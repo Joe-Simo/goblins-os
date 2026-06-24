@@ -330,14 +330,14 @@ fn build_recovery_status() -> RecoveryStatus {
                 },
                 detail: if image.reportable {
                     if image.rollback_available {
-                        "bootc reports the booted system image and a rollback image for this device."
+                        "The system image service reports the running system image and a rollback image for this device."
                             .to_string()
                     } else {
-                        "bootc reports the booted system image for this device; no rollback image is recorded yet."
+                        "The system image service reports the running system image for this device; no rollback image is recorded yet."
                             .to_string()
                     }
                 } else if settings.services.bootc_available {
-                    "Image tooling is present, but bootc could not report deployment status in this session, so image status and rollback are not confirmed here."
+                    "System image tooling is present, but the system image service could not report deployment status in this session, so image status and rollback are not confirmed here."
                         .to_string()
                 } else {
                     "System image checks will be available from the installed OS environment.".to_string()

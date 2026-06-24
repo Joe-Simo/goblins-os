@@ -2990,7 +2990,7 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
             "installer-ui-title-case-confirm-step",
-            "Final Step · Confirm",
+            "Step 3 of 3 · Confirm",
         ),
         contains_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
@@ -5246,22 +5246,22 @@ fn gaming_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-games-vulkan-readiness",
-            "Mesa Vulkan drivers",
+            "Graphics acceleration is ready for games",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-games-vaapi-vdpau-readiness",
-            "Mesa VA-API drivers plus the VDPAU wrapper",
+            "Hardware video decoding is available for games and media.",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-games-flatpak-portals-readiness",
-            "Flatpak and Goblins OS desktop portals",
+            "App installs and desktop integration are ready",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-games-native-architecture-readiness",
-            "Release evidence is captured separately for aarch64 and x86_64 RPMs",
+            "Game tools run natively on this device",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
@@ -5301,7 +5301,7 @@ fn gaming_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-games-steam-absence-copy",
-            "Steam and steam-devices are intentionally absent from the base image.",
+            "Steam is not part of the base system",
         ),
         contains_check(
             root.join("os/release/architectures.toml"),
@@ -6609,8 +6609,8 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
-            "settings-quiet-statuses-render-as-values",
-            "settings_status_value_label",
+            "settings-quiet-statuses-render-as-calm-pills",
+            "gos-status-quiet",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
@@ -6720,7 +6720,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-display-query-copy-is-user-facing",
-            "display query {}",
+            "No displays have been detected for this session yet.",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),

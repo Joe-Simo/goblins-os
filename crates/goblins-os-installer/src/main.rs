@@ -3510,11 +3510,6 @@ fn append_install_environment(panel: &gtk4::Box, environment: &InstallEnvironmen
             other => other,
         }
     };
-    let efi_state = if environment.efi_available {
-        "EFI firmware is visible"
-    } else {
-        "EFI firmware is not visible"
-    };
     let secure_boot = if environment.secure_boot.state.is_empty() {
         "unknown"
     } else {
@@ -3528,13 +3523,32 @@ fn append_install_environment(panel: &gtk4::Box, environment: &InstallEnvironmen
     } else {
         environment.secure_boot.detail.as_str()
     };
-    let boot_detail = if environment.boot_guidance.is_empty() {
-        format!("Boot mode: {boot_mode}. {efi_state}. Secure Boot: {secure_boot}. {secure_detail}")
+    // Consolidate the firmware line. When no EFI system is visible the machine is
+    // booting in legacy/BIOS mode (or an EFI dir simply is not mounted): collapse
+    // the five overlapping "not visible / not available / do not proceed"
+    // negations into one neutral, honest line. The stern "do not proceed" hedge
+    // is reserved for genuinely ambiguous environments (unsupported architecture),
+    // not the ordinary legacy-BIOS-with-eligible-disk case. The calm UEFI branch
+    // keeps the existing per-source guidance and Secure Boot detail.
+    let boot_detail = if environment.efi_available {
+        if environment.boot_guidance.is_empty() {
+            format!(
+                "Boot mode: {boot_mode}. EFI firmware is visible. Secure Boot: {secure_boot}. {secure_detail}"
+            )
+        } else {
+            format!(
+                "Boot mode: {boot_mode}. EFI firmware is visible. Secure Boot: {secure_boot}. {} {}",
+                environment.boot_guidance, secure_detail
+            )
+        }
+    } else if environment.native_supported {
+        "Boot mode: Legacy BIOS or unmounted EFI. No EFI System Partition was detected from this runtime; this image installs a BIOS/GRUB bootloader and no EFI System Partition is required. Secure Boot: not applicable (Legacy/BIOS boot)."
+            .to_string()
     } else {
-        format!(
-            "Boot mode: {boot_mode}. {efi_state}. Secure Boot: {secure_boot}. {} {}",
-            environment.boot_guidance, secure_detail
-        )
+        // Genuinely ambiguous: unsupported architecture with no visible firmware.
+        // Keep the honest hedge to stop before the boot target is understood.
+        "Boot mode: Legacy BIOS or unmounted EFI. No EFI System Partition was detected from this runtime. Do not proceed until the installer boot mode and bootloader target are understood for this computer. Secure Boot: not applicable (Legacy/BIOS boot)."
+            .to_string()
     };
 
     panel.append(&review_row(
@@ -3644,7 +3658,7 @@ fn populate_install_disk(
     column.append(&mark);
 
     column.append(&centered_label(
-        "Step · Install",
+        "Step 1 of 3 · Choose disk",
         "gos-onboarding-kicker",
         false,
     ));
@@ -3686,8 +3700,9 @@ fn populate_install_disk(
     }
     let status_text = if any_eligible {
         // The page header summarizes the scan (rows carry their own per-disk
-        // "Ready to install" status) — and a mixed list is not all-ready.
-        "Eligible disk detected"
+        // "Ready to install" status) — and a mixed list is not all-ready, so
+        // this reads as a neutral scan result, not a "safe to erase now" claim.
+        "Eligible disk found — review the path below"
     } else if !bootc_available {
         "Installation runs from the Goblins OS installer image"
     } else if !bootc_privileged {
@@ -3700,98 +3715,107 @@ fn populate_install_disk(
     header.append(&spacer());
     panel.append(&header);
 
+    // macOS Recovery surfaces the selectable target first. Lead with the disk
+    // list so the one action this page is named for is reachable without
+    // scrolling; all advisory prose is demoted beneath the selection.
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    panel.append(&list);
+
     if let Some(status) = targets {
+        // One canonical preservation callout: keeping another OS routes to
+        // advanced storage. The safe-route panel keeps its working launcher.
         panel.append(&review_row(
             "Keeping another OS or data?",
             "If you are keeping Windows, macOS, Linux, another OS, recovery, EFI, vendor partitions, or shared data, start with advanced storage. Disk rows replace one blank disk only after typed confirmation.",
         ));
         append_dual_boot_safe_route(&panel, &status.policy, true);
-        panel.append(&review_row(
-            "Choose install path",
-            "To dual boot, choose the OS you are keeping first. The advanced storage opens before any disk writes.",
-        ));
-        panel.append(&review_row(
-            "Detected systems are actions",
-            "Rows that show Windows, macOS, Linux, another OS, recovery, EFI, or data open advanced storage instead of erase confirmation.",
-        ));
-        panel.append(&review_row(
-            "Unsure? Keep your current OS",
-            "Open advanced storage and confirm the final summary shows what is preserved and what is formatted.",
-        ));
-        append_dual_boot_launcher(&panel, &status.policy);
-        append_dual_boot_quick_start(&panel, &status.policy);
-        append_full_storage_installer_handoff(&panel, &status.policy, false);
-        append_install_environment(&panel, &status.environment);
-        append_boot_entries(&panel, &status.boot_entries);
-        append_install_path_options(&panel, &status.policy);
-        append_pre_install_safety(&panel, &status.policy);
+
+        // Everything else — environment, boot entries, formatting, and the
+        // pre/post checklists — folds into one collapsed disclosure so the
+        // selection and action lead the first viewport.
+        let details = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        details.set_margin_top(8);
         if !status.policy.simple_install_scope.is_empty() {
-            panel.append(&review_row(
+            details.append(&review_row(
                 "Replace one blank disk",
                 &status.policy.simple_install_scope,
             ));
         }
-        panel.append(&review_row(
+        details.append(&review_row(
             "Keep an existing OS",
             "Windows, macOS, Linux, another OS, recovery, and EFI partitions stay untouched only when you use advanced storage.",
         ));
+        details.append(&review_row(
+            "Choose install path",
+            "To dual boot, choose the OS you are keeping first. The advanced storage opens before any disk writes.",
+        ));
+        details.append(&review_row(
+            "Detected systems are actions",
+            "Rows that show Windows, macOS, Linux, another OS, recovery, EFI, or data open advanced storage instead of erase confirmation.",
+        ));
+        details.append(&review_row(
+            "Unsure? Keep your current OS",
+            "Open advanced storage and confirm the final summary shows what is preserved and what is formatted.",
+        ));
+        details.append(&review_row(
+            "Use this screen when",
+            "You want Goblins OS to replace one blank internal disk. Disks with existing OS, recovery, EFI, or data partitions are routed to manual storage.",
+        ));
+        append_install_environment(&details, &status.environment);
+        append_boot_entries(&details, &status.boot_entries);
+        append_dual_boot_launcher(&details, &status.policy);
+        append_full_storage_installer_handoff(&details, &status.policy, false);
+        append_install_path_options(&details, &status.policy);
+        append_pre_install_safety(&details, &status.policy);
         if !status.policy.dual_boot_preflight.is_empty() {
-            panel.append(&review_row(
+            details.append(&review_row(
                 "Before dual boot",
                 &status.policy.dual_boot_preflight,
             ));
         }
-        panel.append(&review_row(
+        details.append(&review_row(
             "Best dual-boot path",
             &status.policy.dual_boot_preservation,
         ));
         if !status.policy.dual_boot_handoff.is_empty() {
-            panel.append(&review_row(
+            details.append(&review_row(
                 "Keep your current OS",
                 &status.policy.dual_boot_handoff,
             ));
         }
-        append_pre_write_install_plan(&panel, &status.policy);
-        append_dual_boot_readiness(&panel, &status.policy);
-        append_dual_boot_choices(&panel, &status.policy);
-        append_dual_boot_decision_map(&panel, &status.policy);
-        panel.append(&review_row(
-            "Installer choice",
-            &status.policy.dual_boot_guidance,
-        ));
-        append_dual_boot_guide(&panel, &status.policy);
-        panel.append(&review_row(
-            "Use this screen when",
-            "You want Goblins OS to replace one blank internal disk. Disks with existing OS, recovery, EFI, or data partitions are routed to manual storage.",
-        ));
-        panel.append(&review_row(
+        append_pre_write_install_plan(&details, &status.policy);
+        details.append(&review_row(
             "Boot and formatting",
             &status.policy.bootloader,
         ));
         if !status.policy.formatting_guidance.is_empty() {
-            panel.append(&review_row(
+            details.append(&review_row(
                 "Formatting",
                 &status.policy.formatting_guidance,
             ));
         }
         if !status.policy.advanced_storage_guidance.is_empty() {
-            panel.append(&review_row(
+            details.append(&review_row(
                 "Advanced storage",
                 &status.policy.advanced_storage_guidance,
             ));
         }
         if !status.policy.bootloader_recovery.is_empty() {
-            panel.append(&review_row(
+            details.append(&review_row(
                 "After reboot",
                 &status.policy.bootloader_recovery,
             ));
         }
-        append_storage_review_checklist(&panel, &status.policy);
-        append_post_install_verification(&panel, &status.policy);
+        append_storage_review_checklist(&details, &status.policy);
+        append_post_install_verification(&details, &status.policy);
+
+        let disclosure = gtk::Expander::new(Some("Storage & boot details"));
+        disclosure.set_expanded(false);
+        disclosure.set_margin_top(8);
+        disclosure.set_child(Some(&details));
+        panel.append(&disclosure);
     }
 
-    let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    panel.append(&list);
     column.append(&panel);
 
     let cont = button("Continue", &["gos-onboarding-primary"]);
@@ -4002,7 +4026,7 @@ fn populate_install_review(
     column.append(&mark);
 
     column.append(&centered_label(
-        "Step · Review",
+        "Step 2 of 3 · Review",
         "gos-onboarding-kicker",
         false,
     ));
@@ -4024,10 +4048,10 @@ fn populate_install_review(
     panel.set_size_request(820, -1);
     match &selected {
         Some(target) => {
-            if let Some(status) = flow.state.install_targets.as_ref() {
-                append_install_environment(&panel, &status.environment);
-                append_boot_entries(&panel, &status.boot_entries);
-            }
+            // Lead with the device being erased — Disk/Drive/partitions/action.
+            // The installer environment (ISO architecture, firmware mode) is
+            // demoted into the firmware/boot policy group below so this card
+            // reads as a confirmation, not as documentation.
             panel.append(&review_row("Disk", &target.path));
             panel.append(&review_row(
                 "Drive",
@@ -4060,6 +4084,10 @@ fn populate_install_review(
                 "xfs · immutable system image",
             ));
             if let Some(status) = flow.state.install_targets.as_ref() {
+                // Firmware/boot context follows the device identity and action,
+                // grouped with the bootloader/dual-boot policy rows.
+                append_install_environment(&panel, &status.environment);
+                append_boot_entries(&panel, &status.boot_entries);
                 append_dual_boot_safe_route(&panel, &status.policy, false);
                 append_install_path_options(&panel, &status.policy);
                 append_dual_boot_quick_start(&panel, &status.policy);
@@ -4200,7 +4228,7 @@ fn populate_install_confirm(
     let expected = format!("WIPE {device} AND INSTALL GOBLINS OS");
 
     column.append(&centered_label(
-        "Final Step · Confirm",
+        "Step 3 of 3 · Confirm",
         "gos-onboarding-kicker",
         false,
     ));
@@ -4716,26 +4744,26 @@ fn populate_install_done(
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
     panel.add_css_class("gos-net-panel");
     panel.set_size_request(580, -1);
-    if let Some(target) = selected.as_ref() {
-        append_target_dual_boot_plan(&panel, target);
-    }
+    // The erase already committed: do not re-show the pre-write dual-boot plan or
+    // the "verify the disk / review the erase scope" verification cards here. A
+    // post-install screen tells the user what to do next (restart), not re-litigate
+    // a decision they already made. Boot-entry info is post-install factual state,
+    // so it stays; the genuine next-steps always render.
     if let Some(status) = flow.state.install_targets.as_ref() {
         append_boot_entries(&panel, &status.boot_entries);
-        append_post_install_verification(&panel, &status.policy);
-    } else {
-        panel.append(&review_row(
-            "1  Remove the installer medium",
-            "Eject the USB drive or installer image you booted from.",
-        ));
-        panel.append(&review_row(
-            "2  Restart this computer",
-            "Use the firmware startup menu or boot picker to start Goblins OS.",
-        ));
-        panel.append(&review_row(
-            "3  Check anything you kept",
-            "If you kept another OS or data disk, confirm it still starts or appears before changing boot order.",
-        ));
     }
+    panel.append(&review_row(
+        "1  Remove the installer medium",
+        "Eject the USB drive or installer image you booted from.",
+    ));
+    panel.append(&review_row(
+        "2  Restart this computer",
+        "Use the firmware startup menu or boot picker to start Goblins OS.",
+    ));
+    panel.append(&review_row(
+        "3  Check anything you kept",
+        "If you kept another OS or data disk, confirm it still starts or appears before changing boot order.",
+    ));
     panel.append(&review_row(
         "Finish first-boot setup",
         "Sign in or continue with on-device GPT-OSS — ready the moment you are.",

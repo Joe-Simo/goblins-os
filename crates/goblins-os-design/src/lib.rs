@@ -82,6 +82,10 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_surface             #ffffff;
 @define-color gos_surface_muted       #f7f7f8;
 @define-color gos_surface_sunken      #f2f2f4;
+/* A control fill that reads RAISED above a muted track (segmented thumbs). In
+   light this is plain white — lighter than the #f7f7f8 track. The scheme-aware
+   pair below keeps the same "selected sits above the track" reading in dark. */
+@define-color gos_control_raised      #ffffff;
 
 /* macOS 27 UI-kit semantic roles, translated to Goblins OS + Inter. These
    mirror the kit's label/fill/separator axes while staying project-owned. */
@@ -209,6 +213,10 @@ const DARK_TOKENS: &str = r#"
 @define-color gos_surface             #1e1e1e;
 @define-color gos_surface_muted       #242426;
 @define-color gos_surface_sunken      #2c2c2e;
+/* Raised control fill, inverted for night: one step LIGHTER than the #242426
+   track (above #2c2c2e on the surface ladder), so a selected segment reads
+   lifted on graphite instead of sinking into the canvas black. */
+@define-color gos_control_raised      #323234;
 
 /* Same semantic axes as light mode. Alpha roles match the local macOS 27 kit;
    the exact font remains Inter, and these tokens are owned by Goblins OS. */
@@ -485,6 +493,8 @@ window.gos-windowed .gos-root {
 }
 
 .gos-kicker,
+.gos-home-kicker,
+.gos-home-ledger-kicker,
 .gos-panel-source,
 .gos-resident-title {
   color: @gos_label_secondary;
@@ -911,13 +921,11 @@ button:active {
   letter-spacing: 0;
 }
 
+/* Type comes from the canonical .gos-kicker treatment (11px / 600 / 0.6px /
+   uppercase) so every eyebrow across the OS shares one voice; only the
+   home-surface margin is kept here. */
 .gos-home-kicker {
   margin-bottom: 22px;
-  color: @gos_ink_faint;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 2.4px;
-  text-transform: uppercase;
 }
 
 .gos-home-headline {
@@ -1038,14 +1046,11 @@ button:active {
   font-weight: 600;
 }
 
+/* Same canonical eyebrow treatment as .gos-kicker; only the ledger margins
+   are surface-local. */
 .gos-home-ledger-kicker {
   margin-top: 46px;
   margin-bottom: 6px;
-  color: @gos_ink_faint;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1.8px;
-  text-transform: uppercase;
 }
 
 .gos-home-app-row {
@@ -1210,13 +1215,13 @@ button:active {
 }
 
 .gos-studio-badge {
-  padding: 2px 7px;
-  border-radius: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
   border: 1px solid @gos_studio_border;
   color: @gos_studio_text_muted;
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.6px;
   text-transform: uppercase;
 }
 
@@ -2248,8 +2253,9 @@ button:active {
 .gos-cc-action:active { background-color: @gos_material_active; }
 .gos-cc-action:focus:focus-visible { box-shadow: 0 0 0 3px @gos_focus; }
 .gos-cc-action:disabled {
-  color: @gos_ink_muted;
-  opacity: 0.6;
+  color: @gos_ink_faint;
+  background-color: @gos_surface_sunken;
+  box-shadow: none;
 }
 "#;
 

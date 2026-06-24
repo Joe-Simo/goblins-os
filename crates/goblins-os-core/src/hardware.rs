@@ -215,7 +215,7 @@ fn portal_facility() -> SystemFacility {
 fn accessibility_facility() -> SystemFacility {
     facility(
         "accessibility",
-        "Accessibility bus",
+        "Accessibility services",
         executable_exists("at-spi-bus-launcher")
             || Path::new("/usr/libexec/at-spi-bus-launcher").exists(),
         "Assistive technologies, such as screen readers, for native desktop apps.",
@@ -274,7 +274,7 @@ fn boot_image_facility() -> SystemFacility {
         "boot-image",
         "Boot image management",
         executable_exists("bootc"),
-        "Image tooling (bootc) is present; live image status and rollback are reported by the system image service, not enabled by this check.",
+        "System image tooling is present; live image status and rollback are reported by the system image service.",
         vec![evidence_binary("bootc")],
     )
 }

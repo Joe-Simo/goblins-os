@@ -262,9 +262,7 @@ struct DisplaysStatus {
     session_type: String,
     wayland_display: Option<String>,
     x11_display: Option<String>,
-    gdbus_available: bool,
     mutter_display_config_available: bool,
-    xrandr_available: bool,
     outputs: Vec<DisplayOutputStatus>,
     detail: String,
 }
@@ -2293,7 +2291,7 @@ impl SettingsPanel {
             Self::Multitasking => "Workspace, hot corner, and window switching preferences.",
             Self::PowerBattery => "Power mode, battery, suspend, and energy settings.",
             Self::Games => {
-                "Vulkan, GameMode, Gamescope, MangoHud, controllers, audio, Flatpak, and non-Steam launcher readiness."
+                "Graphics and video acceleration, performance tools, controllers, audio, app installs, and game launcher readiness."
             }
             Self::PrintersScanners => "Printer, scanner, and device settings.",
             Self::DateTime => "Clock, time zone, automatic time, and calendar format settings.",
@@ -4533,64 +4531,52 @@ fn build_games(panel: &gtk4::Box) {
     append_panel_header(
         panel,
         "Games",
-        "Native gaming substrate, overlay tools, controllers, audio, Flatpak, and user-initiated non-Steam launcher paths.",
+        "Graphics and video acceleration, performance and overlay tools, controllers, audio, and the game launchers you choose to install.",
     );
 
     panel.append(&label("Readiness", &["gos-subsection-title"]));
     panel.append(&health_summary_group(vec![
         (
-            "GPU and Vulkan",
+            "Graphics acceleration",
             "ready".to_string(),
             true,
-            "Mesa Vulkan drivers and vulkaninfo ship in the OS image; display-backed proof still validates the active GPU.".to_string(),
+            "Graphics acceleration is ready for games; the active GPU is still confirmed once a display session is running.".to_string(),
         ),
         (
             "Video acceleration",
             "ready".to_string(),
             true,
-            "Mesa VA-API drivers plus the VDPAU wrapper ship with vainfo and vdpauinfo for installed-session diagnostics.".to_string(),
+            "Hardware video decoding is available for games and media.".to_string(),
         ),
         (
-            "GameMode",
+            "Performance tools",
             "ready".to_string(),
             true,
-            "GameMode is installed so supported games and launchers can request performance tuning.".to_string(),
-        ),
-        (
-            "Gamescope",
-            "ready".to_string(),
-            true,
-            "Gamescope is installed for user-launched game sessions and compatibility testing.".to_string(),
-        ),
-        (
-            "MangoHud",
-            "ready".to_string(),
-            true,
-            "MangoHud is installed for user-enabled frame, frame time, and GPU overlay diagnostics.".to_string(),
+            "Game performance, full-screen, and on-screen overlay tools are ready for supported games and launchers.".to_string(),
         ),
         (
             "Controllers and audio",
             "ready".to_string(),
             true,
-            "joystick-support, evtest, usbutils, PipeWire, PipeWire PulseAudio/ALSA compatibility, PipeWire tools, and WirePlumber are part of the OS image for controller and audio readiness.".to_string(),
+            "Game controllers and audio are ready.".to_string(),
         ),
         (
-            "Flatpak and portals",
+            "App installs and portals",
             "ready".to_string(),
             true,
-            "Flatpak and Goblins OS desktop portals ship in the OS image; launcher and runtime installs remain user-initiated.".to_string(),
+            "App installs and desktop integration are ready; launcher and runtime installs stay user-initiated.".to_string(),
         ),
         (
-            "Native architecture",
+            "Native game tools",
             "ready".to_string(),
             true,
-            "Release evidence is captured separately for aarch64 and x86_64 RPMs; Goblins OS does not claim x86-only game runtimes work on Arm unless a launcher installs and verifies that path.".to_string(),
+            "Game tools run natively on this device.".to_string(),
         ),
         (
             "Steam",
             "not installed".to_string(),
             true,
-            "Steam and steam-devices are intentionally absent from the base image.".to_string(),
+            "Steam is not part of the base system; install it when you choose to.".to_string(),
         ),
     ]));
 
@@ -4678,12 +4664,9 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
 
     panel.append(&label("Secrets storage", &["gos-subsection-title"]));
     match state.system.as_ref() {
-        Some(system) => panel.append(&system_row(
+        Some(_) => panel.append(&system_row(
             "OpenAI secrets",
-            &format!(
-                "Held at {} — root-owned, mode 0600, readable only by the OS services. The desktop session and this app never receive the key.",
-                system.storage.secrets_dir
-            ),
+            "Your OpenAI credentials are kept in protected system storage that only OS services can read. The desktop session and this app never see your key.",
         )),
         None => panel.append(&system_row(
             "Secrets storage",
@@ -5689,7 +5672,7 @@ fn build_accessibility(panel: &gtk4::Box, state: &SettingsState) {
         panel,
         state,
         "accessibility",
-        "Accessibility bus",
+        "Accessibility services",
         "Waiting for AT-SPI accessibility status.",
     );
     append_assistive_technology_settings(panel, state);
@@ -6314,6 +6297,12 @@ fn append_local_user_settings(panel: &gtk4::Box, state: &SettingsState) {
             ));
             return;
         };
+        let identity_ready = local_account_identity_ready(account);
+        // Until the local identity is populated, the detail rows would echo raw
+        // boot-transient values ("/root", "Unknown computer", an unknown login
+        // shell). Show a calm "still being read" line for those rows instead of
+        // leaking the placeholder, while keeping every honest row in place.
+        let pending = "Still being read.";
         panel.append(&system_row(
             "Local account",
             &local_account_identity_detail(account),
@@ -6322,9 +6311,30 @@ fn append_local_user_settings(panel: &gtk4::Box, state: &SettingsState) {
             "Account type",
             &local_account_type_detail(account),
         ));
-        panel.append(&system_row("Home folder", &account.home));
-        panel.append(&system_row("Login shell", &account.shell));
-        panel.append(&system_row("Computer name", &account.hostname));
+        panel.append(&system_row(
+            "Home folder",
+            if identity_ready {
+                &account.home
+            } else {
+                pending
+            },
+        ));
+        panel.append(&system_row(
+            "Login shell",
+            if identity_ready {
+                &account.shell
+            } else {
+                pending
+            },
+        ));
+        panel.append(&system_row(
+            "Computer name",
+            if identity_ready {
+                &account.hostname
+            } else {
+                pending
+            },
+        ));
     } else {
         panel.append(&system_row(
             "Local account",
@@ -8227,27 +8237,24 @@ fn ai_action_state_ok(action: &AiActionStatus) -> bool {
 }
 
 fn ai_action_detail(action: &AiActionStatus) -> String {
-    let context = action
-        .contexts
-        .iter()
-        .map(|value| readable_runtime_value(value))
-        .collect::<Vec<_>>()
-        .join(", ");
     let entrypoints = action
         .entrypoints
         .iter()
         .map(|value| readable_runtime_value(value))
         .collect::<Vec<_>>()
         .join(", ");
-    format!(
-        "{} {} Context: {}. Permission: {}. Confirmation: {}. Entry points: {}.",
-        action.detail,
-        action.reason,
-        context,
-        readable_runtime_value(&action.permission_control),
-        readable_runtime_value(&action.confirmation),
-        entrypoints
-    )
+    let detail = format!("{} {}", action.detail, action.reason);
+    let detail = detail.trim();
+    // Goblins asks before acting and only sees the context you hand it; the
+    // exact permission/confirmation slugs stay in the policy layer, never in
+    // this user copy.
+    if entrypoints.is_empty() {
+        format!("{detail} Goblins asks before running, and only sees what you choose to share.")
+    } else {
+        format!(
+            "{detail} Goblins asks before running, and only sees what you choose to share. Available from {entrypoints}."
+        )
+    }
 }
 
 fn ai_entrypoint_summary(catalog: &AiActionCatalog) -> String {
@@ -9070,11 +9077,38 @@ fn raw_error_like(detail: &str) -> bool {
 
 fn readable_runtime_value(value: &str) -> &str {
     // Humanize the internal runtime sentinels/slugs so no raw token (e.g.
-    // "not-configured", "os-managed-runtime") reaches user copy.
+    // "not-configured", "os-managed-runtime", or a permission/confirmation
+    // control id like "notification-context"/"explicit-confirmation") reaches
+    // user copy. Mirrors the plain-language conventions in goblins-os-ai
+    // (AiPermission::display_name) without depending on the enum here, since the
+    // settings crate only sees the already-serialized kebab strings.
     match value.trim() {
         "" => "unknown",
         "not-configured" | "unconfigured" => "not configured",
         "os-managed-runtime" => "OS-managed runtime",
+        // AiPermission control ids
+        "resident-assistant" => "the resident assistant",
+        "screen-context" => "screen context",
+        "file-context" => "file context",
+        "settings-control" => "settings control",
+        "notification-context" => "notification context",
+        "system-troubleshooting" => "system troubleshooting",
+        "app-builder" => "the app builder",
+        "computer-use" => "computer use",
+        // AiConfirmation states
+        "none" => "no confirmation needed",
+        "explicit-confirmation" => "asks before running",
+        "permission-and-confirmation" => "needs permission and asks before running",
+        // AiEntrypoint surfaces
+        "keyboard-shortcut" => "keyboard shortcut",
+        "launcher" => "the launcher",
+        "control-center" => "Control Center",
+        "settings" => "Settings",
+        "selected-text" => "selected text",
+        "screenshot" => "a screenshot",
+        "files" => "files",
+        "notifications" => "notifications",
+        "troubleshooting" => "troubleshooting",
         other => other,
     }
 }
@@ -10066,11 +10100,13 @@ fn health_row(title: &str, state: &str, ok: bool, detail: &str) -> gtk4::Box {
     let title_label = label(title, &["gos-row-title"]);
     title_label.set_hexpand(true);
     head.append(&title_label);
-    if ok && settings_status_state_is_quiet(state) {
-        head.append(&settings_status_value_label(state));
-    } else {
-        head.append(&settings_status_pill(state, ok));
-    }
+    // Every row in a grouped health card carries a pill so the trailing status
+    // column shares one consistent treatment: calm/affirmative states get the
+    // quiet neutral pill (settings_status_pill adds .gos-status-quiet for
+    // ok+quiet states) and genuine attention states keep their colored pill.
+    // This keeps the right rail aligned instead of mixing bordered chips with
+    // bare value text for the same word ("None"/"Ready") inside one card.
+    head.append(&settings_status_pill(state, ok));
     row.append(&head);
 
     let copy = label(&display_detail, &["gos-row-copy"]);
@@ -10088,18 +10124,6 @@ fn settings_status_pill(state: &str, ok: bool) -> gtk4::Label {
         pill.add_css_class("gos-status-quiet");
     }
     pill
-}
-
-#[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn settings_status_value_label(state: &str) -> gtk4::Label {
-    use gtk4::prelude::*;
-
-    let display_state = settings_status_display_label(state);
-    let value = label(&display_state, &["gos-row-value", "gos-status-value"]);
-    value.set_wrap(false);
-    value.set_valign(gtk4::Align::Center);
-    set_accessible_label_description(&value, &display_state, &display_state);
-    value
 }
 
 fn settings_status_display_label(state: &str) -> String {
@@ -10133,6 +10157,21 @@ fn settings_status_display_label(state: &str) -> String {
         "online" => "Online".to_string(),
         "offline" => "Offline".to_string(),
         _ if trimmed.ends_with('%') => trimmed.to_string(),
+        // A "<number> <unit>" measurement keeps its canonical lowercase unit
+        // (e.g. "500 ms", "30 ms") instead of being title-cased into "500 Ms".
+        _ if {
+            let mut parts = trimmed.split(' ');
+            matches!(
+                (parts.next(), parts.next(), parts.next()),
+                (Some(num), Some(unit), None)
+                    if !num.is_empty()
+                        && num.chars().all(|c| c.is_ascii_digit() || c == '.')
+                        && matches!(unit, "ms" | "s" | "min" | "hz" | "khz" | "k" | "kb" | "mb" | "gb")
+            )
+        } =>
+        {
+            trimmed.to_string()
+        }
         _ => trimmed
             .split(['-', '_', ' '])
             .filter(|part| !part.is_empty())
@@ -11346,11 +11385,17 @@ fn display_query_summary_spec(displays: Option<&DisplaysStatus>) -> DisplaySumma
         );
     };
 
+    let detail = if displays.outputs.is_empty() {
+        "No displays have been detected for this session yet.".to_string()
+    } else {
+        display_outputs_summary_detail(&displays.outputs)
+    };
+
     display_summary_spec(
         "Display query",
         display_query_state(displays),
         displays.mutter_display_config_available || !displays.outputs.is_empty(),
-        format!("{} · {}", displays.detail, display_handles_detail(displays)),
+        detail,
     )
 }
 
@@ -11484,32 +11529,6 @@ fn display_comfort_summary_detail(display: &DisplayComfortStatus) -> String {
         .unwrap_or_else(|| "temperature unavailable".to_string());
 
     format!("Night Light {night_light} · {schedule} · {temperature}")
-}
-
-fn display_handles_detail(displays: &DisplaysStatus) -> String {
-    let wayland = displays
-        .wayland_display
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("not reported");
-    let x11 = displays
-        .x11_display
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("not reported");
-    format!(
-        "Graphics session: Wayland {wayland} · X11 {x11}. Display service {} · display query {}.",
-        display_availability_word(displays.gdbus_available),
-        display_availability_word(displays.xrandr_available)
-    )
-}
-
-fn display_availability_word(available: bool) -> &'static str {
-    if available {
-        "ready"
-    } else {
-        "not ready"
-    }
 }
 
 fn display_output_title(output: &DisplayOutputStatus) -> String {
@@ -13521,12 +13540,18 @@ fn local_account_summary_spec(system: Option<&SettingsSystemStatus>) -> AccountS
 }
 
 fn local_account_summary_detail(account: &LocalAccountSummary) -> String {
+    if !local_account_identity_ready(account) {
+        return "Local account is still being read.".to_string();
+    }
     let display = if account.display_name == account.username {
         account.username.clone()
     } else {
         format!("{} ({})", account.display_name, account.username)
     };
-    format!("{} on {}. Home {}", display, account.hostname, account.home)
+    format!(
+        "{} — {} on {}.",
+        display, account.account_type, account.hostname
+    )
 }
 
 fn local_account_identity_detail(account: &LocalAccountSummary) -> String {
@@ -15042,7 +15067,7 @@ fn device_settings_action_label(readiness: DeviceSettingsReadiness) -> &'static 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn device_settings_integrated_detail(settings_panel: SettingsPanel) -> String {
     format!(
-        "Open detailed {} controls for this device. Status shown here comes from Goblins OS.",
+        "Open the full {} controls. Goblins OS opens these in the system control center.",
         settings_panel.display_name()
     )
 }
@@ -16446,6 +16471,7 @@ window.gos-settings-window {
   letter-spacing: 0;
   margin-top: 14px;
   margin-bottom: 2px;
+  margin-left: 14px;
 }
 
 .gos-search-entry {
@@ -16654,7 +16680,7 @@ window.gos-settings-window {
 }
 
 .gos-settings-root .gos-system-row {
-  padding: 9px 4px;
+  padding: 8px 14px;
   border-color: transparent;
   border-radius: 0;
   background: transparent;
@@ -16931,7 +16957,7 @@ window.gos-settings-window {
 .gos-segmented-option.is-selected {
   color: @gos_ink;
   border-color: @gos_hairline_strong;
-  background: @gos_surface;
+  background: @gos_control_raised;
   box-shadow: 0 1px 0 alpha(@gos_panel_sheen, 0.56) inset,
               0 2px 6px @gos_shadow_panel;
 }
@@ -17114,10 +17140,6 @@ window.gos-settings-window {
      as their digits change — the macOS standard for any data readout. */
   font-feature-settings: "tnum" 1;
   font-variant-numeric: tabular-nums;
-}
-
-.gos-status-value {
-  margin-left: 12px;
 }
 
 .gos-storage-row {
@@ -17628,12 +17650,12 @@ mod tests {
         background_picture_option_detail, background_shading_detail, bluetooth_adapter_detail,
         bluetooth_adapter_state_detail, bluetooth_power_detail, bluetooth_power_label,
         bluetooth_power_outcome, camera_access_detail, cleanup_temp_detail, cleanup_trash_detail,
-        days_label, desktop_privacy_outcome, display_handles_detail, display_output_detail,
-        display_output_title, engine_selection_success_copy, facility_state_is_ready,
-        facility_state_label, facility_user_detail, input_feedback_sounds_detail,
-        interface_sounds_detail, key_repeat_detail, local_account_identity_detail,
-        local_account_type_detail, lock_screen_notifications_detail, magnifier_detail,
-        microphone_access_detail, milliseconds_label, motion_preference_detail, night_light_detail,
+        days_label, desktop_privacy_outcome, display_output_detail, display_output_title,
+        engine_selection_success_copy, facility_state_is_ready, facility_state_label,
+        facility_user_detail, input_feedback_sounds_detail, interface_sounds_detail,
+        key_repeat_detail, local_account_identity_detail, local_account_type_detail,
+        lock_screen_notifications_detail, magnifier_detail, microphone_access_detail,
+        milliseconds_label, motion_preference_detail, night_light_detail,
         night_light_schedule_detail, night_light_temperature_label, normalized_appearance_theme,
         normalized_audio_volume, normalized_background_picture_option,
         normalized_background_shading, normalized_keyboard_delay,
@@ -18132,8 +18154,9 @@ mod tests {
         assert!(!ready.contains('`'));
 
         let integrated = super::device_settings_integrated_detail(SettingsPanel::Network);
-        assert!(integrated.contains("Open detailed Network controls"));
-        assert!(integrated.contains("Status shown here comes from Goblins OS"));
+        assert!(integrated.contains("Open the full Network controls"));
+        assert!(integrated.contains("system control center"));
+        assert!(!integrated.contains("Status shown here comes from Goblins OS"));
 
         let session_unavailable = super::device_settings_handoff_detail(
             SettingsPanel::PowerBattery,
@@ -18269,7 +18292,6 @@ mod tests {
             css.contains(".gos-settings-root .gos-status-quiet {\n  color: @gos_label_secondary;")
         );
         assert!(css.contains("background: @gos_fill_secondary;"));
-        assert!(css.contains(".gos-status-value {\n  margin-left: 12px;"));
         assert!(css.contains(".gos-settings-root .gos-waiting {\n  color: @gos_waiting;"));
         assert!(css.contains("background: alpha(@gos_waiting, 0.12);"));
         assert!(!css.contains(".gos-status-pill {\n  padding: 6px 10px;"));
@@ -18382,6 +18404,9 @@ mod tests {
             assert!(!label.contains('-'), "{raw_state} leaked as {label}");
         }
         assert_eq!(super::settings_status_display_label("125%"), "125%");
+        // Measurement units keep their canonical lowercase casing.
+        assert_eq!(super::settings_status_display_label("500 ms"), "500 ms");
+        assert_eq!(super::settings_status_display_label("30 ms"), "30 ms");
     }
 
     #[test]
@@ -18828,8 +18853,10 @@ mod tests {
         );
         assert_eq!(
             super::local_account_summary_detail(&account),
-            "Joseph Simo (joseph) on goblins-workstation. Home /home/joseph"
+            "Joseph Simo (joseph) — Administrator on goblins-workstation."
         );
+        // The primary summary line no longer leaks the raw home path.
+        assert!(!super::local_account_summary_detail(&account).contains("/home/joseph"));
     }
 
     #[test]
@@ -18866,7 +18893,9 @@ mod tests {
         assert_eq!(local.state, "Administrator");
         assert!(local.ready);
         assert!(local.detail.contains("Joseph Simo"));
-        assert!(local.detail.contains("/home/joseph"));
+        assert!(local.detail.contains("goblins-workstation"));
+        // The summary line no longer surfaces the raw home path.
+        assert!(!local.detail.contains("/home/joseph"));
 
         let openai = super::openai_account_summary_spec(None, Some(&system));
         assert_eq!(openai.title, "OpenAI account");
@@ -19775,15 +19804,10 @@ mod tests {
             session_type: "wayland".to_string(),
             wayland_display: Some("wayland-0".to_string()),
             x11_display: None,
-            gdbus_available: true,
             mutter_display_config_available: true,
-            xrandr_available: false,
             outputs: Vec::new(),
             detail: "Display configuration is reachable.".to_string(),
         };
-        assert!(display_handles_detail(&displays).contains("Wayland wayland-0"));
-        assert!(display_handles_detail(&displays).contains("Display service ready"));
-        assert!(display_handles_detail(&displays).contains("display query not ready"));
 
         let output = DisplayOutputStatus {
             name: "eDP-1".to_string(),
@@ -19816,7 +19840,10 @@ mod tests {
         let query = super::display_query_summary_spec(Some(&displays));
         assert_eq!(query.state, "desktop bridge");
         assert!(query.ready);
-        assert!(query.detail.contains("Display configuration"));
+        assert!(query.detail.contains("No displays have been detected"));
+        assert!(!query.detail.contains("Wayland"));
+        assert!(!query.detail.contains("X11"));
+        assert!(!query.detail.contains("display query"));
 
         let no_outputs = super::display_outputs_summary_spec(Some(&displays));
         assert_eq!(no_outputs.state, "none");
@@ -19845,9 +19872,7 @@ mod tests {
             session_type: "x11".to_string(),
             wayland_display: None,
             x11_display: Some(":0".to_string()),
-            gdbus_available: true,
             mutter_display_config_available: false,
-            xrandr_available: true,
             outputs: Vec::new(),
             detail: "A desktop display handle is visible, but monitor configuration could not be queried from this session.".to_string(),
         };

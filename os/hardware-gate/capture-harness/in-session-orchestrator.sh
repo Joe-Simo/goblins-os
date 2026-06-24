@@ -15,7 +15,7 @@ sig(){ curl -s "http://$H/ready/$1" >/dev/null 2>&1; sleep 5; }
 # GOBLINS_OS_INSTALLER_PAGE, or the shell in dark) before the prior instance dies
 # just re-focuses the old window, producing duplicate captures. Waiting for exit
 # guarantees the next launch creates a fresh window with the new args/env/theme.
-shot(){ local n="$1"; shift; "$@" >/dev/null 2>&1 & local p=$!; sleep 7; sig "$n"; kill "$p" 2>/dev/null; pkill -f "$1" 2>/dev/null; for _ in $(seq 1 24); do pgrep -f "$1" >/dev/null 2>&1 || break; sleep 0.3; done; sleep 1; }
+shot(){ local n="$1"; shift; dbus-run-session -- "$@" >/dev/null 2>&1 & local p=$!; sleep 7; sig "$n"; kill "$p" 2>/dev/null; pkill -f "$1" 2>/dev/null; for _ in $(seq 1 24); do pgrep -f "$1" >/dev/null 2>&1 || break; sleep 0.3; done; sleep 1; }
 darkon(){ gsettings set org.gnome.desktop.interface color-scheme prefer-dark 2>/dev/null; sleep 1; }
 darkoff(){ gsettings set org.gnome.desktop.interface color-scheme default 2>/dev/null; sleep 1; }
 

@@ -94,7 +94,19 @@ while time.time() - t < 600:
                 print("ORCH_ALLDONE", flush=True); raise SystemExit(0)
             if name and name not in seen and name not in ("ORCH_START",):
                 seen.add(name); ppm = f"{OUTDIR}/{name}.ppm"
-                dump(ppm); png(ppm, f"{OUTDIR}/{name}.png")
+                # Re-dump until the frame differs from the previous shot: a
+                # launched window can render slower than the orchestrator's fixed
+                # delay, so one dump may catch the prior/desktop frame.
+                import hashlib
+                last = globals().get("_last_md5")
+                for _try in range(5):
+                    dump(ppm)
+                    try: h = hashlib.md5(open(ppm, "rb").read()).hexdigest()
+                    except OSError: h = None
+                    if h != last or _try == 4:
+                        globals()["_last_md5"] = h; break
+                    time.sleep(1.3)
+                png(ppm, f"{OUTDIR}/{name}.png")
                 try: os.remove(ppm)
                 except OSError: pass
                 print(f"captured {name} ({len(seen)})", flush=True)

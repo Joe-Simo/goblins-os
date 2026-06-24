@@ -217,6 +217,35 @@ sha256_file() {
   fi
 }
 
+brand_installer() {
+  # Stock bootc-image-builder produces an Anaconda runtime (install.img) with
+  # Fedora's sidebar art, logo, and accent. Replace them with the Goblins identity
+  # so the installer carries ZERO Fedora chrome (os/iso/remaster-anaconda-branding.sh:
+  # arch-agnostic squashfs swap + xorriso boot-preserving replay). Opt out with
+  # GOBLINS_OS_SKIP_INSTALLER_BRANDING=1.
+  local iso="$1" dir base
+  if [ "${GOBLINS_OS_SKIP_INSTALLER_BRANDING:-0}" = "1" ]; then
+    echo "==> Skipping Anaconda installer branding (GOBLINS_OS_SKIP_INSTALLER_BRANDING=1)"
+    return 0
+  fi
+  dir="$(cd "$(dirname "$iso")" && pwd)"
+  base="$(basename "$iso")"
+  echo "==> Branding the Anaconda installer (Goblins sidebar/logo/accent)"
+  docker run --rm \
+    -v "$REPO_ROOT/os/brand/anaconda":/brand:ro \
+    -v "$REPO_ROOT/os/iso":/scripts:ro \
+    -v "$dir":/iso:ro \
+    -v "$dir":/work \
+    -e ISO_IN="/iso/$base" \
+    -e ISO_OUT="/work/$base.branded" \
+    docker.io/library/fedora:44 bash /scripts/remaster-anaconda-branding.sh
+  # The remaster container writes the branded ISO as root; reclaim ownership (a
+  # throwaway container, no host sudo) before swapping it in.
+  docker run --rm -v "$dir":/work docker.io/library/alpine:latest \
+    chown -R "$(id -u):$(id -g)" /work 2>/dev/null || true
+  mv -f "$iso.branded" "$iso"
+}
+
 finalize_outputs() {
   local latest_iso
 
@@ -228,6 +257,9 @@ finalize_outputs() {
   if [ "$latest_iso" != "$ISO_PATH" ]; then
     cp "$latest_iso" "$ISO_PATH"
   fi
+  # Replace Fedora's Anaconda chrome with the Goblins identity before sealing the
+  # checksum, so the shipped ISO's installer carries zero Fedora branding.
+  brand_installer "$ISO_PATH"
   # Emit a portable, basename-relative checksum so no machine-specific absolute
   # path is baked into a shipping artifact; verify with `cd <dir> && sha256sum -c`.
   (cd "$(dirname "$ISO_PATH")" && sha256_file "$(basename "$ISO_PATH")") > "$SHA_PATH"

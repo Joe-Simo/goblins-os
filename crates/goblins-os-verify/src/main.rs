@@ -4497,6 +4497,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
+            "iso-builder-brands-anaconda-installer",
+            "brand_installer \"$ISO_PATH\"",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-swaps-goblins-sidebar",
+            "sidebar-bg.png",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-recolors-fedora-accent",
+            "#0b0b0f",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
             "iso-builder-container-runtime-selector",
             "GOBLINS_OS_CONTAINER_RUNTIME",
         ),

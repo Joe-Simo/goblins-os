@@ -82,7 +82,7 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
                 ServiceStatus::ServerGated,
             ),
             api_surface: "resident-generate",
-            sdk: "Official OpenAI Agents SDK relay when configured; Codex when the account engine is selected; Responses API when BYO OpenAI is selected; local GPT-OSS otherwise",
+            sdk: "Official OpenAI Agents SDK relay when configured; Codex when the account engine is selected; Responses API when your own OpenAI key is selected; local GPT-OSS otherwise",
             os_boundary: "Rust Build Studio owns policy, storage, and approvals; configured Agents SDK relays own tools, handoffs, guardrails, tracing, and sandbox execution server-side.",
             secret_boundary: "Build Studio never receives raw API keys, account tokens, SDK relay credentials, or tool credentials.",
             readiness: if agents_sdk_relay_configured() {
@@ -90,7 +90,7 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
             } else if crate::resident::resident_engine_ready() {
                 "Ready through the active Goblins AI engine.".to_string()
             } else {
-                "Waiting for GPT-OSS, Codex sign-in, BYO OpenAI key, or an OS-owned SDK relay."
+                "Waiting for GPT-OSS, Codex sign-in, your own OpenAI key, or an OS-owned SDK relay."
                     .to_string()
             },
         },
@@ -122,11 +122,11 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
             api_surface: "/v1/responses",
             sdk: "Official OpenAI API surface called from Rust over the server-side core",
             os_boundary: "The Rust core owns HTTPS calls; clients call only Goblins OS localhost routes.",
-            secret_boundary: "BYO API keys stay in OS-owned 0600 storage or behind a server-side relay.",
+            secret_boundary: "Your own API keys stay in OS-owned 0600 storage or behind a server-side relay.",
             readiness: if responses_api_configured() {
                 "Configured for server-side Responses API calls.".to_string()
             } else {
-                "Add a BYO OpenAI key or configure a server-side OpenAI relay.".to_string()
+                "Add your own OpenAI key or configure a server-side OpenAI relay.".to_string()
             },
         },
         ServiceCatalogEntry {

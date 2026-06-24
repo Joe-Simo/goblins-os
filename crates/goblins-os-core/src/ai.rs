@@ -392,7 +392,7 @@ pub async fn ask_file_context(
             );
             file_context_outcome(
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or a BYO OpenAI key before it can answer about the selected item: {detail}."),
+                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can answer about the selected item: {detail}."),
                 Some(context),
             )
         }
@@ -459,7 +459,7 @@ pub async fn ask_settings_context(
             audit_ai_action(action_id, Some("settings"), AiActionOutcome::Blocked);
             settings_context_outcome(
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or a BYO OpenAI key before it can answer about this Settings panel: {detail}."),
+                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can answer about this Settings panel: {detail}."),
                 Some(context),
             )
         }
@@ -583,7 +583,7 @@ pub async fn ask_system_status(
             audit_ai_action(action_id, Some("troubleshooting"), AiActionOutcome::Blocked);
             system_status_context_outcome(
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or a BYO OpenAI key before it can summarize system status: {detail}."),
+                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can summarize system status: {detail}."),
                 Some(context),
             )
         }
@@ -696,7 +696,7 @@ pub async fn ask_selected_text_context(
             );
             selected_text_context_outcome(
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or a BYO OpenAI key before it can answer about selected text: {detail}."),
+                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can answer about selected text: {detail}."),
                 Some(context),
             )
         }
@@ -760,7 +760,7 @@ pub async fn write_selected_text_context(
             );
             selected_text_context_outcome(
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or a BYO OpenAI key before it can help write selected text: {detail}."),
+                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can help write selected text: {detail}."),
                 Some(context),
             )
         }
@@ -837,7 +837,7 @@ pub async fn ask_notification_context(
             );
             notification_context_outcome(
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or a BYO OpenAI key before it can answer about this notification: {detail}."),
+                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can answer about this notification: {detail}."),
                 Some(context),
             )
         }
@@ -924,7 +924,7 @@ pub async fn ask_screen_context(
             );
             screen_context_outcome(
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or a BYO OpenAI key before it can summarize the screen: {detail}."),
+                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can summarize the screen: {detail}."),
                 Some(context),
             )
         }
@@ -1003,7 +1003,7 @@ fn readiness_for_action(
 fn readiness_reason(
     action: &AiAction,
     state: AiActionReadiness,
-    policy: PolicyControlState,
+    _policy: PolicyControlState,
 ) -> String {
     match state {
         AiActionReadiness::Ready => "Ready through the OS-owned resident path.".to_string(),
@@ -1011,14 +1011,15 @@ fn readiness_reason(
             "Ready after the user reviews and confirms the exact action.".to_string()
         }
         AiActionReadiness::WaitingForEngine => {
-            "Disabled until GPT-OSS, Codex, or a BYO OpenAI relay is configured.".to_string()
+            "Set up on-device GPT-OSS, sign in to Codex, or add your own OpenAI key to use Goblins AI."
+                .to_string()
         }
         AiActionReadiness::PermissionGated => format!(
             "Requires an explicit Goblins OS permission grant for {}.",
-            action.permission.control_id()
+            action.permission.display_name()
         ),
         AiActionReadiness::Denied => {
-            format!("Denied by the active Goblins OS policy profile ({policy:?}).")
+            "This action is turned off by the active Goblins OS policy.".to_string()
         }
     }
 }
@@ -1027,7 +1028,7 @@ fn engine_detail(engine: &str, ready: bool) -> String {
     if ready {
         return format!("Goblins AI is using {engine} through an OS-owned relay.");
     }
-    "Goblins AI is waiting for GPT-OSS, Codex sign-in, or a BYO OpenAI key in OS-owned storage."
+    "Goblins AI is waiting for GPT-OSS, Codex sign-in, or your own OpenAI key in OS-owned storage."
         .to_string()
 }
 

@@ -1326,7 +1326,7 @@ fn populate_app_detail(page: &gtk4::Box, app: &BuiltApp, stack: &gtk4::Stack) {
     let meta = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     meta.set_halign(gtk::Align::Start);
     meta.set_margin_top(10);
-    meta.append(&label(engine_label(&app.source), &["gos-studio-badge"]));
+    meta.append(&label(&engine_label(&app.source), &["gos-studio-badge"]));
     meta.append(&label(
         &relative_time(&app.created_at),
         &["gos-home-app-time"],
@@ -1464,15 +1464,23 @@ fn markdown_to_pango(src: &str) -> String {
     out.trim().to_string()
 }
 
-/// A friendly label for the engine that built an app — never invents a value.
+/// A friendly label for the engine that built an app — never invents a value and
+/// never shows a raw internal slug (an unknown source is de-slugified for display).
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn engine_label(source: &str) -> &str {
+fn engine_label(source: &str) -> String {
     match source {
-        "local-gpt-oss" | "gpt-oss" | "local" => "GPT-OSS",
-        "codex" => "Codex",
-        "openai-api" | "openai" => "Your OpenAI API key",
-        "" => "On-device",
-        other => other,
+        "local-gpt-oss" | "gpt-oss" | "local" => "GPT-OSS".to_string(),
+        "codex" => "Codex".to_string(),
+        "openai-api" | "openai" => "Your OpenAI API key".to_string(),
+        "" => "On-device".to_string(),
+        other => {
+            let cleaned = other.replace('-', " ");
+            let mut chars = cleaned.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => cleaned,
+            }
+        }
     }
 }
 
@@ -1870,7 +1878,7 @@ fn rebuild_conversation(conv: &gtk4::Box, view: &StudioSessionView) {
         let rows: Vec<(String, String, String)> = view
             .files
             .iter()
-            .map(|path| (path.clone(), "new".to_string(), String::new()))
+            .map(|path| (path.clone(), String::new(), String::new()))
             .collect();
         conv.append(&studio_diff_block(
             &format!("Changed files ({})", view.files.len()),

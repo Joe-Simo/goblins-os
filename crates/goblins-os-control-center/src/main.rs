@@ -176,12 +176,15 @@ mod native {
             &screen_context_availability,
             &window,
         ));
-        ai_visual.append(&tool_button(
+        let ai_settings_btn = tool_button(
             "AI Settings…",
             "/usr/libexec/goblins-os/goblins-os-settings",
             &["--panel=models"],
             &window,
-        ));
+        );
+        ai_settings_btn.remove_css_class("gos-cc-link");
+        ai_settings_btn.add_css_class("gos-cc-action");
+        ai_visual.append(&ai_settings_btn);
         ai_actions.append(&ai_primary);
         ai_actions.append(&ai_context);
         ai_actions.append(&ai_visual);
@@ -366,7 +369,7 @@ mod native {
             (Some(true), Some(name)) if !name.is_empty() => name,
             (Some(true), _) => "On".to_string(),
             (Some(false), _) => "Off".to_string(),
-            (None, _) => "Unavailable".to_string(),
+            (None, _) => "Unavailable in this session".to_string(),
         };
         let (tile, state) = make_tile("network-wireless-symbolic", "Wi-Fi", &state_text, on);
         if enabled.is_none() {
@@ -591,6 +594,10 @@ mod native {
         window: &gtk::ApplicationWindow,
     ) -> gtk::Button {
         let button = tool_button(label, program, args, window);
+        // The primary AI actions read as real chips, not the bare text link used
+        // for the trailing "Open Settings…" affordance.
+        button.remove_css_class("gos-cc-link");
+        button.add_css_class("gos-cc-action");
         if !availability.enabled {
             button.set_sensitive(false);
             button.set_tooltip_text(Some(&availability.reason));

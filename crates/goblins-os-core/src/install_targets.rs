@@ -1331,19 +1331,11 @@ fn classify_existing_system(
 fn existing_system_detail(
     partition: &str,
     kind: &str,
-    metadata: &BTreeMap<String, String>,
+    _metadata: &BTreeMap<String, String>,
 ) -> String {
-    let mut evidence = Vec::new();
-    for key in ["TYPE", "PART_ENTRY_TYPE", "PARTTYPE", "PARTLABEL", "LABEL"] {
-        if let Some(value) = metadata.get(key).filter(|value| !value.is_empty()) {
-            evidence.push(format!("{key}={value}"));
-        }
-    }
-    if evidence.is_empty() {
-        format!("{kind} signal on {partition}")
-    } else {
-        format!("{kind} signal on {partition} ({})", evidence.join(", "))
-    }
+    // User-facing: a plain sentence. The raw blkid keys (TYPE=, PARTLABEL=, …)
+    // are internal probe evidence and are never shown.
+    format!("{kind} detected on {partition}")
 }
 
 fn existing_systems_summary(systems: &[ExistingSystem]) -> String {

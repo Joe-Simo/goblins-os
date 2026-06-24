@@ -61,6 +61,20 @@ impl AiPermission {
             Self::ComputerUse => "computer-use",
         }
     }
+
+    /// Plain-language name for user-facing copy (never the kebab `control_id`).
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::ResidentAssistant => "the resident assistant",
+            Self::ScreenContext => "screen context",
+            Self::FileContext => "file context",
+            Self::SettingsControl => "settings control",
+            Self::NotificationContext => "notification context",
+            Self::SystemTroubleshooting => "system troubleshooting",
+            Self::AppBuilder => "the app builder",
+            Self::ComputerUse => "computer use",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

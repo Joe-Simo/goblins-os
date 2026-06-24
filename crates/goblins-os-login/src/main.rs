@@ -221,18 +221,8 @@ fn session_gate_summary(gate: &SessionGateStatus) -> String {
             "Local-only desktop access is ready. Sign in with your OpenAI account any time."
                 .to_string()
         }
-        other => lock_state_label(other).to_string(),
-    }
-}
-
-#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
-fn lock_state_label(state: &str) -> &str {
-    match state {
-        "unlocked" => "unlocked",
-        "waiting-for-first-boot" => "waiting for first boot",
-        "requires-open-a-i-account" => "requires OpenAI account",
-        "local-only-available" => "local-only available",
-        _ => state,
+        // Unknown/future lock states never expose the raw token to the user.
+        _ => "Sign-in state is being prepared.".to_string(),
     }
 }
 

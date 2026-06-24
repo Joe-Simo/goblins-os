@@ -2231,6 +2231,26 @@ button:active {
   color: @gos_ink;
   box-shadow: 0 0 0 3px @gos_focus;
 }
+/* Quick-action chip (the Goblins AI actions) — a real button surface, not a
+   bare text link, like macOS Control Center's chipped actions. */
+.gos-cc-action {
+  min-height: 38px;
+  padding: 7px 12px;
+  color: @gos_ink;
+  background-color: @gos_surface_muted;
+  border: 1px solid @gos_material_border;
+  border-radius: 11px;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+.gos-cc-action:hover { background-color: @gos_surface_sunken; }
+.gos-cc-action:active { background-color: @gos_material_active; }
+.gos-cc-action:focus:focus-visible { box-shadow: 0 0 0 3px @gos_focus; }
+.gos-cc-action:disabled {
+  color: @gos_ink_muted;
+  opacity: 0.6;
+}
 "#;
 
 #[cfg(test)]

@@ -2847,6 +2847,18 @@ fn install_recommendation_summary(target: &InstallTarget) -> String {
     )
 }
 
+/// Human label for the internal dual-boot plan status slug (never shown raw).
+/// The raw slug stays the internal key for CSS-class/logic comparisons.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn dual_boot_status_label(status: &str) -> &str {
+    match status {
+        "manual-preserve-required" => "manual storage required to preserve the existing OS",
+        "blank-dedicated-disk-ready" => "ready — a blank, dedicated disk",
+        "blocked-until-reviewed" => "blocked until you review storage",
+        other => other,
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn dual_boot_plan_summary(target: &InstallTarget) -> String {
     if target.dual_boot_plan.title.is_empty() {
@@ -2871,7 +2883,10 @@ fn dual_boot_plan_summary(target: &InstallTarget) -> String {
         target.dual_boot_plan.finish
     );
     if !target.dual_boot_plan.status.is_empty() {
-        detail.push_str(&format!(" Status: {}.", target.dual_boot_plan.status));
+        detail.push_str(&format!(
+            " Status: {}.",
+            dual_boot_status_label(&target.dual_boot_plan.status)
+        ));
     }
     if !target.dual_boot_plan.steps.is_empty() {
         detail.push_str(" Steps: ");
@@ -3080,7 +3095,10 @@ fn append_target_dual_boot_plan(panel: &gtk4::Box, target: &InstallTarget) {
     let heading = if target.dual_boot_plan.status.is_empty() {
         "Dual-boot plan".to_string()
     } else {
-        format!("Dual-boot plan · {}", target.dual_boot_plan.status)
+        format!(
+            "Dual-boot plan · {}",
+            dual_boot_status_label(&target.dual_boot_plan.status)
+        )
     };
     panel.append(&review_row(&heading, &dual_boot_plan_summary(target)));
     for (index, step) in target.dual_boot_plan.steps.iter().enumerate() {
@@ -3486,7 +3504,11 @@ fn append_install_environment(panel: &gtk4::Box, environment: &InstallEnvironmen
     let boot_mode = if environment.boot_mode.is_empty() {
         "unknown"
     } else {
-        environment.boot_mode.as_str()
+        match environment.boot_mode.as_str() {
+            "uefi" => "UEFI",
+            "legacy-or-unknown" => "Legacy BIOS or unknown",
+            other => other,
+        }
     };
     let efi_state = if environment.efi_available {
         "EFI firmware is visible"
@@ -3496,7 +3518,10 @@ fn append_install_environment(panel: &gtk4::Box, environment: &InstallEnvironmen
     let secure_boot = if environment.secure_boot.state.is_empty() {
         "unknown"
     } else {
-        environment.secure_boot.state.as_str()
+        match environment.secure_boot.state.as_str() {
+            "not-uefi" => "not applicable (no UEFI)",
+            other => other,
+        }
     };
     let secure_detail = if environment.secure_boot.detail.is_empty() {
         "Secure Boot status has not been reported by the installer environment."
@@ -4366,10 +4391,7 @@ fn launch_full_storage_installer(configured_command: &str) -> Result<(), String>
     if failures.is_empty() {
         Err("Advanced storage is not available in this live image. Simple install remains disabled for dual boot, custom partitions, scan-unknown disks, encryption, or a non-blank dedicated disk; reboot from Goblins OS install media and choose Install Goblins OS Beside Another OS.".to_string())
     } else {
-        Err(format!(
-            "Advanced storage could not start: {}. No disk was changed; simple install remains disabled for dual boot, custom storage, and scan-unknown disks.",
-            failures.join("; ")
-        ))
+        Err("Advanced storage could not start in this live image. No disk was changed; simple install remains disabled for dual boot, custom storage, and scan-unknown disks. Reboot from Goblins OS install media and choose Install Goblins OS Beside Another OS.".to_string())
     }
 }
 
@@ -5068,8 +5090,8 @@ fn install_prepare_summary(body: &[u8]) -> Result<String, CoreFetchError> {
         .map(|target| format!(" for selected disk {target}"))
         .unwrap_or_default();
     Ok(format!(
-        "{}: {} · Review the install plan{target}; no disk has been changed.",
-        response.state, response.detail
+        "{} · Review the install plan{target}; no disk has been changed.",
+        response.detail
     ))
 }
 
@@ -5304,7 +5326,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(summary.contains("prepared: Install plan prepared."));
+        assert!(summary.contains("Install plan prepared."));
+        // The raw internal state slug is never prefixed onto user copy.
+        assert!(!summary.starts_with("prepared:"));
         assert!(summary.contains("selected disk /dev/nvme0n1"));
         assert!(summary.contains("no disk has been changed"));
         assert!(!summary.contains("bootc install"));

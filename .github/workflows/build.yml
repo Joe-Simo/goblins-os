@@ -48,6 +48,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends libgtk-4-dev pkg-config
+      - name: Add rustfmt and clippy components
+        run: rustup component add rustfmt clippy
       - name: Format check
         run: cargo fmt --all --check
       - name: Clippy (deny warnings)
@@ -76,6 +78,14 @@ jobs:
       - name: Assert native runner architecture
         run: |
           test "$(uname -m)" = "${{ matrix.expected_uname }}"
+      - name: Maximize build disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/.ghcup /opt/hostedtoolcache || true
+          sudo systemctl stop docker
+          sudo mkdir -p /mnt/docker /etc/docker
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          df -h / /mnt
       - name: Build the Goblins OS image
         run: docker build -f os/bootc/Containerfile --target goblins-os -t goblins-os:${{ matrix.arch }} .
       - name: Verify the packaging contract (must be 0 blocked)
@@ -118,6 +128,14 @@ jobs:
       - name: Assert native runner architecture
         run: |
           test "$(uname -m)" = "${{ matrix.expected_uname }}"
+      - name: Maximize build disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/.ghcup /opt/hostedtoolcache || true
+          sudo systemctl stop docker
+          sudo mkdir -p /mnt/docker /etc/docker
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          df -h / /mnt
       - name: Build the Goblins OS image
         run: docker build -f os/bootc/Containerfile -t localhost/goblins-os:${{ matrix.arch }} .
       - name: Build the installer ISO

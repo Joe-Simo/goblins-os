@@ -31,20 +31,31 @@ ISO_SHA="$(awk '{print $1; exit}' "$SHA_FILE")"
 
 # Accel: KVM on Linux, HVF on macOS.
 if [ "$(uname -s)" = "Linux" ] && [ -e /dev/kvm ]; then ACCEL=kvm; CPU=host; else ACCEL=hvf; CPU=host; fi
+pick() { for f in "$@"; do [ -n "$f" ] && [ -f "$f" ] && { echo "$f"; return 0; }; done; return 1; }
+VARS_TEMPLATE=""
 if [ "$ARCH" = aarch64 ]; then
   MACHINE="virt,accel=$ACCEL,gic-version=max"
-  CODE="${AARCH64_UEFI_CODE:-/opt/homebrew/share/qemu/edk2-aarch64-code.fd}"
-  [ -f "$CODE" ] || CODE=/usr/share/edk2/aarch64/QEMU_EFI-silent.fd
-  PFLASH=(-drive "if=pflash,format=raw,file=$WORK/code.fd,readonly=on" -drive "if=pflash,format=raw,file=$WORK/vars.fd")
+  CODE="$(pick "$AARCH64_UEFI_CODE" /opt/homebrew/share/qemu/edk2-aarch64-code.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/edk2/aarch64/QEMU_EFI-silent.fd)"
+  VARS_TEMPLATE="$(pick "$AARCH64_UEFI_VARS" /usr/share/AAVMF/AAVMF_VARS.fd || true)"  # empty 64M also works on edk2-aarch64
 else
   MACHINE="q35,accel=$ACCEL"
-  CODE="${X86_UEFI_CODE:-/usr/share/edk2/ovmf/OVMF_CODE.fd}"
-  PFLASH=(-drive "if=pflash,format=raw,readonly=on,file=$WORK/code.fd" -drive "if=pflash,format=raw,file=$WORK/vars.fd")
+  CODE="$(pick "$X86_UEFI_CODE" /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/ovmf/OVMF_CODE.fd)"
+  # x86_64 OVMF requires a real VARS template matching the code build (4M code -> 4M vars).
+  case "$CODE" in
+    *_4M.fd) VARS_TEMPLATE="$(pick /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/ovmf/OVMF_VARS.fd)";;
+    *)       VARS_TEMPLATE="$(pick /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/ovmf/OVMF_VARS.fd)";;
+  esac
 fi
+[ -n "$CODE" ] || { echo "no UEFI code firmware found for $ARCH"; exit 1; }
+PFLASH=(-drive "if=pflash,format=raw,file=$WORK/code.fd,readonly=on" -drive "if=pflash,format=raw,file=$WORK/vars.fd")
 
 mkdir -p "$WORK" "$RUN_DIR"
 cp "$CODE" "$WORK/code.fd"
-: > "$WORK/vars.fd"; truncate -s 67108864 "$WORK/vars.fd" 2>/dev/null || dd if=/dev/zero of="$WORK/vars.fd" bs=1m count=64 2>/dev/null
+if [ -n "$VARS_TEMPLATE" ]; then
+  cp "$VARS_TEMPLATE" "$WORK/vars.fd"
+else
+  : > "$WORK/vars.fd"; truncate -s 67108864 "$WORK/vars.fd" 2>/dev/null || dd if=/dev/zero of="$WORK/vars.fd" bs=1m count=64 2>/dev/null
+fi
 qemu-img create -f qcow2 "$WORK/scratch.qcow2" 16G >/dev/null
 # OEMDRV kickstart disk (FAT, label OEMDRV) carrying verify-install.ks
 "$HERE/make-oemdrv.sh" "$WORK/oemdrv.img" "$REPO/os/iso/verify-install.ks"

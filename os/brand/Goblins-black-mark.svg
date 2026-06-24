@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="721" height="721" viewBox="0 0 721 721" fill="none">
+  <!-- Goblins OS system mark (ink) — for light surfaces; eyes as cutouts. -->
+  <g transform="translate(360.5 366) scale(2.0)" fill="#161616" fill-rule="evenodd">
+    <path d="M0,104 C 49,104 86,58 92,3 C 127,-26 132,-95 124,-104 C 116,-112 63,-75 58,-63 C 40,-75 20,-81 0,-81 C -20,-81 -40,-75 -58,-63 C -63,-75 -116,-112 -124,-104 C -132,-95 -127,-26 -92,3 C -86,58 -49,104 0,104 Z M-29,-12 C -43,-12 -52,0 -49,14 C -47,23 -31,23 -23,11 C -17,3 -17,-12 -29,-12 Z M29,-12 C 43,-12 52,0 49,14 C 47,23 31,23 23,11 C 17,3 17,-12 29,-12 Z"/>
+  </g>
+</svg>

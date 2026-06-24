@@ -1,0 +1,8 @@
+[Sound Theme]
+Name=GoblinsOS
+Comment=Goblins OS event sounds: calm, short, and graphite-light
+Directories=stereo
+Inherits=freedesktop
+
+[stereo]
+OutputProfile=stereo

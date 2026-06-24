@@ -1,0 +1,39 @@
+# Goblins OS boot splash. A calm near-black field with the centered mark taking a
+# slow breath — the Goblins-native boot, not Fedora's. Kept deliberately quiet:
+# no spinner racing, no logos stacked, just the mark and the dark.
+
+Window.SetBackgroundTopColor(0.05, 0.05, 0.07);
+Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
+
+screen_width = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+logo.image = Image("logo.png");
+logo.sprite = Sprite(logo.image);
+logo.width = logo.image.GetWidth();
+logo.height = logo.image.GetHeight();
+logo.sprite.SetX(screen_width / 2 - logo.width / 2);
+logo.sprite.SetY(screen_height / 2 - logo.height / 2);
+logo.sprite.SetOpacity(1);
+
+tick = 0;
+fun refresh_callback() {
+    tick++;
+    # A slow, gentle breath (period ~ a couple seconds at 50Hz refresh).
+    opacity = 0.62 + 0.38 * Math.Sin(tick / 22);
+    logo.sprite.SetOpacity(opacity);
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# When boot needs a password (e.g. an encrypted disk), steady the mark and show
+# the prompt + bullets beneath it, styled to match the calm dark field.
+status = "normal";
+fun display_password_callback(prompt, bullets) {
+    logo.sprite.SetOpacity(0.45);
+}
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+
+fun display_normal_callback() {
+    logo.sprite.SetOpacity(1);
+}
+Plymouth.SetDisplayNormalFunction(display_normal_callback);

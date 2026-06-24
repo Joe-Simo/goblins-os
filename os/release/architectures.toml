@@ -1,0 +1,49 @@
+# Native release architecture contract.
+
+supported = ["aarch64", "x86_64"]
+
+[artifacts.aarch64]
+iso = "goblins-os-aarch64.iso"
+sha256 = "goblins-os-aarch64.iso.sha256"
+manifest = "manifest-goblins-os-aarch64.json"
+iso_path = "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso"
+sha256_path = "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso.sha256"
+manifest_path = "os/iso/output/aarch64/manifest-goblins-os-aarch64.json"
+hardware_proofs = "os/screenshots/hardware-gate/aarch64/<date>/"
+release_evidence = "os/signoff-proofs/sbom/aarch64/"
+cargo_sbom = "os/signoff-proofs/sbom/aarch64/cargo-lock-packages.tsv"
+rpm_sbom = "os/signoff-proofs/sbom/aarch64/rpm-packages.tsv"
+qemu = "qemu-system-aarch64"
+qemu_machine = "virt,accel=kvm,gic-version=max"
+uefi_code = "AARCH64_UEFI_CODE"
+uefi_vars = "AARCH64_UEFI_VARS or AARCH64_UEFI_VARS_TEMPLATE"
+runner = "Native aarch64 Linux runner; do not use x86_64 emulation as baseline."
+
+[artifacts.x86_64]
+iso = "goblins-os-x86_64.iso"
+sha256 = "goblins-os-x86_64.iso.sha256"
+manifest = "manifest-goblins-os-x86_64.json"
+iso_path = "os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso"
+sha256_path = "os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso.sha256"
+manifest_path = "os/iso/output/x86_64/manifest-goblins-os-x86_64.json"
+hardware_proofs = "os/screenshots/hardware-gate/x86_64/<date>/"
+release_evidence = "os/signoff-proofs/sbom/x86_64/"
+cargo_sbom = "os/signoff-proofs/sbom/x86_64/cargo-lock-packages.tsv"
+rpm_sbom = "os/signoff-proofs/sbom/x86_64/rpm-packages.tsv"
+qemu = "qemu-system-x86_64"
+qemu_accel = "kvm"
+runner = "Native x86_64 Linux runner."
+
+[gaming]
+package_contract = "Native Fedora RPM packages in the bootc image: Mesa Vulkan/VA-API, VDPAU wrapper diagnostics, vulkan-tools, gamescope, gamemode, mangohud, Flatpak/portal support, PipeWire audio compatibility, joystick-support, evtest, and usbutils."
+non_steam_launcher_policy = "Heroic, Lutris, Bottles, UMU-compatible launchers, Proton runtimes, and Flatpak runtimes are user-initiated installs through Software/Flatpak or Fedora packages where available."
+steam_policy = "Steam and steam-devices are intentionally absent from the base image and are checked absent in source and installed-root verification."
+architecture_policy = "Gaming readiness evidence is captured separately for aarch64 and x86_64 RPMs. Goblins OS does not claim x86-only game runtimes work on Arm unless a user-initiated launcher path installs and verifies that compatibility layer."
+display_proofs = [
+  "19-vulkan-vkcube.png",
+  "20-gamemode-active.png",
+  "21-gamescope-session.png",
+  "22-mangohud-overlay.png",
+  "23-controller-detection.png",
+  "24-audio-output.png",
+]

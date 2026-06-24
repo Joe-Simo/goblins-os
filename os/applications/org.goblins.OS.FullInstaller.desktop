@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Install Goblins OS Beside Another OS
+GenericName=Advanced Storage
+Comment=Preserve existing systems, choose storage, review encryption, and confirm EFI before installing.
+Exec=/usr/libexec/goblins-os/goblins-os-full-installer
+Icon=org.goblins.OS.Installer
+Terminal=false
+Categories=System;Settings;
+Keywords=install;dual boot;Windows;macOS;Linux;partition;storage;EFI;beside;

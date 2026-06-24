@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Goblins OS
+Comment=Goblins OS native desktop session
+Exec=/usr/libexec/goblins-os/goblins-os-session
+Type=Application
+DesktopNames=GoblinsOS;GNOME

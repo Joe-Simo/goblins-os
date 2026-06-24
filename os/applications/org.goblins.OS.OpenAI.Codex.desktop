@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Codex
+Comment=OpenAI Codex account engine for Goblins OS Build Studio
+Exec=/usr/libexec/goblins-os/goblins-os-open codex
+Icon=/usr/share/goblins-os/brand/icons/codex.svg
+Categories=Development;
+NoDisplay=false
+StartupWMClass=org.goblins.OS.OpenAI.Codex

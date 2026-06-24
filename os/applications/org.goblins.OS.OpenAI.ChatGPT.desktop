@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ChatGPT
+Comment=OpenAI conversation workspace for Goblins OS
+Exec=/usr/libexec/goblins-os/goblins-os-open chatgpt
+Categories=Office;Network;
+NoDisplay=false
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+StartupWMClass=org.goblins.OS.OpenAI.ChatGPT

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Goblins OS Recovery
+Comment=Native recovery checks for the boot image, services, models, and Goblins identity
+Exec=/usr/libexec/goblins-os/goblins-os-settings --panel=recovery
+Categories=System;Settings;
+NoDisplay=false
+Icon=/usr/share/goblins-os/brand/icons/settings.svg
+StartupWMClass=org.goblins.OS.Settings

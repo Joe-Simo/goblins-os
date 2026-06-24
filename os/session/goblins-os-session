@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+# Load the non-secret system config (ports, loopback URLs, paths, modes). This
+# file is credential-free by contract; the desktop session must NEVER source
+# /etc/goblins-os/openai-secrets.env — operator secrets stay server-side, read
+# only by the OS services via their systemd EnvironmentFile.
+if [ -r /etc/goblins-os/environment ]; then
+  set -a
+  . /etc/goblins-os/environment
+  set +a
+fi
+
+export GOBLINS_OS_SESSION="${GOBLINS_OS_SESSION:-gnome-native-desktop}"
+export GOBLINS_OS_GUI_PLATFORM="${GOBLINS_OS_GUI_PLATFORM:-gnome-session}"
+export GOBLINS_OS_SHELL_MODE="${GOBLINS_OS_SHELL_MODE:-native-desktop}"
+export GOBLINS_OS_CORE_URL="${GOBLINS_OS_CORE_URL:-${OPENAI_OS_CORE_URL:-http://127.0.0.1:8787}}"
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-GoblinsOS:GNOME}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-goblins-os}"
+export DESKTOP_SESSION="${DESKTOP_SESSION:-goblins-os}"
+export GTK_IM_MODULE="${GTK_IM_MODULE:-gtk-im-context-simple}"
+export QT_IM_MODULE="${QT_IM_MODULE:-simple}"
+export XMODIFIERS="${XMODIFIERS:-@im=none}"
+export IBUS_ENABLE_SYNC_MODE="${IBUS_ENABLE_SYNC_MODE:-0}"
+
+# Goblins OS owns the GNOME compositor through a custom shell mode so the desktop
+# never presents stock GNOME chrome (no activities button, overview, or app grid).
+export GNOME_SHELL_SESSION_MODE="${GNOME_SHELL_SESSION_MODE:-goblins-os}"
+
+# When the display manager launches us it already owns the session bus and the
+# systemd --user instance, so start GNOME directly. Wrapping that case in
+# dbus-run-session creates a nested bus where gnome-session cannot reach
+# systemd1 (the gnome-session-wayland@goblins-os.target activation failure).
+# A standalone launch (e.g. from a TTY) has no bus, so provide a private one.
+if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+  exec /usr/bin/gnome-session --session=goblins-os
+else
+  exec /usr/bin/dbus-run-session -- /usr/bin/gnome-session --session=goblins-os
+fi

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenAI Agents
+Comment=OpenAI tool-using automations and managed workflows
+Exec=/usr/libexec/goblins-os/goblins-os-open agents
+Categories=Development;Office;
+NoDisplay=false
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+StartupWMClass=org.goblins.OS.OpenAI.Agents

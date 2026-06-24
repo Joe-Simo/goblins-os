@@ -1,0 +1,114 @@
+# Asset provenance manifest for acquisition diligence.
+
+[[assets]]
+path = "os/brand/Goblins-black-mark.svg"
+owner = "Goblins OS"
+status = "first-party mark"
+ship_scope = "primary product identity"
+
+[[assets]]
+path = "os/brand/Goblins-white-mark.svg"
+owner = "Goblins OS"
+status = "first-party mark"
+ship_scope = "primary product identity"
+
+[[assets]]
+path = "os/brand/OpenAI-black-wordmark.svg"
+owner = "OpenAI"
+status = "third-party trademark/provider integration asset"
+ship_scope = "provider/integration reference; review before acquisition or public distribution"
+
+[[assets]]
+path = "os/brand/OpenAI-black-wordmark.png"
+owner = "OpenAI"
+status = "third-party trademark/provider integration asset, raster variant"
+ship_scope = "provider/integration reference; review before acquisition or public distribution"
+
+[[assets]]
+path = "os/brand/OpenAI-white-wordmark.svg"
+owner = "OpenAI"
+status = "third-party trademark/provider integration asset"
+ship_scope = "provider/integration reference; review before acquisition or public distribution"
+
+[[assets]]
+path = "os/brand/OpenAI-white-wordmark.png"
+owner = "OpenAI"
+status = "third-party trademark/provider integration asset, raster variant"
+ship_scope = "provider/integration reference; review before acquisition or public distribution"
+
+[[assets]]
+path = "os/brand/OpenAI-black-monoblossom.svg"
+owner = "OpenAI"
+status = "third-party trademark/provider integration asset"
+ship_scope = "provider/integration reference; review before acquisition or public distribution"
+
+[[assets]]
+path = "os/brand/OpenAI-black-monoblossom.png"
+owner = "OpenAI"
+status = "third-party trademark/provider integration asset, raster variant"
+ship_scope = "provider/integration reference; review before acquisition or public distribution"
+
+[[assets]]
+path = "os/brand/OpenAI-white-monoblossom.svg"
+owner = "OpenAI"
+status = "third-party trademark/provider integration asset"
+ship_scope = "provider/integration reference; review before acquisition or public distribution"
+
+[[assets]]
+path = "os/brand/OpenAI-white-monoblossom.png"
+owner = "OpenAI"
+status = "third-party trademark/provider integration asset, raster variant"
+ship_scope = "provider/integration reference; review before acquisition or public distribution"
+
+[[assets]]
+path = "os/brand/anaconda/sidebar-bg.png"
+owner = "Goblins OS"
+status = "first-party installer background"
+ship_scope = "Anaconda installer chrome"
+
+[[assets]]
+path = "os/brand/anaconda/sidebar-bg.svg"
+owner = "Goblins OS"
+status = "first-party installer background source"
+ship_scope = "Anaconda installer chrome"
+
+[[assets]]
+path = "os/brand/anaconda/sidebar-logo.png"
+owner = "Goblins OS"
+status = "first-party installer logo composition"
+ship_scope = "Anaconda installer chrome"
+
+[[assets]]
+path = "os/brand/wallpaper/goblins-os-light.svg"
+owner = "Goblins OS"
+status = "first-party wallpaper"
+ship_scope = "desktop wallpaper"
+
+[[assets]]
+path = "os/brand/wallpaper/goblins-os-dark.svg"
+owner = "Goblins OS"
+status = "first-party wallpaper"
+ship_scope = "desktop wallpaper"
+
+[[assets]]
+path = "os/brand/icons/"
+owner = "Goblins OS"
+status = "first-party brand and shell icon set"
+ship_scope = "launcher, settings, files, terminal, control center, and shell chrome"
+
+[[assets]]
+path = "os/icons/GoblinsOS/"
+owner = "Goblins OS"
+status = "first-party icon theme with Adwaita inheritance"
+ship_scope = "desktop/app chrome"
+
+[[assets]]
+path = "os/sounds/GoblinsOS/"
+owner = "Goblins OS"
+status = "generated first-party tones from Containerfile sox synthesis"
+ship_scope = "sound theme"
+
+[policy]
+apple_assets = "Not used. Apple design sources are quality references only."
+openai_sans = "Not used."
+sf_symbols = "Not used."

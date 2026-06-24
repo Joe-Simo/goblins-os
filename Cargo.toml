@@ -1,0 +1,25 @@
+[workspace]
+members = [
+  "crates/goblins-os-ai",
+  "crates/goblins-os-control-center",
+  "crates/goblins-os-core",
+  "crates/goblins-os-design",
+  "crates/goblins-os-file-builder",
+  "crates/goblins-os-installer",
+  "crates/goblins-os-launcher",
+  "crates/goblins-os-login",
+  "crates/goblins-os-open",
+  "crates/goblins-os-resident",
+  "crates/goblins-os-screenshot-context",
+  "crates/goblins-os-settings",
+  "crates/goblins-os-shell",
+  "crates/goblins-os-ui",
+  "crates/goblins-os-verify",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.83"

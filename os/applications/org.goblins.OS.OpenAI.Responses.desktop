@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Responses API
+Comment=OpenAI unified intelligence layer for OS services
+Exec=/usr/libexec/goblins-os/goblins-os-open responses-api
+Categories=Development;
+NoDisplay=false
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+StartupWMClass=org.goblins.OS.OpenAI.Responses

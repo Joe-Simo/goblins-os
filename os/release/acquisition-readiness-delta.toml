@@ -1,0 +1,187 @@
+# Additive acquisition manifest for the current source tree state.
+# This does not replace the existing release manifests; it records current,
+# repo-verifiable packaging intent while those files are not locally materialized.
+
+[manifest]
+name = "goblins-os-acquisition-readiness-delta"
+version = 1
+status = "partial"
+reason = "The source package is materialized and locally verifiable, but native per-architecture release artifacts and display-backed signoff evidence are not complete in this workspace."
+
+[source_package]
+root = "."
+source_tree_manifest = "os/release/source-tree-manifest.toml"
+base_os = "Fedora bootc"
+desktop_stack = ["Rust", "GNOME", "GTK", "systemd"]
+font_stack = ["Inter", "Noto Sans fallback"]
+architecture_policy = ["x86_64", "aarch64"]
+prohibited = [
+  "OpenAI Sans",
+  "SF Pro",
+  "Apple fonts",
+  "Apple logos",
+  "Apple wallpapers",
+  "copied Apple trade dress",
+  "Steam",
+  "steam-devices",
+  "custom kernel",
+  "client-side secrets",
+]
+
+[[source_sets]]
+name = "first_party_rust"
+paths = ["crates/"]
+purpose = "Native Goblins OS apps, core services, installer, shell, settings, AI relay, and verification tools."
+verification = "cargo fmt, clippy, test, and release build with native desktop features."
+
+[[source_sets]]
+name = "bootc_image_contract"
+paths = ["os/bootc/Containerfile", "os/bootc-install/"]
+purpose = "Fedora bootc image package list, bootc install configuration, native app installation, GNOME/session integration, and image build assertions."
+verification = "Native bootc image build for x86_64 and aarch64 plus installed-root self-test."
+
+[[source_sets]]
+name = "native_architecture_image_contract"
+paths = ["os/bootc/Containerfile"]
+purpose = "Fail-closed native image builds for exactly x86_64 and aarch64. The Rust builder host, Fedora image machine architecture, and Fedora RPM architecture must all match a supported architecture."
+verification = "Image build must fail outside x86_64/aarch64 and must fail if uname -m disagrees with rpm --eval %{_arch}; release automation still must produce separate goblins-os-x86_64.iso and goblins-os-aarch64.iso artifacts."
+
+[[source_sets]]
+name = "installer_and_dual_boot"
+paths = [
+  "crates/goblins-os-installer/src/main.rs",
+  "crates/goblins-os-installer/src/bin/goblins-os-full-installer.rs",
+  "os/applications/org.goblins.OS.FullInstaller.desktop",
+]
+purpose = "Guided blank-disk install, full Anaconda storage handoff, dual-boot/manual-storage entry point, and post-install boot verification guidance."
+verification = "Installer render proof showing Open advanced storage, desktop entry validation, full installer launch proof, and architecture-specific ISO install proof."
+
+[[source_sets]]
+name = "release_governance"
+paths = ["SHIP.md", "os/release/"]
+purpose = "Policy, source tree manifest, architecture contract, third-party notices, asset provenance, and trademark posture."
+verification = "License/SBOM/provenance checks plus source/stage/image verifier."
+
+[[source_sets]]
+name = "font_and_secret_policy"
+paths = ["os/bootc/Containerfile", "os/etc/goblins-os/environment", "os/etc/goblins-os/openai-secrets.env"]
+purpose = "Image-enforced Inter/Noto font stack, forbidden Apple/OpenAI Sans font absence, and server-side-only OpenAI secret handling."
+verification = "Image build must prove Inter resolves through fontconfig, OpenAI Sans/SF Pro/Apple font packages are absent, openai-secrets.env is root:root 0600, and no active key/secret/token assignments ship in environment files."
+
+[[source_sets]]
+name = "non_steam_gaming_substrate"
+paths = ["os/bootc/Containerfile", "crates/goblins-os-settings/src/main.rs", "crates/goblins-os-verify/src/main.rs"]
+purpose = "Native Fedora gaming substrate without Steam: Vulkan/Mesa, Vulkan tools, Gamescope, GameMode, MangoHud, VAAPI diagnostics, Flatpak portals, PipeWire audio, and controller/device diagnostics."
+verification = "Image build must prove the packages and commands exist, prove steam and steam-devices are absent, then display-backed hardware proof must run Vulkan sample, GameMode, Gamescope, MangoHud, controller detection, and audio output per architecture."
+
+[[source_sets]]
+name = "user_initiated_non_steam_launchers"
+paths = [
+  "crates/goblins-os-installer/src/bin/goblins-os-install-game-launcher.rs",
+  "os/applications/org.goblins.OS.Games.Heroic.desktop",
+  "os/applications/org.goblins.OS.Games.Bottles.desktop",
+  "os/applications/org.goblins.OS.Games.Lutris.desktop",
+]
+purpose = "User-initiated install paths for Heroic, Bottles, and Lutris through GNOME Software, appstream links, or Flathub pages without auto-installing launchers or runtimes."
+verification = "Image build validates the Flathub system remote, desktop entries, and helper binary; runtime proof must show each entry opens the installer/details page and waits for user approval."
+
+[[generated_outputs]]
+name = "build_outputs"
+paths = ["target/"]
+package_status = "local build output; never source of truth"
+
+[[generated_outputs]]
+name = "signoff_proofs"
+paths = ["os/signoff-proofs/", "os/screenshots/"]
+package_status = "generated proof artifacts; preserve but do not treat as source"
+
+[[generated_outputs]]
+name = "iso_outputs"
+paths = ["os/iso/output*/", "artifacts/"]
+package_status = "release/build artifacts; regenerate per architecture"
+
+[[release_artifacts]]
+name = "x86_64_iso"
+path = "goblins-os-x86_64.iso"
+required = true
+status = "not-produced-in-current-workspace"
+verification = "SHA256 file, manifest proving x86_64 payload, goblins-os-verify blocked=0, self-test, screenshots, and signoff notes."
+
+[[release_artifacts]]
+name = "aarch64_iso"
+path = "goblins-os-aarch64.iso"
+required = true
+status = "not-produced-in-current-workspace"
+verification = "SHA256 file, manifest proving aarch64 payload, goblins-os-verify blocked=0, self-test, screenshots, and signoff notes."
+
+[[sensitive_paths]]
+path = "os/etc/goblins-os/openai-secrets.env"
+policy = "Template or operator-owned server-side secrets only; no live key material may ship."
+
+[[sensitive_paths]]
+path = "/var/lib/goblins-os/secrets/openai"
+policy = "Runtime-only secret storage owned by the OS service account."
+
+[[current_materialized_deltas]]
+path = "crates/goblins-os-installer/src/bin/goblins-os-full-installer.rs"
+purpose = "Rust launcher for advanced storage handoff used by dual boot and custom storage."
+
+[[current_materialized_deltas]]
+path = "os/applications/org.goblins.OS.FullInstaller.desktop"
+purpose = "User-visible Install Goblins OS Beside Another OS entry point for dual boot and advanced storage."
+
+[[current_materialized_deltas]]
+path = "os/bootc/Containerfile"
+purpose = "Image package contract plus build-time checks for the full installer handoff and non-Steam gaming substrate."
+
+[[current_materialized_deltas]]
+path = "crates/goblins-os-installer/src/bin/goblins-os-install-game-launcher.rs"
+purpose = "Rust helper for user-initiated non-Steam launcher install paths."
+
+[[current_materialized_deltas]]
+path = "os/applications/org.goblins.OS.Games.Heroic.desktop"
+purpose = "User-visible install path for Heroic through GNOME Software or Flathub."
+
+[[current_materialized_deltas]]
+path = "os/applications/org.goblins.OS.Games.Bottles.desktop"
+purpose = "User-visible install path for Bottles through GNOME Software or Flathub."
+
+[[current_materialized_deltas]]
+path = "os/applications/org.goblins.OS.Games.Lutris.desktop"
+purpose = "User-visible install path for Lutris through GNOME Software or Flathub."
+
+[[current_evidence]]
+name = "rust_source_gates_available"
+evidence = "Rust toolchain is available locally; cargo fmt, cargo test, cargo clippy with native-desktop features, cargo build --release, and goblins-os-verify source mode have been run successfully from this workspace."
+
+[[current_evidence]]
+name = "source_package_materialized"
+evidence = "Cargo workspace, OS source tree, release manifests, hardware gate scripts, ISO config, runbook, and verifier sources are readable in the current workspace."
+
+[[current_evidence]]
+name = "x86_64_rpm_sbom_present"
+evidence = "os/signoff-proofs/sbom/x86_64/rpm-packages.tsv is present with x86_64/noarch package rows; shipping status verifies RPM SBOM architecture per release arch."
+
+[[current_evidence]]
+name = "dual_arch_rpm_sbom_present"
+evidence = "Both os/signoff-proofs/sbom/aarch64/rpm-packages.tsv and os/signoff-proofs/sbom/x86_64/rpm-packages.tsv are present with only matching-architecture or noarch rows; the remaining release blockers are ISO provenance, display-backed screenshots, runtime proof, and signoff rows."
+
+[[current_blockers]]
+name = "native_linux_release_runner_required"
+evidence = "The current development host can run Docker artifact tests, but it is not the native Linux release runner required for display-backed KVM install proof for both architectures."
+next_required_action = "Run os/hardware-gate/run-external-gate.sh on native aarch64 and x86_64 Linux hosts with Docker, QEMU/KVM, bootc-image-builder access, and at least 120 GiB free on repo and VM scratch filesystems."
+
+[[current_blockers]]
+name = "shippable_release_iso_artifacts_incomplete"
+evidence = "A Docker-local aarch64 artifact can exist for artifact proof, but final release media still requires both architecture ISO tracks built with a nonlocal bootc-image-builder source ref, SHA256 files, ISO manifests, and BIB manifests that do not track a local Docker registry."
+next_required_action = "Push the bootc image for each architecture to the real release registry, then build each native ISO with GOBLINS_OS_SHIPPABLE_RELEASE=1 and GOBLINS_OS_BIB_SOURCE_IMAGE set to that real pullable release ref."
+
+[[current_blockers]]
+name = "display_backed_architecture_proofs_missing"
+evidence = "The aarch64 hardware-gate root has an empty dated run directory at os/screenshots/hardware-gate/aarch64/2026-06-23, while the x86_64 hardware-gate root is absent. Legacy/non-shipping screenshot roots under os/screenshots/hardware-gate that are not nested under <arch>/<YYYY-MM-DD> are preserved as migration history and ignored by the architecture proof gate. Neither architecture has the required PNG screenshots plus proof-manifest.json tied to the ISO and SHA."
+next_required_action = "Boot each native ISO in a display-backed QEMU/KVM or hardware run, capture the required 01-installer.png through 28-bootloader-efi-summary.png screenshots in the matching architecture directory, add proof-manifest.json, and validate with close-signoff.sh. Do not copy or re-date legacy root-level screenshots into an architecture proof root."
+
+[[current_blockers]]
+name = "complete_signoff_rows_missing"
+evidence = "No complete per-architecture signoff row currently proves runner/device, ISO hash, goblins-os-verify blocked=0, self-test, SBOM, runtime engine, gaming, motion, install-storage, and built-artifact evidence."
+next_required_action = "After artifact, screenshot, runtime-engine, and built-app proof exists for each architecture, run close-signoff.sh with GOBLINS_OS_ARCH, SCREENSHOT_RUN_DIR, RUNTIME_ENGINE_MODE, RUNTIME_ENGINE_SOURCE, RUNTIME_ENGINE_CONFIG, and BUILT_ARTIFACT_PATH_URL."

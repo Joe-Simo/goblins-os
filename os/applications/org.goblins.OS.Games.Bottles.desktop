@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Install Bottles
+GenericName=Windows App Compatibility
+Comment=Open Bottles in the software installer. Nothing is installed until you choose Install.
+Exec=/usr/libexec/goblins-os/goblins-os-install-game-launcher bottles
+Icon=org.goblins.OS.Settings
+Terminal=false
+Categories=Game;System;
+Keywords=games;launcher;Windows;Wine;Flatpak;Flathub;

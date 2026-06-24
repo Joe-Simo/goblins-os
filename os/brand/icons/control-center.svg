@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <!-- Two slider tracks with offset knobs — the control-center mark, white for the
+       dark glass menu bar (used by-path, so it renders as authored). -->
+  <line x1="4" y1="8.5" x2="20" y2="8.5" stroke="#f5f5f7" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="4" y1="15.5" x2="20" y2="15.5" stroke="#f5f5f7" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="15" cy="8.5" r="2.9" fill="#f5f5f7"/>
+  <circle cx="9" cy="15.5" r="2.9" fill="#f5f5f7"/>
+</svg>

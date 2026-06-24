@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Goblins OS Settings
+Comment=Native settings and recovery controls for Goblins OS
+Exec=/usr/libexec/goblins-os/goblins-os-settings
+Icon=/usr/share/goblins-os/brand/icons/settings.svg
+Categories=System;Settings;
+Keywords=Settings;Preferences;System;Network;Bluetooth;Displays;Sound;Keyboard;Mouse;Trackpad;Accessibility;Desktop;Dock;Menu Bar;Control Center;Notifications;Lock Screen;Search;Power;Battery;Printers;Date;Time;Language;Region;Accounts;Privacy;Security;Storage;Updates;Recovery;AI;Models;OpenAI;Goblins OS;
+NoDisplay=false
+StartupNotify=true
+X-GNOME-Autostart-enabled=false
+StartupWMClass=org.goblins.OS.Settings

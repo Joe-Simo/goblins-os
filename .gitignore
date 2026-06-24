@@ -1,0 +1,46 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+.next
+out
+target
+dist
+dist-ssr
+*.tsbuildinfo
+*.local
+
+# Generated build/proof/release outputs. Keep these out of source-package reviews;
+# the verifier/signoff scripts regenerate or consume them explicitly.
+artifacts/
+libpod/
+.claude/
+os/signoff-proofs/
+os/screenshots/
+os/iso/output*/
+
+# Accidental shell-fragment/image files that can be produced by interrupted
+# terminal redirections.
+%sn *
+-background
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# CI: persistent x86_64-linux cargo target for in-container clippy/fmt
+.ci-target/
+.ci-target-amd64/

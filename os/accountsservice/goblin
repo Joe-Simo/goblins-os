@@ -1,0 +1,7 @@
+# AccountsService profile for the local Goblins OS desktop user. Pins the
+# Goblins OS Wayland session as the default so GDM autologin always lands in the
+# OS-owned session (never stock GNOME), where the OpenAI login gate takes over.
+[User]
+Session=goblins-os
+SessionType=wayland
+SystemAccount=false

@@ -1,0 +1,10 @@
+[Unit]
+Description=Goblins OS shell target
+CollectMode=inactive-or-failed
+
+Wants=org.goblins.OS.Shell.service
+
+Requisite=gnome-session-initialized.target
+After=gnome-session-initialized.target org.gnome.Shell@user.service
+PartOf=gnome-session-initialized.target
+Before=gnome-session.target

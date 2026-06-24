@@ -1,0 +1,27 @@
+[Unit]
+Description=Goblins OS local AI service core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=goblins-os
+Group=goblins-os
+EnvironmentFile=-/etc/goblins-os/environment
+EnvironmentFile=-/etc/goblins-os/openai-secrets.env
+ExecStart=/usr/libexec/goblins-os/goblins-os-core
+Restart=on-failure
+RestartSec=2s
+StateDirectory=goblins-os/models goblins-os/ai
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/goblins-os/installer /var/lib/goblins-os/session /var/lib/goblins-os/policy /var/lib/goblins-os/ai /var/lib/goblins-os/models /var/lib/goblins-os/secrets/openai
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

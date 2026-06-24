@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Goblins OS Login
+Comment=Native Goblins OS identity gate
+Exec=/usr/libexec/goblins-os/goblins-os-login
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+NoDisplay=true
+OnlyShowIn=GoblinsOS;
+StartupWMClass=org.goblins.OS.Login

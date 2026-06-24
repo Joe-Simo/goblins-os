@@ -1,0 +1,64 @@
+/* Light-scheme chrome overlay. The goblins-menubar extension OVERLAYS this
+ * color-only sheet on top of the always-loaded dark gnome-shell.css (the base
+ * that supplies all geometry) whenever the desktop color-scheme is light,
+ * re-coloring the chrome to macOS-style light frosted glass + dark ink. In dark
+ * mode the overlay is unloaded and the dark base shows through. Because this is
+ * an overlay (not a replacement), it carries NO geometry — only colors — and if
+ * the extension is absent or errors, the dark base remains in both schemes (the
+ * safe fallback, with no half-styled mix). */
+
+/* ── Menu bar → light frosted ─────────────────────────────────────────── */
+#panel {
+  background-color: rgba(249, 249, 251, 0.78);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.09);
+  color: #1a1a1f;
+}
+
+#panel .panel-button { color: #1a1a1f; }
+#panel .panel-button:hover { background-color: rgba(0, 0, 0, 0.06); }
+#panel .panel-button:active,
+#panel .panel-button:overview,
+#panel .panel-button:focus,
+#panel .panel-button:checked {
+  background-color: rgba(0, 0, 0, 0.10);
+  color: #000000;
+}
+
+/* ── Popups + control center → light ──────────────────────────────────── */
+.popup-menu-content,
+.quick-settings,
+.osd-window,
+.datemenu-popover,
+.message,
+.notification-banner {
+  background-color: rgba(252, 252, 254, 0.96);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  color: #1a1a1f;
+  box-shadow: 0 18px 48px rgba(13, 13, 12, 0.16);
+}
+
+.popup-menu-item:hover,
+.popup-menu-item:focus,
+.popup-menu-item.selected {
+  background-color: rgba(0, 0, 0, 0.06);
+  color: #000000;
+}
+
+.quick-toggle,
+.quick-menu-toggle,
+.quick-slider { background-color: rgba(0, 0, 0, 0.05); color: #1a1a1f; }
+
+.quick-toggle:checked,
+.quick-toggle:active,
+.quick-menu-toggle:checked { background-color: #1a1a1f; color: #ffffff; }
+
+/* ── Dock + menu-bar mark → light ─────────────────────────────────────── */
+.goblins-dock {
+  background-color: rgba(249, 249, 251, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 18px 44px rgba(13, 13, 12, 0.14);
+}
+
+.goblins-dock-item:hover { background-color: rgba(0, 0, 0, 0.07); }
+
+.goblins-menubar-name { color: #1a1a1f; }

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Goblins OS First Boot
+Comment=Native first-boot installer for Goblins OS
+Exec=/usr/libexec/goblins-os/goblins-os-installer
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+NoDisplay=true
+OnlyShowIn=GoblinsOS;
+StartupWMClass=org.goblins.OS.Installer

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Goblins OS Login
+Comment=Native OpenAI account and local-only session gate for Goblins OS
+Exec=/usr/libexec/goblins-os/goblins-os-login
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Phase=Application
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+StartupWMClass=org.goblins.OS.Login

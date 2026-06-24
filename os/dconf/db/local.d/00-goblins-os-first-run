@@ -1,0 +1,20 @@
+[org/gnome/shell]
+welcome-dialog-last-shown-version='999999999'
+
+[org/gnome/desktop/session]
+idle-delay=uint32 0
+
+[org/gnome/desktop/screensaver]
+idle-activation-enabled=false
+lock-enabled=false
+lock-delay=uint32 0
+
+[org/gnome/desktop/lockdown]
+disable-lock-screen=true
+
+[org/gnome/settings-daemon/plugins/power]
+idle-dim=false
+sleep-inactive-ac-type='nothing'
+sleep-inactive-ac-timeout=0
+sleep-inactive-battery-type='nothing'
+sleep-inactive-battery-timeout=0

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenAI Images
+Comment=OpenAI image generation and editing workspace
+Exec=/usr/libexec/goblins-os/goblins-os-open images
+Categories=Graphics;
+NoDisplay=false
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+StartupWMClass=org.goblins.OS.OpenAI.Images

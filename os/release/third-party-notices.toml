@@ -1,0 +1,38 @@
+# Third-party notice and SBOM plan. Generated outputs are architecture-specific
+# release artifacts and must live outside the source package.
+
+[cargo]
+lockfile = "Cargo.lock"
+generator = "goblins-os-verify --source-root <source> --release-evidence os/signoff-proofs/sbom/<arch>/ --arch <arch>"
+packages_tsv = "os/signoff-proofs/sbom/<arch>/cargo-lock-packages.tsv"
+manifest = "os/signoff-proofs/sbom/<arch>/release-evidence-manifest.json"
+license_policy = "Workspace source is UNLICENSED/proprietary; dependency licenses remain third-party."
+
+[rpm]
+source = "Fedora 44 bootc image package set"
+generator = "Run goblins-os-verify --release-evidence inside the built Goblins OS image, or run os/signoff-proofs/sbom/<arch>/rpm-packages.command in the image."
+recommended_sbom = "rpm -qa output and license scan under os/signoff-proofs/sbom/<arch>/"
+packages_tsv = "os/signoff-proofs/sbom/<arch>/rpm-packages.tsv"
+command_file = "os/signoff-proofs/sbom/<arch>/rpm-packages.command"
+architectures = ["aarch64", "x86_64"]
+
+[gnome]
+source = "Fedora RPM package set in the built image"
+coverage = "GNOME Shell, GTK, libadwaita/Adwaita assets, Nautilus, Console, Settings integrations, Flatpak, portals, and related desktop packages are captured in os/signoff-proofs/sbom/<arch>/rpm-packages.tsv."
+trademark_policy = "GNOME, GTK, Flatpak, and Flathub names are factual component/package references only; Goblins OS remains the product identity."
+notice_path = "See os/release/trademark-posture.toml and the architecture-specific RPM SBOM."
+
+[fonts]
+inter = "rsms-inter-fonts from Fedora packages"
+noto = "google-noto-sans-fonts fallback from Fedora packages"
+excluded = ["OpenAI Sans", "SF Pro", "Apple fonts"]
+
+[firmware]
+status = "No custom kernel or bundled proprietary firmware is added by this source tree."
+obligation = "Document firmware/package obligations from the Fedora image SBOM for each architecture."
+
+[trademarks]
+goblins = "Primary product identity."
+openai = "Provider/integration references only unless an acquisition agreement changes scope."
+fedora = "Base platform reference; Goblins OS remains primary identity."
+apple = "Quality reference only; no Apple assets or trade dress copied."

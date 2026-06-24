@@ -1,0 +1,331 @@
+/* Motion mirrors goblins-os-design:
+ * overlay 180ms, fast 140ms, standard ease, spring-like selection feel. */
+
+.goblins-wm-overlay {
+  background-color: rgba(10, 10, 12, 0.58);
+  padding: 54px 58px 30px 58px;
+  spacing: 22px;
+  color: #f5f5f4;
+}
+
+.goblins-wm-header {
+  spacing: 18px;
+  padding: 0 6px;
+}
+
+.goblins-wm-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.goblins-wm-search {
+  width: 360px;
+  min-height: 42px;
+  border-radius: 999px;
+  padding: 8px 18px;
+  background-color: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.28);
+}
+
+.goblins-wm-body {
+  spacing: 18px;
+  padding-bottom: 6px;
+}
+
+.goblins-wm-stage-rail {
+  width: 198px;
+  spacing: 8px;
+  padding: 14px;
+  border-radius: 22px;
+  background-color: rgba(22, 22, 26, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 24px 58px rgba(0, 0, 0, 0.42);
+}
+
+.goblins-wm-rail-button,
+.goblins-wm-rail-action {
+  min-height: 38px;
+  border-radius: 12px;
+  padding: 9px 11px;
+  color: #e9e9ec;
+  background-color: transparent;
+}
+
+.goblins-wm-rail-button:hover,
+.goblins-wm-rail-action:hover,
+.goblins-wm-rail-button:focus,
+.goblins-wm-rail-action:focus,
+.goblins-wm-rail-button.active {
+  background-color: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.goblins-wm-rail-divider {
+  min-height: 1px;
+  background-color: rgba(255, 255, 255, 0.10);
+  margin: 8px 0;
+}
+
+.goblins-wm-window-area {
+  spacing: 16px;
+  padding-bottom: 8px;
+}
+
+.goblins-wm-workspace-group {
+  spacing: 10px;
+}
+
+.goblins-wm-space-heading {
+  color: rgba(245, 245, 247, 0.70);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.goblins-wm-space-heading.active {
+  color: #ffffff;
+}
+
+.goblins-wm-window-grid {
+  spacing: 14px;
+}
+
+.goblins-wm-window-card,
+.goblins-wm-switch-card {
+  border-radius: 18px;
+  padding: 10px;
+  background-color: rgba(30, 30, 36, 0.80);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
+}
+
+.goblins-wm-window-card:hover,
+.goblins-wm-switch-card:hover,
+.goblins-wm-window-card:focus,
+.goblins-wm-switch-card:focus,
+.goblins-wm-window-card.selected,
+.goblins-wm-switch-card.selected {
+  background-color: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.42);
+}
+
+.goblins-wm-thumbnail {
+  border-radius: 13px;
+  background-color: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+.goblins-wm-thumbnail-placeholder {
+  color: rgba(245, 245, 247, 0.72);
+  padding: 20px;
+}
+
+.goblins-wm-window-footer,
+.goblins-wm-switch-title-row,
+.goblins-wm-hud-title-row {
+  spacing: 8px;
+  padding-top: 9px;
+}
+
+.goblins-wm-window-title,
+.goblins-wm-switch-title,
+.goblins-wm-hud-title {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.goblins-wm-empty {
+  padding: 44px;
+  border-radius: 22px;
+  color: rgba(245, 245, 247, 0.70);
+  background-color: rgba(22, 22, 26, 0.68);
+}
+
+.goblins-wm-spaces-strip {
+  spacing: 8px;
+  margin-top: 4px;
+  padding: 11px;
+  border-radius: 20px;
+  background-color: rgba(20, 20, 24, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 22px 58px rgba(0, 0, 0, 0.40);
+}
+
+.goblins-wm-space-button,
+.goblins-wm-space-control {
+  min-height: 44px;
+  border-radius: 12px;
+  padding: 7px 14px;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #eeeeef;
+}
+
+.goblins-wm-space-button:hover,
+.goblins-wm-space-control:hover,
+.goblins-wm-space-button:focus,
+.goblins-wm-space-control:focus,
+.goblins-wm-space-button.active,
+.goblins-wm-space-control.add {
+  background-color: #f5f5f4;
+  color: #101014;
+}
+
+.goblins-wm-switcher-overlay {
+  background-color: rgba(8, 8, 10, 0.50);
+}
+
+.goblins-wm-switcher {
+  spacing: 14px;
+  padding: 16px;
+  border-radius: 24px;
+  background-color: rgba(23, 23, 28, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 34px 76px rgba(0, 0, 0, 0.54);
+}
+
+.goblins-wm-switch-card-inner {
+  spacing: 8px;
+}
+
+.goblins-wm-hud-overlay {
+  background-color: rgba(8, 8, 10, 0.28);
+}
+
+.goblins-wm-hud {
+  min-width: 510px;
+  spacing: 12px;
+  padding: 18px;
+  border-radius: 24px;
+  background-color: rgba(24, 24, 30, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 34px 76px rgba(0, 0, 0, 0.52);
+}
+
+.goblins-wm-hud-actions,
+.goblins-wm-hud-spaces {
+  spacing: 8px;
+}
+
+.goblins-wm-hud-button {
+  min-height: 44px;
+  border-radius: 12px;
+  padding: 9px 12px;
+  background-color: rgba(255, 255, 255, 0.09);
+  color: #f5f5f4;
+}
+
+.goblins-wm-hud-button:hover,
+.goblins-wm-hud-button:focus,
+.goblins-wm-hud-button.primary {
+  background-color: #f5f5f4;
+  color: #101014;
+}
+
+.goblins-wm-hud-button.disabled {
+  color: rgba(245, 245, 247, 0.48);
+}
+
+.goblins-wm-snap-preview {
+  border-radius: 22px;
+  background-color: rgba(245, 245, 247, 0.16);
+  border: 1px solid rgba(245, 245, 247, 0.62);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+}
+
+.goblins-wm-overlay.light {
+  background-color: rgba(245, 245, 247, 0.52);
+  color: #16161a;
+}
+
+.goblins-wm-overlay.light .goblins-wm-title,
+.goblins-wm-overlay.light .goblins-wm-window-title,
+.goblins-wm-overlay.light .goblins-wm-switch-title,
+.goblins-wm-overlay.light .goblins-wm-hud-title {
+  color: #101014;
+}
+
+.goblins-wm-overlay.light .goblins-wm-search,
+.goblins-wm-overlay.light .goblins-wm-stage-rail,
+.goblins-wm-overlay.light .goblins-wm-spaces-strip,
+.goblins-wm-overlay.light .goblins-wm-switcher,
+.goblins-wm-overlay.light .goblins-wm-hud {
+  background-color: rgba(252, 252, 254, 0.90);
+  border-color: rgba(0, 0, 0, 0.09);
+  color: #151519;
+  box-shadow: 0 24px 58px rgba(13, 13, 12, 0.18);
+}
+
+.goblins-wm-overlay.light .goblins-wm-search {
+  background-color: rgba(22, 22, 26, 0.88);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  -st-hint-text-color: rgba(255, 255, 255, 0.72);
+}
+
+.goblins-wm-overlay.light .goblins-wm-rail-button,
+.goblins-wm-overlay.light .goblins-wm-rail-action {
+  color: #25252a;
+}
+
+.goblins-wm-overlay.light .goblins-wm-rail-divider {
+  background-color: rgba(0, 0, 0, 0.10);
+}
+
+.goblins-wm-overlay.light .goblins-wm-window-card,
+.goblins-wm-overlay.light .goblins-wm-switch-card,
+.goblins-wm-overlay.light .goblins-wm-empty {
+  background-color: rgba(255, 255, 255, 0.82);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #17171b;
+  box-shadow: 0 18px 44px rgba(13, 13, 12, 0.13);
+}
+
+.goblins-wm-overlay.light .goblins-wm-window-card:hover,
+.goblins-wm-overlay.light .goblins-wm-switch-card:hover,
+.goblins-wm-overlay.light .goblins-wm-window-card:focus,
+.goblins-wm-overlay.light .goblins-wm-switch-card:focus,
+.goblins-wm-overlay.light .goblins-wm-window-card.selected,
+.goblins-wm-overlay.light .goblins-wm-switch-card.selected,
+.goblins-wm-overlay.light .goblins-wm-rail-button:hover,
+.goblins-wm-overlay.light .goblins-wm-rail-action:hover,
+.goblins-wm-overlay.light .goblins-wm-rail-button:focus,
+.goblins-wm-overlay.light .goblins-wm-rail-action:focus,
+.goblins-wm-overlay.light .goblins-wm-rail-button.active {
+  background-color: rgba(0, 0, 0, 0.07);
+  border-color: rgba(0, 0, 0, 0.18);
+  color: #000000;
+}
+
+.goblins-wm-overlay.light .goblins-wm-thumbnail,
+.goblins-wm-overlay.light .goblins-wm-space-button,
+.goblins-wm-overlay.light .goblins-wm-space-control,
+.goblins-wm-overlay.light .goblins-wm-hud-button {
+  background-color: rgba(0, 0, 0, 0.055);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #17171b;
+}
+
+.goblins-wm-overlay.light .goblins-wm-space-button.active,
+.goblins-wm-overlay.light .goblins-wm-space-control.add,
+.goblins-wm-overlay.light .goblins-wm-hud-button:hover,
+.goblins-wm-overlay.light .goblins-wm-hud-button:focus,
+.goblins-wm-overlay.light .goblins-wm-hud-button.primary {
+  background-color: #16161a;
+  color: #ffffff;
+}
+
+.goblins-wm-overlay.light .goblins-wm-space-heading {
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.goblins-wm-overlay.light .goblins-wm-space-heading.active {
+  color: #101014;
+}
+
+.goblins-wm-snap-preview.light {
+  background-color: rgba(255, 255, 255, 0.34);
+  border-color: rgba(0, 0, 0, 0.26);
+  box-shadow: 0 22px 54px rgba(13, 13, 12, 0.18);
+}

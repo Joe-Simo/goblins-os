@@ -1,0 +1,28 @@
+/* Goblins OS dock — the macOS-blend glass dock, matching the shell theme. */
+.goblins-dock {
+  background-color: rgba(18, 18, 23, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 24px;
+  padding: 8px 10px;
+  spacing: 8px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+}
+
+.goblins-dock-item {
+  border-radius: 15px;
+  padding: 6px;
+  transition-duration: 150ms;
+}
+
+.goblins-dock-item:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.goblins-dock-item:focus {
+  background-color: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.74);
+}
+
+.goblins-dock-item:active {
+  background-color: rgba(255, 255, 255, 0.18);
+}

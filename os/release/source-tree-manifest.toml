@@ -1,0 +1,79 @@
+# Acquisition source-package manifest. This classifies what belongs in the source
+# handoff versus generated proofs and local build output.
+
+[source]
+description = "Authoritative Goblins OS source package"
+paths = [
+  ".dockerignore",
+  ".github/",
+  ".gitignore",
+  "Cargo.toml",
+  "Cargo.lock",
+  "crates/",
+  "os/accountsservice/",
+  "os/applications/",
+  "os/autostart/",
+  "os/bootc/",
+  "os/bootc-install/",
+  "os/brand/",
+  "os/codex/",
+  "os/dconf/",
+  "os/etc/",
+  "os/gdm/",
+  "os/gnome-session/",
+  "os/gnome-shell-extensions/",
+  "os/gnome-shell-modes/",
+  "os/gtk-4.0/",
+  "os/hardware-gate/",
+  "os/icons/",
+  "os/iso/",
+  "os/nautilus/",
+  "os/plymouth/",
+  "os/release/",
+  "os/runtime-gate/",
+  "os/session/",
+  "os/sounds/",
+  "os/systemd/",
+  "os/systemd-system/",
+  "os/systemd-user/",
+  "os/themes/",
+  "os/tmpfiles/",
+  "SHIP.md",
+  "LICENSE.md",
+  "GOAL.md",
+]
+
+[generated_proofs]
+description = "Regenerable design, signoff, hardware, and local proof artifacts"
+paths = [
+  "artifacts/",
+  "os/signoff-notes.md",
+  "os/signoff-proofs/",
+  "os/screenshots/",
+]
+
+[release_artifacts]
+description = "Generated install media, manifests, checksums, and architecture artifacts"
+paths = [
+  "os/iso/output*/",
+]
+
+[local_build_outputs]
+description = "Local compiler, container, and editor output that must not be treated as source"
+paths = [
+  ".ci-target/",
+  ".ci-target-amd64/",
+  "target/",
+  "libpod/",
+  ".claude/",
+  ".DS_Store",
+  "%sn *",
+  "-background",
+]
+
+[policy]
+base = "Fedora bootc"
+font_stack = "Inter with Noto fallback"
+architectures = ["aarch64", "x86_64"]
+secrets = "Server-side/OS-owned relay only; no client-side secrets."
+trade_dress = "Goblins-owned UI; Apple references are quality references only."

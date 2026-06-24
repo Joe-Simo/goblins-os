@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Goblins OS Policy
+Comment=Native Goblins OS policy, enterprise controls, data boundaries, and permission gates
+Exec=/usr/libexec/goblins-os/goblins-os-settings --panel=policy
+Categories=System;Settings;
+NoDisplay=false
+Icon=/usr/share/goblins-os/brand/icons/settings.svg
+StartupWMClass=org.goblins.OS.Settings

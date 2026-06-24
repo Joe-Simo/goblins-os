@@ -1,0 +1,124 @@
+/* Goblins OS GTK/libadwaita bridge for themed GNOME stock utilities in Dark. */
+
+@define-color accent_color #f5f5f7;
+@define-color accent_bg_color #3a3a3c;
+@define-color accent_fg_color #ffffff;
+@define-color focus_ring_color rgba(245, 245, 247, 0.22);
+@define-color destructive_color #ff4245;
+@define-color success_color #30d158;
+@define-color warning_color #ff9230;
+
+@define-color window_bg_color #1e1e1e;
+@define-color window_fg_color #ededf0;
+@define-color view_bg_color #202022;
+@define-color view_fg_color #ededf0;
+@define-color sidebar_bg_color #242426;
+@define-color sidebar_fg_color #c4c4cc;
+@define-color headerbar_bg_color rgba(30, 30, 30, 0.90);
+@define-color headerbar_fg_color #ededf0;
+@define-color headerbar_border_color rgba(255, 255, 255, 0.10);
+@define-color card_bg_color rgba(36, 36, 38, 0.94);
+@define-color card_fg_color #ededf0;
+@define-color dialog_bg_color #242426;
+@define-color dialog_fg_color #ededf0;
+@define-color popover_bg_color rgba(36, 36, 38, 0.96);
+@define-color popover_fg_color #ededf0;
+@define-color shade_color rgba(0, 0, 0, 0.55);
+@define-color scrollbar_outline_color rgba(255, 255, 255, 0.12);
+
+window.background,
+window.csd {
+  background: @window_bg_color;
+  color: @window_fg_color;
+}
+
+window.background headerbar,
+window.csd headerbar {
+  background: @headerbar_bg_color;
+  color: @headerbar_fg_color;
+  border-bottom: 1px solid @headerbar_border_color;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+.navigation-sidebar,
+.sidebar,
+placessidebar,
+sidebar {
+  background: @sidebar_bg_color;
+  color: @sidebar_fg_color;
+}
+
+listview,
+gridview,
+preferencespage,
+preferencesgroup,
+group,
+clamp {
+  background: transparent;
+}
+
+row,
+preferencesrow {
+  border-radius: 10px;
+}
+
+listview row:selected,
+gridview child:selected,
+.navigation-sidebar row:selected {
+  background: @accent_bg_color;
+  color: @accent_fg_color;
+  border-radius: 10px;
+}
+
+button,
+menubutton > button {
+  border-radius: 9px;
+}
+
+entry,
+searchentry {
+  border-radius: 10px;
+}
+
+button:focus,
+menubutton > button:focus,
+entry:focus-within,
+searchentry:focus-within,
+row:focus,
+preferencesrow:focus {
+  outline: none;
+  border-color: @accent_color;
+  box-shadow: 0 0 0 3px @focus_ring_color,
+              0 0 0 1px @accent_color inset;
+}
+
+button:disabled,
+entry:disabled,
+searchentry:disabled {
+  opacity: 1;
+  color: rgba(237, 237, 240, 0.48);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(36, 36, 38, 0.58);
+}
+
+popover,
+dialog,
+window.dialog {
+  background: @popover_bg_color;
+  color: @popover_fg_color;
+  border-radius: 16px;
+}
+
+window.nautilus-window placessidebar,
+window.org-gnome-Nautilus placessidebar {
+  background: rgba(36, 36, 38, 0.94);
+}
+
+window.nautilus-window popover,
+window.org-gnome-Nautilus popover {
+  background: @popover_bg_color;
+  color: @popover_fg_color;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}

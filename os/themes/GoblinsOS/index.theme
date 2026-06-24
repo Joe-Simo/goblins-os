@@ -1,0 +1,10 @@
+[X-GNOME-Metatheme]
+Name=GoblinsOS
+Comment=Goblins OS — Goblins-native design language, macOS-blend chrome
+Encoding=UTF-8
+
+[Settings]
+GtkTheme=Adwaita
+MetacityTheme=Adwaita
+IconTheme=GoblinsOS
+CursorTheme=Adwaita

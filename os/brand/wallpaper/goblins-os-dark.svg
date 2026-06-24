@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2560" height="1600" viewBox="0 0 2560 1600">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#15151f"/>
+      <stop offset="0.5" stop-color="#0c0c13"/>
+      <stop offset="1" stop-color="#050507"/>
+    </linearGradient>
+    <radialGradient id="bloomCool" cx="0.28" cy="0.20" r="0.85">
+      <stop offset="0" stop-color="#5b6bf0" stop-opacity="0.30"/>
+      <stop offset="0.45" stop-color="#3b3f8a" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#3b3f8a" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bloomViolet" cx="0.62" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#8a5cf0" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#8a5cf0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bloomWarm" cx="0.86" cy="0.92" r="0.7">
+      <stop offset="0" stop-color="#e0a06a" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#e0a06a" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="vignette" cx="0.5" cy="0.4" r="0.85">
+      <stop offset="0" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="0.62" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.55"/>
+    </radialGradient>
+  </defs>
+  <rect width="2560" height="1600" fill="url(#base)"/>
+  <rect width="2560" height="1600" fill="url(#bloomCool)"/>
+  <rect width="2560" height="1600" fill="url(#bloomViolet)"/>
+  <rect width="2560" height="1600" fill="url(#bloomWarm)"/>
+  <g fill="none" stroke="#ffffff" stroke-opacity="0.018">
+    <circle cx="720" cy="360" r="260"/>
+    <circle cx="720" cy="360" r="470"/>
+    <circle cx="720" cy="360" r="700"/>
+  </g>
+  <rect width="2560" height="1600" fill="url(#vignette)"/>
+</svg>

@@ -1,0 +1,17 @@
+# The bootc build only needs the workspace sources and the os/ tree; keep the
+# build context small and reproducible by excluding local build output.
+target
+**/target
+.git
+.DS_Store
+*.log
+os/iso/output*
+os/screenshots
+os/signoff-proofs
+artifacts
+libpod
+.claude
+.ci-target
+.ci-target-amd64
+%sn *
+-background

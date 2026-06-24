@@ -1,0 +1,74 @@
+# Goblins OS — bare-metal install ISO (bootc-image-builder, anaconda-iso).
+#
+# This is the supported bootc install medium: bootc-image-builder embeds the
+# Goblins OS image in the supported installer ISO. The installer engine deploys
+# the immutable image to the disk the person explicitly chooses, then the
+# machine reboots into the native Goblins OS first-boot GUI (the Goblins-native
+# onboarding) — and from there, on-device GPT-OSS or the user's OpenAI account.
+#
+# bootc-image-builder automatically injects the `ostreecontainer` line that
+# deploys the image, so the kickstart below must NOT set it (or anything that
+# conflicts). Build with os/iso/build-iso.sh through Docker for local testing or
+# CI; final release media must use a real pullable bootc image ref so the
+# generated installer does not track a local Docker registry after install.
+
+[customizations.installer.kickstart]
+contents = """
+# Locale and time defaults — the person can change them in the installer.
+lang en_US.UTF-8
+keyboard us
+timezone --utc Etc/UTC
+
+# Bring up networking during install so post-deploy is ready; the immutable image
+# is embedded in the ISO, so the deployment itself does not require the internet.
+network --bootproto=dhcp --device=link --activate --onboot=on
+
+# Storage is intentionally LEFT to advanced storage and its Installation
+# Destination screen: the person explicitly selects and confirms
+# the target disk or free space. Goblins OS never auto-wipes a disk, so there is
+# deliberately no clearpart / autopart here. Whole-disk installs,
+# reclaim/free-space installs, and manual storage for dual boot with Windows, macOS, Linux, or another OS
+# must stay visible in advanced storage before any write happens.
+#
+# Dual boot is first-class but not custom-reimplemented: choose Installation
+# Destination, then Custom/manual storage or Reclaim Space. Back up first, make
+# free space from the OS being kept when possible, install into unallocated free
+# space or a dedicated disk, and preserve existing Windows, macOS/APFS, Linux,
+# other OS, recovery, and EFI partitions unless the user intentionally chooses
+# to replace that system.
+#
+# In the native Goblins OS installer, the user-facing choice is simple: Keep my
+# current OS, Replace one blank disk, or Advanced storage. Keeping another OS
+# shows Open advanced storage and hands off to this storage
+# path so the final preserve/format summary is visible before disk writes.
+#
+# The native first-boot installer only offers the simple blank-disk whole-disk
+# path. If a disk already has Windows, macOS/APFS, Linux, another OS, recovery,
+# EFI, or data partitions, Goblins OS routes the user back here so advanced
+# storage can show the final manual-storage summary before any write.
+#
+# Bootloader, EFI System Partition, and root formatting are handled by advanced
+# storage and the image builder after the user confirms the final storage
+# summary. Do not proceed unless that summary names the target disk
+# or free-space assignment, every filesystem that will be formatted, every
+# preserved Windows, macOS/APFS, Linux, other OS, recovery, EFI, vendor, and data
+# partition, and the bootloader/EFI target.
+# The release hardware gate captures Installation Destination, storage summary,
+# dual-boot/manual storage, and bootloader/EFI proof screenshots.
+# (bootc-image-builder injects the image-deploy line itself.)
+
+# Eject the installer medium and reboot into the Goblins OS first-boot GUI.
+reboot --eject
+"""
+
+# Identity in Goblins OS is the in-session OpenAI login gate, not a local Unix
+# password (the image ships the `goblin` desktop user with GDM autologin), so the
+# installer skips the user-creation step entirely.
+[customizations.installer.modules]
+disable = ["org.fedoraproject.Anaconda.Modules.Users"]
+
+# ISO metadata / branding.
+[customizations.iso]
+volume_id = "GOBLINS_OS"
+application_id = "Goblins OS"
+publisher = "Goblins OS"

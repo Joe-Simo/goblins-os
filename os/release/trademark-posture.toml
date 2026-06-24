@@ -1,0 +1,39 @@
+# Trademark posture for acquisition diligence.
+# This is an engineering release control, not legal clearance.
+
+[official_sources]
+openai_brand = "https://openai.com/brand/"
+openai_developer_apps_terms = "https://openai.com/policies/developer-apps-terms/"
+fedora_trademark_guidelines = "https://docs.fedoraproject.org/en-US/legal/trademarks/"
+red_hat_trademark_guidelines = "https://www.redhat.com/en/about/trademark-guidelines-and-policies"
+gnome_legal_trademarks = "https://foundation.gnome.org/legal-and-trademarks/"
+apple_third_party_guidelines = "https://www.apple.com/legal/intellectual-property/guidelinesfor3rdparties.html"
+
+[product_identity]
+primary_name = "Goblins OS"
+primary_owner = "Goblins OS"
+rule = "Goblins OS remains the leading product identity across boot, installer, desktop, settings, documentation, release artifacts, and screenshots."
+
+[openai]
+scope = "Provider/integration reference only unless a written acquisition or partnership agreement changes scope."
+allowed = "OpenAI marks may identify OpenAI account, Codex, GPT-OSS/OpenAI-compatible provider, or OpenAI service integration."
+blocked = "Do not use OpenAI marks as the product name, app icon, boot identity, wallpaper, primary branding, or implied endorsement."
+review = "Review OpenAI assets and copy before public distribution or acquisition close."
+
+[fedora_red_hat]
+scope = "Base-platform reference only."
+allowed = "Fedora may be named factually as the bootc base and RPM package source."
+blocked = "Do not use Fedora or Red Hat marks as Goblins OS identity, certification, endorsement, domain, installer title, wallpaper, or merchandise."
+review = "Confirm any remixed Fedora/Red Hat marks are removed or permitted before public distribution."
+
+[gnome]
+scope = "Runtime, toolkit, and package reference only."
+allowed = "GNOME, GTK, Flatpak, and Flathub may be named factually for installed components, compatibility, or package source."
+blocked = "Do not use GNOME, GTK, Flatpak, Flathub logos, names, or trade dress as Goblins OS identity or implied endorsement."
+review = "Confirm any GNOME-family marks in app metadata, screenshots, or release pages are factual and secondary."
+
+[apple]
+scope = "Quality reference only."
+allowed = "Apple and macOS may be referenced internally as design-quality comparators."
+blocked = "Do not ship Apple fonts, logos, symbols, wallpapers, screenshots, app screens, product images, SF Symbols, or copied Apple trade dress."
+review = "Do not use Apple marks or assets in product UI, packaging, screenshots, or release marketing without explicit rights."

@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Goblins OS
+Description=Goblins OS boot splash — calm dark with the Goblins mark
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/goblins-os
+ScriptFile=/usr/share/plymouth/themes/goblins-os/goblins-os.script

@@ -1,0 +1,313 @@
+/* Goblins OS — GNOME Shell theme.
+ *
+ * The macOS-blend chrome over the Goblins-native design language: a translucent menu bar,
+ * a Control Center, a glass dock, and calm rounded popups — all in the same calm
+ * near-black/paper palette and Inter type as the native app surfaces (mirrors the
+ * tokens in goblins-os-design, hardcoded here because St theming has no
+ * @define-color). The desktop surfaces read as refined dark glass floating over
+ * either wallpaper, the way the macOS menu bar and dock do.
+ *
+ * FIRST PASS — selectors and metrics are refined against os/bootc/render-desktop.sh
+ * (the headless GNOME Shell render). Do not hand-tune blind past structural sanity.
+ */
+
+stage {
+  font-family: Inter;
+  font-size: 11pt;
+  color: #ededf0;
+}
+
+/* ── Top panel → the menu bar ─────────────────────────────────────────── */
+#panel {
+  background-color: rgba(20, 20, 26, 0.52);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  height: 30px;
+  font-weight: 500;
+  color: #ededf0;
+}
+
+#panel:overview {
+  background-color: rgba(18, 18, 23, 0.74);
+}
+
+#panel .panel-button {
+  color: #ededf0;
+  border-radius: 9px;
+  padding: 1px 8px;
+  -natural-hpadding: 8px;
+  -minimum-hpadding: 6px;
+  transition-duration: 140ms;
+}
+
+#panel .panel-button:hover {
+  background-color: rgba(255, 255, 255, 0.10);
+}
+
+#panel .panel-button:active,
+#panel .panel-button:overview,
+#panel .panel-button:focus,
+#panel .panel-button:checked {
+  background-color: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+#panel .panel-button .clock-display { font-weight: 500; }
+
+#panel .panel-button.clock-display .clock { padding: 0 6px; }
+
+/* Quiet the system status icons so the bar reads calm, not busy. */
+#panel .system-status-icon { icon-size: 16px; }
+
+/* ── Popups + menus ───────────────────────────────────────────────────── */
+.popup-menu-content,
+.candidate-popup-content {
+  background-color: rgba(24, 24, 30, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.50);
+  padding: 8px;
+  color: #ededf0;
+}
+
+.popup-menu-item {
+  border-radius: 11px;
+  padding: 8px 12px;
+  spacing: 10px;
+}
+
+.popup-menu-item:hover,
+.popup-menu-item:focus,
+.popup-menu-item.selected {
+  background-color: rgba(255, 255, 255, 0.10);
+  color: #ffffff;
+}
+
+.popup-separator-menu-item .popup-separator-menu-item-separator {
+  background-color: rgba(255, 255, 255, 0.10);
+}
+
+/* ── Quick settings → the Control Center ──────────────────────────────── */
+.quick-settings {
+  background-color: rgba(22, 22, 28, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 22px;
+  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.52);
+  padding: 14px;
+}
+
+.quick-toggle,
+.quick-menu-toggle,
+.quick-slider {
+  border-radius: 16px;
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #ededf0;
+  transition-duration: 140ms;
+}
+
+.quick-toggle:hover,
+.quick-menu-toggle:hover { background-color: rgba(255, 255, 255, 0.12); }
+
+.quick-toggle:checked,
+.quick-toggle:active,
+.quick-menu-toggle:checked {
+  background-color: #f5f5f4;
+  color: #161616;
+}
+
+.quick-slider .slider { color: #f5f5f4; }
+
+/* ── Dash-to-Dock → the dock ──────────────────────────────────────────── */
+#dashtodockContainer .dash-background {
+  background-color: rgba(18, 18, 23, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 24px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+
+#dashtodockContainer .overview-icon { border-radius: 15px; }
+
+#dashtodockContainer .app-well-app:hover .overview-icon,
+#dashtodockContainer .app-well-app:focus .overview-icon {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+#dashtodockContainer .app-well-app-running-dot { background-color: #ededf0; }
+
+/* ── OSD, calendar, date menu ─────────────────────────────────────────── */
+.osd-window,
+.datemenu-popover {
+  background-color: rgba(24, 24, 30, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 18px;
+  color: #ededf0;
+}
+
+/* The volume/brightness OSD pill — a calm capsule, ink fill on its track. */
+.osd-window {
+  padding: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.50);
+}
+.osd-window .level-bar { background-color: #f5f5f4; border-radius: 999px; }
+.osd-window .level { border-radius: 999px; }
+
+/* ── Notifications (banners + the message list) ───────────────────────────
+   Themed to the same glass material as the chrome — a rounded card with a soft
+   shadow, a hairline, and calm ink type. Banners arrive at the top center. */
+.notification-banner,
+.message {
+  background-color: rgba(26, 26, 32, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 18px;
+  color: #ededf0;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.46);
+}
+
+.notification-banner { padding: 4px; }
+
+.message {
+  padding: 12px;
+  margin: 4px 0;
+}
+
+.message .message-title {
+  font-weight: 700;
+  color: #f5f5f7;
+}
+
+.message .message-body,
+.message .message-secondary-bin {
+  color: rgba(245, 245, 247, 0.66);
+}
+
+.message .message-icon-bin { padding-right: 10px; }
+
+/* Notification action buttons + the close affordance — calm hairline pills. */
+.message .message-close-button,
+.notification-banner .notification-button {
+  border-radius: 10px;
+  color: #ededf0;
+  background-color: rgba(255, 255, 255, 0.06);
+  transition-duration: 140ms;
+}
+.message .message-close-button:hover,
+.notification-banner .notification-button:hover {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+/* The "Do Not Disturb" toggle + the Clear pill in the message list footer. */
+.message-list-clear-button,
+.dnd-button {
+  border-radius: 12px;
+  color: #ededf0;
+}
+
+.message-list-placeholder { color: rgba(245, 245, 247, 0.5); }
+
+/* ── Login / lock (shell-rendered) ────────────────────────────────────── */
+.login-dialog,
+.unlock-dialog { background-color: transparent; }
+
+.login-dialog .modal-dialog-button-box .button,
+.unlock-dialog .modal-dialog-button-box .button {
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.10);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.login-dialog-prompt-entry,
+.unlock-dialog .modal-dialog-button-box .button:default {
+  border-radius: 12px;
+}
+
+/* ── One dock idiom ───────────────────────────────────────────────────────
+   Goblins OS ships a single always-on dock: the addChrome `goblins-dock`
+   (visible on the desktop AND in the overview). Suppress GNOME's built-in
+   overview dash + its show-apps button + window running-dots so two dock
+   languages never coexist in the Activities overview. */
+#overviewControls .dash,
+#dash {
+  height: 0;
+  width: 0;
+  opacity: 0;
+  -natural-hpadding: 0;
+  spacing: 0;
+}
+.window-picker .app-well-app-running-dot,
+.workspace-thumbnails .window-clone .overview-icon {
+  opacity: 0;
+}
+
+/* ── Snap assist + window management (Goblins materials) ───────────────────
+   The session strips the stock Activities entry (hasOverview:false), so the
+   window-management surfaces that actually appear are themed here: the snap-assist
+   tile preview, the Alt-Tab switcher, the window cycler, and the workspace switcher.
+   All wear the same dark glass material as the chrome. */
+
+/* Snap assist — the half/quarter-screen highlight while dragging a window to an
+   edge. A calm accent-tinted glass plate with our radius, not the stock blue box. */
+.tile-preview {
+  background-color: rgba(245, 245, 247, 0.16);
+  border: 1px solid rgba(245, 245, 247, 0.5);
+  border-radius: 18px;
+}
+
+/* Alt-Tab application switcher + the window cycler — rounded glass with calm
+   selection, matching popups. */
+.switcher-list,
+.window-cycler-popup {
+  background-color: rgba(24, 24, 30, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 22px;
+  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.52);
+  padding: 10px;
+}
+.switcher-list .item-box,
+.switcher-list .thumbnail-box {
+  border-radius: 14px;
+  padding: 8px;
+}
+.switcher-list .item-box:selected,
+.switcher-list .item-box:outlined {
+  background-color: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+
+/* Workspace switcher popup (Super+PageUp/Down). */
+.workspace-switcher-group .workspace-switcher {
+  background-color: rgba(24, 24, 30, 0.92);
+  border-radius: 18px;
+  padding: 8px;
+}
+.workspace-switcher .ws-switcher-box {
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.06);
+}
+.workspace-switcher .ws-switcher-active {
+  background-color: #f5f5f4;
+  border-radius: 10px;
+}
+
+/* ── Overview surfaces (shown via keybinding; entry point is off by design) ──
+   The search field, workspace thumbnails, and window-clone selection — all in the
+   Goblins material, so if the overview is ever invoked it reads as one OS. */
+.overview .search-entry {
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #ededf0;
+}
+.workspace-thumbnails .workspace-thumbnail {
+  border-radius: 14px;
+}
+.window-clone-border,
+.window-clone .window-clone-border {
+  border-radius: 14px;
+  border: 2px solid rgba(245, 245, 247, 0.7);
+}
+.search-section-content,
+.search-provider-icon {
+  border-radius: 16px;
+}

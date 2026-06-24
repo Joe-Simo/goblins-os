@@ -1,0 +1,30 @@
+# Goblins OS — default Codex configuration.
+#
+# Codex is THE builder in Goblins OS. By default it targets the on-device GPT-OSS
+# model through a keyless, loopback OpenAI-compatible endpoint, so the OS builds
+# apps with no OpenAI account and no API key out of the box — there is no secret to
+# leak (the endpoint is local-only). Signing in with an OpenAI account (Codex
+# "Sign in with ChatGPT") upgrades Codex to that plan's hosted models; the account
+# credentials live only under CODEX_HOME, never in the desktop session.
+#
+# This file is the shipped default seed (installed read-only under /usr and copied
+# into the persistent CODEX_HOME on first boot via tmpfiles). The on-device GPT-OSS
+# runtime serves the OpenAI-compatible /v1 endpoint below; until a model is present
+# the build path is complete and honest, and generation runs once the model is.
+
+model = "gpt-oss"
+model_provider = "goblins-local"
+
+# Non-interactive OS builder: no per-step approval prompts; Codex may read/write
+# within its workspace (the OS-owned scratch dir under CODEX_HOME).
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[model_providers.goblins-local]
+name = "Goblins OS on-device GPT-OSS"
+# Keyless loopback to the OS's on-device GPT-OSS runtime. No env_key by design:
+# a local endpoint has no secret, satisfying the no-client-side-secrets contract.
+# This compatibility wire is local-only; hosted OpenAI model calls are made by
+# the Rust core through the Responses API.
+base_url = "http://127.0.0.1:11434/v1"
+wire_api = "chat"

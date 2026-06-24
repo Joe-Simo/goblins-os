@@ -1,0 +1,32 @@
+[Icon Theme]
+Name=GoblinsOS
+Comment=Goblins OS — graphite app tiles + one symbolic family over Adwaita
+Inherits=Adwaita,hicolor
+Directories=scalable/apps,scalable/actions,scalable/status
+
+# The graphite app tiles for the GNOME stock utilities we pin, so the dock reads as
+# one OS. Everything not overridden falls back to Adwaita.
+[scalable/apps]
+Context=Applications
+Size=512
+MinSize=16
+MaxSize=1024
+Type=Scalable
+
+# A cohesive monochrome symbolic family at one stroke weight, drawn to GNOME's
+# 16px symbolic grid so the toolbars/menus that look these names up read as one
+# OS. GTK recolors `*-symbolic.svg` to the context ink. Names not overridden here
+# fall back to Adwaita's symbolic set (the same weight), so the language stays one.
+[scalable/actions]
+Context=Actions
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[scalable/status]
+Context=Status
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable

@@ -1,0 +1,294 @@
+FROM docker.io/library/rust:1.88 AS rust-build
+
+WORKDIR /src
+RUN case "$(uname -m)" in \
+      x86_64|aarch64) ;; \
+      *) echo "Goblins OS native builds support only x86_64 and aarch64; got $(uname -m)" >&2; exit 1 ;; \
+    esac \
+    && rustc -Vv | grep -Eq '^host: (x86_64|aarch64)-'
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      libgtk-4-dev \
+      pkg-config \
+      sox \
+      libsox-fmt-all \
+    && rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build --release --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-ui/native-desktop"
+RUN install -d /tmp/goblins-sounds/GoblinsOS/stereo \
+    && sox -n -r 48000 -c 2 /tmp/goblins-sounds/GoblinsOS/stereo/system-ready.wav synth 0.32 sine 329.63 sine 493.88 fade t 0.02 0.32 0.12 gain -18 \
+    && sox -n -r 48000 -c 2 /tmp/goblins-sounds/GoblinsOS/stereo/desktop-login.wav synth 0.28 sine 392 sine 587.33 fade t 0.02 0.28 0.10 gain -19 \
+    && sox -n -r 48000 -c 2 /tmp/goblins-sounds/GoblinsOS/stereo/message-new-instant.wav synth 0.16 sine 659.25 fade t 0.01 0.16 0.06 gain -22 \
+    && sox -n -r 48000 -c 2 /tmp/goblins-sounds/GoblinsOS/stereo/dialog-error.wav synth 0.18 sine 220 sine 196 fade t 0.01 0.18 0.07 gain -23 \
+    && sox -n -r 48000 -c 2 /tmp/goblins-sounds/GoblinsOS/stereo/screen-capture.wav synth 0.11 sine 880 fade t 0.005 0.11 0.04 gain -24
+
+FROM quay.io/fedora/fedora-bootc:44 AS goblins-os
+
+LABEL org.goblins-os.supported-architectures="x86_64,aarch64"
+
+RUN image_arch="$(rpm --eval '%{_arch}')" \
+    && machine_arch="$(uname -m)" \
+    && case "${machine_arch}" in \
+      x86_64|aarch64) ;; \
+      *) echo "Goblins OS native images support only x86_64 and aarch64; got ${machine_arch}" >&2; exit 1 ;; \
+    esac \
+    && case "${image_arch}" in \
+      x86_64|aarch64) ;; \
+      *) echo "Fedora RPM architecture must be x86_64 or aarch64; got ${image_arch}" >&2; exit 1 ;; \
+    esac \
+    && test "${machine_arch}" = "${image_arch}"
+
+RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" \
+    && dnf -y --setopt=retries=20 --setopt=timeout=600 --setopt=minrate=1 --setopt=install_weak_deps=False install \
+      at-spi2-core \
+      bolt \
+      dbus-daemon \
+      dbus-tools \
+      dmidecode \
+      gdm \
+      gnome-bluetooth \
+      gnome-color-manager \
+      gnome-keyring \
+      gnome-remote-desktop \
+      gnome-session \
+      gnome-shell \
+      gnome-shell-extension-dash-to-dock \
+      gnome-shell-extension-user-theme \
+      gnome-control-center \
+      baobab \
+      gnome-disk-utility \
+      gnome-console \
+      gnome-logs \
+      gnome-software \
+      gnome-software-rpm-ostree \
+      gnome-system-monitor \
+      gnome-text-editor \
+      nautilus \
+      anaconda \
+      anaconda-gui \
+      anaconda-live \
+      anaconda-install-img-deps \
+      desktop-file-utils \
+      gtk4 \
+      flatpak \
+      librsvg2 \
+      plymouth \
+      plymouth-plugin-script \
+      rsms-inter-fonts \
+      google-noto-sans-fonts \
+      alsa-utils \
+      brightnessctl \
+      NetworkManager \
+      NetworkManager-wifi \
+      nm-connection-editor \
+      pipewire \
+      pipewire-alsa \
+      pipewire-pulseaudio \
+      pipewire-utils \
+      polkit \
+      wireplumber \
+      xdg-desktop-portal \
+      xdg-desktop-portal-gnome \
+      mesa-va-drivers \
+      libvdpau \
+      vdpauinfo \
+      mesa-vulkan-drivers \
+      mesa-dri-drivers \
+      vulkan-tools \
+      gamescope \
+      gamemode \
+      mangohud \
+      libva-utils \
+      "kernel-modules-extra-${kernel_release}" \
+      joystick-support \
+      evtest \
+      usbutils \
+      xdg-utils \
+      switcheroo-control \
+      tuned-ppd \
+    && rpm -q \
+      mesa-vulkan-drivers \
+      vulkan-tools \
+      gamescope \
+      gamemode \
+      mangohud \
+      libva-utils \
+      libvdpau \
+      vdpauinfo \
+      flatpak \
+      xdg-desktop-portal \
+      xdg-desktop-portal-gnome \
+      pipewire \
+      pipewire-utils \
+      wireplumber \
+      joystick-support \
+      evtest \
+      usbutils \
+      xdg-utils \
+      rsms-inter-fonts \
+      google-noto-sans-fonts \
+    && command -v vulkaninfo \
+    && command -v gamescope \
+    && command -v gamemoderun \
+    && command -v mangohud \
+    && command -v vainfo \
+    && command -v vdpauinfo \
+    && command -v flatpak \
+    && command -v pw-cli \
+    && command -v wpctl \
+    && command -v evtest \
+    && command -v lsusb \
+    && command -v gnome-software \
+    && command -v xdg-open \
+    && command -v fc-match \
+    && command -v fc-list \
+    && fc-match Inter | grep -qi 'Inter' \
+    && ! fc-list | grep -Eiq 'OpenAI Sans|SF Pro|Apple' \
+    && ! rpm -qa | grep -Eiq 'openai.*sans|sf-pro|apple.*font' \
+    && flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo \
+    && flatpak remotes --system | grep -q '^flathub' \
+    && ! rpm -q steam >/dev/null 2>&1 \
+    && ! rpm -q steam-devices >/dev/null 2>&1 \
+    && dnf clean all
+
+RUN useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/sbin/nologin goblins-os \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/resident \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/installer \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/session \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/policy \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/ai \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/models \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/apps \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/voice/stt /var/lib/goblins-os/voice/tts /var/lib/goblins-os/voice/work \
+    && install -d -o goblins-os -g goblins-os -m 2770 /var/lib/goblins-os/codex /var/lib/goblins-os/codex/work \
+    && install -d -m 0700 -o goblins-os -g goblins-os /var/lib/goblins-os/secrets/openai \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.local/bin \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.config \
+    && install -d /etc/dconf/db/local.d /etc/goblins-os/model-manifests /etc/xdg/autostart /usr/lib/bootc/install /usr/lib/systemd/system /usr/lib/systemd/user /usr/libexec/goblins-os /usr/share/applications /usr/share/goblins-os/brand /usr/share/gnome-session/sessions /usr/share/wayland-sessions /usr/share/gnome-shell/modes
+
+# Human desktop login user. Goblins OS authenticates people through the in-session
+# OpenAI identity gate, so the machine auto-enters the OS session as this user;
+# the home lives under /var/home for bootc/ostree persistence.
+RUN install -d /var/home \
+    && useradd --uid 1000 --create-home --home-dir /var/home/goblin --shell /bin/bash goblin \
+    && usermod -aG goblins-os goblin \
+    && install -d -o goblin -g goblin /var/home/goblin/.config/environment.d \
+    && touch /var/home/goblin/.config/gnome-initial-setup-done \
+    && chown -R goblin:goblin /var/home/goblin
+
+COPY --from=rust-build /src/target/release/goblins-os-control-center /usr/libexec/goblins-os/goblins-os-control-center
+COPY --from=rust-build /src/target/release/goblins-os-core /usr/libexec/goblins-os/goblins-os-core
+COPY --from=rust-build /src/target/release/goblins-os-file-builder /usr/libexec/goblins-os/goblins-os-file-builder
+COPY --from=rust-build /src/target/release/goblins-os-full-installer /usr/libexec/goblins-os/goblins-os-full-installer
+COPY --from=rust-build /src/target/release/goblins-os-install-game-launcher /usr/libexec/goblins-os/goblins-os-install-game-launcher
+COPY --from=rust-build /src/target/release/goblins-os-installer /usr/libexec/goblins-os/goblins-os-installer
+COPY --from=rust-build /src/target/release/goblins-os-launcher /usr/libexec/goblins-os/goblins-os-launcher
+COPY --from=rust-build /src/target/release/goblins-os-login /usr/libexec/goblins-os/goblins-os-login
+COPY --from=rust-build /src/target/release/goblins-os-open /usr/libexec/goblins-os/goblins-os-open
+COPY --from=rust-build /src/target/release/goblins-os-resident /usr/libexec/goblins-os/goblins-os-resident
+COPY --from=rust-build /src/target/release/goblins-os-screenshot-context /usr/libexec/goblins-os/goblins-os-screenshot-context
+COPY --from=rust-build /src/target/release/goblins-os-settings /usr/libexec/goblins-os/goblins-os-settings
+COPY --from=rust-build /src/target/release/goblins-os-shell /usr/libexec/goblins-os/goblins-os-shell
+COPY --from=rust-build /src/target/release/goblins-os-verify /usr/libexec/goblins-os/goblins-os-verify
+
+COPY os/systemd/goblins-os-core.service /usr/lib/systemd/system/goblins-os-core.service
+COPY os/systemd/goblins-os-resident.service /usr/lib/systemd/system/goblins-os-resident.service
+COPY os/systemd/goblins-os-model-cache.service /usr/lib/systemd/system/goblins-os-model-cache.service
+COPY os/systemd-system/ /usr/lib/systemd/system/
+COPY os/session/goblins-os-session /usr/libexec/goblins-os/goblins-os-session
+COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.desktop
+COPY os/gnome-session/goblins-os.session /usr/share/gnome-session/sessions/goblins-os.session
+COPY os/gnome-shell-modes/goblins-os.json /usr/share/gnome-shell/modes/goblins-os.json
+COPY os/systemd-user/ /usr/lib/systemd/user/
+COPY os/applications/ /usr/share/applications/
+RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
+    && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
+    && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
+    && { test -x /usr/bin/liveinst || test -x /usr/bin/anaconda || test -x /usr/libexec/anaconda/run-anaconda; } \
+    && test -x /usr/libexec/goblins-os/goblins-os-install-game-launcher \
+    && for launcher_desktop in \
+      /usr/share/applications/org.goblins.OS.Games.Heroic.desktop \
+      /usr/share/applications/org.goblins.OS.Games.Bottles.desktop \
+      /usr/share/applications/org.goblins.OS.Games.Lutris.desktop; do \
+        desktop-file-validate "${launcher_desktop}"; \
+        grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-install-game-launcher ' "${launcher_desktop}"; \
+      done
+COPY os/brand/ /usr/share/goblins-os/brand/
+COPY os/themes/ /usr/share/themes/
+COPY os/gnome-shell-extensions/ /usr/share/gnome-shell/extensions/
+COPY os/gtk-4.0/ /etc/gtk-4.0/
+COPY os/nautilus/ /usr/share/goblins-os/nautilus/
+COPY os/codex/config.toml /usr/share/goblins-os/codex/config.toml
+COPY os/tmpfiles/goblins-os-codex.conf /usr/lib/tmpfiles.d/goblins-os-codex.conf
+COPY os/plymouth/goblins-os/ /usr/share/plymouth/themes/goblins-os/
+COPY os/icons/ /usr/share/icons/
+COPY os/sounds/GoblinsOS/index.theme /usr/share/sounds/GoblinsOS/index.theme
+COPY --from=rust-build /tmp/goblins-sounds/GoblinsOS/stereo/ /usr/share/sounds/GoblinsOS/stereo/
+COPY os/brand/anaconda/sidebar-bg.png /usr/share/anaconda/pixmaps/sidebar-bg.png
+COPY os/brand/anaconda/sidebar-logo.png /usr/share/anaconda/pixmaps/sidebar-logo.png
+COPY os/bootc-install/00-goblins-os.toml /usr/lib/bootc/install/00-goblins-os.toml
+COPY os/autostart/org.goblins.OS.Installer.desktop /etc/xdg/autostart/org.goblins.OS.Installer.desktop
+COPY os/etc/goblins-os/environment /etc/goblins-os/environment
+COPY os/etc/goblins-os/openai-secrets.env /etc/goblins-os/openai-secrets.env
+COPY os/dconf/ /etc/dconf/
+COPY os/gdm/custom.conf /etc/gdm/custom.conf
+COPY os/accountsservice/goblin /var/lib/AccountsService/users/goblin
+
+# Product identity: this is Goblins OS, not Fedora. Rebrand os-release (NAME /
+# PRETTY_NAME / VARIANT) while keeping ID=fedora + the version intact so dnf and
+# bootc still resolve the platform correctly.
+RUN sed -i \
+      -e 's/^NAME=.*/NAME="Goblins OS"/' \
+      -e 's/^PRETTY_NAME=.*/PRETTY_NAME="Goblins OS"/' \
+      -e '/^VARIANT=/d' -e '/^VARIANT_ID=/d' \
+      /usr/lib/os-release \
+    && printf 'VARIANT="Goblins OS"\nVARIANT_ID=goblins-os\n' >> /usr/lib/os-release
+
+# Boot identity: the Goblins OS Plymouth splash replaces Fedora's. The mark is
+# the shipped Goblins mark; setting the default theme writes plymouthd.conf (the
+# initramfs regen happens at deploy).
+RUN cp /usr/share/goblins-os/brand/anaconda/sidebar-logo.png \
+        /usr/share/plymouth/themes/goblins-os/logo.png \
+    && plymouth-set-default-theme goblins-os
+
+# Themed GNOME stock utilities: GoblinsOS icon theme ships source-owned graphite
+# tiles and a one-weight symbolic family, inheriting Adwaita for everything else.
+RUN (gtk4-update-icon-cache -f /usr/share/icons/GoblinsOS \
+        || gtk-update-icon-cache -f /usr/share/icons/GoblinsOS || true)
+
+# Shell-extension keybindings live in the extension's GSettings schema so Mutter
+# owns the shortcuts directly.
+RUN glib-compile-schemas /usr/share/gnome-shell/extensions/goblins-wm@goblins.os/schemas
+
+# Rebrand the Anaconda installer chrome (the disk installer the ISO boots into):
+# recolor the Fedora-blue sidebar base (#51a2da) to Goblins ink so the sidebar
+# reads dark and on-brand; the dark sidebar art + white mark are COPYed above.
+RUN sed -i 's/#51a2da/#0b0b0f/g' /usr/share/anaconda/pixmaps/fedora.css 2>/dev/null || true
+
+RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
+    && install -d -o goblin -g goblin /var/home/goblin/.local/share/nautilus/scripts \
+    && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Build an app to open this" "/var/home/goblin/.local/share/nautilus/scripts/Build an app to open this" \
+    && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Ask Goblin about this" "/var/home/goblin/.local/share/nautilus/scripts/Ask Goblin about this" \
+    && chown -R goblin:goblin /var/home/goblin/.local/share/nautilus \
+    && chown root:root /etc/goblins-os/openai-secrets.env \
+    && chmod 0600 /etc/goblins-os/openai-secrets.env \
+    && test "$(stat -c '%U:%G:%a' /etc/goblins-os/openai-secrets.env)" = "root:root:600" \
+    && ! grep -Eq '^[[:space:]]*[A-Za-z0-9_]*(KEY|SECRET|TOKEN)[[:space:]]*=' /etc/goblins-os/openai-secrets.env \
+    && ! grep -Eq '^[[:space:]]*[A-Za-z0-9_]*(KEY|SECRET|TOKEN)[[:space:]]*=' /etc/goblins-os/environment \
+    && printf '%s\n' \
+        'GTK_IM_MODULE=gtk-im-context-simple' \
+        'QT_IM_MODULE=simple' \
+        'XMODIFIERS=@im=none' \
+        'IBUS_ENABLE_SYNC_MODE=0' \
+        > /var/home/goblin/.config/environment.d/10-goblins-os-input.conf \
+    && chown goblin:goblin /var/home/goblin/.config/environment.d/10-goblins-os-input.conf \
+    && touch /var/lib/goblins-os/.config/gnome-initial-setup-done \
+    && chown -R goblins-os:goblins-os /var/lib/goblins-os/.local /var/lib/goblins-os/.config /var/lib/goblins-os/installer /var/lib/goblins-os/session /var/lib/goblins-os/policy \
+    && dconf update \
+    && systemctl enable NetworkManager.service \
+    && systemctl enable gdm.service \
+    && systemctl enable goblins-os-model-cache.service \
+    && systemctl enable goblins-os-core.service \
+    && systemctl enable goblins-os-resident.service \
+    && bootc container lint

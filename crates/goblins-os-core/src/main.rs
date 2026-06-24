@@ -1,0 +1,250 @@
+mod accelerators;
+mod accessibility;
+mod ai;
+mod app_builder;
+mod appearance;
+mod audio;
+mod auth;
+mod bluetooth;
+mod boot_lock;
+mod codex;
+mod displays;
+mod hardware;
+mod input;
+mod install_targets;
+mod installer;
+mod model_manager;
+mod network;
+mod notifications;
+mod openai_key;
+mod policy;
+mod privacy;
+mod readiness;
+mod resident;
+mod service_catalog;
+mod session_gate;
+mod settings;
+mod studio;
+mod system;
+mod system_image;
+mod voice;
+
+use std::net::SocketAddr;
+
+use axum::{
+    routing::{get, post},
+    Router,
+};
+use tower_http::trace::TraceLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::{
+    accessibility::{accessibility_status, set_accessibility_preference},
+    ai::{
+        ai_action_catalog, ai_action_history, ask_file_context, ask_notification_context,
+        ask_screen_context, ask_selected_text_context, ask_settings_context, ask_system_status,
+        change_safe_setting, open_settings_panel, record_ai_action_history,
+        write_selected_text_context,
+    },
+    app_builder::{app_builder_catalog, create_app_build, list_apps},
+    appearance::{
+        appearance_status, set_color_scheme, set_wallpaper_placement, set_wallpaper_shading,
+    },
+    audio::{
+        audio_status, set_audio_default_device, set_audio_mute, set_audio_volume,
+        set_sound_preference,
+    },
+    auth::{
+        openai_auth_callback, openai_auth_device_poll, openai_auth_device_start,
+        openai_auth_refresh, openai_auth_start, openai_auth_status,
+    },
+    bluetooth::{bluetooth_status, set_bluetooth_power},
+    boot_lock::boot_lock_status,
+    codex::codex_status,
+    displays::displays_status,
+    hardware::hardware_status,
+    input::{input_status, set_input_preference},
+    install_targets::{install_progress_status, install_target_status, prepare_install},
+    installer::{complete_installer, installer_readiness},
+    model_manager::{install_local_model, local_model_catalog},
+    network::{network_status, set_proxy_mode, wifi_connect, wifi_scan},
+    notifications::{notifications_status, set_notification_preference},
+    openai_key::{openai_key_status, set_openai_key, set_resident_engine},
+    policy::{configure_policy, grant_permission, policy_status},
+    privacy::{privacy_status, set_desktop_privacy, set_privacy},
+    readiness::readiness,
+    resident::{ai_runtime, ai_runtime_status},
+    service_catalog::service_catalog,
+    session_gate::{session_gate_status, unlock_session},
+    settings::{recovery_status, settings_system},
+    studio::{studio_file, studio_session, studio_sessions, studio_turn},
+    system::{health, system_services},
+    system_image::system_image_status,
+    voice::{voice_converse, voice_status},
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "goblins_os_core=info,tower_http=warn".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    let port = std::env::var("GOBLINS_OS_CORE_PORT")
+        .or_else(|_| std::env::var("OPENAI_OS_CORE_PORT"))
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(8787);
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/v1/readiness", get(readiness))
+        .route("/v1/boot-lock", get(boot_lock_status))
+        .route("/v1/ai/actions", get(ai_action_catalog))
+        .route("/v1/ai/action-history", get(ai_action_history))
+        .route("/v1/ai/action-history", post(record_ai_action_history))
+        .route("/v1/ai/safe-setting-change", post(change_safe_setting))
+        .route("/v1/ai/open-settings-panel", post(open_settings_panel))
+        .route("/v1/ai/system-status", post(ask_system_status))
+        .route("/v1/ai/file-context", post(ask_file_context))
+        .route("/v1/ai/settings-context", post(ask_settings_context))
+        .route(
+            "/v1/ai/selected-text-context",
+            post(ask_selected_text_context),
+        )
+        .route(
+            "/v1/ai/write-selected-text",
+            post(write_selected_text_context),
+        )
+        .route("/v1/ai/screen-context", post(ask_screen_context))
+        .route(
+            "/v1/ai/notification-context",
+            post(ask_notification_context),
+        )
+        .route("/v1/settings/system", get(settings_system))
+        .route("/v1/system/hardware", get(hardware_status))
+        .route("/v1/system/image", get(system_image_status))
+        .route("/v1/displays/status", get(displays_status))
+        .route("/v1/system/services", get(system_services))
+        .route("/v1/installer/install-targets", get(install_target_status))
+        .route(
+            "/v1/installer/install-targets/prepare",
+            post(prepare_install),
+        )
+        .route(
+            "/v1/installer/install-targets/progress",
+            get(install_progress_status),
+        )
+        .route("/v1/recovery/status", get(recovery_status))
+        .route("/v1/session/gate", get(session_gate_status))
+        .route("/v1/session/unlock", post(unlock_session))
+        .route("/v1/installer/readiness", get(installer_readiness))
+        .route("/v1/installer/complete", post(complete_installer))
+        .route("/v1/services", get(service_catalog))
+        .route("/v1/local-models", get(local_model_catalog))
+        .route("/v1/local-models/install", post(install_local_model))
+        .route("/v1/appearance/status", get(appearance_status))
+        .route("/v1/appearance/color-scheme", post(set_color_scheme))
+        .route(
+            "/v1/appearance/wallpaper-placement",
+            post(set_wallpaper_placement),
+        )
+        .route(
+            "/v1/appearance/wallpaper-shading",
+            post(set_wallpaper_shading),
+        )
+        .route("/v1/accessibility/status", get(accessibility_status))
+        .route(
+            "/v1/accessibility/preference",
+            post(set_accessibility_preference),
+        )
+        .route("/v1/network/status", get(network_status))
+        .route("/v1/network/wifi/scan", get(wifi_scan))
+        .route("/v1/network/wifi/connect", post(wifi_connect))
+        .route("/v1/network/proxy/mode", post(set_proxy_mode))
+        .route("/v1/notifications/status", get(notifications_status))
+        .route(
+            "/v1/notifications/preference",
+            post(set_notification_preference),
+        )
+        .route("/v1/bluetooth/status", get(bluetooth_status))
+        .route("/v1/bluetooth/power", post(set_bluetooth_power))
+        .route("/v1/audio/status", get(audio_status))
+        .route("/v1/audio/volume", post(set_audio_volume))
+        .route("/v1/audio/mute", post(set_audio_mute))
+        .route("/v1/audio/default-device", post(set_audio_default_device))
+        .route("/v1/audio/preference", post(set_sound_preference))
+        .route("/v1/input/status", get(input_status))
+        .route("/v1/input/preference", post(set_input_preference))
+        .route("/v1/privacy/status", get(privacy_status))
+        .route("/v1/privacy", post(set_privacy))
+        .route("/v1/privacy/desktop", post(set_desktop_privacy))
+        .route("/v1/voice/status", get(voice_status))
+        .route("/v1/voice/converse", post(voice_converse))
+        .route("/v1/studio/turn", post(studio_turn))
+        .route("/v1/studio/sessions", get(studio_sessions))
+        .route("/v1/studio/session", get(studio_session))
+        .route("/v1/studio/file", get(studio_file))
+        .route("/v1/codex/status", get(codex_status))
+        .route("/v1/models/openai-key", get(openai_key_status))
+        .route("/v1/models/openai-key", post(set_openai_key))
+        .route("/v1/models/engine", post(set_resident_engine))
+        .route("/v1/policy/status", get(policy_status))
+        .route("/v1/policy/configure", post(configure_policy))
+        .route("/v1/policy/permissions/grant", post(grant_permission))
+        .route("/v1/apps/build-catalog", get(app_builder_catalog))
+        .route("/v1/apps/builds", post(create_app_build))
+        .route("/v1/apps", get(list_apps))
+        .route("/v1/auth/openai/status", get(openai_auth_status))
+        .route("/v1/auth/openai/start", get(openai_auth_start))
+        .route("/v1/auth/openai/callback", get(openai_auth_callback))
+        .route(
+            "/v1/auth/openai/device/start",
+            post(openai_auth_device_start),
+        )
+        .route("/v1/auth/openai/device/poll", post(openai_auth_device_poll))
+        .route("/v1/auth/openai/refresh", post(openai_auth_refresh))
+        .route("/v1/ai/runtime/status", get(ai_runtime_status))
+        .route("/v1/ai/runtime", post(ai_runtime))
+        // Compatibility for images and clients built before the Goblins AI
+        // runtime route became the product-facing API surface.
+        .route("/v1/codex/resident/status", get(ai_runtime_status))
+        .route("/v1/codex/resident", post(ai_runtime))
+        .layer(TraceLayer::new_for_http());
+
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    tracing::info!("Goblins OS core listening on http://{address}");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+}

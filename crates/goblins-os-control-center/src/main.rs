@@ -1,0 +1,816 @@
+//! The Goblins OS control center — a bespoke, all-Rust GTK4 glass panel the menu
+//! bar opens, in the macOS Control Center idiom and the Goblins-native language.
+//!
+//! It gathers the controls reached for without opening Settings: the Light/Dark
+//! scheme, AI mode, Wi-Fi, and sound/brightness.
+//! Every control drives a REAL backend — the desktop color-scheme key, the OS
+//! core's engine endpoint, NetworkManager, WirePlumber, and the backlight — and a
+//! control whose backend is absent (no audio sink, no backlight in a VM) recedes
+//! to a disabled state with an honest reason, never an invented value. Outside a Linux
+//! native-desktop build the crate degrades to a one-line status print.
+
+use std::{env, error::Error};
+
+const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
+
+type ControlResult<T> = Result<T, Box<dyn Error>>;
+
+#[derive(Clone)]
+struct ControlConfig {
+    core_url: String,
+}
+
+impl ControlConfig {
+    fn from_env() -> Self {
+        Self {
+            core_url: env::var("GOBLINS_OS_CORE_URL")
+                .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
+                .unwrap_or_else(|_| DEFAULT_CORE_URL.into()),
+        }
+    }
+}
+
+fn main() -> ControlResult<()> {
+    run_control_center(ControlConfig::from_env())
+}
+
+#[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
+fn run_control_center(config: ControlConfig) -> ControlResult<()> {
+    let _ = config.core_url.as_str();
+    println!("goblins_os_control_center=unavailable");
+    println!("control_center_reason=build_requires_linux_native_desktop_feature");
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+use native::run_control_center;
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+mod native {
+    use std::{
+        io::{Read, Write},
+        net::{TcpStream, ToSocketAddrs},
+        process::Command,
+        time::Duration,
+    };
+
+    use gtk::gdk;
+    use gtk::glib;
+    use gtk::prelude::*;
+    use gtk4 as gtk;
+    use serde::Deserialize;
+
+    use super::{ControlConfig, ControlResult};
+
+    const APP_ID: &str = "org.goblins.OS.ControlCenter";
+    const MAX_BODY_BYTES: u64 = 256 * 1024;
+    const SINK: &str = "@DEFAULT_AUDIO_SINK@";
+    const LAUNCHER_BIN: &str = "/usr/libexec/goblins-os/goblins-os-launcher";
+    const SCREENSHOT_CONTEXT_BIN: &str = "/usr/libexec/goblins-os/goblins-os-screenshot-context";
+
+    #[derive(Deserialize)]
+    struct AiActionCatalog {
+        actions: Vec<AiActionStatus>,
+    }
+
+    #[derive(Deserialize)]
+    struct AiActionStatus {
+        id: String,
+        enabled: bool,
+        reason: String,
+    }
+
+    struct AiActionAvailability {
+        enabled: bool,
+        reason: String,
+    }
+
+    pub fn run_control_center(config: ControlConfig) -> ControlResult<()> {
+        let app = gtk::Application::builder().application_id(APP_ID).build();
+        app.connect_activate(move |app| {
+            goblins_os_ui::init_theming("");
+            build_window(app, &config);
+        });
+        app.run_with_args(&["goblins-os-control-center"]);
+        Ok(())
+    }
+
+    fn build_window(app: &gtk::Application, config: &ControlConfig) {
+        let window = gtk::ApplicationWindow::builder()
+            .application(app)
+            .title("Goblins OS Control Center")
+            .decorated(false)
+            .resizable(false)
+            .default_width(360)
+            .build();
+        window.add_css_class("gos-cc-root");
+        window.add_css_class("gos-window");
+
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        card.add_css_class("gos-cc");
+
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        header.append(&goblins_os_ui::themed_brand_mark(16));
+        let title = gtk::Label::new(Some("Control Center"));
+        title.add_css_class("gos-cc-title");
+        title.set_xalign(0.0);
+        header.append(&title);
+        card.append(&header);
+
+        // ── Quick tiles: Wi-Fi · Dark Mode ──
+        card.append(&section("Connection & Appearance"));
+        let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        tiles.set_homogeneous(true);
+        tiles.append(&wifi_tile());
+        tiles.append(&scheme_tile());
+        card.append(&tiles);
+
+        // ── AI mode ──
+        card.append(&section("AI Mode"));
+        card.append(&engine_switch(&config.core_url));
+
+        // ── Goblins AI entry points ──
+        card.append(&section("Goblins AI"));
+        let ask_availability = ai_action_availability(&config.core_url, "ask-goblins");
+        let selected_text_availability =
+            ai_action_availability(&config.core_url, "ask-selected-text");
+        let writing_tools_availability =
+            ai_action_availability(&config.core_url, "write-with-goblins");
+        let screen_context_availability =
+            ai_action_availability(&config.core_url, "summarize-screen");
+        let ai_actions = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let ai_primary = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        ai_primary.set_homogeneous(true);
+        ai_primary.append(&ai_action_button(
+            "Ask Goblin…",
+            &["--assistant"],
+            &ask_availability,
+            &window,
+        ));
+        ai_primary.append(&ai_action_button(
+            "Write…",
+            &["--writing-tools"],
+            &writing_tools_availability,
+            &window,
+        ));
+        let ai_context = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        ai_context.set_homogeneous(true);
+        ai_context.append(&ai_action_button(
+            "Selected Text…",
+            &["--selected-text"],
+            &selected_text_availability,
+            &window,
+        ));
+        ai_context.append(&ai_action_button(
+            "Screen Context…",
+            &["--screen-context"],
+            &screen_context_availability,
+            &window,
+        ));
+        let ai_visual = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        ai_visual.set_homogeneous(true);
+        ai_visual.append(&ai_tool_button(
+            "Screenshot…",
+            SCREENSHOT_CONTEXT_BIN,
+            &[],
+            &screen_context_availability,
+            &window,
+        ));
+        ai_visual.append(&tool_button(
+            "AI Settings…",
+            "/usr/libexec/goblins-os/goblins-os-settings",
+            &["--panel=models"],
+            &window,
+        ));
+        ai_actions.append(&ai_primary);
+        ai_actions.append(&ai_context);
+        ai_actions.append(&ai_visual);
+        card.append(&ai_actions);
+        if let Some(reason) = first_unavailable_ai_reason(&[
+            &ask_availability,
+            &writing_tools_availability,
+            &selected_text_availability,
+            &screen_context_availability,
+        ]) {
+            let note = gtk::Label::new(Some(reason));
+            note.add_css_class("gos-cc-note");
+            note.set_xalign(0.0);
+            note.set_wrap(true);
+            card.append(&note);
+        }
+
+        // ── Sound ──
+        card.append(&section("Sound"));
+        card.append(&slider_row(
+            "Volume",
+            "audio-volume-high-symbolic",
+            volume_percent(),
+            |value| {
+                let _ = run(
+                    "wpctl",
+                    &["set-volume", SINK, &format!("{:.2}", value / 100.0)],
+                );
+            },
+            "No audio output device.",
+        ));
+
+        // ── Display brightness ──
+        card.append(&section("Display"));
+        card.append(&slider_row(
+            "Display brightness",
+            "display-brightness-symbolic",
+            brightness_percent(),
+            |value| {
+                let _ = run(
+                    "brightnessctl",
+                    &["set", &format!("{}%", value.round() as i64)],
+                );
+            },
+            "No adjustable display.",
+        ));
+
+        let settings = gtk::Button::with_label("Open Settings…");
+        settings.add_css_class("gos-cc-link");
+        settings.set_halign(gtk::Align::Start);
+        settings.set_margin_top(8);
+        settings.set_tooltip_text(Some("Open Settings"));
+        set_accessible_label_description(
+            &settings,
+            "Open Settings",
+            "Open Settings and close Control Center",
+        );
+        {
+            let weak = window.downgrade();
+            settings.connect_clicked(move |_| {
+                let _ = Command::new("/usr/libexec/goblins-os/goblins-os-settings").spawn();
+                if let Some(win) = weak.upgrade() {
+                    win.close();
+                }
+            });
+        }
+        card.append(&settings);
+
+        window.set_child(Some(&card));
+
+        // Escape dismisses; losing focus dismisses (a real popover) unless the
+        // render harness pins the only captured window on screen.
+        let keys = gtk::EventControllerKey::new();
+        {
+            let weak = window.downgrade();
+            keys.connect_key_pressed(move |_, key, _code, _state| {
+                if key == gdk::Key::Escape {
+                    if let Some(win) = weak.upgrade() {
+                        win.close();
+                    }
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            });
+        }
+        window.add_controller(keys);
+        if std::env::var("GOBLINS_OS_RENDER_HOLD_WINDOW").is_err() {
+            let weak = window.downgrade();
+            window.connect_is_active_notify(move |win| {
+                if !win.is_active() {
+                    if let Some(win) = weak.upgrade() {
+                        win.close();
+                    }
+                }
+            });
+        }
+
+        present_with_fade(&window);
+    }
+
+    fn section(text: &str) -> gtk::Label {
+        let label = gtk::Label::new(Some(text));
+        label.add_css_class("gos-cc-section");
+        label.set_xalign(0.0);
+        set_accessible_label_description(&label, text, text);
+        label
+    }
+
+    /// A toggle tile (symbolic icon + label + state), accented when on.
+    fn make_tile(
+        icon_name: &str,
+        name: &str,
+        state_text: &str,
+        on: bool,
+    ) -> (gtk::Button, gtk::Label) {
+        let button = gtk::Button::new();
+        button.add_css_class("gos-cc-tile");
+        update_tile_accessibility(&button, name, state_text);
+        if on {
+            button.add_css_class("is-on");
+        }
+        let inner = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let glyph_label = icon(icon_name, "gos-cc-tile-glyph", 22);
+        glyph_label.set_halign(gtk::Align::Start);
+        let name_label = gtk::Label::new(Some(name));
+        name_label.add_css_class("gos-cc-tile-label");
+        name_label.set_xalign(0.0);
+        let state = gtk::Label::new(Some(state_text));
+        state.add_css_class("gos-cc-tile-state");
+        state.set_xalign(0.0);
+        inner.append(&glyph_label);
+        inner.append(&name_label);
+        inner.append(&state);
+        button.set_child(Some(&inner));
+        (button, state)
+    }
+
+    fn update_tile_accessibility(button: &gtk::Button, name: &str, state_text: &str) {
+        let description = format!("{name}: {state_text}");
+        button.set_tooltip_text(Some(&description));
+        set_accessible_label_description(button, name, &description);
+    }
+
+    fn scheme_tile() -> gtk::Button {
+        let dark = goblins_os_ui::resolve_dark();
+        let (tile, state) = make_tile(
+            "preferences-desktop-appearance-symbolic",
+            "Appearance",
+            if dark { "Dark" } else { "Light" },
+            dark,
+        );
+        let state_weak = state.downgrade();
+        let tile_weak = tile.downgrade();
+        tile.connect_clicked(move |_| {
+            let now_dark = goblins_os_ui::resolve_dark();
+            let next = if now_dark { "default" } else { "prefer-dark" };
+            if goblins_os_ui::set_color_scheme(next) {
+                if let (Some(state), Some(tile)) = (state_weak.upgrade(), tile_weak.upgrade()) {
+                    let dark = next == "prefer-dark";
+                    state.set_text(if dark { "Dark" } else { "Light" });
+                    update_tile_accessibility(
+                        &tile,
+                        "Appearance",
+                        if dark { "Dark" } else { "Light" },
+                    );
+                    if dark {
+                        tile.add_css_class("is-on");
+                    } else {
+                        tile.remove_css_class("is-on");
+                    }
+                }
+            }
+        });
+        tile
+    }
+
+    fn wifi_tile() -> gtk::Button {
+        let enabled = wifi_enabled();
+        let on = enabled.unwrap_or(false);
+        let state_text = match (enabled, wifi_name()) {
+            (Some(true), Some(name)) if !name.is_empty() => name,
+            (Some(true), _) => "On".to_string(),
+            (Some(false), _) => "Off".to_string(),
+            (None, _) => "Unavailable".to_string(),
+        };
+        let (tile, state) = make_tile("network-wireless-symbolic", "Wi-Fi", &state_text, on);
+        if enabled.is_none() {
+            update_tile_accessibility(&tile, "Wi-Fi", "Unavailable in this session");
+            tile.set_sensitive(false);
+            return tile;
+        }
+        let state_weak = state.downgrade();
+        let tile_weak = tile.downgrade();
+        tile.connect_clicked(move |_| {
+            let now_on = wifi_enabled().unwrap_or(false);
+            let target = if now_on { "off" } else { "on" };
+            let _ = run("nmcli", &["radio", "wifi", target]);
+            if let (Some(state), Some(tile)) = (state_weak.upgrade(), tile_weak.upgrade()) {
+                let on = target == "on";
+                let label = if on {
+                    wifi_name()
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| "On".to_string())
+                } else {
+                    "Off".to_string()
+                };
+                state.set_text(&label);
+                update_tile_accessibility(&tile, "Wi-Fi", &label);
+                if on {
+                    tile.add_css_class("is-on");
+                } else {
+                    tile.remove_css_class("is-on");
+                }
+            }
+        });
+        tile
+    }
+
+    /// A two-segment AI mode switch. The active segment reflects the OS core's
+    /// current mode; clicking a segment posts the switch (the core validates
+    /// account requirements, and only a 2xx moves the highlight).
+    fn engine_switch(core_url: &str) -> gtk::Box {
+        let current = current_engine(core_url);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.add_css_class("gos-cc-engine");
+        row.set_homogeneous(true);
+
+        let local = gtk::Button::with_label("On-device · GPT-OSS");
+        local.add_css_class("gos-cc-seg");
+        let codex = gtk::Button::with_label("OpenAI · Codex");
+        codex.add_css_class("gos-cc-seg");
+        if current.as_deref() == Some("codex") {
+            codex.add_css_class("is-active");
+        } else {
+            local.add_css_class("is-active");
+        }
+        update_engine_accessibility(
+            &local,
+            &codex,
+            current.as_deref().unwrap_or("local-gpt-oss"),
+        );
+
+        let wire =
+            |button: &gtk::Button, engine: &'static str, sibling: &gtk::Button, url: String| {
+                let button_weak = button.downgrade();
+                let sibling_weak = sibling.downgrade();
+                button.connect_clicked(move |_| {
+                    if set_engine(&url, engine) {
+                        if let (Some(button), Some(sibling)) =
+                            (button_weak.upgrade(), sibling_weak.upgrade())
+                        {
+                            button.add_css_class("is-active");
+                            sibling.remove_css_class("is-active");
+                            if engine == "codex" {
+                                update_engine_accessibility(&sibling, &button, engine);
+                            } else {
+                                update_engine_accessibility(&button, &sibling, engine);
+                            }
+                        }
+                    }
+                });
+            };
+        wire(&local, "local-gpt-oss", &codex, core_url.to_string());
+        wire(&codex, "codex", &local, core_url.to_string());
+
+        row.append(&local);
+        row.append(&codex);
+        row
+    }
+
+    fn update_engine_accessibility(local: &gtk::Button, codex: &gtk::Button, selected: &str) {
+        let local_current = selected != "codex";
+        set_segment_accessibility(
+            local,
+            "Use on-device GPT-OSS",
+            "on-device GPT-OSS",
+            local_current,
+        );
+        set_segment_accessibility(codex, "Use OpenAI Codex", "OpenAI Codex", !local_current);
+    }
+
+    fn set_segment_accessibility(
+        button: &gtk::Button,
+        label: &str,
+        engine_name: &str,
+        current: bool,
+    ) {
+        let description = if current {
+            format!("Current build engine: {engine_name}")
+        } else {
+            format!("Switch build engine to {engine_name}")
+        };
+        button.set_tooltip_text(Some(&description));
+        set_accessible_label_description(button, label, &description);
+    }
+
+    /// A labeled slider row. When the backend value is None, the row reads as
+    /// disabled with an honest reason rather than presenting an invented position.
+    fn slider_row(
+        label: &str,
+        icon_name: &str,
+        value: Option<f64>,
+        on_change: impl Fn(f64) + 'static,
+        unavailable: &str,
+    ) -> gtk::Box {
+        let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        row.add_css_class("gos-cc-slider-row");
+
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let glyph_label = icon(icon_name, "gos-cc-slider-glyph", 18);
+        glyph_label.set_valign(gtk::Align::Center);
+        set_accessible_label_description(&glyph_label, label, label);
+        line.append(&glyph_label);
+
+        let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
+        scale.set_hexpand(true);
+        scale.set_draw_value(false);
+        scale.set_tooltip_text(Some(label));
+        match value {
+            Some(value) => {
+                // Set the position BEFORE wiring the signal so opening the panel
+                // never re-issues the current value back to the device.
+                scale.set_value(value);
+                let description = percent_description(label, value);
+                set_accessible_label_description(&scale, label, &description);
+                let label_text = label.to_string();
+                scale.connect_value_changed(move |scale| {
+                    let value = scale.value();
+                    on_change(value);
+                    let description = percent_description(&label_text, value);
+                    set_accessible_label_description(scale, &label_text, &description);
+                });
+            }
+            None => {
+                row.add_css_class("is-disabled");
+                scale.set_sensitive(false);
+                set_accessible_label_description(&scale, label, unavailable);
+            }
+        }
+        line.append(&scale);
+        row.append(&line);
+
+        if value.is_none() {
+            let note = gtk::Label::new(Some(unavailable));
+            note.add_css_class("gos-cc-note");
+            note.set_xalign(0.0);
+            row.append(&note);
+        }
+        row
+    }
+
+    fn percent_description(label: &str, value: f64) -> String {
+        format!("{label}: {} percent", value.round() as i64)
+    }
+
+    fn icon(icon_name: &str, class_name: &str, px: i32) -> gtk::Image {
+        let image = gtk::Image::from_icon_name(icon_name);
+        image.add_css_class(class_name);
+        image.set_pixel_size(px);
+        image
+    }
+
+    fn set_accessible_label_description<W>(widget: &W, label: &str, description: &str)
+    where
+        W: gtk::glib::object::IsA<gtk::Accessible>,
+    {
+        widget.update_property(&[
+            gtk::accessible::Property::Label(label),
+            gtk::accessible::Property::Description(description),
+        ]);
+    }
+
+    fn tool_button(
+        label: &str,
+        program: &'static str,
+        args: &'static [&'static str],
+        window: &gtk::ApplicationWindow,
+    ) -> gtk::Button {
+        let button = gtk::Button::with_label(label);
+        button.add_css_class("gos-cc-link");
+        button.set_halign(gtk::Align::Fill);
+        let weak = window.downgrade();
+        button.connect_clicked(move |_| {
+            let _ = Command::new(program).args(args).spawn();
+            if let Some(win) = weak.upgrade() {
+                win.close();
+            }
+        });
+        button
+    }
+
+    fn ai_action_button(
+        label: &str,
+        args: &'static [&'static str],
+        availability: &AiActionAvailability,
+        window: &gtk::ApplicationWindow,
+    ) -> gtk::Button {
+        ai_tool_button(label, LAUNCHER_BIN, args, availability, window)
+    }
+
+    fn ai_tool_button(
+        label: &str,
+        program: &'static str,
+        args: &'static [&'static str],
+        availability: &AiActionAvailability,
+        window: &gtk::ApplicationWindow,
+    ) -> gtk::Button {
+        let button = tool_button(label, program, args, window);
+        if !availability.enabled {
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some(&availability.reason));
+        }
+        button
+    }
+
+    fn first_unavailable_ai_reason<'a>(actions: &[&'a AiActionAvailability]) -> Option<&'a str> {
+        actions
+            .iter()
+            .find(|availability| !availability.enabled)
+            .map(|availability| availability.reason.as_str())
+    }
+
+    fn present_with_fade(window: &gtk::ApplicationWindow) {
+        let animate = gtk::Settings::default()
+            .map(|s| s.is_gtk_enable_animations())
+            .unwrap_or(true);
+        if !animate {
+            window.set_opacity(1.0);
+            window.present();
+            return;
+        }
+        window.set_opacity(0.0);
+        window.present();
+        let start = std::time::Instant::now();
+        let weak = window.downgrade();
+        glib::timeout_add_local(Duration::from_millis(16), move || {
+            let Some(window) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let elapsed = start.elapsed().as_millis() as f64;
+            let t = (elapsed / goblins_os_design::MOTION_OVERLAY_MS as f64).clamp(0.0, 1.0);
+            window.set_opacity(1.0 - (1.0 - t).powi(3));
+            if t >= 1.0 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
+    // ── Real backends ────────────────────────────────────────────────────────
+
+    fn run(program: &str, args: &[&str]) -> Option<String> {
+        let output = Command::new(program).args(args).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// WirePlumber default-sink volume as a 0–100 percentage.
+    fn volume_percent() -> Option<f64> {
+        let out = run("wpctl", &["get-volume", SINK])?;
+        // "Volume: 0.65" (optionally "[MUTED]").
+        let value: f64 = out.split_whitespace().nth(1)?.parse().ok()?;
+        Some((value * 100.0).clamp(0.0, 100.0))
+    }
+
+    /// Backlight brightness as a 0–100 percentage (None when there's no backlight).
+    fn brightness_percent() -> Option<f64> {
+        let out = run("brightnessctl", &["-m"])?;
+        // "name,type,current,percent,max" → e.g. "intel_backlight,backlight,3500,35%,10000"
+        let percent = out.lines().next()?.split(',').nth(3)?.trim_end_matches('%');
+        percent.parse::<f64>().ok()
+    }
+
+    fn wifi_enabled() -> Option<bool> {
+        let out = run("nmcli", &["-t", "-f", "WIFI", "g"])?;
+        Some(out.trim() == "enabled")
+    }
+
+    fn wifi_name() -> Option<String> {
+        let out = run("nmcli", &["-t", "-f", "active,ssid", "dev", "wifi"])?;
+        out.lines()
+            .find_map(|line| line.strip_prefix("yes:"))
+            .map(|ssid| ssid.to_string())
+    }
+
+    #[derive(Deserialize)]
+    struct EngineStatus {
+        engine: String,
+    }
+
+    fn current_engine(core_url: &str) -> Option<String> {
+        let (status, body) = http_request(core_url, "GET", "/v1/models/openai-key", None).ok()?;
+        if !(200..=299).contains(&status) {
+            return None;
+        }
+        serde_json::from_slice::<EngineStatus>(&body)
+            .ok()
+            .map(|status| status.engine)
+    }
+
+    fn ai_action_availability(core_url: &str, id: &str) -> AiActionAvailability {
+        let fallback = "Set up local or hosted AI in Models before asking Goblins AI.".to_string();
+        let Some(catalog) = get_json::<AiActionCatalog>(core_url, "/v1/ai/actions") else {
+            return AiActionAvailability {
+                enabled: false,
+                reason: fallback,
+            };
+        };
+        catalog
+            .actions
+            .into_iter()
+            .find(|action| action.id == id)
+            .map(|action| AiActionAvailability {
+                enabled: action.enabled,
+                reason: action.reason,
+            })
+            .unwrap_or_else(|| AiActionAvailability {
+                enabled: false,
+                reason: "This Goblins AI action is not registered in the OS action catalog."
+                    .to_string(),
+            })
+    }
+
+    fn get_json<T: for<'de> Deserialize<'de>>(core_url: &str, path: &str) -> Option<T> {
+        let (status, body) = http_request(core_url, "GET", path, None).ok()?;
+        if !(200..=299).contains(&status) {
+            return None;
+        }
+        serde_json::from_slice(&body).ok()
+    }
+
+    fn set_engine(core_url: &str, engine: &str) -> bool {
+        let body = serde_json::json!({ "engine": engine }).to_string();
+        matches!(
+            http_request(core_url, "POST", "/v1/models/engine", Some(&body)),
+            Ok((200..=299, _))
+        )
+    }
+
+    fn http_request(
+        core_url: &str,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<(u16, Vec<u8>), ()> {
+        let rest = core_url.strip_prefix("http://").ok_or(())?;
+        let authority = rest.split('/').next().ok_or(())?;
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((h, p)) => (h, p.parse::<u16>().map_err(|_| ())?),
+            None => (authority, 80),
+        };
+        let address = (host, port)
+            .to_socket_addrs()
+            .map_err(|_| ())?
+            .next()
+            .ok_or(())?;
+        let mut stream =
+            TcpStream::connect_timeout(&address, Duration::from_millis(700)).map_err(|_| ())?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|_| ())?;
+        stream
+            .set_write_timeout(Some(Duration::from_millis(2000)))
+            .map_err(|_| ())?;
+
+        let request = match body {
+            Some(payload) => format!(
+                "POST {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            ),
+            None => format!(
+                "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+            ),
+        };
+        stream.write_all(request.as_bytes()).map_err(|_| ())?;
+
+        let mut raw = Vec::new();
+        stream
+            .take(MAX_BODY_BYTES)
+            .read_to_end(&mut raw)
+            .map_err(|_| ())?;
+        let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or(())?;
+        let head = std::str::from_utf8(&raw[..header_end]).map_err(|_| ())?;
+        let status = head
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .ok_or(())?;
+        Ok((status, raw[header_end + 4..].to_vec()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn control_center_controls_are_accessible_and_title_case() {
+        let source = include_str!("main.rs");
+        assert!(source.contains("Connection & Appearance"));
+        assert!(source.contains("AI Mode"));
+        assert!(source.contains("Goblins AI"));
+        assert!(source.contains("set_accessible_label_description"));
+        assert!(source.contains("Use on-device GPT-OSS"));
+        assert!(source.contains("Use OpenAI Codex"));
+        assert!(source.contains("Volume"));
+        assert!(source.contains("percent_description"));
+        assert!(source.contains("Display brightness"));
+        assert!(source.contains("Ask Goblin…"));
+        assert!(source.contains("Open Settings and close Control Center"));
+        let legacy_render_env = ["GOBLINS", "OS", "CONTROL", "CENTER", "DEMO"].join("_");
+        let legacy_render_ssid = ["Goblins", "5G"].join("-");
+        assert!(!source.contains(&legacy_render_env));
+        assert!(!source.contains(&legacy_render_ssid));
+
+        for legacy in [
+            ["CONNECTION", "&", "APPEARANCE"].join(" "),
+            ["BUILD", "ENGINE"].join(" "),
+            ["GOBLINS", "AI"].join(" "),
+            ["SO", "UND"].join(""),
+            ["DIS", "PLAY"].join(""),
+        ] {
+            assert!(
+                !source.contains(&legacy),
+                "Control Center section labels should stay title case: {legacy}"
+            );
+        }
+    }
+}

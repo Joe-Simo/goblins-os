@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenAI Platform
+Comment=OpenAI models, projects, usage, and developer controls
+Exec=/usr/libexec/goblins-os/goblins-os-open platform
+Categories=Development;Network;
+NoDisplay=false
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+StartupWMClass=org.goblins.OS.OpenAI.Platform

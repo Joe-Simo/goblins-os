@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Goblins OS
+Comment=Desktop and system controls for Goblins OS
+Exec=/usr/libexec/goblins-os/goblins-os-shell
+X-GNOME-Autostart-enabled=true
+X-GNOME-AutoRestart=true
+X-GNOME-HiddenUnderSystemd=true
+OnlyShowIn=GoblinsOS;
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+StartupWMClass=org.goblins.OS.Shell

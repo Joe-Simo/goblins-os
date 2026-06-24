@@ -1,0 +1,103 @@
+# Goblins OS desktop defaults — the macOS-blend chrome at the GNOME level.
+# Compiled into the system dconf db (system-db:local) and applied to the desktop
+# user via os/dconf/profile/user. These are defaults; the person can change them.
+
+[org/gnome/desktop/background]
+picture-uri='file:///usr/share/goblins-os/brand/wallpaper/goblins-os-light.svg'
+picture-uri-dark='file:///usr/share/goblins-os/brand/wallpaper/goblins-os-dark.svg'
+picture-options='zoom'
+primary-color='#0b0b11'
+secondary-color='#0b0b11'
+
+[org/gnome/desktop/screensaver]
+picture-uri='file:///usr/share/goblins-os/brand/wallpaper/goblins-os-dark.svg'
+picture-options='zoom'
+
+[org/gnome/desktop/interface]
+# Goblins-calm: Inter everywhere, a neutral (slate) accent, Light by default with
+# Auto/Dark a switch away — the whole OS themes from one scheme key.
+color-scheme='default'
+accent-color='slate'
+icon-theme='GoblinsOS'
+font-name='Inter 11'
+document-font-name='Inter 11'
+font-antialiasing='rgba'
+font-hinting='slight'
+enable-animations=true
+
+[org/gnome/desktop/sound]
+theme-name='GoblinsOS'
+event-sounds=true
+input-feedback-sounds=false
+
+[org/gnome/desktop/wm/preferences]
+# macOS-style: window controls on the LEFT, none on the right.
+button-layout='close,minimize,maximize:'
+titlebar-font='Inter 11'
+
+[org/gnome/mutter]
+# Keep GNOME's real compositor/window manager doing the hard work, but tune the
+# user-facing behavior toward the Goblins/macOS model: centered new windows,
+# dynamic workspaces, edge snap-assist, and no multi-monitor workspace surprise.
+center-new-windows=true
+dynamic-workspaces=true
+edge-tiling=true
+workspaces-only-on-primary=true
+
+[org/gnome/desktop/wm/keybindings]
+# Free ⌘/Super+Space for the launcher — it defaults to the input-source switcher,
+# which the native session disables anyway (one keyboard layout, IBus off).
+switch-input-source=@as []
+switch-input-source-backward=@as []
+
+[org/gnome/settings-daemon/plugins/media-keys]
+# Super+Space opens the bespoke Goblins launcher (Spotlight); Super+Shift+Space
+# opens the same surface in assistant-first mode. Super+Alt+Space opens the
+# selected-text context action, Super+Alt+W opens writing tools, Super+Alt+S opens screen context, and
+# Super+Alt+V opens screenshot/visual context. The MediaKeys settings-daemon
+# plugin is a RequiredComponent of the goblins-os session, so these bindings
+# are live in the session.
+custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-launcher/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-assistant/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-selected-text/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-writing-tools/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-screen-context/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-visual-context/']
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-launcher]
+name='Goblins Launcher'
+command='/usr/libexec/goblins-os/goblins-os-launcher'
+binding='<Super>space'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-assistant]
+name='Goblins AI'
+command='/usr/libexec/goblins-os/goblins-os-launcher --assistant'
+binding='<Super><Shift>space'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-selected-text]
+name='Goblins AI Selected Text'
+command='/usr/libexec/goblins-os/goblins-os-launcher --selected-text'
+binding='<Super><Alt>space'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-writing-tools]
+name='Goblins AI Writing Tools'
+command='/usr/libexec/goblins-os/goblins-os-launcher --writing-tools'
+binding='<Super><Alt>w'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-screen-context]
+name='Goblins AI Screen Context'
+command='/usr/libexec/goblins-os/goblins-os-launcher --screen-context'
+binding='<Super><Alt>s'
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-visual-context]
+name='Goblins AI Screenshot Context'
+command='/usr/libexec/goblins-os/goblins-os-screenshot-context'
+binding='<Super><Alt>v'
+
+[org/gnome/shell]
+# Desktop surfaces: the GoblinsOS theme (menu bar / control center) + our
+# own overview-independent dock (dash-to-dock needs the overview, which this mode
+# strips out). Version validation off as belt-and-suspenders for bundled extensions.
+enabled-extensions=['user-theme@gnome-shell-extensions.gcampax.github.com', 'goblins-dock@goblins.os', 'goblins-menubar@goblins.os', 'goblins-wm@goblins.os']
+disable-extension-version-validation=true
+# The dock's pinned surfaces (Build Studio + Settings). The Home IS the shell, so
+# it is not pinned; built apps and utilities join the dock when running.
+favorite-apps=['org.goblins.OS.OpenAI.Codex.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Console.desktop', 'org.goblins.OS.Settings.desktop']
+
+[org/gnome/shell/extensions/user-theme]
+name='GoblinsOS'

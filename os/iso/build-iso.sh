@@ -336,6 +336,13 @@ run_docker_builder() {
     "$BIB" \
     -lc 'set -euo pipefail; mkdir -p /var/lib/containers/storage/overlay; if [ "$BIB_PULL_LOCAL" = "1" ]; then podman pull --tls-verify=false "$BIB_SOURCE_IMAGE"; else podman pull "$BIB_SOURCE_IMAGE"; fi; bootc-image-builder --verbose build --type anaconda-iso --rootfs "$BIB_ROOTFS" --output /output "$BIB_SOURCE_IMAGE"'
 
+  # The privileged bootc-image-builder container writes /output as root. Reclaim
+  # ownership via a throwaway container (no host sudo needed; a harmless no-op on
+  # Docker Desktop) so the host user can rename the ISO and write the
+  # sha/manifest in finalize_outputs.
+  docker run --rm -v "$OUTDIR":/output docker.io/library/alpine:latest \
+    chown -R "$(id -u):$(id -g)" /output 2>/dev/null || true
+
   finalize_outputs
 }
 

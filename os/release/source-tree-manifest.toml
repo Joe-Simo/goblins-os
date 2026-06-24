@@ -66,6 +66,7 @@ paths = [
   "target/",
   "libpod/",
   ".claude/",
+  ".git/",
   ".DS_Store",
   "%sn *",
   "-background",

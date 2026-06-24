@@ -6719,8 +6719,8 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
-            "settings-display-fallback-copy-is-user-facing",
-            "fallback query {}",
+            "settings-display-query-copy-is-user-facing",
+            "display query {}",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),

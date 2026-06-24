@@ -4184,7 +4184,9 @@ fn append_policy_summary(panel: &gtk4::Box, policy: &PolicyStatus) {
         health_row(
             "Permission gates",
             &policy_control_counts_label(counts),
-            counts.total > 0,
+            // Affirmative (green) only when nothing is gated or denied. Gating is a
+            // guard, not an endorsement, so it reads as a calm/neutral state.
+            counts.gated == 0 && counts.denied == 0,
             &format!(
                 "{} allowed, {} gated, {} denied, {} explicitly granted.",
                 counts.allowed, counts.gated, counts.denied, counts.granted
@@ -4238,7 +4240,6 @@ fn build_overview(panel: &gtk4::Box, state: &SettingsState) {
         "Overview",
         "Goblins OS keeps OpenAI, policy, local models, storage, recovery, device controls, accounts, apps, and connectivity in one Settings experience.",
     );
-    panel.append(&label("Device controls", &["gos-subsection-title"]));
     append_overview_native_settings(panel, state);
 
     panel.append(&label("Goblins OS status", &["gos-subsection-title"]));
@@ -4662,7 +4663,7 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
             "Boot image",
             facility_state_label(&facility.state).to_string(),
             facility_state_is_ready(&facility.state),
-            facility_detail_with_evidence(facility),
+            facility_user_detail(facility),
         ));
     }
     if let Some(facility) = facility_by_id(state, "keyring") {
@@ -4670,7 +4671,7 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
             "Credential keyring",
             facility_state_label(&facility.state).to_string(),
             facility_state_is_ready(&facility.state),
-            facility_detail_with_evidence(facility),
+            facility_user_detail(facility),
         ));
     }
     panel.append(&health_summary_group(rows));
@@ -4919,7 +4920,7 @@ fn append_wifi_management(panel: &gtk4::Box, state: &SettingsState) {
                 "Wi-Fi scan",
                 &format!(
                     "{} Network scanning is {}.",
-                    scan.detail,
+                    polished_network_detail(&scan.detail),
                     ready_word(scan.manager_available),
                 ),
             ));
@@ -7242,7 +7243,7 @@ fn native_handoff_status_label(available: bool) -> &'static str {
 
 fn native_app_handoff_detail(app_label: &str, purpose: &str, available: bool) -> String {
     if available {
-        format!("{app_label} provides {purpose}. Related Goblins OS status stays on this page.")
+        format!("{app_label} lets you {purpose}. Related Goblins OS status stays on this page.")
     } else {
         format!("{app_label} is included in the full Goblins OS image. Start from that image, or add the utility to this build, before opening it here.")
     }
@@ -8156,7 +8157,11 @@ fn settings_ai_help_readiness(state: &SettingsState) -> SettingsAiHelpReadiness 
         },
         Some(action) => SettingsAiHelpReadiness {
             enabled: false,
-            detail: ai_action_detail(action),
+            // User-facing help caption: the plain reason only, never the internal
+            // action taxonomy (context/permission/confirmation/entry-points).
+            detail: format!("{} {}", action.detail.trim(), action.reason.trim())
+                .trim()
+                .to_string(),
         },
         None => SettingsAiHelpReadiness {
             enabled: false,
@@ -9064,11 +9069,13 @@ fn raw_error_like(detail: &str) -> bool {
 }
 
 fn readable_runtime_value(value: &str) -> &str {
-    let value = value.trim();
-    if value.is_empty() {
-        "unknown"
-    } else {
-        value
+    // Humanize the internal runtime sentinels/slugs so no raw token (e.g.
+    // "not-configured", "os-managed-runtime") reaches user copy.
+    match value.trim() {
+        "" => "unknown",
+        "not-configured" | "unconfigured" => "not configured",
+        "os-managed-runtime" => "OS-managed runtime",
+        other => other,
     }
 }
 
@@ -10276,7 +10283,7 @@ fn append_facility_status(
 
     match facility_by_id(state, id) {
         Some(facility) => {
-            let detail = facility_detail_with_evidence(facility);
+            let detail = facility_user_detail(facility);
             panel.append(&health_row(
                 title,
                 facility_state_label(&facility.state),
@@ -10304,16 +10311,11 @@ fn facility_by_id<'a>(state: &'a SettingsState, id: &str) -> Option<&'a SystemFa
         })
 }
 
-fn facility_detail_with_evidence(facility: &SystemFacility) -> String {
-    if facility.evidence.is_empty() {
-        return facility.detail.clone();
-    }
-
-    format!(
-        "{}. Evidence: {}.",
-        trim_terminal_period(&facility.detail),
-        facility.evidence.join(", ")
-    )
+fn facility_user_detail(facility: &SystemFacility) -> String {
+    // User-facing facility cards show the plain-language status only. The raw
+    // probe evidence (e.g. "/dev/input:missing", "bootc:present") is internal
+    // verification data, not user copy, so it is never surfaced here.
+    facility.detail.clone()
 }
 
 fn trim_terminal_period(value: &str) -> &str {
@@ -11496,7 +11498,7 @@ fn display_handles_detail(displays: &DisplaysStatus) -> String {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("not reported");
     format!(
-        "Session handles: Wayland {wayland} · X11 {x11}. Display bridge {} · fallback query {}.",
+        "Graphics session: Wayland {wayland} · X11 {x11}. Display service {} · display query {}.",
         display_availability_word(displays.gdbus_available),
         display_availability_word(displays.xrandr_available)
     )
@@ -12323,6 +12325,13 @@ fn appearance_scheme_summary_spec(appearance: Option<&AppearanceStatus>) -> Appe
     }
 
     let current = normalized_appearance_theme(&appearance.theme);
+    // Name the system value with the same friendly label as the pill/selector
+    // (Auto/Light/Dark), never the raw gsettings token (default/prefer-*).
+    let scheme_label = match appearance.color_scheme.as_str() {
+        "prefer-dark" => "Dark",
+        "prefer-light" => "Light",
+        _ => "Auto",
+    };
     appearance_summary_spec(
         "Color scheme",
         current,
@@ -12330,7 +12339,7 @@ fn appearance_scheme_summary_spec(appearance: Option<&AppearanceStatus>) -> Appe
         format!(
             "{} Current system value is {}.",
             appearance_scheme_detail(current),
-            appearance.color_scheme
+            scheme_label
         ),
     )
 }
@@ -13693,10 +13702,14 @@ fn device_identity_summary_spec(system: Option<&SettingsSystemStatus>) -> Update
                     "unknown"
                 },
                 ready,
-                format!(
-                    "{} on {} · {} account.",
-                    account.display_name, account.hostname, account.account_type
-                ),
+                if ready {
+                    format!(
+                        "{} on {} · {} account.",
+                        account.display_name, account.hostname, account.account_type
+                    )
+                } else {
+                    "Local account and device identity are still being read.".to_string()
+                },
             )
         }
         None => updates_about_summary_spec(
@@ -16276,7 +16289,7 @@ fn runtime_label(runtime: &RuntimeReport) -> String {
     let mut names = Vec::new();
 
     if let Some(selected) = &runtime.selected {
-        names.push(selected.clone());
+        names.push(readable_runtime_value(selected).to_string());
     }
 
     if runtime.ollama {
@@ -17616,8 +17629,8 @@ mod tests {
         bluetooth_adapter_state_detail, bluetooth_power_detail, bluetooth_power_label,
         bluetooth_power_outcome, camera_access_detail, cleanup_temp_detail, cleanup_trash_detail,
         days_label, desktop_privacy_outcome, display_handles_detail, display_output_detail,
-        display_output_title, engine_selection_success_copy, facility_detail_with_evidence,
-        facility_state_is_ready, facility_state_label, input_feedback_sounds_detail,
+        display_output_title, engine_selection_success_copy, facility_state_is_ready,
+        facility_state_label, facility_user_detail, input_feedback_sounds_detail,
         interface_sounds_detail, key_repeat_detail, local_account_identity_detail,
         local_account_type_detail, lock_screen_notifications_detail, magnifier_detail,
         microphone_access_detail, milliseconds_label, motion_preference_detail, night_light_detail,
@@ -18060,7 +18073,7 @@ mod tests {
             applications_handoff.purpose,
             true
         )
-        .contains("Software provides"));
+        .contains("Software lets you"));
         assert!(super::device_native_handoff_spec(SettingsPanel::PowerBattery).is_none());
     }
 
@@ -18900,10 +18913,11 @@ mod tests {
         assert_eq!(facility_state_label("failed"), "Needs attention");
         assert!(facility_state_is_ready("ready"));
         assert!(!facility_state_is_ready("waiting"));
-        assert_eq!(
-            facility_detail_with_evidence(&facility),
-            "Portals provide native app integration. Evidence: xdg-desktop-portal:present, xdg-desktop-portal.service:active."
-        );
+        let detail = facility_user_detail(&facility);
+        assert!(detail.contains("Portals provide native app integration"));
+        // Raw probe evidence is internal and must never reach user copy.
+        assert!(!detail.contains("Evidence:"));
+        assert!(!detail.contains("xdg-desktop-portal:present"));
     }
 
     #[test]
@@ -19560,7 +19574,10 @@ mod tests {
         let scheme = super::appearance_scheme_summary_spec(Some(&appearance));
         assert_eq!(scheme.state, "dark");
         assert!(scheme.ready);
-        assert!(scheme.detail.contains("prefer-dark"));
+        // The system value reads as the friendly label (Dark), never the raw
+        // gsettings token (prefer-dark).
+        assert!(scheme.detail.contains("system value is Dark"));
+        assert!(!scheme.detail.contains("prefer-dark"));
         assert!(!scheme.detail.contains("goblins-os-core"));
         assert!(scheme.detail.contains("system value"));
 
@@ -19765,8 +19782,8 @@ mod tests {
             detail: "Display configuration is reachable.".to_string(),
         };
         assert!(display_handles_detail(&displays).contains("Wayland wayland-0"));
-        assert!(display_handles_detail(&displays).contains("Display bridge ready"));
-        assert!(display_handles_detail(&displays).contains("fallback query not ready"));
+        assert!(display_handles_detail(&displays).contains("Display service ready"));
+        assert!(display_handles_detail(&displays).contains("display query not ready"));
 
         let output = DisplayOutputStatus {
             name: "eDP-1".to_string(),
@@ -20280,13 +20297,13 @@ mod tests {
             "inspect folders, mounted volumes, and where disk space is being used",
             true
         )
-        .contains("Disk Usage Analyzer provides"));
+        .contains("Disk Usage Analyzer lets you"));
         assert!(super::native_app_handoff_detail(
             "Disks",
             "inspect drives, partitions, filesystems, and SMART data",
             true
         )
-        .contains("Disks provides"));
+        .contains("Disks lets you"));
         assert!(super::native_app_handoff_detail(
             "Disks",
             "inspect drives, partitions, filesystems, and SMART data",
@@ -20793,7 +20810,7 @@ mod tests {
 
         assert!(
             super::native_app_handoff_detail("Logs", "review system and service logs", true)
-                .contains("Logs provides")
+                .contains("Logs lets you")
         );
         assert!(
             super::native_app_handoff_detail("Logs", "review system and service logs", false)
@@ -21148,7 +21165,7 @@ mod tests {
             "review application and OS update surfaces",
             true
         )
-        .contains("Software provides"));
+        .contains("Software lets you"));
         assert!(super::native_app_handoff_detail(
             "Software",
             "review application and OS update surfaces",

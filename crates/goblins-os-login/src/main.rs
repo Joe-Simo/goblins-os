@@ -206,23 +206,23 @@ fn local_unlock_available(state: &LoginState) -> bool {
 
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
 fn session_gate_summary(gate: &SessionGateStatus) -> String {
-    let mode = gate
-        .mode
-        .as_deref()
-        .map(identity_mode_label)
-        .unwrap_or("not selected");
-    let first_boot = gate
-        .first_boot_mode
-        .as_deref()
-        .map(identity_mode_label)
-        .unwrap_or("pending");
-
-    format!(
-        "{} · mode {} · first boot {}",
-        lock_state_label(&gate.lock.state),
-        mode,
-        first_boot
-    )
+    // A single reader-facing sentence per lock state — never a raw field-join of
+    // internal mode/first-boot tokens.
+    match gate.lock.state.as_str() {
+        "unlocked" => "Signed in. The desktop is unlocked.".to_string(),
+        "waiting-for-first-boot" => {
+            "Waiting for first-boot setup to choose how you sign in.".to_string()
+        }
+        "requires-open-a-i-account" => {
+            "Sign in with your OpenAI account to unlock, or keep local-only desktop access."
+                .to_string()
+        }
+        "local-only-available" => {
+            "Local-only desktop access is ready. Sign in with your OpenAI account any time."
+                .to_string()
+        }
+        other => lock_state_label(other).to_string(),
+    }
 }
 
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
@@ -233,15 +233,6 @@ fn lock_state_label(state: &str) -> &str {
         "requires-open-a-i-account" => "requires OpenAI account",
         "local-only-available" => "local-only available",
         _ => state,
-    }
-}
-
-#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
-fn identity_mode_label(mode: &str) -> &str {
-    match mode {
-        "cloud-openai" => "OpenAI account",
-        "local-gpt-oss" => "local GPT-OSS",
-        _ => mode,
     }
 }
 
@@ -823,10 +814,14 @@ mod tests {
         let state = login_state_with_gate(Some("cloud-openai"), "requires-open-a-i-account", true);
         let gate = state.gate.as_ref().unwrap();
 
+        let summary = session_gate_summary(gate);
         assert_eq!(
-            session_gate_summary(gate),
-            "requires OpenAI account · mode not selected · first boot OpenAI account"
+            summary,
+            "Sign in with your OpenAI account to unlock, or keep local-only desktop access."
         );
+        // No raw internal tokens / field-joins in user copy.
+        assert!(!summary.contains('·'));
+        assert!(!summary.contains("first boot "));
     }
 
     #[test]

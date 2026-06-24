@@ -197,18 +197,18 @@ fn displays_detail(
     }
     if output_count > 0 {
         return format!(
-            "{output_count} display output(s) were reported; full display configuration is not reachable from this runtime."
+            "{output_count} display output(s) were reported; the full display configuration can't be read for this session yet."
         );
     }
     if wayland_display.is_none() && x11_display.is_none() {
-        return "No active Wayland or X11 display handle is visible to the core runtime."
-            .to_string();
+        return "No active Wayland or X11 display is detected for this session yet.".to_string();
     }
     if !xrandr_available {
-        return "A desktop display handle is visible, but display configuration is not reachable."
+        return "A desktop display is active, but its configuration can't be read right now."
             .to_string();
     }
-    "A desktop display handle is visible, but monitor configuration could not be queried from this runtime.".to_string()
+    "A desktop display is active, but its monitor configuration can't be read for this session."
+        .to_string()
 }
 
 fn env_optional(key: &str) -> Option<String> {

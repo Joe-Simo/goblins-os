@@ -1480,7 +1480,7 @@ mod native {
             items.push(LauncherItem {
                 icon: "=",
                 title: trimmed.to_string(),
-                subtitle: "Return to copy".to_string(),
+                subtitle: "Press Return to copy".to_string(),
                 kind: "Math",
                 answer: Some(answer.clone()),
                 action: Action::Copy(answer),
@@ -1489,7 +1489,7 @@ mod native {
             items.push(LauncherItem {
                 icon: "\u{21C4}", // ⇄
                 title: trimmed.to_string(),
-                subtitle: "Return to copy".to_string(),
+                subtitle: "Press Return to copy".to_string(),
                 kind: "Convert",
                 answer: Some(answer.clone()),
                 action: Action::Copy(answer),

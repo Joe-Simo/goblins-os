@@ -132,7 +132,7 @@ fn input_facility() -> SystemFacility {
         "input-devices",
         "Keyboard, pointer, and input",
         Path::new("/dev/input").exists() || Path::new("/proc/bus/input/devices").exists(),
-        "Input readiness is based on Linux input device paths exposed to the session.",
+        "Keyboard, pointer, tablet, and other input devices available to this session.",
         vec![
             evidence_path("/dev/input"),
             evidence_path("/proc/bus/input/devices"),
@@ -218,7 +218,7 @@ fn accessibility_facility() -> SystemFacility {
         "Accessibility bus",
         executable_exists("at-spi-bus-launcher")
             || Path::new("/usr/libexec/at-spi-bus-launcher").exists(),
-        "Accessibility readiness is based on AT-SPI availability for native desktop controls.",
+        "Assistive technologies, such as screen readers, for native desktop apps.",
         vec![
             evidence_binary("at-spi-bus-launcher"),
             evidence_path("/usr/libexec/at-spi-bus-launcher"),

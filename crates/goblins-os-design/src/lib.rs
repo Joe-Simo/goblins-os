@@ -162,6 +162,13 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_studio_active       rgba(0, 0, 0, 0.07);
 @define-color gos_studio_bubble       rgba(0, 0, 0, 0.05);
 @define-color gos_studio_input        #ffffff;
+/* The composer reads as a slightly-raised input ABOVE the conversation plane:
+   a fill a hair off the panel (light = faint off-white over white), a top-edge
+   sheen lip, and a soft contact shadow — the same lift the light panels carry,
+   translated into the studio palette. */
+@define-color gos_studio_composer_fill #fbfbfc;
+@define-color gos_studio_panel_sheen  rgba(255, 255, 255, 0.80);
+@define-color gos_studio_shadow       rgba(13, 13, 12, 0.10);
 
 /* Studio functional accents use the same system-blue action role. */
 @define-color gos_studio_send_top     rgba(0, 136, 255, 1);
@@ -208,9 +215,14 @@ const LIGHT_TOKENS: &str = r#"
 /// design language, inverted. Night surfaces (login/lock/hero) are already dark, so they
 /// hold across both schemes.
 const DARK_TOKENS: &str = r#"
-@define-color gos_canvas              #1e1e1e;
-@define-color gos_canvas_top          #1e1e1e;
-@define-color gos_surface             #1e1e1e;
+/* Break the canvas==surface collision so surface-backed panels read LIFTED, the
+   way macOS dark mode elevates a card off the desktop. The page drops to a darker
+   base while surface holds a step above it (still below the muted/sunken track so
+   the recessed ladder is intact): a state panel at 0.9 alpha now lands clearly
+   above the page instead of vanishing into it. */
+@define-color gos_canvas              #161618;
+@define-color gos_canvas_top          #161618;
+@define-color gos_surface             #202022;
 @define-color gos_surface_muted       #242426;
 @define-color gos_surface_sunken      #2c2c2e;
 /* Raised control fill, inverted for night: one step LIGHTER than the #242426
@@ -247,7 +259,11 @@ const DARK_TOKENS: &str = r#"
 @define-color gos_hairline            rgba(255, 255, 255, 0.10);
 @define-color gos_hairline_strong     rgba(255, 255, 255, 0.17);
 
-@define-color gos_night_top           #161616;
+/* The night hero (login/lock/identity) gradient. Lifted a step now that the dark
+   canvas dropped to #161618 — the old #161616 top would tie the page, collapsing
+   the hero's figure/ground lip. #202024 gives the hero's upper edge clear lift
+   above the darker canvas while the gradient still falls to true black. */
+@define-color gos_night_top           #202024;
 @define-color gos_night_bottom        #000000;
 @define-color gos_on_night            #f5f5f7;
 @define-color gos_on_night_muted      rgba(245, 245, 247, 0.66);
@@ -293,6 +309,13 @@ const DARK_TOKENS: &str = r#"
 @define-color gos_studio_active       rgba(255, 255, 255, 0.08);
 @define-color gos_studio_bubble       rgba(255, 255, 255, 0.08);
 @define-color gos_studio_input        #1e1e1e;
+/* Inverted for night: the composer fill steps up to the existing raised tone
+   (#242426, the sidebar graphite) so it lifts off the #1e1e1e canvas, the sheen
+   is a faint top-edge highlight, and the contact shadow stays a true black drop
+   that reads on graphite without muddying. */
+@define-color gos_studio_composer_fill #242426;
+@define-color gos_studio_panel_sheen  rgba(255, 255, 255, 0.06);
+@define-color gos_studio_shadow       rgba(0, 0, 0, 0.34);
 
 /* Studio functional accents use the same dark system-blue action role. */
 @define-color gos_studio_send_top     rgba(0, 145, 255, 1);
@@ -372,23 +395,29 @@ window.gos-windowed .gos-root {
 }
 
 /* ── Top bars ────────────────────────────────────────────────────────── */
+/* One window idiom across the whole family: a FUSED macOS-unified titlebar —
+   flush to the window's top edge, sharing the root's 16px top corners, separated
+   from content by a single hairline. Not a detached floating pill (no all-sides
+   border, no 14px radius, no drop shadow). Settings already used this idiom; this
+   makes the shell, login, and installer read as the same window family. */
 .gos-top-bar,
 .gos-login-top,
 .gos-installer-top,
 .gos-settings-top {
   padding: 12px 16px;
-  min-height: 32px;
-  border: 1px solid @gos_hairline;
-  border-radius: 14px;
+  min-height: 50px;
+  border: none;
+  border-bottom: 1px solid @gos_hairline;
+  border-radius: 16px 16px 0 0;
   background: alpha(@gos_surface, 0.82);
-  box-shadow: 0 1px 0 @gos_panel_sheen inset,
-              0 8px 24px @gos_shadow_raise;
+  box-shadow: none;
 }
 
+/* Content sits flush under the titlebar hairline — no detached-pill gap. */
 .gos-installer-body,
 .gos-login-body,
 .gos-settings-body {
-  margin-top: 18px;
+  margin-top: 0;
 }
 
 .gos-window-controls {
@@ -1003,10 +1032,10 @@ button:active {
 
 /* Inset in the build field, the Build pill is a CHILD of one material: the field
    owns the elevation (no double shadow), and its corners are concentric with the
-   field (field radius 16 − field padding 6 = 10). */
+   field (field radius 14 − field padding 6 = 8). */
 .gos-home-field .gos-home-build {
   box-shadow: none;
-  border-radius: 10px;
+  border-radius: 8px;
 }
 
 .gos-home-field .gos-home-build:hover {
@@ -1207,6 +1236,14 @@ button:active {
   border-right: 1px solid @gos_studio_border_soft;
 }
 
+/* The brand/title row carries the same hairline + vertical rhythm as the main
+   panel's .gos-studio-topbar, so the header rule reads as one continuous line
+   across both panes instead of dead-ending at the sidebar boundary. */
+.gos-studio-sidebar-head {
+  padding-bottom: 12px;
+  border-bottom: 1px solid @gos_studio_border_soft;
+}
+
 .gos-studio-wordmark {
   color: @gos_studio_text;
   font-size: 14px;
@@ -1227,7 +1264,9 @@ button:active {
 
 .gos-studio-search {
   min-height: 34px;
-  margin-top: 10px;
+  /* Sits below the head row's new hairline; 12px keeps the field optically
+     centered in the gap, matching the topbar's vertical rhythm. */
+  margin-top: 12px;
   padding: 0 12px;
   border-radius: 8px;
   border: 1px solid @gos_studio_border;
@@ -1455,7 +1494,22 @@ button:active {
   padding: 12px 16px;
   border-radius: 16px;
   border: 1px solid @gos_studio_border;
-  background: @gos_studio_panel;
+  /* Lift the composer so it reads as a slightly-raised input above the
+     conversation plane: a faintly distinct fill (not flush with the canvas), a
+     top-edge sheen lip, and a soft contact shadow — depth without heaviness. */
+  background: @gos_studio_composer_fill;
+  box-shadow: 0 1px 0 @gos_studio_panel_sheen inset,
+              0 6px 18px @gos_studio_shadow;
+}
+
+/* The Build Studio composer is the OS's primary 'describe what to build' input.
+   Give it the same visible 3px focus ring every other input in the OS uses —
+   @gos_focus already carries baked alpha, so no alpha() multiply here. */
+.gos-studio-composer:focus-within {
+  border-color: @gos_focus;
+  box-shadow: 0 0 0 3px @gos_focus,
+              0 1px 0 @gos_studio_panel_sheen inset,
+              0 6px 18px @gos_studio_shadow;
 }
 
 .gos-studio-input {
@@ -1507,6 +1561,10 @@ button:active {
 .gos-studio-send {
   min-width: 36px;
   min-height: 36px;
+  /* Cancel GTK4's intrinsic button h-padding so the 36px min-width isn't
+     overridden — without this the '↑' button stretches into a 999px oval
+     instead of holding a true 36×36 circle. */
+  padding: 0;
   border-radius: 999px;
   color: @gos_studio_send_text;
   background: linear-gradient(180deg, @gos_studio_send_top, @gos_studio_send_bottom);
@@ -1689,9 +1747,13 @@ button:active {
   margin-top: 24px;
 }
 
+/* The card holds a title + one line of copy. The old 104px min-height reserved
+   roughly half the card as empty space below top-anchored text, reading as an
+   unfinished placeholder. Drop to a height that hugs the content (title + copy
+   + 18px vertical padding) so the cards no longer look half-empty. */
 .gos-setup-choice {
-  min-height: 104px;
-  padding: 16px;
+  min-height: 76px;
+  padding: 18px;
   border: 1px solid @gos_hairline;
   border-radius: 14px;
   background: alpha(@gos_surface, 0.76);
@@ -1704,6 +1766,22 @@ button:active {
   background: @gos_surface;
   border: 1px solid @gos_hairline_strong;
   box-shadow: 0 8px 20px @gos_shadow_raise;
+}
+
+/* Active choice on the Appearance/Accessibility setup steps. Modeled on
+   .gos-net-ssid-selected, but carries the accent ring so the chosen tone /
+   motion / type-size card reads as a clear filled, blue-ringed selection in
+   both Light and Dark — the first-boot person always sees what they picked. */
+.gos-setup-choice-selected {
+  border: 1px solid @gos_accent;
+  background: @gos_surface;
+  box-shadow: 0 0 0 3px @gos_focus, 0 1px 0 @gos_panel_sheen inset;
+}
+
+.gos-setup-choice-selected:hover {
+  border: 1px solid @gos_accent;
+  background: @gos_surface;
+  box-shadow: 0 0 0 3px @gos_focus, 0 8px 20px @gos_shadow_raise;
 }
 
 .gos-setup-first-app-entry {
@@ -2014,8 +2092,11 @@ button:active {
   background-color: alpha(@gos_accent, 0.30);
 }
 
+/* The divider sits between the search field and the result list. A wider bottom
+   margin clears the first row's selection ring so the hairline reads as optically
+   centered in its whitespace, not as a doubled line hugging the selected card. */
 .gos-launcher-sep {
-  margin: 4px 8px;
+  margin: 6px 8px 9px 8px;
   min-height: 1px;
   background: @gos_material_border;
 }
@@ -2156,6 +2237,12 @@ button:active {
 .gos-cc-tile:focus:focus-visible {
   box-shadow: 0 0 0 3px @gos_focus;
 }
+/* A genuinely unavailable tile (e.g. Wi-Fi off in this session) recedes so it
+   reads not-actionable next to live tiles. set_sensitive(false) maps here. */
+.gos-cc-tile:disabled {
+  opacity: 0.5;
+  border-color: transparent;
+}
 .gos-cc-tile.is-on {
   background: @gos_material_regular;
   border-color: @gos_primary_border;
@@ -2219,11 +2306,22 @@ button:active {
   box-shadow: 0 1px 3px @gos_material_shadow;
 }
 .gos-cc-slider-row.is-disabled { opacity: 0.55; }
+/* When no sink / no backlight exists the row dims to 0.55, but the white thumb
+   still reads as a live, draggable handle inviting a no-op interaction. Flatten
+   it into the track so the disabled slider reads as an inert rail. (Light is the
+   primary fix; in dark the thumb already blends, so this stays consistent.) */
+.gos-cc-slider-row.is-disabled scale slider {
+  background: @gos_material_active;
+  border-color: transparent;
+  box-shadow: none;
+}
 
 .gos-cc-note { margin-top: 6px; color: @gos_ink_faint; font-size: 11px; }
 
 .gos-cc-link {
   min-height: 32px;
+  padding-left: 0;
+  padding-right: 0;
   color: @gos_ink_muted;
   background: transparent;
   border: none;
@@ -2255,6 +2353,7 @@ button:active {
 .gos-cc-action:disabled {
   color: @gos_ink_faint;
   background-color: @gos_surface_sunken;
+  border-color: transparent;
   box-shadow: none;
 }
 "#;
@@ -2384,7 +2483,9 @@ mod tests {
             assert!(light.contains(exact));
         }
         for exact in [
-            "@define-color gos_canvas              #1e1e1e",
+            // The dark page base sits below the dark surface so elevated panels
+            // read lifted (see DARK_TOKENS canvas/surface separation).
+            "@define-color gos_canvas              #161618",
             "@define-color gos_system_blue         rgba(0, 145, 255, 1)",
             "@define-color gos_system_green        rgba(48, 209, 88, 1)",
             "@define-color gos_system_red          rgba(255, 66, 69, 1)",

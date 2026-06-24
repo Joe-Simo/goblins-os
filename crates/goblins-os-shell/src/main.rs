@@ -795,7 +795,7 @@ fn build_desktop(
     if let Some(window) = window {
         top_bar.append(&goblins_os_ui::window_controls(window));
     }
-    top_bar.append(&goblins_os_ui::themed_brand_mark(20));
+    top_bar.append(&goblins_os_ui::themed_brand_mark(22));
     let brand = label("Goblins OS", &["gos-brand"]);
     brand.set_wrap(false);
     top_bar.append(&brand);
@@ -1513,12 +1513,24 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     sidebar.add_css_class("gos-studio-sidebar");
 
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    // The brand/title row carries the topbar's hairline so the header rule reads
+    // as one continuous line across both panes of the two-pane layout.
+    head.add_css_class("gos-studio-sidebar-head");
     // The Studio sidebar follows the scheme (paper in Light, graphite in Dark),
     // so its mark follows too.
     head.append(&goblins_os_ui::themed_brand_mark(18));
     head.append(&label("Build Studio", &["gos-studio-wordmark"]));
     head.append(&spacer());
-    head.append(&label("RUST", &["gos-studio-badge"]));
+    // The header badge names the engine the next build will run on — the same
+    // source resolved for the composer's model picker — so it stays consistent
+    // with the app-detail badge and tells the user something actionable, rather
+    // than tagging the surface with its implementation language.
+    let header_engine = shell_state
+        .engine
+        .as_ref()
+        .map(|engine| engine.engine.as_str())
+        .unwrap_or("local-gpt-oss");
+    head.append(&label(&engine_label(header_engine), &["gos-studio-badge"]));
     sidebar.append(&head);
 
     let search = gtk::Entry::new();
@@ -1544,6 +1556,19 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
             studio_rows.push((thread_row.clone(), thread.id.clone()));
             list.append(&thread_row);
         }
+    }
+    // First-run ledger: with no saved builds the list would otherwise be a tall
+    // blank gap. A centered, honest placeholder makes the empty state read as a
+    // designed starting point rather than a broken column.
+    if studio_rows.is_empty() {
+        let empty = label(
+            "No builds yet. Describe one below to start your first thread.",
+            &["gos-studio-empty"],
+        );
+        empty.set_halign(gtk::Align::Center);
+        empty.set_justify(gtk::Justification::Center);
+        empty.set_margin_top(12);
+        list.append(&empty);
     }
     let list_scroll = gtk::ScrolledWindow::new();
     list_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -2340,7 +2365,7 @@ fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<
         let top_bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         top_bar.add_css_class("gos-top-bar");
         top_bar.append(&goblins_os_ui::window_controls(&window));
-        top_bar.append(&goblins_os_ui::themed_brand_mark(20));
+        top_bar.append(&goblins_os_ui::themed_brand_mark(22));
         let brand = label("Goblins OS", &["gos-brand"]);
         brand.set_wrap(false);
         top_bar.append(&brand);

@@ -1496,7 +1496,7 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
     ));
     column.append(&centered_label(
         "Choose the desktop tone",
-        "gos-net-title",
+        "gos-onboarding-title",
         false,
     ));
     column.append(&centered_label(
@@ -1511,12 +1511,30 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
 
     let light = setup_choice("Light", "Paper surfaces, graphite ink, high clarity.");
     let dark = setup_choice("Dark", "Graphite glass, quiet contrast, night-ready.");
-    light.connect_clicked(|_| {
-        let _ = goblins_os_ui::set_color_scheme("default");
-    });
-    dark.connect_clicked(|_| {
-        let _ = goblins_os_ui::set_color_scheme("prefer-dark");
-    });
+    let tone_group = Rc::new([light.clone(), dark.clone()]);
+    {
+        let tone_group = tone_group.clone();
+        let light = light.clone();
+        light.connect_clicked(move |chosen| {
+            let _ = goblins_os_ui::set_color_scheme("default");
+            select_one(chosen, tone_group.as_slice());
+        });
+    }
+    {
+        let tone_group = tone_group.clone();
+        let dark = dark.clone();
+        dark.connect_clicked(move |chosen| {
+            let _ = goblins_os_ui::set_color_scheme("prefer-dark");
+            select_one(chosen, tone_group.as_slice());
+        });
+    }
+    // Open already showing the live tone: dark when the desktop prefers dark,
+    // light otherwise (matching what set_color_scheme writes above).
+    if goblins_os_ui::system_color_scheme() == "prefer-dark" {
+        select_one(&dark, tone_group.as_slice());
+    } else {
+        select_one(&light, tone_group.as_slice());
+    }
     panel.append(&light);
     panel.append(&dark);
     column.append(&panel);
@@ -1573,7 +1591,7 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
     ));
     column.append(&centered_label(
         "Set the motion and type",
-        "gos-net-title",
+        "gos-onboarding-title",
         false,
     ));
     column.append(&centered_label(
@@ -1593,12 +1611,27 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
         "Reduce motion",
         "Cut transitions and keep state changes direct.",
     );
-    standard_motion.connect_clicked(|_| {
-        let _ = set_interface_bool("enable-animations", true);
-    });
-    reduce_motion.connect_clicked(|_| {
-        let _ = set_interface_bool("enable-animations", false);
-    });
+    let motion_group = Rc::new([standard_motion.clone(), reduce_motion.clone()]);
+    {
+        let motion_group = motion_group.clone();
+        standard_motion.connect_clicked(move |chosen| {
+            let _ = set_interface_bool("enable-animations", true);
+            select_one(chosen, motion_group.as_slice());
+        });
+    }
+    {
+        let motion_group = motion_group.clone();
+        reduce_motion.connect_clicked(move |chosen| {
+            let _ = set_interface_bool("enable-animations", false);
+            select_one(chosen, motion_group.as_slice());
+        });
+    }
+    // Open showing the live motion preference (animations on => Standard motion).
+    if interface_bool("enable-animations", true) {
+        select_one(&standard_motion, motion_group.as_slice());
+    } else {
+        select_one(&reduce_motion, motion_group.as_slice());
+    }
     motion.append(&standard_motion);
     motion.append(&reduce_motion);
     panel.append(&motion);
@@ -1607,12 +1640,27 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
     type_size.set_homogeneous(true);
     let regular_text = setup_choice("Regular text", "The default Inter scale.");
     let larger_text = setup_choice("Larger text", "Increase the desktop text scale.");
-    regular_text.connect_clicked(|_| {
-        let _ = set_interface_double("text-scaling-factor", 1.0);
-    });
-    larger_text.connect_clicked(|_| {
-        let _ = set_interface_double("text-scaling-factor", 1.16);
-    });
+    let text_group = Rc::new([regular_text.clone(), larger_text.clone()]);
+    {
+        let text_group = text_group.clone();
+        regular_text.connect_clicked(move |chosen| {
+            let _ = set_interface_double("text-scaling-factor", 1.0);
+            select_one(chosen, text_group.as_slice());
+        });
+    }
+    {
+        let text_group = text_group.clone();
+        larger_text.connect_clicked(move |chosen| {
+            let _ = set_interface_double("text-scaling-factor", 1.16);
+            select_one(chosen, text_group.as_slice());
+        });
+    }
+    // Open showing the live text scale: Regular when ~1.0, Larger when scaled up.
+    if (interface_double("text-scaling-factor", 1.0) - 1.0).abs() < 0.01 {
+        select_one(&regular_text, text_group.as_slice());
+    } else {
+        select_one(&larger_text, text_group.as_slice());
+    }
     type_size.append(&regular_text);
     type_size.append(&larger_text);
     panel.append(&type_size);
@@ -1674,7 +1722,7 @@ fn build_first_app_page(
     ));
     column.append(&centered_label(
         "Build the first thing you need",
-        "gos-net-title",
+        "gos-onboarding-title",
         false,
     ));
     column.append(&centered_label(
@@ -1699,9 +1747,17 @@ fn build_first_app_page(
     feedback.set_xalign(0.0);
     panel.append(&feedback);
 
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    // Stack the actions vertically, centered, matching the Welcome page's
+    // primary-over-secondary rhythm (and the single centered Continue on the
+    // Appearance/Accessibility steps). Vertical stacking also gives each pill
+    // its full 340px min-width inside the 620px panel instead of force-shrinking
+    // two side-by-side pills. The skip is demoted to quiet so the primary out-ranks it.
+    let actions = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    actions.set_halign(gtk::Align::Center);
     let build = button("Build first app", &["gos-onboarding-primary"]);
-    let skip = button("Enter Goblins OS", &["gos-onboarding-secondary"]);
+    build.set_halign(gtk::Align::Center);
+    let skip = button("Enter Goblins OS", &["gos-onboarding-quiet"]);
+    skip.set_halign(gtk::Align::Center);
     actions.append(&build);
     actions.append(&skip);
     panel.append(&actions);
@@ -1787,6 +1843,54 @@ fn set_interface_double(key: &str, value: f64) -> bool {
     gtk4::gio::Settings::new("org.gnome.desktop.interface")
         .set_double(key, value)
         .is_ok()
+}
+
+/// Read a desktop-interface boolean (e.g. `enable-animations`), falling back to
+/// `default` when the schema is absent — so a minimal container pre-selects the
+/// honest default instead of aborting. Mirrors `set_interface_bool`.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn interface_bool(key: &str, default: bool) -> bool {
+    use gtk4::prelude::SettingsExt;
+
+    if gtk4::gio::SettingsSchemaSource::default()
+        .and_then(|source| source.lookup("org.gnome.desktop.interface", true))
+        .is_none()
+    {
+        return default;
+    }
+    gtk4::gio::Settings::new("org.gnome.desktop.interface").boolean(key)
+}
+
+/// Read a desktop-interface double (e.g. `text-scaling-factor`), falling back to
+/// `default` when the schema is absent. Mirrors `set_interface_double`.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn interface_double(key: &str, default: f64) -> f64 {
+    use gtk4::prelude::SettingsExt;
+
+    if gtk4::gio::SettingsSchemaSource::default()
+        .and_then(|source| source.lookup("org.gnome.desktop.interface", true))
+        .is_none()
+    {
+        return default;
+    }
+    gtk4::gio::Settings::new("org.gnome.desktop.interface").double(key)
+}
+
+/// Mark `chosen` as the active card in a homogeneous setup group and clear the
+/// selected state from its siblings, so exactly one card in the group ever reads
+/// as selected. macOS Setup Assistant always shows the current tone/option this
+/// way; the Appearance and Accessibility steps reuse this for every group.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn select_one(chosen: &gtk4::Button, group: &[gtk4::Button]) {
+    use gtk4::prelude::WidgetExt;
+
+    for card in group {
+        if card == chosen {
+            card.add_css_class("gos-setup-choice-selected");
+        } else {
+            card.remove_css_class("gos-setup-choice-selected");
+        }
+    }
 }
 
 /// True when a NetworkManager connection name is really a raw kernel interface name

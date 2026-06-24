@@ -952,9 +952,23 @@ mod native {
 
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
 
-        let icon = gtk::Label::new(Some(item.icon));
+        // One optical icon rail: every leading mark is a themed symbolic image at
+        // a single pixel size, inheriting one ink color (and the accent on the
+        // selected row via CSS) — never a grab-bag of differently sized dingbats.
+        let icon = gtk::Image::from_icon_name(item.icon);
         icon.add_css_class("gos-launcher-row-icon");
-        icon.set_valign(gtk::Align::Center);
+        icon.set_halign(gtk::Align::Center);
+        if item.answer.is_some() {
+            // On a quick-answer row the glyph is the operator next to a large
+            // 20px/700 result; size it up and pin it to the headline's top line
+            // so it reads as a baseline-matched operator, not a floating accent.
+            row.add_css_class("has-answer");
+            icon.set_pixel_size(20);
+            icon.set_valign(gtk::Align::Start);
+        } else {
+            icon.set_pixel_size(16);
+            icon.set_valign(gtk::Align::Center);
+        }
         content.append(&icon);
 
         let text = gtk::Box::new(gtk::Orientation::Vertical, 1);
@@ -1350,7 +1364,7 @@ mod native {
                     "Ask about selected text",
                     "Use selected-text context after explicit invocation",
                     "Text",
-                    "\u{2726}",
+                    "goblins-engine-symbolic",
                     &ai_actions.selected_text,
                     LauncherMode::SelectedText,
                 ));
@@ -1358,7 +1372,7 @@ mod native {
                     "Write with Goblin",
                     "Rewrite, proofread, summarize, or change tone for selected text",
                     "Writing",
-                    "\u{270D}",
+                    "document-edit-symbolic",
                     &ai_actions.writing_tools,
                     LauncherMode::WritingTools,
                 ));
@@ -1366,7 +1380,7 @@ mod native {
                     "Summarize screen context",
                     "Use provided visible context without silent capture",
                     "Screen",
-                    "\u{25A3}",
+                    "video-display-symbolic",
                     &ai_actions.screen_context,
                     LauncherMode::ScreenContext,
                 ));
@@ -1374,12 +1388,12 @@ mod native {
                     "Ask about a screenshot",
                     VISUAL_CONTEXT_SUBTITLE,
                     "Visual",
-                    "\u{25A7}",
+                    "camera-photo-symbolic",
                     &ai_actions.screen_context,
                     LauncherMode::VisualContext,
                 ));
                 items.push(LauncherItem {
-                    icon: "\u{25C8}",
+                    icon: "emblem-system-symbolic",
                     title: "Goblins AI Settings".to_string(),
                     subtitle: "Models, permissions, and recent action history".to_string(),
                     kind: "Setup",
@@ -1394,7 +1408,7 @@ mod native {
                         "Ask about selected text",
                         "Paste or type selected text above. Goblins OS does not read selection silently.",
                         "Text",
-                        "\u{2726}",
+                        "goblins-engine-symbolic",
                         &ai_actions.selected_text,
                     ));
                     return items;
@@ -1403,7 +1417,7 @@ mod native {
                     "Ask about selected text",
                     trimmed,
                     "Text",
-                    "\u{2726}",
+                    "goblins-engine-symbolic",
                     &ai_actions.selected_text,
                     Action::AskSelectedText(trimmed.to_string()),
                 ));
@@ -1415,7 +1429,7 @@ mod native {
                         "Write with Goblin",
                         "Paste or type text above. Goblins OS does not read selection silently.",
                         "Writing",
-                        "\u{270D}",
+                        "document-edit-symbolic",
                         &ai_actions.writing_tools,
                     ));
                     return items;
@@ -1424,7 +1438,7 @@ mod native {
                     "Write with Goblin",
                     trimmed,
                     "Writing",
-                    "\u{270D}",
+                    "document-edit-symbolic",
                     &ai_actions.writing_tools,
                     Action::WriteWithGoblins(trimmed.to_string()),
                 ));
@@ -1436,7 +1450,7 @@ mod native {
                         "Summarize screen context",
                         "Describe visible content or paste recognized text. Nothing is captured silently.",
                         "Screen",
-                        "\u{25A3}",
+                        "video-display-symbolic",
                         &ai_actions.screen_context,
                     ));
                     return items;
@@ -1445,7 +1459,7 @@ mod native {
                     "Summarize screen context",
                     trimmed,
                     "Screen",
-                    "\u{25A3}",
+                    "video-display-symbolic",
                     &ai_actions.screen_context,
                     Action::AskScreenContext(trimmed.to_string()),
                 ));
@@ -1457,7 +1471,7 @@ mod native {
                         "Ask about a screenshot",
                         "Describe the screenshot or paste recognized text. Goblins OS does not capture pixels silently.",
                         "Visual",
-                        "\u{25A7}",
+                        "camera-photo-symbolic",
                         &ai_actions.screen_context,
                     ));
                     return items;
@@ -1466,7 +1480,7 @@ mod native {
                     "Ask about a screenshot",
                     trimmed,
                     "Visual",
-                    "\u{25A7}",
+                    "camera-photo-symbolic",
                     &ai_actions.screen_context,
                     Action::AskVisualContext(trimmed.to_string()),
                 ));
@@ -1478,7 +1492,7 @@ mod native {
         // 1) Instant answer (math / unit conversion) — always first when present.
         if let Some(answer) = eval_math(trimmed) {
             items.push(LauncherItem {
-                icon: "=",
+                icon: "accessories-calculator-symbolic",
                 title: trimmed.to_string(),
                 subtitle: "Press Return to copy".to_string(),
                 kind: "Math",
@@ -1487,7 +1501,7 @@ mod native {
             });
         } else if let Some(answer) = convert_units(trimmed) {
             items.push(LauncherItem {
-                icon: "\u{21C4}", // ⇄
+                icon: "object-flip-horizontal-symbolic",
                 title: trimmed.to_string(),
                 subtitle: "Press Return to copy".to_string(),
                 kind: "Convert",
@@ -1511,7 +1525,7 @@ mod native {
         scored.sort_by(|a, b| b.0.cmp(&a.0));
         for (_, app) in scored.into_iter().take(6) {
             items.push(LauncherItem {
-                icon: "\u{25C9}", // ◉
+                icon: "application-x-executable-symbolic",
                 title: app.name.clone(),
                 subtitle: source_label(&app.source).to_string(),
                 kind: "App",
@@ -1536,7 +1550,7 @@ mod native {
                 "Ask Goblin",
                 trimmed,
                 "AI",
-                "\u{2726}",
+                "goblins-engine-symbolic",
                 &ai_actions.ask,
                 Action::AskGoblins(trimmed.to_string()),
             ));
@@ -1544,7 +1558,7 @@ mod native {
                 "Build a new app",
                 trimmed,
                 "Build",
-                "+",
+                "list-add-symbolic",
                 &ai_actions.build,
                 Action::Build(trimmed.to_string()),
             ));
@@ -1555,7 +1569,7 @@ mod native {
     fn assistant_prompt_item(availability: &AiActionAvailability) -> LauncherItem {
         if availability.enabled {
             LauncherItem {
-                icon: "\u{2726}",
+                icon: "goblins-engine-symbolic",
                 title: "Ask Goblin".to_string(),
                 subtitle: "Type a question above, then press Return".to_string(),
                 kind: "AI",
@@ -1564,7 +1578,7 @@ mod native {
             }
         } else {
             LauncherItem {
-                icon: "\u{2726}",
+                icon: "goblins-engine-symbolic",
                 title: "Set up Goblins AI".to_string(),
                 subtitle: availability.reason.clone(),
                 kind: "Setup",
@@ -1657,12 +1671,33 @@ mod native {
             LauncherItem {
                 icon,
                 title: format!("Set up {label}: {query}"),
-                subtitle: availability.reason.clone(),
+                // A concise, per-action setup hint — the standing AI rows no
+                // longer stack the same ~80-char provider sentence twice. The
+                // full GPT-OSS / Codex / OpenAI-key guidance lives in the
+                // Settings panel this row opens (and stays in `reason` for
+                // routing below).
+                subtitle: setup_hint_for_action(label),
                 kind: "Setup",
                 answer: None,
                 action: Action::OpenSettings(setup_panel_for_reason(&availability.reason)),
             }
         }
+    }
+
+    /// A short, action-specific call to action for a not-yet-configured Goblins
+    /// AI row. The row title already names the intent, so the subtitle only
+    /// needs to point at engine setup without repeating the full provider list.
+    fn setup_hint_for_action(label: &str) -> String {
+        match label {
+            "Build a new app" => "Set up an engine to build a new app",
+            "Ask about selected text" => "Set up an engine to ask about selected text",
+            "Write with Goblin" => "Set up an engine to write with Goblin",
+            "Summarize screen context" => "Set up an engine to summarize screen context",
+            "Ask about a screenshot" => "Set up an engine to ask about a screenshot",
+            // "Ask Goblin" and any future action.
+            _ => "Set up an engine to ask the on-device assistant",
+        }
+        .to_string()
     }
 
     fn setup_panel_for_reason(reason: &str) -> Option<&'static str> {
@@ -1690,7 +1725,7 @@ mod native {
         StaticEntry {
             keywords: &["Settings", "Overview", "preferences"],
             make: |_| LauncherItem {
-                icon: "\u{2699}", // ⚙
+                icon: "emblem-system-symbolic",
                 title: "Settings".to_string(),
                 subtitle: "Overview · engine · network · privacy".to_string(),
                 kind: "Settings",
@@ -1701,7 +1736,7 @@ mod native {
         StaticEntry {
             keywords: &["Desktop & Dock", "dock", "desktop", "window controls"],
             make: |_| LauncherItem {
-                icon: "\u{25C8}", // ◈
+                icon: "preferences-desktop-appearance-symbolic",
                 title: "Settings — Desktop & Dock".to_string(),
                 subtitle: "Dock, app launcher, and window controls".to_string(),
                 kind: "Settings",
@@ -1718,7 +1753,7 @@ mod native {
                 "clock",
             ],
             make: |_| LauncherItem {
-                icon: "\u{25C8}",
+                icon: "open-menu-symbolic",
                 title: "Settings — Menu Bar & Control Center".to_string(),
                 subtitle: "Top bar, quick settings, and clock".to_string(),
                 kind: "Settings",
@@ -1729,7 +1764,7 @@ mod native {
         StaticEntry {
             keywords: &["Lock Screen", "lock", "screen lock", "blank screen"],
             make: |_| LauncherItem {
-                icon: "\u{25C8}",
+                icon: "system-lock-screen-symbolic",
                 title: "Settings — Lock Screen".to_string(),
                 subtitle: "Screen lock and lock-screen privacy".to_string(),
                 kind: "Settings",
@@ -1740,7 +1775,7 @@ mod native {
         StaticEntry {
             keywords: &["Date & Time", "date", "time", "clock", "timezone"],
             make: |_| LauncherItem {
-                icon: "\u{25C8}",
+                icon: "preferences-system-time-symbolic",
                 title: "Settings — Date & Time".to_string(),
                 subtitle: "Clock, time zone, and calendar format".to_string(),
                 kind: "Settings",
@@ -1757,7 +1792,7 @@ mod native {
                 "formats",
             ],
             make: |_| LauncherItem {
-                icon: "\u{25C8}",
+                icon: "preferences-desktop-locale-symbolic",
                 title: "Settings — Language & Region".to_string(),
                 subtitle: "Language, region, and input language".to_string(),
                 kind: "Settings",
@@ -1774,7 +1809,7 @@ mod native {
                 "secrets",
             ],
             make: |_| LauncherItem {
-                icon: "\u{25C8}",
+                icon: "security-high-symbolic",
                 title: "Settings — Security".to_string(),
                 subtitle: "Credentials, boot integrity, and secret boundaries".to_string(),
                 kind: "Settings",
@@ -1792,7 +1827,7 @@ mod native {
                 "change tone",
             ],
             make: |_| LauncherItem {
-                icon: "\u{270D}",
+                icon: "document-edit-symbolic",
                 title: "Write with Goblin".to_string(),
                 subtitle: "Rewrite, proofread, summarize, or change tone for selected text"
                     .to_string(),
@@ -1810,7 +1845,7 @@ mod native {
                 "OCR",
             ],
             make: |_| LauncherItem {
-                icon: "\u{25A7}",
+                icon: "camera-photo-symbolic",
                 title: "Ask Goblin about a screenshot".to_string(),
                 subtitle: VISUAL_CONTEXT_SUBTITLE.to_string(),
                 kind: "Visual",
@@ -1827,7 +1862,7 @@ mod native {
                 "screenshot",
             ],
             make: |_| LauncherItem {
-                icon: "\u{2726}",
+                icon: "goblins-engine-symbolic",
                 title: "Settings — Goblins AI".to_string(),
                 subtitle: "Assistant actions, permissions, and model setup".to_string(),
                 kind: "Settings",
@@ -1838,7 +1873,7 @@ mod native {
         StaticEntry {
             keywords: &["Models", "engine", "GPT-OSS", "Codex", "OpenAI"],
             make: |_| LauncherItem {
-                icon: "\u{25C8}", // ◈
+                icon: "goblins-engine-symbolic",
                 title: "Settings — Models".to_string(),
                 subtitle: "On-device GPT-OSS · OpenAI account".to_string(),
                 kind: "Settings",
@@ -1849,7 +1884,7 @@ mod native {
         StaticEntry {
             keywords: &["Policy", "permissions", "consent"],
             make: |_| LauncherItem {
-                icon: "\u{25C8}",
+                icon: "emblem-system-symbolic",
                 title: "Settings — Policy".to_string(),
                 subtitle: "Permissions and consent".to_string(),
                 kind: "Settings",
@@ -1860,7 +1895,7 @@ mod native {
         StaticEntry {
             keywords: &["Recovery", "rollback", "reset"],
             make: |_| LauncherItem {
-                icon: "\u{25C8}",
+                icon: "view-refresh-symbolic",
                 title: "Settings — Recovery".to_string(),
                 subtitle: "Rollback and recovery".to_string(),
                 kind: "Settings",
@@ -1871,7 +1906,7 @@ mod native {
         StaticEntry {
             keywords: &["Build Studio", "studio", "agent", "build"],
             make: |_| LauncherItem {
-                icon: "\u{25C9}",
+                icon: "document-build-symbolic",
                 title: "Open Build Studio".to_string(),
                 subtitle: "Create and refine Goblins OS apps".to_string(),
                 kind: "Action",
@@ -1882,7 +1917,7 @@ mod native {
         StaticEntry {
             keywords: &["Appearance", "dark mode", "light mode", "theme", "toggle"],
             make: |_| LauncherItem {
-                icon: "\u{25D1}", // ◑
+                icon: "preferences-desktop-appearance-symbolic",
                 title: "Toggle Light / Dark".to_string(),
                 subtitle: "Switch the desktop appearance".to_string(),
                 kind: "Action",

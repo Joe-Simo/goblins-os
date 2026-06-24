@@ -354,12 +354,17 @@ fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState
         ));
     }
 
+    // The brightest, top-most control must be the usable one: reading order has
+    // to match action priority. When the OpenAI account is authenticated the
+    // OpenAI unlock is the live primary and leads; otherwise the live local-only
+    // unlock leads and the (inert until authenticated) OpenAI unlock is demoted
+    // below it as a quiet secondary rather than a full-width ghost on top.
     let unlock_openai = button(
         "Unlock Goblins OS desktop",
         if auth_authenticated {
             &["gos-primary-action"]
         } else {
-            &["gos-disabled-action"]
+            &["gos-secondary-action"]
         },
     );
     unlock_openai.set_sensitive(auth_authenticated);
@@ -375,7 +380,6 @@ fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState
             }
         });
     }
-    identity.append(&unlock_openai);
 
     // Local-only is the primary white pill when it is the available path (no
     // OpenAI account configured); a quiet secondary when OpenAI is the primary.
@@ -402,13 +406,29 @@ fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState
             }
         });
     }
-    identity.append(&unlock_local);
+
+    if auth_authenticated {
+        // OpenAI is the live primary path: it leads, local-only is the secondary.
+        identity.append(&unlock_openai);
+        identity.append(&unlock_local);
+    } else {
+        // No OpenAI account yet: the live local-only unlock is the primary and
+        // leads. The OpenAI unlock stays inert, so it is demoted below as a quiet
+        // secondary for discoverability rather than a full-width ghost on top.
+        identity.append(&unlock_local);
+        identity.append(&unlock_openai);
+    }
     identity.append(&feedback);
     body.append(&identity);
 
     let state_panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
     state_panel.add_css_class("gos-state-panel");
     state_panel.set_size_request(380, -1);
+    // Size the readiness rail to its 3 short rows instead of Fill-stretching to
+    // the taller dark identity hero. `body` already sits in a vexpand+valign:Center
+    // box, so a centered compact card reads as deliberately balanced against the
+    // hero rather than top-anchored against a tall empty void.
+    state_panel.set_valign(gtk::Align::Center);
     state_panel.append(&label("Desktop readiness", &["gos-kicker"]));
     match &state.gate {
         Some(gate) => {

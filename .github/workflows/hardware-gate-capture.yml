@@ -14,12 +14,15 @@ on:
         required: true
 jobs:
   capture:
+    # x86_64 only: GitHub's ubuntu-24.04-arm runners have no /dev/kvm (no nested
+    # virt), so the aarch64 display-backed-VM run is captured locally on an
+    # Apple-Silicon/hvf host instead. This job covers the x86_64 track, which
+    # has no local route on an Apple-Silicon dev host.
     strategy:
       fail-fast: false
       matrix:
         include:
           - { arch: x86_64,  runner: ubuntu-24.04,     uname: x86_64 }
-          - { arch: aarch64, runner: ubuntu-24.04-arm, uname: aarch64 }
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write

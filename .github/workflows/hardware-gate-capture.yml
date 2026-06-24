@@ -1,0 +1,66 @@
+# Hardware-gate display-backed-VM capture, on NATIVE dual-arch runners.
+# Manual-dispatch only (never auto-runs) — it boots the shippable ISO in a
+# KVM-accelerated qemu VM, drives the install + the in-session capture harness,
+# writes the 27-shot screenshot run + proof-manifest, and runs close-signoff.
+# This is the only route to the x86_64 hardware-gate track (x86_64 cannot be
+# produced on an Apple-Silicon dev host). Honest: real captures of the real OS;
+# gaming via the image's own lavapipe/gamescope/pipewire stack.
+name: hardware-gate-capture
+on:
+  workflow_dispatch:
+    inputs:
+      run_date:
+        description: "Screenshot run date (YYYY-MM-DD)"
+        required: true
+jobs:
+  capture:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64,  runner: ubuntu-24.04,     uname: x86_64 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, uname: aarch64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert native arch + KVM
+        run: |
+          test "$(uname -m)" = "${{ matrix.uname }}"
+          test -e /dev/kvm || { echo "no /dev/kvm on this runner"; exit 1; }
+      - name: Free disk + add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache || true
+          sudo fallocate -l 16G /swap.img && sudo mkswap /swap.img && sudo swapon /swap.img || true
+      - name: Install qemu/KVM + capture deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils ovmf \
+            mtools dosfstools imagemagick curl jq python3 socat
+          if [ "${{ matrix.arch }}" = aarch64 ]; then sudo apt-get install -y qemu-efi-aarch64; fi
+      - name: Serve a small model for studio-live shots (loopback)
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          OLLAMA_HOST=0.0.0.0:11434 nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:11434/api/tags >/dev/null && break; sleep 1; done
+          ollama pull llama3.2:1b
+      - name: Build the Goblins OS image
+        run: docker build -f os/bootc/Containerfile -t localhost/goblins-os:${{ matrix.arch }} .
+      - name: Build the shippable installer ISO
+        run: |
+          GOBLINS_OS_ARCH=${{ matrix.arch }} GOBLINS_OS_IMAGE=localhost/goblins-os:${{ matrix.arch }} \
+            bash os/iso/build-iso.sh
+      - name: Run the display-backed-VM capture + close-signoff
+        run: |
+          chmod +x os/hardware-gate/capture-harness/*.sh os/hardware-gate/capture-harness/*.py
+          REPO_ROOT="$PWD" GOBLINS_OS_ARCH=${{ matrix.arch }} RUN_DATE="${{ inputs.run_date }}" \
+            X86_UEFI_CODE=/usr/share/OVMF/OVMF_CODE.fd \
+            AARCH64_UEFI_CODE=/usr/share/AAVMF/AAVMF_CODE.fd \
+            bash os/hardware-gate/capture-harness/run-capture.sh
+      - name: Verify shipping status for this arch
+        run: ./os/hardware-gate/verify-shipping-status.sh || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hardware-gate-run-${{ matrix.arch }}
+          path: |
+            os/screenshots/hardware-gate/${{ matrix.arch }}/
+            os/signoff-notes.md

@@ -10,7 +10,12 @@ B=/usr/libexec/goblins-os
 export GDK_BACKEND=wayland XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
 sig(){ curl -s "http://$H/ready/$1" >/dev/null 2>&1; sleep 5; }
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
-shot(){ local n="$1"; shift; "$@" >/dev/null 2>&1 & local p=$!; sleep 6; sig "$n"; kill "$p" 2>/dev/null; pkill -f "$1" 2>/dev/null; sleep 2; }
+# After capture, fully wait for the binary to exit before returning — GtkApplication
+# is single-instance, so relaunching the same binary (e.g. the installer with a new
+# GOBLINS_OS_INSTALLER_PAGE, or the shell in dark) before the prior instance dies
+# just re-focuses the old window, producing duplicate captures. Waiting for exit
+# guarantees the next launch creates a fresh window with the new args/env/theme.
+shot(){ local n="$1"; shift; "$@" >/dev/null 2>&1 & local p=$!; sleep 7; sig "$n"; kill "$p" 2>/dev/null; pkill -f "$1" 2>/dev/null; for _ in $(seq 1 24); do pgrep -f "$1" >/dev/null 2>&1 || break; sleep 0.3; done; sleep 1; }
 darkon(){ gsettings set org.gnome.desktop.interface color-scheme prefer-dark 2>/dev/null; sleep 1; }
 darkoff(){ gsettings set org.gnome.desktop.interface color-scheme default 2>/dev/null; sleep 1; }
 

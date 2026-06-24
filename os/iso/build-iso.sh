@@ -314,9 +314,18 @@ run_docker_builder() {
   else
     echo "==> Using release registry source: $builder_image"
   fi
+  # Optional: a registry auth file so bootc-image-builder's podman can pull a
+  # private release registry source image (e.g. a private GHCR package). Docker's
+  # ~/.docker/config.json is a valid REGISTRY_AUTH_FILE for podman.
+  local bib_auth_mounts=()
+  if [ -n "${GOBLINS_OS_BIB_AUTH_FILE:-}" ]; then
+    echo "==> Using registry auth file for the bootc-image-builder source pull"
+    bib_auth_mounts=(-v "${GOBLINS_OS_BIB_AUTH_FILE}:/run/containers/0/auth.json:ro" -e "REGISTRY_AUTH_FILE=/run/containers/0/auth.json")
+  fi
   docker run --rm --privileged --pull=missing \
     --platform "$DOCKER_PLATFORM" \
     --add-host=host.docker.internal:host-gateway \
+    ${bib_auth_mounts[@]+"${bib_auth_mounts[@]}"} \
     -e BIB_SOURCE_IMAGE="$builder_image" \
     -e BIB_PULL_LOCAL="$bib_pull_local" \
     -e BIB_ROOTFS="$ROOTFS" \

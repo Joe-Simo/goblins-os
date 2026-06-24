@@ -26,6 +26,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - name: Assert native arch + KVM
@@ -48,12 +49,28 @@ jobs:
           OLLAMA_HOST=0.0.0.0:11434 nohup ollama serve >/tmp/ollama.log 2>&1 &
           for i in $(seq 1 30); do curl -sf localhost:11434/api/tags >/dev/null && break; sleep 1; done
           ollama pull llama3.2:1b
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Compute lowercase GHCR ref
+        id: ref
+        run: |
+          owner='${{ github.repository_owner }}'; owner="${owner,,}"
+          echo "ref=ghcr.io/${owner}/goblins-os:${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
       - name: Build the Goblins OS image
         run: docker build -f os/bootc/Containerfile -t localhost/goblins-os:${{ matrix.arch }} .
-      - name: Build the shippable installer ISO
+      - name: Publish the image to GHCR (pullable ref for the ISO builder)
         run: |
-          GOBLINS_OS_ARCH=${{ matrix.arch }} GOBLINS_OS_IMAGE=localhost/goblins-os:${{ matrix.arch }} \
-            bash os/iso/build-iso.sh
+          docker tag localhost/goblins-os:${{ matrix.arch }} '${{ steps.ref.outputs.ref }}'
+          docker push '${{ steps.ref.outputs.ref }}'
+      - name: Build the shippable installer ISO from the published ref
+        run: |
+          GOBLINS_OS_CONTAINER_RUNTIME=docker \
+          GOBLINS_OS_ARCH=${{ matrix.arch }} \
+          GOBLINS_OS_IMAGE=localhost/goblins-os:${{ matrix.arch }} \
+          GOBLINS_OS_SHIPPABLE_RELEASE=1 \
+          GOBLINS_OS_BIB_SOURCE_IMAGE='${{ steps.ref.outputs.ref }}' \
+          GOBLINS_OS_BIB_AUTH_FILE="$HOME/.docker/config.json" \
+          os/iso/build-iso.sh
       - name: Run the display-backed-VM capture + close-signoff
         run: |
           chmod +x os/hardware-gate/capture-harness/*.sh os/hardware-gate/capture-harness/*.py

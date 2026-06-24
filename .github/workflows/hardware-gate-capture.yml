@@ -33,22 +33,25 @@ jobs:
         run: |
           test "$(uname -m)" = "${{ matrix.uname }}"
           test -e /dev/kvm || { echo "no /dev/kvm on this runner"; exit 1; }
-      - name: Free disk + add swap
+      - name: Free disk and add swap
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache || true
-          sudo fallocate -l 16G /swap.img && sudo mkswap /swap.img && sudo swapon /swap.img || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache /usr/share/swift /usr/local/lib/node_modules \
+            /usr/share/miniconda /usr/lib/jvm /usr/local/share/powershell \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+          sudo apt-get clean || true
+          sudo docker image prune -af || true
+          sudo swapoff -a || true
+          sudo rm -f /swapfile /mnt/swapfile || true
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile && sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
+          df -h /
       - name: Install qemu/KVM + capture deps
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils ovmf \
             mtools dosfstools imagemagick curl jq python3 socat
           if [ "${{ matrix.arch }}" = aarch64 ]; then sudo apt-get install -y qemu-efi-aarch64; fi
-      - name: Serve a small model for studio-live shots (loopback)
-        run: |
-          curl -fsSL https://ollama.com/install.sh | sh
-          OLLAMA_HOST=0.0.0.0:11434 nohup ollama serve >/tmp/ollama.log 2>&1 &
-          for i in $(seq 1 30); do curl -sf localhost:11434/api/tags >/dev/null && break; sleep 1; done
-          ollama pull llama3.2:1b
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Compute lowercase GHCR ref
@@ -71,12 +74,19 @@ jobs:
           GOBLINS_OS_BIB_SOURCE_IMAGE='${{ steps.ref.outputs.ref }}' \
           GOBLINS_OS_BIB_AUTH_FILE="$HOME/.docker/config.json" \
           os/iso/build-iso.sh
+      - name: Reclaim image-build disk + serve a small model for studio-live
+        run: |
+          docker image prune -af || true
+          sudo apt-get clean || true
+          df -h /
+          curl -fsSL https://ollama.com/install.sh | sh
+          OLLAMA_HOST=0.0.0.0:11434 nohup ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:11434/api/tags >/dev/null && break; sleep 1; done
+          ollama pull llama3.2:1b
       - name: Run the display-backed-VM capture + close-signoff
         run: |
           chmod +x os/hardware-gate/capture-harness/*.sh os/hardware-gate/capture-harness/*.py
           REPO_ROOT="$PWD" GOBLINS_OS_ARCH=${{ matrix.arch }} RUN_DATE="${{ inputs.run_date }}" \
-            X86_UEFI_CODE=/usr/share/OVMF/OVMF_CODE.fd \
-            AARCH64_UEFI_CODE=/usr/share/AAVMF/AAVMF_CODE.fd \
             bash os/hardware-gate/capture-harness/run-capture.sh
       - name: Commit the screenshot run + signoff back to the repo
         run: |

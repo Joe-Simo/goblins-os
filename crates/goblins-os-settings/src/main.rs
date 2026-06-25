@@ -10266,6 +10266,24 @@ fn settings_status_state_is_quiet(state: &str) -> bool {
     if normalized.ends_with('%') {
         return true;
     }
+    // A "<number> <unit>" measurement (e.g. "500 ms", "30 ms", "2.4 ghz") is a
+    // configured value, not a health state, so it rests in the same neutral pill as
+    // the percentage readings above — green stays reserved for affirmative status.
+    // Mirrors the unit set the display label keeps lowercase.
+    {
+        let mut parts = normalized.split(' ');
+        if let (Some(num), Some(unit), None) = (parts.next(), parts.next(), parts.next()) {
+            if !num.is_empty()
+                && num.chars().all(|c| c.is_ascii_digit() || c == '.')
+                && matches!(
+                    unit,
+                    "ms" | "s" | "min" | "hz" | "khz" | "k" | "kb" | "mb" | "gb"
+                )
+            {
+                return true;
+            }
+        }
+    }
     // One status -> pill-variant map for the whole app: descriptive/neutral facts
     // (a chosen mode, a font, a layout, a configured-but-idle state) read as a calm
     // gray pill; only genuinely affirmative health (on, connected, granted, …) stays
@@ -18410,6 +18428,29 @@ mod tests {
         // Measurement units keep their canonical lowercase casing.
         assert_eq!(super::settings_status_display_label("500 ms"), "500 ms");
         assert_eq!(super::settings_status_display_label("30 ms"), "30 ms");
+    }
+
+    // settings_status_state_is_quiet is gated to the native-desktop Linux build, so
+    // this guard runs in the canonical Linux gate (gate.Dockerfile / CI).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn descriptive_values_rest_in_the_neutral_pill_not_green() {
+        // A configured measurement or percentage is a descriptive value, not an
+        // affirmative health state — it must read as the calm neutral pill so green
+        // stays reserved for genuinely-good status (macOS reserves green likewise).
+        for quiet in ["500 ms", "30 ms", "2.4 ghz", "125%", "off", "available"] {
+            assert!(
+                super::settings_status_state_is_quiet(quiet),
+                "{quiet} should be a neutral/quiet pill, not green"
+            );
+        }
+        // Genuine attention/health states stay explicitly colored.
+        for loud in ["waiting", "blocked", "failed", "unavailable"] {
+            assert!(
+                !super::settings_status_state_is_quiet(loud),
+                "{loud} must keep its explicit colored pill"
+            );
+        }
     }
 
     #[test]

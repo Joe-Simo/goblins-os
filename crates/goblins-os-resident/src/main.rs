@@ -366,6 +366,7 @@ fn serve_ipc() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(unix)]
 fn handle_client(stream: std::os::unix::net::UnixStream) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let read_half = match stream.try_clone() {
         Ok(clone) => clone,
         Err(_) => return,
@@ -402,7 +403,16 @@ fn forward_chat_to_core(core_url: &str, message: &str) -> Result<String, String>
 
     let mut stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port))
         .map_err(|_| "resident could not reach local OS services".to_string())?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(65)));
+    // Core's worst-case wall time behind /v1/codex/resident is its model read timeout
+    // (GOBLINS_OS_RESIDENT_TIMEOUT_SECS, default 120s) plus its own connect+write budget.
+    // Read the same clamped value core uses and add ~30s of headroom so the resident's
+    // socket read never fires before core can legitimately answer on slow CPU-only hardware.
+    let core_timeout = goblins_os_ai::resident_timeout::clamp_secs(
+        env::var("GOBLINS_OS_RESIDENT_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok()),
+    );
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(core_timeout + 30)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
 
     stream
@@ -418,15 +428,22 @@ fn forward_chat_to_core(core_url: &str, message: &str) -> Result<String, String>
 
     let (status, body) =
         split_http_response(&response).ok_or_else(|| "core response was malformed".to_string())?;
-    if !(200..=299).contains(&status) {
-        return Err(format!(
-            "core relay returned HTTP {status} without exposing credentials"
-        ));
-    }
 
     #[derive(Deserialize)]
     struct CoreText {
         text: String,
+    }
+
+    if !(200..=299).contains(&status) {
+        // Core returns a `{ text: "..." }` body with actionable, credential-free guidance
+        // on its error paths; surface it. Fall back to the generic line only when the body
+        // is missing or unparsable so a body-less error still hides core internals.
+        let detail = serde_json::from_slice::<CoreText>(&body)
+            .map(|core| core.text)
+            .unwrap_or_else(|_| {
+                format!("core relay returned HTTP {status} without exposing credentials")
+            });
+        return Err(detail);
     }
 
     let parsed: CoreText = serde_json::from_slice(&body)
@@ -501,7 +518,12 @@ fn selected_engine(cloud_relay: bool, local_relay: bool) -> &'static str {
 }
 
 fn cloud_relay_configured() -> bool {
-    env_var_os_with_compat(RESIDENT_RELAY_ENV, RESIDENT_RELAY_LEGACY_ENV)
+    // Defense-in-depth only: require the relay URL to be present, HTTPS, and paired with a
+    // gateway key. Core (resident_relay) remains the authority — it additionally applies the
+    // offline/private gate, which the resident must NOT self-determine from env alone.
+    env_var_with_compat(RESIDENT_RELAY_ENV, RESIDENT_RELAY_LEGACY_ENV)
+        .map(|url| url.trim().starts_with("https://"))
+        .unwrap_or(false)
         && env::var_os("AI_GATEWAY_API_KEY").is_some()
 }
 
@@ -511,6 +533,10 @@ fn local_relay_configured() -> bool {
 
 fn env_var_os_with_compat(primary: &str, legacy: &str) -> bool {
     env::var_os(primary).is_some() || env::var_os(legacy).is_some()
+}
+
+fn env_var_with_compat(primary: &str, legacy: &str) -> Option<String> {
+    env::var(primary).or_else(|_| env::var(legacy)).ok()
 }
 
 #[cfg(test)]

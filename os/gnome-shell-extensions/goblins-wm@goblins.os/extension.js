@@ -74,6 +74,7 @@ export default class GoblinsWindowManagement extends Extension {
         this._recentWindows = [];
         this._selectedIndex = 0;
         this._groupFilter = null;
+        this._snapApplyTimeout = 0;
         this._signals = [];
 
         for (const [name, method] of KEYBINDINGS) {
@@ -868,7 +869,8 @@ export default class GoblinsWindowManagement extends Extension {
             this._geometryBeforeSnap.set(key, win.get_frame_rect());
         const rect = this._rectForZone(win, zone);
         this._showSnapPreview(rect);
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 90, () => {
+        this._snapApplyTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 90, () => {
+            this._snapApplyTimeout = 0;
             try {
                 win.unmaximize(Meta.MaximizeFlags.BOTH);
                 win.move_resize_frame(false, rect.x, rect.y, rect.width, rect.height);
@@ -991,6 +993,10 @@ export default class GoblinsWindowManagement extends Extension {
         if (this._snapPreviewTimeout) {
             GLib.source_remove(this._snapPreviewTimeout);
             this._snapPreviewTimeout = null;
+        }
+        if (this._snapApplyTimeout) {
+            GLib.source_remove(this._snapApplyTimeout);
+            this._snapApplyTimeout = 0;
         }
         if (this._snapPreview) {
             Main.layoutManager.removeChrome(this._snapPreview);

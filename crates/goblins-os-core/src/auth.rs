@@ -18,6 +18,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use crate::http_error::error_response;
+
 const PENDING_AUTH_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Serialize)]
@@ -27,11 +29,6 @@ pub struct OpenAIAuthStatus {
     provider: &'static str,
     session_storage: String,
     message: String,
-}
-
-#[derive(Serialize)]
-struct ErrorBody {
-    text: String,
 }
 
 pub async fn openai_auth_status() -> Json<OpenAIAuthStatus> {
@@ -148,13 +145,20 @@ pub async fn openai_auth_start() -> Response {
     );
     remember_pending_auth(state.clone(), verifier);
 
+    // The auth URL is operator-supplied; a stray control character or non-ASCII byte
+    // would make HeaderValue::from_str fail, so return a clean 500 instead of panicking
+    // on a live request path.
+    let Ok(location) = HeaderValue::from_str(&destination) else {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "OpenAI account auth URL is malformed.",
+        );
+    };
+
     let mut response = StatusCode::FOUND.into_response();
     let headers = response.headers_mut();
 
-    headers.insert(
-        header::LOCATION,
-        HeaderValue::from_str(&destination).expect("valid redirect URL"),
-    );
+    headers.insert(header::LOCATION, location);
     headers.append(
         header::SET_COOKIE,
         HeaderValue::from_str(&session_cookie("goblins_os_auth_state", &state))
@@ -814,10 +818,6 @@ fn cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
         .filter_map(|part| part.trim().split_once('='))
         .find(|(key, _)| *key == name)
         .map(|(_, value)| value)
-}
-
-fn error_response(status: StatusCode, text: impl Into<String>) -> Response {
-    (status, Json(ErrorBody { text: text.into() })).into_response()
 }
 
 fn with_query_params(base_url: &str, params: &[(&str, &str)]) -> String {

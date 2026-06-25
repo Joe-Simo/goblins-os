@@ -354,7 +354,7 @@ fn convert_units(query: &str) -> Option<String> {
     let lower = query.trim().to_lowercase();
     let (head, target) = split_once_any(&lower, &[" to ", " in ", " into ", ">"])?;
     let head = head.trim();
-    let target = target.trim().trim_end_matches('s');
+    let target = target.trim();
 
     // The amount is the leading number; the rest of the head is the source unit.
     let mut split = head.len();
@@ -366,7 +366,7 @@ fn convert_units(query: &str) -> Option<String> {
         }
     }
     let amount: f64 = head[..split].trim().replace(' ', "").parse().ok()?;
-    let source = head[split..].trim().trim_end_matches('s');
+    let source = head[split..].trim();
     if source.is_empty() {
         return None;
     }
@@ -384,10 +384,19 @@ fn convert_units(query: &str) -> Option<String> {
         return None;
     }
     let value = amount * from_factor / to_factor;
+    // Echo the user's as-typed target, but if only its singular form matched the
+    // table (e.g. "meters" -> "meter"), display that singular so it reads "1 meter".
+    let display_target = if unit_factor_exact(target).is_some() {
+        target
+    } else {
+        singularized(target)
+            .filter(|singular| unit_factor_exact(singular).is_some())
+            .unwrap_or(target)
+    };
     Some(format!(
         "{} {}",
         format_number(value),
-        canonical_unit(target)
+        canonical_unit(display_target)
     ))
 }
 
@@ -439,19 +448,34 @@ impl Temp {
     }
 }
 
+/// A plural unit token reduced to its singular form, e.g. "meters" -> "meter".
+/// Used only as a fallback after an exact match misses, so units that legitimately
+/// end in "s" (like "celsius") are never corrupted.
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
-fn temperature_kind(unit: &str) -> Option<Temp> {
-    match unit {
-        "c" | "celsius" | "°c" | "centigrade" => Some(Temp::C),
-        "f" | "fahrenheit" | "°f" => Some(Temp::F),
-        "k" | "kelvin" => Some(Temp::K),
-        _ => None,
-    }
+fn singularized(unit: &str) -> Option<&str> {
+    unit.strip_suffix('s')
 }
 
-/// (dimension tag, factor to the dimension's base unit).
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
-fn unit_factor(unit: &str) -> Option<(&'static str, f64)> {
+fn temperature_kind(unit: &str) -> Option<Temp> {
+    fn lookup(u: &str) -> Option<Temp> {
+        match u {
+            "c" | "celsius" | "°c" | "centigrade" => Some(Temp::C),
+            "f" | "fahrenheit" | "°f" => Some(Temp::F),
+            "k" | "kelvin" => Some(Temp::K),
+            _ => None,
+        }
+    }
+    // Match the token as typed first; only on a miss retry its singular form so
+    // plurals still resolve without breaking units that end in a non-plural 's'.
+    lookup(unit).or_else(|| singularized(unit).and_then(lookup))
+}
+
+/// (dimension tag, factor to the dimension's base unit). Exact-match only — no
+/// plural fallback — used both by `unit_factor` and by the display-label logic to
+/// tell whether a token matched as typed or only via its singular form.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn unit_factor_exact(unit: &str) -> Option<(&'static str, f64)> {
     let table: &[(&str, &str, f64)] = &[
         // length → base metre
         ("mm", "len", 0.001),
@@ -505,6 +529,14 @@ fn unit_factor(unit: &str) -> Option<(&'static str, f64)> {
         .iter()
         .find(|(name, _, _)| *name == unit)
         .map(|(_, dim, factor)| (*dim, *factor))
+}
+
+/// (dimension tag, factor to the dimension's base unit). Exact match first, then a
+/// singular fallback (so "meters" -> "meter") without mangling tokens that simply
+/// end in a non-plural 's'.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn unit_factor(unit: &str) -> Option<(&'static str, f64)> {
+    unit_factor_exact(unit).or_else(|| singularized(unit).and_then(unit_factor_exact))
 }
 
 /// A tidy display label for a target unit (the user's own spelling, capitalized
@@ -1113,7 +1145,9 @@ mod native {
     }
 
     fn spawn(program: &str, args: &[&str]) {
-        let _ = Command::new(program).args(args).spawn();
+        if let Err(err) = Command::new(program).args(args).spawn() {
+            eprintln!("goblins-os-launcher: failed to spawn {program}: {err}");
+        }
     }
 
     fn spawn_shell(args: &[&str]) {
@@ -2238,7 +2272,7 @@ mod native {
 
         let request = match body {
             Some(payload) => format!(
-                "POST {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
                 payload.len()
             ),
             None => format!(
@@ -2301,6 +2335,18 @@ mod tests {
         // Cross-dimension nonsense never resolves.
         assert_eq!(convert_units("5 kg to m"), None);
         assert_eq!(convert_units("hello to world"), None);
+    }
+
+    #[test]
+    fn converts_units_handles_celsius_and_plurals() {
+        // "celsius" ends in a non-plural 's' and must not be trimmed to "celsiu".
+        assert_eq!(
+            convert_units("100 celsius to fahrenheit"),
+            Some("212 °F".to_string())
+        );
+        assert_eq!(convert_units("0 c to celsius"), Some("0 °C".to_string()));
+        // Genuine plurals still resolve via the singular fallback.
+        assert_eq!(convert_units("2 meters to cm"), Some("200 cm".to_string()));
     }
 
     #[test]

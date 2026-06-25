@@ -12,9 +12,13 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-const MARK = '/usr/share/goblins-os/brand/Goblins-white-mark.svg';
+// The mark is a path-loaded non-symbolic SVG (CSS color can't recolor it), so we
+// switch the gicon by scheme: white on the dark glass panel, ink on the light
+// frosted panel. The control icon IS symbolic, so it recolors via CSS color.
+const MARK_DARK = '/usr/share/goblins-os/brand/Goblins-white-mark.svg';
+const MARK_LIGHT = '/usr/share/goblins-os/brand/Goblins-black-mark.svg';
 const AI_ICON = '/usr/share/icons/GoblinsOS/scalable/actions/goblins-engine-symbolic.svg';
-const CONTROL_ICON = '/usr/share/goblins-os/brand/icons/control-center.svg';
+const CONTROL_ICON = '/usr/share/goblins-os/brand/icons/control-center-symbolic.svg';
 const LAUNCHER = '/usr/libexec/goblins-os/goblins-os-launcher';
 const SCREENSHOT_CONTEXT = '/usr/libexec/goblins-os/goblins-os-screenshot-context';
 const CONTROL_CENTER = '/usr/libexec/goblins-os/goblins-os-control-center';
@@ -28,10 +32,11 @@ export default class GoblinsMenuBar extends Extension {
         // Left: the system mark + wordmark.
         this._mark = new PanelMenu.Button(0.0, 'Goblins OS', true);
         const box = new St.BoxLayout({style_class: 'goblins-menubar'});
-        box.add_child(new St.Icon({
-            gicon: Gio.icon_new_for_string(MARK),
+        this._markIcon = new St.Icon({
+            gicon: Gio.icon_new_for_string(MARK_DARK),
             style_class: 'goblins-menubar-mark',
-        }));
+        });
+        box.add_child(this._markIcon);
         box.add_child(new St.Label({
             text: 'Goblins OS',
             style_class: 'goblins-menubar-name',
@@ -108,6 +113,11 @@ export default class GoblinsMenuBar extends Extension {
                 return;
             const isLight =
                 this._interfaceSettings.get_string('color-scheme') !== 'prefer-dark';
+            // The mark is non-symbolic, so swap the gicon by scheme: ink on the
+            // light frosted panel, white on the dark glass panel.
+            this._markIcon?.set_gicon(
+                Gio.icon_new_for_string(isLight ? MARK_LIGHT : MARK_DARK)
+            );
             if (isLight && !this._lightChromeLoaded && this._lightChromeFile.query_exists(null)) {
                 theme.load_stylesheet(this._lightChromeFile);
                 this._lightChromeLoaded = true;
@@ -231,6 +241,7 @@ export default class GoblinsMenuBar extends Extension {
             this._mark.destroy();
             this._mark = null;
         }
+        this._markIcon = null;
         if (this._control) {
             this._control.destroy();
             this._control = null;

@@ -209,7 +209,14 @@ pub(crate) fn build_resident_status() -> ResidentStatus {
         (None, _) => ResidentProcessState::Waiting,
     };
 
-    let (pid, mode, engine, capabilities) = match stored {
+    // Core owns the answer path, so core's status must report what would ACTUALLY
+    // run — never the resident's looser env-presence guess. Derive both engine
+    // booleans (and the selected engine) from the same authoritative gate
+    // `resident_relay()` uses, so the status can never advertise cloud-ready while
+    // offline/private mode or a non-HTTPS relay URL means a turn would be refused.
+    let (cloud_configured, local_configured) = relay_eligibility();
+
+    let (pid, mode, mut engine, mut capabilities) = match stored {
         Some(stored) => (
             Some(stored.pid),
             stored.mode,
@@ -225,18 +232,32 @@ pub(crate) fn build_resident_status() -> ResidentStatus {
             None,
             "persistent".to_string(),
             ResidentEngine {
-                selected: selected_engine(
-                    cloud_relay_configured_from_env(),
-                    local_relay_configured_from_env(),
-                )
-                .to_string(),
-                cloud_relay_configured: cloud_relay_configured_from_env(),
-                local_relay_configured: local_relay_configured_from_env(),
+                selected: selected_engine(cloud_configured, local_configured).to_string(),
+                cloud_relay_configured: cloud_configured,
+                local_relay_configured: local_configured,
                 relay_contract: "POST JSON {message:string} -> {text:string}; secrets remain server-side or OS-owned".to_string(),
             },
             default_capabilities(),
         ),
     };
+
+    // Overwrite the engine eligibility (including a stored heartbeat's possibly stale
+    // or env-derived booleans) with core's authoritative view.
+    engine.cloud_relay_configured = cloud_configured;
+    engine.local_relay_configured = local_configured;
+    engine.selected = selected_engine(cloud_configured, local_configured).to_string();
+
+    // The conversation capability must match: Ready only if a relay would truly answer.
+    let conversation_ready = if cloud_configured || local_configured {
+        CapabilityState::Ready
+    } else {
+        CapabilityState::Waiting
+    };
+    for capability in &mut capabilities {
+        if capability.id == "conversation" {
+            capability.state = conversation_ready.clone();
+        }
+    }
 
     ResidentStatus {
         generated_at: format!("{:?}", SystemTime::now()),
@@ -368,12 +389,10 @@ fn resident_read_timeout_secs() -> u64 {
 
 /// Pure timeout policy (testable without touching the process environment): keep the
 /// 120s default when unset/unparsable, otherwise clamp the override to 5s..=3600s.
+/// Delegates to the shared helper in `goblins-os-ai` so core and the resident binary
+/// agree on one clamp source.
 fn clamp_resident_timeout(parsed: Option<u64>) -> u64 {
-    const DEFAULT: u64 = 120;
-    match parsed {
-        Some(secs) => secs.clamp(5, 3600),
-        None => DEFAULT,
-    }
+    goblins_os_ai::resident_timeout::clamp_secs(parsed)
 }
 
 /// Generate text through whatever resident engine is active (GPT-OSS by default,
@@ -462,6 +481,34 @@ fn resident_relay() -> Option<ResidentRelay> {
         url,
         authorization: Some(format!("Bearer {key}")),
     })
+}
+
+/// The authoritative relay eligibility, derived from the SAME gate `resident_relay()`
+/// uses to actually answer a turn (offline/private mode + the HTTPS / loopback URL
+/// checks). The status the daemon serves must report exactly what would run, so it can
+/// never claim cloud-ready while `resident_relay()` would return `None` (e.g. offline
+/// mode is on or the server relay URL is not HTTPS). `cloud` is true only when a real
+/// hosted engine (HTTPS server relay, the user's OpenAI key/account) would be selected;
+/// `local` only when a real loopback engine (local contract relay or local runtime)
+/// would be selected.
+fn relay_eligibility() -> (bool, bool) {
+    classify_relay(resident_relay().as_ref())
+}
+
+/// Map an eligible relay (the one `resident_relay()` would actually use, already past
+/// the offline gate and the HTTPS / loopback URL checks) to `(cloud, local)`. `None`
+/// — including when offline mode or a non-HTTPS server relay made every cloud branch
+/// ineligible — yields `(false, false)`.
+fn classify_relay(relay: Option<&ResidentRelay>) -> (bool, bool) {
+    match relay {
+        Some(ResidentRelay::OpenAiApi { .. } | ResidentRelay::Codex) => (true, false),
+        // A contract relay is either an offline-safe loopback relay (local) or an
+        // HTTPS server relay (cloud); distinguish by the URL the gate accepted.
+        Some(ResidentRelay::Contract { url, .. }) if local_http_url(url) => (false, true),
+        Some(ResidentRelay::Contract { .. }) => (true, false),
+        Some(ResidentRelay::Ollama { .. }) => (false, true),
+        None => (false, false),
+    }
 }
 
 fn read_resident_state(path: &Path) -> Option<StoredResidentState> {
@@ -602,10 +649,11 @@ fn host_after_scheme(value: &str, scheme: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_resident_status, clamp_resident_timeout, extract_openai_response_text,
-        forward_resident_message, local_http_url, resident_process_detail, selected_engine,
-        server_https_url, CapabilityState, OpenAiResponseContent, OpenAiResponseOutput,
-        OpenAiResponsesReply, ResidentProcessState, ResidentRelay,
+        build_resident_status, clamp_resident_timeout, classify_relay,
+        extract_openai_response_text, forward_resident_message, local_http_url,
+        resident_process_detail, selected_engine, server_https_url, CapabilityState,
+        OpenAiResponseContent, OpenAiResponseOutput, OpenAiResponsesReply, ResidentProcessState,
+        ResidentRelay,
     };
 
     #[test]
@@ -819,6 +867,48 @@ mod tests {
         assert!(server_https_url("https://relay.example.com/goblins-os"));
         assert!(!server_https_url("http://relay.example.com/goblins-os"));
         assert!(!server_https_url("https://user@example.com/goblins-os"));
+    }
+
+    #[test]
+    fn status_reports_only_actual_relay_eligibility() {
+        // A hosted engine that would actually run reports cloud, never local.
+        assert_eq!(
+            classify_relay(Some(&ResidentRelay::OpenAiApi {
+                key: "sk-test".to_string(),
+                model: "gpt-5.5".to_string(),
+                base: "https://api.openai.com".to_string(),
+            })),
+            (true, false)
+        );
+        assert_eq!(classify_relay(Some(&ResidentRelay::Codex)), (true, false));
+        // An HTTPS server relay is cloud; a loopback contract relay is local.
+        assert_eq!(
+            classify_relay(Some(&ResidentRelay::Contract {
+                url: "https://relay.example.com/goblins-os".to_string(),
+                authorization: Some("Bearer test".to_string()),
+            })),
+            (true, false)
+        );
+        assert_eq!(
+            classify_relay(Some(&ResidentRelay::Contract {
+                url: "http://127.0.0.1:11434/v1/resident".to_string(),
+                authorization: None,
+            })),
+            (false, true)
+        );
+        assert_eq!(
+            classify_relay(Some(&ResidentRelay::Ollama {
+                url: "http://127.0.0.1:11434".to_string(),
+                model: "gpt-oss-20b".to_string(),
+            })),
+            (false, true)
+        );
+        // When no relay is eligible — e.g. offline/private mode disqualifies every
+        // cloud branch, or the server relay URL is not HTTPS — cloud must read
+        // not-configured, never Ready, so the status can't claim cloud while
+        // `resident_relay()` returns None.
+        assert_eq!(classify_relay(None), (false, false));
+        assert_eq!(selected_engine(false, false), "not-configured");
     }
 
     #[test]

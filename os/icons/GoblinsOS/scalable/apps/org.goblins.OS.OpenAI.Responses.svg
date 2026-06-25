@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="responsesTile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2c30"/>
+      <stop offset="1" stop-color="#141417"/>
+    </linearGradient>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="208" fill="url(#responsesTile)"/>
+  <rect x="97" y="97" width="830" height="830" rx="207" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="2"/>
+  <rect x="120" y="120" width="784" height="392" rx="184" fill="#ffffff" fill-opacity="0.04"/>
+  <!-- Responses: a return/reply arrow looping back to a sender node — a reply emitted. -->
+  <path d="M408 344 L264 472 L408 600" fill="none" stroke="#f5f5f4" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M280 472 H600 C672 472 730 530 730 602 V680" fill="none" stroke="#f5f5f4" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="730" cy="720" r="40" fill="#f5f5f4" fill-opacity="0.92"/>
+</svg>

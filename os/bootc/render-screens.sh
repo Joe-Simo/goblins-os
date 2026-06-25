@@ -523,7 +523,7 @@ export GOBLINS_OS_INSTALLER_PAGE=install-progress
 capture goblins-os-installer "Goblins OS Setup"    15-install-progress.png
 export GOBLINS_OS_INSTALLER_PAGE=install-done
 capture goblins-os-installer "Goblins OS Setup"    16-install-done.png
-# The "Customize setup" advanced page — a denser surface (account, readiness,
+# The "Advanced setup" advanced page — a denser surface (account, readiness,
 # install target, local models) that the calm welcome hides behind one link.
 export GOBLINS_OS_INSTALLER_PAGE=details
 capture goblins-os-installer "Goblins OS Setup"    18-installer-details.png

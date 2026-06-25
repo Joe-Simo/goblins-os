@@ -1151,7 +1151,7 @@ struct InstallFlow {
 }
 
 /// A calm, centered first-boot welcome — GPT-OSS first, account optional. This is
-/// the onboarding most users ever see; "Customize setup" reveals the details.
+/// the onboarding most users ever see; "Advanced setup" reveals the details.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn build_installer(
     app: &gtk4::Application,
@@ -1334,12 +1334,12 @@ fn build_welcome_page(
     {
         let app_handle = app.clone();
         let core_url = config.core_url.clone();
-        private.connect_clicked(move |_| {
-            let _ = set_privacy_mode(&core_url, true);
-            match complete_and_unlock_first_boot(&core_url, "local-gpt-oss") {
+        private.connect_clicked(move |_| match set_privacy_mode(&core_url, true) {
+            Ok(()) => match complete_and_unlock_first_boot(&core_url, "local-gpt-oss") {
                 Ok(()) => app_handle.quit(),
                 Err(error) => eprintln!("installer_complete_private_error={error}"),
-            }
+            },
+            Err(error) => eprintln!("installer_privacy_mode_error={error}"),
         });
     }
     column.append(&private);
@@ -1484,9 +1484,9 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
     }
     column.append(&back);
 
-    let mark = goblins_os_ui::themed_brand_mark(52);
-    mark.set_margin_top(2);
-    mark.set_margin_bottom(12);
+    let mark = goblins_os_ui::themed_brand_mark(60);
+    mark.set_margin_top(6);
+    mark.set_margin_bottom(18);
     column.append(&mark);
 
     column.append(&centered_label(
@@ -1505,9 +1505,15 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
         true,
     ));
 
-    let panel = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    panel.add_css_class("gos-setup-choice-grid");
-    panel.set_homogeneous(true);
+    // Same containment as the Accessibility and First App steps: the choice cards
+    // live inside the shared onboarding card (gos-net-panel) rather than floating
+    // bare on the canvas, so the layout does not visibly jump between guided steps.
+    let panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    panel.add_css_class("gos-net-panel");
+    panel.set_size_request(620, -1);
+
+    let grid = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    grid.set_homogeneous(true);
 
     let light = setup_choice("Light", "Paper surfaces, graphite ink, high clarity.");
     let dark = setup_choice("Dark", "Graphite glass, quiet contrast, night-ready.");
@@ -1535,8 +1541,9 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
     } else {
         select_one(&light, tone_group.as_slice());
     }
-    panel.append(&light);
-    panel.append(&dark);
+    grid.append(&light);
+    grid.append(&dark);
+    panel.append(&grid);
     column.append(&panel);
 
     let cont = button("Continue", &["gos-onboarding-primary"]);
@@ -1808,11 +1815,51 @@ fn setup_choice(title: &str, detail: &str) -> gtk4::Button {
 
     let button = gtk4::Button::new();
     button.add_css_class("gos-setup-choice");
+
+    // Title/copy on the left, a single-select checkmark pinned to the trailing
+    // edge. macOS Setup Assistant marks the active option with a check, not only
+    // a fill — so the chosen tone/motion/type-size card is unmistakable even
+    // when two accent-tinted cards sit side by side. select_one toggles its
+    // visibility; it starts hidden and inherits the card's ink, so it stays
+    // legible over the accent tint in both Light and Dark.
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
     let body = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    body.set_hexpand(true);
     body.append(&label(title, &["gos-row-title"]));
     body.append(&label(detail, &["gos-row-copy"]));
-    button.set_child(Some(&body));
+    row.append(&body);
+
+    let check = label("✓", &["gos-setup-choice-check"]);
+    check.set_valign(gtk4::Align::Center);
+    check.set_halign(gtk4::Align::End);
+    check.set_visible(false);
+    row.append(&check);
+
+    // select_one finds the checkmark by walking the body's sibling, so keep the
+    // check as the row's last child.
+    button.set_child(Some(&row));
     button
+}
+
+/// The trailing checkmark a `setup_choice` card carries, or `None` for a card
+/// built some other way. Lets `select_one` flip the check's visibility without
+/// each caller having to thread the widget through.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn setup_choice_check(card: &gtk4::Button) -> Option<gtk4::Label> {
+    use gtk4::prelude::*;
+
+    let row = card.child()?;
+    let mut child = row.first_child();
+    while let Some(widget) = child {
+        if let Some(check) = widget
+            .downcast_ref::<gtk4::Label>()
+            .filter(|lbl| lbl.has_css_class("gos-setup-choice-check"))
+        {
+            return Some(check.clone());
+        }
+        child = widget.next_sibling();
+    }
+    None
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -1885,10 +1932,17 @@ fn select_one(chosen: &gtk4::Button, group: &[gtk4::Button]) {
     use gtk4::prelude::WidgetExt;
 
     for card in group {
-        if card == chosen {
+        let is_chosen = card == chosen;
+        if is_chosen {
             card.add_css_class("gos-setup-choice-selected");
         } else {
             card.remove_css_class("gos-setup-choice-selected");
+        }
+        // Show the trailing check only on the active card, so exactly one card
+        // in the group ever reads as picked — the fill-tint and the checkmark
+        // agree.
+        if let Some(check) = setup_choice_check(card) {
+            check.set_visible(is_chosen);
         }
     }
 }
@@ -1932,7 +1986,14 @@ fn build_network_page(
         .network
         .as_ref()
         .and_then(|network| network.active.as_ref())
-        .map(|active| format!("{} ({})", active.name, active.kind));
+        .and_then(|active| {
+            let name = active.name.trim();
+            if name.is_empty() || is_kernel_ifname(name) {
+                None
+            } else {
+                Some(format!("{} ({})", name, active.kind))
+            }
+        });
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gos-onboarding-root");
@@ -2002,7 +2063,6 @@ fn build_network_page(
     column.append(&panel);
 
     let cont = button("Continue", &["gos-onboarding-primary"]);
-    cont.add_css_class("gos-onboarding-primary");
     cont.set_halign(gtk::Align::Center);
     cont.set_margin_top(22);
     cont.set_label(net_continue_label(manager, online));
@@ -2390,7 +2450,7 @@ fn build_details_page(
     brand.set_wrap(false);
     top.append(&brand);
     // Like the wordmark, the page name must never wrap in the crowded top bar.
-    let page_name = label("Customize setup", &["gos-muted"]);
+    let page_name = label("Advanced setup", &["gos-muted"]);
     page_name.set_wrap(false);
     top.append(&page_name);
     top.append(&spacer());
@@ -2399,21 +2459,24 @@ fn build_details_page(
     top.append(&status_pill("Local", state.local_models.is_some()));
     root.append(&top);
 
-    let body = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    // One calm, centered single column — the same shell every other onboarding
+    // and install screen uses — instead of a horizontal two-panel dashboard, so
+    // welcome → details → install paces as one consistent flow. The panels stack
+    // vertically inside the column; the column is centered and width-capped so the
+    // page does not sprawl edge-to-edge.
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 14);
     body.add_css_class("gos-installer-body");
-    body.set_hexpand(true);
+    body.add_css_class("gos-onboarding");
+    body.set_halign(gtk::Align::Center);
     body.set_valign(gtk::Align::Start);
+    body.set_size_request(620, -1);
+    body.set_margin_top(28);
     body.set_margin_bottom(40);
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 14);
-    content.add_css_class("gos-installer-content");
-    content.set_hexpand(true);
-    content.set_valign(gtk::Align::Start);
 
     let hero = gtk::Box::new(gtk::Orientation::Vertical, 18);
     hero.set_valign(gtk::Align::Start);
     hero.add_css_class("gos-hero-panel");
-    hero.set_size_request(440, -1);
+    hero.set_hexpand(true);
     hero.append(&label("Goblins-native desktop", &["gos-kicker"]));
     hero.append(&label("Set up Goblins OS", &["gos-hero-title"]));
     hero.append(&label(
@@ -2490,6 +2553,7 @@ fn build_details_page(
 
     let checks = gtk::Box::new(gtk::Orientation::Vertical, 10);
     checks.add_css_class("gos-checks-panel");
+    checks.set_hexpand(true);
     checks.append(&label("Installer readiness", &["gos-kicker"]));
     match &state.readiness {
         Some(readiness) => {
@@ -2507,10 +2571,11 @@ fn build_details_page(
             "Waiting for installer readiness.",
         )),
     }
-    content.append(&checks);
+    body.append(&checks);
 
     let install = gtk::Box::new(gtk::Orientation::Vertical, 10);
     install.add_css_class("gos-install-panel");
+    install.set_hexpand(true);
     install.append(&label("Install target", &["gos-kicker"]));
     match &state.install_targets {
         Some(status) => {
@@ -2627,10 +2692,11 @@ fn build_details_page(
             "Waiting for the install media storage scan.",
         )),
     }
-    content.append(&install);
+    body.append(&install);
 
     let models = gtk::Box::new(gtk::Orientation::Vertical, 10);
     models.add_css_class("gos-model-panel");
+    models.set_hexpand(true);
     models.append(&label("Local models", &["gos-kicker"]));
     match &state.local_models {
         Some(catalog) => {
@@ -2694,9 +2760,7 @@ fn build_details_page(
             "Waiting for model compatibility scan.",
         )),
     }
-    content.append(&models);
-
-    body.append(&content);
+    body.append(&models);
 
     let details_scroller = gtk::ScrolledWindow::new();
     details_scroller.set_hexpand(true);
@@ -3962,7 +4026,13 @@ fn populate_install_disk(
             row.set_sensitive(target.eligible || preservation_handoff);
             row.set_hexpand(true);
 
-            let inner = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            // The card is two stacked blocks: a tight identity block (name +
+            // device path) on top, then an evenly-spaced facts block beneath.
+            // Splitting them — instead of one flat 4px stack of seven labels —
+            // gives the scan an anchor and a rhythm so the facts no longer read
+            // as a wall of same-size text.
+            let inner = gtk::Box::new(gtk::Orientation::Vertical, 10);
+            let identity = gtk::Box::new(gtk::Orientation::Vertical, 4);
             let titleline = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             titleline.append(&label(
                 &format!("{} · {} GB", target.model, target.size_gb),
@@ -3970,12 +4040,18 @@ fn populate_install_disk(
             ));
             titleline.append(&spacer());
             titleline.append(&label(disk_kind(target), &["gos-install-disk-kind"]));
-            inner.append(&titleline);
-            inner.append(&label(&target.path, &["gos-install-disk-path"]));
+            identity.append(&titleline);
+            identity.append(&label(&target.path, &["gos-install-disk-path"]));
+            inner.append(&identity);
+
+            // One consistent gap between every fact, so partitions ↔ detected
+            // systems ↔ recommendation ↔ dual-boot plan ↔ status read as a list,
+            // not a paragraph.
+            let facts = gtk::Box::new(gtk::Orientation::Vertical, 7);
             let partitions = label(&partition_summary(target), &["gos-install-disk-state"]);
             partitions.set_wrap(true);
             partitions.set_xalign(0.0);
-            inner.append(&partitions);
+            facts.append(&partitions);
             let detected = label(
                 &existing_system_summary(target),
                 &["gos-install-disk-state"],
@@ -3985,7 +4061,7 @@ fn populate_install_disk(
             if !target.existing_systems.is_empty() {
                 detected.add_css_class("is-blocked");
             }
-            inner.append(&detected);
+            facts.append(&detected);
             if let Some(checklist) = detected_system_preservation_checklist(target) {
                 let checklist = label(
                     &format!("Preservation checklist: {checklist}"),
@@ -3993,7 +4069,7 @@ fn populate_install_disk(
                 );
                 checklist.set_wrap(true);
                 checklist.set_xalign(0.0);
-                inner.append(&checklist);
+                facts.append(&checklist);
             }
             let recommendation = label(
                 &format!(
@@ -4007,7 +4083,7 @@ fn populate_install_disk(
             if !target.eligible {
                 recommendation.add_css_class("is-blocked");
             }
-            inner.append(&recommendation);
+            facts.append(&recommendation);
             let dual_boot_plan = label(
                 &format!("Dual-boot plan: {}", dual_boot_plan_summary(target)),
                 &["gos-install-disk-state"],
@@ -4017,18 +4093,35 @@ fn populate_install_disk(
             if !target.eligible || target.dual_boot_plan.status == "manual-preserve-required" {
                 dual_boot_plan.add_css_class("is-blocked");
             }
-            inner.append(&dual_boot_plan);
+            facts.append(&dual_boot_plan);
             if target.eligible {
-                let detail = if target.partitions.is_empty() {
-                    "Ready to replace this whole disk".to_string()
+                if target.partitions.is_empty() {
+                    // A truly blank disk needs no caution — the one-line status
+                    // is the whole story.
+                    let ready = label(
+                        "Ready to replace this whole disk",
+                        &["gos-install-disk-state"],
+                    );
+                    ready.set_wrap(true);
+                    ready.set_xalign(0.0);
+                    facts.append(&ready);
                 } else {
-                    "Whole-disk replace only. Do not choose this row to keep Windows, macOS, Linux, another OS, recovery, or EFI partitions."
-                        .to_string()
-                };
-                let ready = label(&detail, &["gos-install-disk-state"]);
-                ready.set_wrap(true);
-                ready.set_xalign(0.0);
-                inner.append(&ready);
+                    // A disk with partitions carries the whole-disk caution as
+                    // its status fact. It stays inline (the row is a Button, so a
+                    // nested disclosure would fight select-on-click), but now sits
+                    // in the evenly-spaced facts list rather than jammed against
+                    // its neighbours. The verbose, repeatable preservation prose
+                    // already lives in the page-level "Storage & boot details"
+                    // disclosure above, so this single sentence is all the card
+                    // needs to carry.
+                    let caution = label(
+                        "Whole-disk replace only. Do not choose this row to keep Windows, macOS, Linux, another OS, recovery, or EFI partitions.",
+                        &["gos-install-disk-state"],
+                    );
+                    caution.set_wrap(true);
+                    caution.set_xalign(0.0);
+                    facts.append(&caution);
+                }
             } else {
                 let detail = if target.reasons.is_empty() {
                     "This disk can't be used for installation.".to_string()
@@ -4038,8 +4131,9 @@ fn populate_install_disk(
                 let blocked = label(&detail, &["gos-install-disk-state", "is-blocked"]);
                 blocked.set_wrap(true);
                 blocked.set_xalign(0.0);
-                inner.append(&blocked);
+                facts.append(&blocked);
             }
+            inner.append(&facts);
             let preservation_feedback = if preservation_handoff {
                 let prompt = preservation_handoff_prompt(target);
                 let prompt = label(&prompt, &["gos-install-disk-state", "is-blocked"]);
@@ -4727,8 +4821,32 @@ fn populate_install_progress(
     // terminal state. If the endpoint is absent (404) stop quietly — the dots keep
     // breathing and the user restarts when the machine is ready; a transient error
     // keeps polling without ever inventing a phase.
+    //
+    // The fetch is blocking HTTP, so it runs on a worker thread (only a cloned
+    // `core_url` String and the mpsc Sender cross the boundary — both Send; every
+    // Rc/RefCell/GTK handle stays on this main thread). The main-thread tick drains
+    // the channel and re-arms the next fetch only after the prior result lands, so
+    // blocking calls never overlap.
     {
-        let core_url_c = core_url.to_string();
+        use std::sync::mpsc;
+
+        let (tx, rx) = mpsc::channel::<Result<InstallProgress, CoreFetchError>>();
+        let core_url_owned = core_url.to_string();
+        let spawn_fetch = move |tx: mpsc::Sender<Result<InstallProgress, CoreFetchError>>| {
+            let core_url_c = core_url_owned.clone();
+            thread::spawn(move || {
+                let result = get_core_json::<InstallProgress>(
+                    &core_url_c,
+                    "/v1/installer/install-targets/progress",
+                );
+                // Receiver gone means the page advanced; nothing to do.
+                let _ = tx.send(result);
+            });
+        };
+
+        spawn_fetch(tx.clone());
+
+        let core_url_done = core_url.to_string();
         let phase_c = phase.clone();
         let pages_c = pages.clone();
         let stack_c = stack.clone();
@@ -4740,14 +4858,14 @@ fn populate_install_progress(
             if stack_c.visible_child_name().as_deref() != Some("install-progress") {
                 return gtk::glib::ControlFlow::Break;
             }
-            match get_core_json::<InstallProgress>(
-                &core_url_c,
-                "/v1/installer/install-targets/progress",
-            ) {
-                Ok(progress) => match progress.state.as_str() {
+            // Drain whatever the worker reported; if nothing has landed yet, keep
+            // breathing and check again on the next tick (no new fetch is armed
+            // while one is still in flight).
+            match rx.try_recv() {
+                Ok(Ok(progress)) => match progress.state.as_str() {
                     "succeeded" => {
                         *flow_c.last_error.borrow_mut() = None;
-                        populate_install_done(&pages_c, &stack_c, &flow_c, &core_url_c);
+                        populate_install_done(&pages_c, &stack_c, &flow_c, &core_url_done);
                         stack_c.set_visible_child_name("install-done");
                         gtk::glib::ControlFlow::Break
                     }
@@ -4758,7 +4876,7 @@ fn populate_install_progress(
                             progress.phase.clone()
                         };
                         *flow_c.last_error.borrow_mut() = Some(detail);
-                        populate_install_done(&pages_c, &stack_c, &flow_c, &core_url_c);
+                        populate_install_done(&pages_c, &stack_c, &flow_c, &core_url_done);
                         stack_c.set_visible_child_name("install-done");
                         gtk::glib::ControlFlow::Break
                     }
@@ -4766,12 +4884,26 @@ fn populate_install_progress(
                         if !progress.phase.is_empty() {
                             phase_c.set_text(&progress.phase);
                         }
+                        spawn_fetch(tx.clone());
                         gtk::glib::ControlFlow::Continue
                     }
-                    _ => gtk::glib::ControlFlow::Continue,
+                    _ => {
+                        spawn_fetch(tx.clone());
+                        gtk::glib::ControlFlow::Continue
+                    }
                 },
-                Err(CoreFetchError::Status(404)) => gtk::glib::ControlFlow::Break,
-                Err(_) => gtk::glib::ControlFlow::Continue,
+                Ok(Err(CoreFetchError::Status(404))) => gtk::glib::ControlFlow::Break,
+                Ok(Err(_)) => {
+                    spawn_fetch(tx.clone());
+                    gtk::glib::ControlFlow::Continue
+                }
+                // Still fetching — let it land on a later tick.
+                Err(mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+                // Worker thread vanished without sending; re-arm to recover.
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    spawn_fetch(tx.clone());
+                    gtk::glib::ControlFlow::Continue
+                }
             }
         });
     }
@@ -5159,7 +5291,7 @@ fn submit_setup_build(core_url: &str, intent: &str) -> Result<(), CoreFetchError
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn complete_first_boot(core_url: &str, mode: &str) -> Result<(), CoreFetchError> {
-    let body = format!(r#"{{"mode":"{mode}"}}"#);
+    let body = serde_json::json!({ "mode": mode }).to_string();
     let response = http_request(
         core_url,
         "POST",
@@ -5176,7 +5308,7 @@ fn complete_first_boot(core_url: &str, mode: &str) -> Result<(), CoreFetchError>
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn unlock_session(core_url: &str, mode: &str) -> Result<(), CoreFetchError> {
-    let body = format!(r#"{{"mode":"{mode}"}}"#);
+    let body = serde_json::json!({ "mode": mode }).to_string();
     let response = http_request(
         core_url,
         "POST",
@@ -5208,7 +5340,7 @@ fn set_privacy_mode(core_url: &str, offline: bool) -> Result<(), CoreFetchError>
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn request_model_install(core_url: &str, model_id: &str) -> Result<String, CoreFetchError> {
-    let body = format!(r#"{{"model_id":"{model_id}","consent":true}}"#);
+    let body = serde_json::json!({ "model_id": model_id, "consent": true }).to_string();
     let response = http_request(
         core_url,
         "POST",

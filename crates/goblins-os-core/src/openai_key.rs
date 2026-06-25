@@ -18,6 +18,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::http_error::error_response;
+
 const DEFAULT_KEY_PATH: &str = "/var/lib/goblins-os/secrets/openai/api-key";
 const DEFAULT_ENGINE_PATH: &str = "/var/lib/goblins-os/resident/engine";
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.5";
@@ -244,10 +246,6 @@ fn write_key_to(path: &Path, key: &str) -> std::io::Result<()> {
     {
         fs::write(path, key)
     }
-}
-
-fn error_response(status: StatusCode, text: &'static str) -> Response {
-    (status, Json(serde_json::json!({ "text": text }))).into_response()
 }
 
 #[cfg(test)]

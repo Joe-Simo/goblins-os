@@ -5,5 +5,5 @@ Comment=OpenAI models, projects, usage, and developer controls
 Exec=/usr/libexec/goblins-os/goblins-os-open platform
 Categories=Development;Network;
 NoDisplay=false
-Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+Icon=org.goblins.OS.OpenAI.Platform
 StartupWMClass=org.goblins.OS.OpenAI.Platform

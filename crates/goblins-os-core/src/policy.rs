@@ -271,7 +271,12 @@ fn persist_policy(profile: PolicyProfile) -> std::io::Result<()> {
         profile,
         configured_at: format!("{:?}", SystemTime::now()),
     })?;
-    fs::write(path, body)
+    // Write to a sibling temp file then rename onto the final path, so a crash or
+    // concurrent overwrite can never leave a truncated profile.json — which would
+    // parse to None and silently fail open to the most permissive Consumer profile.
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, body)?;
+    fs::rename(tmp, path)
 }
 
 fn persist_permission_grant(grant: PolicyPermissionGrant) -> std::io::Result<()> {
@@ -287,7 +292,11 @@ fn persist_permission_grant(grant: PolicyPermissionGrant) -> std::io::Result<()>
     });
     stored.grants.push(grant);
     let body = serde_json::to_vec(&stored)?;
-    fs::write(path, body)
+    // Atomic temp+rename so a torn write can never corrupt permissions.json (which
+    // would silently re-prompt every grant).
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, body)?;
+    fs::rename(tmp, path)
 }
 
 fn create_state_dir(path: &Path) -> std::io::Result<()> {

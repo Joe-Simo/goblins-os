@@ -6,7 +6,7 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::Path,
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     thread,
     time::SystemTime,
 };
@@ -478,7 +478,7 @@ pub async fn prepare_install(
             InstallPrepareState::Blocked,
             command,
             Some(target),
-            "Goblins OS could not start the disk installer. No disk was changed.",
+            "Goblins OS could not start the disk installer and stopped the install.",
         );
     }
 
@@ -1652,16 +1652,38 @@ fn spawn_bootc_install(command: &[String]) -> std::io::Result<()> {
             .spawn(move || pump_install_output(stderr));
     }
 
-    thread::Builder::new()
+    // The waiter owns the destructive child. If its thread cannot be spawned we must
+    // not leak that child: a dropped `Child` does NOT kill the process, so bootc would
+    // keep rewriting the disk with no one ever observing completion. Share the child so
+    // the error path can reap it before returning.
+    let child = Arc::new(Mutex::new(child));
+    let waiter_child = Arc::clone(&child);
+    let spawned = thread::Builder::new()
         .name("goblins-bootc-wait".to_string())
         .spawn(move || {
-            let succeeded = child.wait().map(|status| status.success()).unwrap_or(false);
+            let succeeded = waiter_child
+                .lock()
+                .ok()
+                .and_then(|mut child| child.wait().ok())
+                .map(|status| status.success())
+                .unwrap_or(false);
             set_install_state(if succeeded {
                 InstallProgressState::Succeeded
             } else {
                 InstallProgressState::Failed
             });
-        })?;
+        });
+
+    if let Err(error) = spawned {
+        // Kill the already-spawned bootc child and reap it (kill alone leaves a zombie)
+        // so no orphaned destructive install survives this error path; only then is it
+        // safe for the caller to release the install slot.
+        if let Ok(mut child) = child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        return Err(error);
+    }
 
     Ok(())
 }

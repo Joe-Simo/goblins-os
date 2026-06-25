@@ -5,5 +5,5 @@ Comment=OpenAI speech and low-latency multimodal interface
 Exec=/usr/libexec/goblins-os/goblins-os-open voice-realtime
 Categories=AudioVideo;Network;
 NoDisplay=false
-Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+Icon=org.goblins.OS.OpenAI.VoiceRealtime
 StartupWMClass=org.goblins.OS.OpenAI.VoiceRealtime

@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -70,20 +71,6 @@ pub struct AiActionHistoryEvent {
     confirmation: AiConfirmation,
     occurred_at: u64,
     detail: String,
-}
-
-#[derive(Deserialize)]
-pub struct RecordAiActionRequest {
-    action_id: String,
-    outcome: AiActionOutcome,
-    entrypoint: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct RecordAiActionResponse {
-    ok: bool,
-    text: String,
-    event: Option<AiActionHistoryEvent>,
 }
 
 #[derive(Deserialize)]
@@ -304,30 +291,6 @@ pub async fn ai_action_catalog() -> Json<AiActionCatalog> {
 
 pub async fn ai_action_history() -> Json<AiActionHistory> {
     Json(build_ai_action_history())
-}
-
-pub async fn record_ai_action_history(
-    Json(request): Json<RecordAiActionRequest>,
-) -> (StatusCode, Json<RecordAiActionResponse>) {
-    match append_ai_action_history(&request.action_id, request.entrypoint.as_deref(), request.outcome)
-    {
-        Ok(event) => (
-            StatusCode::OK,
-            Json(RecordAiActionResponse {
-                ok: true,
-                text: "Goblins AI action recorded without prompt, response, screen, file, or secret content.".to_string(),
-                event: Some(event),
-            }),
-        ),
-        Err(detail) => (
-            StatusCode::BAD_REQUEST,
-            Json(RecordAiActionResponse {
-                ok: false,
-                text: detail,
-                event: None,
-            }),
-        ),
-    }
 }
 
 pub async fn ask_file_context(
@@ -2127,6 +2090,14 @@ fn build_ai_action_history() -> AiActionHistory {
     }
 }
 
+/// Serializes the audit-history read-modify-write so concurrent action handlers (axum
+/// serves requests on a multi-thread runtime) cannot lose or corrupt events through an
+/// interleaved read -> insert -> truncate -> persist cycle.
+fn history_write_lock() -> &'static Mutex<()> {
+    static HISTORY_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    HISTORY_WRITE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn append_ai_action_history(
     action_id: &str,
     entrypoint: Option<&str>,
@@ -2138,6 +2109,12 @@ fn append_ai_action_history(
         .ok_or_else(|| {
             "Unknown Goblins AI action id; history only records registered OS actions.".to_string()
         })?;
+    // Hold the process-global lock across the whole read-modify-write so two overlapping
+    // requests cannot both read the same prior state and have the second writer drop the
+    // first writer's event.
+    let _guard = history_write_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = ai_history_path();
     let mut stored = read_ai_action_history(&path);
     let event = action_history_event(action, entrypoint, outcome);
@@ -2239,12 +2216,16 @@ fn persist_ai_action_history(path: &Path, stored: &StoredAiActionHistory) -> std
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(parent, fs::Permissions::from_mode(0o750))?;
     }
-    fs::write(path, serde_json::to_vec(stored)?)?;
+    // Write to a sibling temp file and rename onto the final path so a reader (or a
+    // crash mid-write) can never observe a partially written history file.
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_vec(stored)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o640))?;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o640))?;
     }
+    fs::rename(&tmp, path)?;
     Ok(())
 }
 

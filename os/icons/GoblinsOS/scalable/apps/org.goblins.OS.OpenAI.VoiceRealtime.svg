@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="voiceTile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2c30"/>
+      <stop offset="1" stop-color="#141417"/>
+    </linearGradient>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="208" fill="url(#voiceTile)"/>
+  <rect x="97" y="97" width="830" height="830" rx="207" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="2"/>
+  <rect x="120" y="120" width="784" height="392" rx="184" fill="#ffffff" fill-opacity="0.04"/>
+  <!-- Voice + realtime: a live audio waveform — five capsule bars at speaking heights. -->
+  <g fill="#f5f5f4" stroke="none">
+    <rect x="316" y="456" width="44" height="112" rx="22"/>
+    <rect x="404" y="392" width="44" height="240" rx="22"/>
+    <rect x="492" y="320" width="44" height="384" rx="22"/>
+    <rect x="580" y="392" width="44" height="240" rx="22" fill-opacity="0.92"/>
+    <rect x="668" y="456" width="44" height="112" rx="22" fill-opacity="0.92"/>
+  </g>
+</svg>

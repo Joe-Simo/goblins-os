@@ -255,7 +255,7 @@ fn run_native_login(config: LoginConfig, state: LoginState) -> LoginResult<()> {
             .default_height(820)
             .build();
 
-        window.set_child(Some(&build_login(app, &config, &state)));
+        window.set_child(Some(&build_login(app, &window, &config, &state)));
         window.fullscreen();
         window.present();
     });
@@ -265,7 +265,12 @@ fn run_native_login(config: LoginConfig, state: LoginState) -> LoginResult<()> {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState) -> gtk4::Box {
+fn build_login(
+    app: &gtk4::Application,
+    window: &gtk4::ApplicationWindow,
+    config: &LoginConfig,
+    state: &LoginState,
+) -> gtk4::Box {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
@@ -284,19 +289,20 @@ fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState
     top.append(&spacer());
     root.append(&top);
 
-    let body = gtk::Box::new(gtk::Orientation::Horizontal, 14);
-    body.add_css_class("gos-login-body");
-
+    // macOS login idiom: a single centered identity column over the canvas,
+    // not a two-column dashboard. The night-gradient identity card is the hero;
+    // readiness folds in below the primary action as quiet supporting context.
     let identity = gtk::Box::new(gtk::Orientation::Vertical, 18);
     identity.add_css_class("gos-identity-panel");
     identity.set_size_request(460, -1);
+    identity.set_halign(gtk::Align::Center);
     // The identity hero keeps the white mark in both schemes (its card is the
-    // night gradient regardless of theme), left-aligned with the hero copy.
+    // night gradient regardless of theme), centered above the hero copy.
     let hero_mark = goblins_os_ui::brand_mark(goblins_os_design::OPENAI_MARK_LIGHT, 56);
-    hero_mark.set_halign(gtk::Align::Start);
+    hero_mark.set_halign(gtk::Align::Center);
     identity.append(&hero_mark);
-    identity.append(&label("OpenAI account", &["gos-kicker"]));
-    identity.append(&label(
+    identity.append(&centered_label("OpenAI account", &["gos-kicker"]));
+    identity.append(&centered_label(
         if auth_authenticated {
             "Ready"
         } else if auth_configured {
@@ -306,7 +312,7 @@ fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState
         },
         &["gos-hero-title"],
     ));
-    identity.append(&label(
+    identity.append(&centered_label(
         state
             .gate
             .as_ref()
@@ -315,14 +321,19 @@ fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState
         &["gos-hero-copy"],
     ));
 
-    let feedback = label(
-        "Session is locked by the local OS identity gate.",
+    let feedback = centered_label(
+        &state
+            .gate
+            .as_ref()
+            .map(session_gate_summary)
+            .unwrap_or_else(|| "Waiting for local OS services.".to_string()),
         &["gos-feedback"],
     );
 
     // A state ("OpenAI sign-in is not set up yet" / "OpenAI account ready") is a status line,
     // never button chrome — only a real action gets a button.
-    if auth_configured && !auth_authenticated {
+    let sign_in_built = auth_configured && !auth_authenticated;
+    if sign_in_built {
         let sign_in = button("Sign in with OpenAI", &["gos-primary-action"]);
         let core_url = config.core_url.clone();
         let feedback = feedback.clone();
@@ -344,7 +355,7 @@ fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState
         });
         identity.append(&sign_in);
     } else {
-        identity.append(&label(
+        identity.append(&centered_label(
             if auth_authenticated {
                 "OpenAI account ready."
             } else {
@@ -418,35 +429,80 @@ fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState
         identity.append(&unlock_local);
         identity.append(&unlock_openai);
     }
-    identity.append(&feedback);
-    body.append(&identity);
 
-    let state_panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    state_panel.add_css_class("gos-state-panel");
-    state_panel.set_size_request(380, -1);
-    // Size the readiness rail to its 3 short rows instead of Fill-stretching to
-    // the taller dark identity hero. `body` already sits in a vexpand+valign:Center
-    // box, so a centered compact card reads as deliberately balanced against the
-    // hero rather than top-anchored against a tall empty void.
-    state_panel.set_valign(gtk::Align::Center);
-    state_panel.append(&label("Desktop readiness", &["gos-kicker"]));
-    match &state.gate {
-        Some(gate) => {
-            let gate_summary = session_gate_summary(gate);
-            state_panel.append(&system_row("Desktop access", &gate_summary));
-            state_panel.append(&system_row(
-                "First run",
-                if gate.first_boot_mode.is_some() {
-                    "Setup is complete for this desktop."
-                } else {
-                    "Setup will finish before the desktop opens."
-                },
-            ));
-        }
-        None => state_panel.append(&system_row(
-            "Desktop access",
-            "Waiting for local OS services.",
-        )),
+    // Guarantee a live way forward. When local OS services never came up (or every
+    // unlock path is gated), none of the buttons above is sensitive: there is no
+    // sign-in, no authenticated OpenAI unlock, and no local unlock. Without an
+    // always-live control the user is stranded on an inert screen. "Try again"
+    // re-probes local OS services on a worker thread and rebuilds the panels.
+    if !sign_in_built && !auth_authenticated && !local_available {
+        let retry = button("Try again", &["gos-primary-action"]);
+        let app_handle = app.clone();
+        let window_handle = window.clone();
+        let config = config.clone();
+        let feedback = feedback.clone();
+        retry.connect_clicked(move |retry| {
+            retry.set_sensitive(false);
+            feedback.set_text("Reconnecting to local OS services.");
+
+            // The /health, auth, and gate fetches each block up to ~1.2s, so run
+            // them off the GTK main loop and marshal the result back via a channel
+            // polled with rx.try_recv() — mirroring the launcher worker pattern.
+            let (tx, rx) = std::sync::mpsc::channel::<LoginState>();
+            let worker_config = config.clone();
+            thread::spawn(move || {
+                let core_ready = wait_for_core(&worker_config.core_url, worker_config.core_wait);
+                let _ = tx.send(load_login_state(&worker_config, core_ready));
+            });
+
+            let app_handle = app_handle.clone();
+            let window_handle = window_handle.clone();
+            let config = config.clone();
+            let retry = retry.clone();
+            let feedback = feedback.clone();
+            gtk::glib::timeout_add_local(Duration::from_millis(90), move || match rx.try_recv() {
+                Ok(next_state) => {
+                    window_handle.set_child(Some(&build_login(
+                        &app_handle,
+                        &window_handle,
+                        &config,
+                        &next_state,
+                    )));
+                    gtk::glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    retry.set_sensitive(true);
+                    feedback.set_text("Could not reach local OS services. Try again.");
+                    gtk::glib::ControlFlow::Break
+                }
+            });
+        });
+        identity.append(&retry);
+    }
+
+    identity.append(&feedback);
+
+    // Readiness is folded into the centered column as a quiet, single-column block
+    // BELOW the primary action — supporting context, not a co-equal 380px rail.
+    // It reads as muted night-foreground facts under a hairline, never a second
+    // bright panel competing with the hero. The honest gate states are kept.
+    let readiness = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    readiness.add_css_class("gos-login-readiness");
+    readiness.set_margin_top(8);
+    // The hero feedback line above already states desktop-access status
+    // (session_gate_summary), so the readiness block stays tight and
+    // non-duplicative: just first-run and account sign-in facts.
+    readiness.append(&centered_label("Session checks", &["gos-kicker"]));
+    if let Some(gate) = &state.gate {
+        readiness.append(&readiness_fact(
+            "First run",
+            if gate.first_boot_mode.is_some() {
+                "Setup is complete for this desktop."
+            } else {
+                "Setup will finish before the desktop opens."
+            },
+        ));
     }
     match &state.auth {
         Some(auth) => {
@@ -457,33 +513,40 @@ fn build_login(app: &gtk4::Application, config: &LoginConfig, state: &LoginState
             } else {
                 "Sign-in setup is incomplete; local-only desktop access remains available."
             };
-            state_panel.append(&system_row("OpenAI sign-in", secure_account_copy));
+            readiness.append(&readiness_fact("OpenAI sign-in", secure_account_copy));
         }
-        None => state_panel.append(&system_row("OpenAI sign-in", "Waiting for account state.")),
+        None => readiness.append(&readiness_fact(
+            "OpenAI sign-in",
+            "Waiting for account state.",
+        )),
     }
-    body.append(&state_panel);
-    body.set_halign(gtk::Align::Center);
+    identity.append(&readiness);
 
-    // Center the sign-in cluster in the viewport so first boot reads as a calm,
-    // intentional hero rather than a top-left-packed dashboard.
+    // Center the single identity column in the viewport so first boot reads as a
+    // calm, intentional macOS-style login rather than a top-left-packed dashboard.
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
     center.set_vexpand(true);
     center.set_valign(gtk::Align::Center);
-    center.append(&body);
+    center.set_halign(gtk::Align::Center);
+    center.append(&identity);
     root.append(&center);
     root
 }
 
+// A single readiness fact, styled for the night identity card: a white title line
+// (default night foreground) over muted supporting copy, centered and stacked. It
+// reads as a quiet supporting fact in the centered column, never a bright light row
+// competing with the hero — so no light `.gos-row` fill on the night gradient.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn system_row(title: &str, detail: &str) -> gtk4::Box {
+fn readiness_fact(title: &str, detail: &str) -> gtk4::Box {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
-    let row = gtk::Box::new(gtk::Orientation::Vertical, 3);
-    row.add_css_class("gos-row");
-    row.append(&label(title, &["gos-row-title"]));
-    row.append(&label(detail, &["gos-row-copy"]));
-    row
+    let fact = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    fact.add_css_class("gos-login-fact");
+    fact.append(&centered_label(title, &["gos-identity-note"]));
+    fact.append(&centered_label(detail, &["gos-feedback"]));
+    fact
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -498,6 +561,20 @@ fn label(text: &str, classes: &[&str]) -> gtk4::Label {
         label.add_css_class(class);
     }
 
+    label
+}
+
+// A centered variant of `label` for the single macOS-style identity column: the
+// text and its wrap both center instead of left-anchoring, so multi-line copy
+// stays balanced under the hero.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn centered_label(text: &str, classes: &[&str]) -> gtk4::Label {
+    use gtk4::prelude::*;
+
+    let label = label(text, classes);
+    label.set_xalign(0.5);
+    label.set_halign(gtk4::Align::Center);
+    label.set_justify(gtk4::Justification::Center);
     label
 }
 
@@ -600,9 +677,19 @@ fn openai_login_destination_from_response(
         return Err(CoreFetchError::Status(response.status));
     }
 
-    header_value(&response.headers, "location")
-        .map(ToString::to_string)
-        .ok_or(CoreFetchError::Malformed)
+    let destination =
+        header_value(&response.headers, "location").ok_or(CoreFetchError::Malformed)?;
+    // The account handoff must be HTTPS: never hand a file://, plain http://, or
+    // custom-scheme Location to the desktop's default URI handler.
+    let scheme = destination
+        .split_once("://")
+        .map(|(scheme, _)| scheme)
+        .ok_or(CoreFetchError::Malformed)?;
+    if !scheme.eq_ignore_ascii_case("https") {
+        return Err(CoreFetchError::Malformed);
+    }
+
+    Ok(destination.to_string())
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -787,6 +874,23 @@ mod tests {
             openai_login_destination_from_response(&response),
             Ok("https://auth.openai.example/start".to_string())
         );
+    }
+
+    #[test]
+    fn rejects_non_https_login_redirect() {
+        for location in ["http://evil.example/start", "file:///etc/passwd"] {
+            let response = HttpResponse {
+                status: 302,
+                headers: vec![("location".to_string(), location.to_string())],
+                body: Vec::new(),
+            };
+
+            assert_eq!(
+                openai_login_destination_from_response(&response),
+                Err(CoreFetchError::Malformed),
+                "non-https Location must be rejected: {location}"
+            );
+        }
     }
 
     #[test]

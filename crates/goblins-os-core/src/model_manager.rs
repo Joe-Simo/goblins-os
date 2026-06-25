@@ -17,6 +17,8 @@ use std::{
 };
 use sysinfo::{Disks, System};
 
+use crate::http_error::error_response;
+
 const GIB: u64 = 1024 * 1024 * 1024;
 const MAX_MODEL_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 /// Free space the model store must keep beyond the download itself so the OS
@@ -941,10 +943,6 @@ fn executable_exists(binary: &str) -> bool {
     };
 
     env::split_paths(&paths).any(|path| path.join(binary).is_file())
-}
-
-fn error_response(status: StatusCode, text: &'static str) -> Response {
-    (status, Json(serde_json::json!({ "text": text }))).into_response()
 }
 
 #[cfg(test)]

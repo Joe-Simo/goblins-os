@@ -3,6 +3,5 @@
   "name": "Goblins Dock",
   "description": "The Goblins OS dock — a calm bottom dock of pinned surfaces and running apps. Overview-independent, so it works in the minimal goblins-os session mode.",
   "shell-version": ["46", "47", "48", "49", "50"],
-  "session-modes": ["user", "goblins-os"],
-  "settings-schema": ""
+  "session-modes": ["user", "goblins-os"]
 }

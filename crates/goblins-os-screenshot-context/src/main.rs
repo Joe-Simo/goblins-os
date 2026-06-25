@@ -164,9 +164,7 @@ fn decode_uri_path(encoded: &str) -> PathBuf {
 fn screenshot_dir() -> io::Result<PathBuf> {
     let base = env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            env::temp_dir().join(format!("goblins-os-screenshot-context-{}", safe_user()))
-        });
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is not set"))?;
     let dir = base.join("goblins-os").join("screenshot-context");
     fs::create_dir_all(&dir)?;
     set_private_permissions(&dir)?;
@@ -202,21 +200,6 @@ fn capture_failure_summary(detail: &str) -> String {
     format!(
         "Screenshot capture did not complete. Describe the screenshot or paste recognized text, then press Return. No pixels were sent to the model. Capture detail: {detail}"
     )
-}
-
-fn safe_user() -> String {
-    let value = env::var("USER").unwrap_or_else(|_| "user".to_string());
-    let safe = sanitize_context_value(&value, 48)
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string();
-    if safe.is_empty() {
-        "user".to_string()
-    } else {
-        safe
-    }
 }
 
 fn sanitize_context_value(value: &str, max_chars: usize) -> String {

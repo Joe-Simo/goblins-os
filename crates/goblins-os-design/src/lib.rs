@@ -145,9 +145,9 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_material_hover      rgba(0, 0, 0, 0.05);
 @define-color gos_material_active     rgba(0, 0, 0, 0.09);
 
-@define-color gos_primary_top         rgba(0, 136, 255, 1);
-@define-color gos_primary_bottom      rgba(0, 120, 240, 1);
-@define-color gos_primary_border      rgba(0, 92, 190, 0.48);
+@define-color gos_primary_top         rgba(0, 122, 255, 1);
+@define-color gos_primary_bottom      rgba(0, 122, 255, 1);
+@define-color gos_primary_border      rgba(0, 92, 190, 0.36);
 @define-color gos_on_primary          #ffffff;
 
 @define-color gos_studio_bg           #ffffff;
@@ -292,9 +292,9 @@ const DARK_TOKENS: &str = r#"
 
 /* Dark primary CTAs use the kit's dark blue, matching the same system action
    role as light mode. */
-@define-color gos_primary_top         rgba(0, 145, 255, 1);
-@define-color gos_primary_bottom      rgba(10, 153, 255, 1);
-@define-color gos_primary_border      rgba(92, 184, 255, 0.46);
+@define-color gos_primary_top         rgba(10, 132, 255, 1);
+@define-color gos_primary_bottom      rgba(10, 132, 255, 1);
+@define-color gos_primary_border      rgba(92, 184, 255, 0.34);
 @define-color gos_on_primary          #ffffff;
 
 @define-color gos_studio_bg           #1e1e1e;
@@ -660,13 +660,13 @@ window.gos-windowed .gos-root {
 
 .gos-primary-action {
   color: @gos_on_primary;
-  background: linear-gradient(180deg, @gos_primary_top, @gos_primary_bottom);
+  background: @gos_primary_top;
   border: 1px solid @gos_primary_border;
-  box-shadow: 0 6px 16px rgba(13, 13, 12, 0.16);
+  box-shadow: 0 1px 2px rgba(13, 13, 12, 0.12);
 }
 
 .gos-primary-action:hover {
-  box-shadow: 0 10px 24px rgba(13, 13, 12, 0.20);
+  box-shadow: 0 2px 6px rgba(13, 13, 12, 0.16);
 }
 
 /* Night-surface primary actions use the same system-blue action role. */
@@ -675,19 +675,19 @@ window.gos-windowed .gos-root {
 .gos-session-lock .gos-primary-action,
 .gos-hero-panel .gos-primary-action {
   color: #ffffff;
-  background: linear-gradient(180deg, @gos_primary_top, @gos_primary_bottom);
+  background: @gos_primary_top;
   border: 1px solid @gos_primary_border;
-  box-shadow: 0 8px 20px rgba(0, 92, 190, 0.20);
+  box-shadow: 0 1px 3px rgba(0, 40, 100, 0.24);
 }
 
 .gos-secondary-action {
   color: @gos_on_night;
   border: 1px solid @gos_on_night_hairline;
-  background: rgba(250, 249, 246, 0.06);
+  background: alpha(@gos_on_night, 0.06);
 }
 
 .gos-secondary-action:hover {
-  background: rgba(250, 249, 246, 0.12);
+  background: alpha(@gos_on_night, 0.12);
 }
 
 .gos-local-action,
@@ -706,7 +706,7 @@ window.gos-windowed .gos-root {
 
 .gos-mode-selected {
   color: @gos_on_primary;
-  background: linear-gradient(180deg, @gos_primary_top, @gos_primary_bottom);
+  background: @gos_primary_top;
   border: 1px solid @gos_primary_border;
 }
 
@@ -793,9 +793,7 @@ switch.gos-switch:focus:focus-visible {
 /* Tabular figures so numeric value/measurement columns align like macOS instead
    of drifting with proportional digits. */
 .gos-install-row-value,
-.gos-row-value,
-.gos-studio-diff-add,
-.gos-studio-diff-del {
+.gos-row-value {
   font-feature-settings: "tnum" 1;
 }
 
@@ -822,7 +820,7 @@ switch.gos-switch:focus:focus-visible {
 
 .gos-model-unavailable {
   opacity: 0.6;
-  border: 1px solid rgba(140, 58, 46, 0.2);
+  border: 1px solid alpha(@gos_blocked, 0.2);
 }
 
 /* ── Resident strip + stage ──────────────────────────────────────────── */
@@ -886,9 +884,9 @@ button:active {
 .gos-onboarding-title {
   margin-bottom: 18px;
   color: @gos_ink;
-  font-size: 48px;
-  font-weight: 700;
-  letter-spacing: 0;
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
 }
 
 .gos-onboarding-subtitle {
@@ -899,25 +897,25 @@ button:active {
 
 .gos-onboarding-primary {
   min-width: 340px;
-  min-height: 54px;
+  min-height: 52px;
   margin-bottom: 12px;
   padding: 0 30px;
-  border-radius: 13px;
+  border-radius: 12px;
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 600;
   color: @gos_on_primary;
-  background: linear-gradient(180deg, @gos_primary_top, @gos_primary_bottom);
+  background: @gos_primary_top;
   border: 1px solid @gos_primary_border;
-  box-shadow: 0 7px 18px rgba(13, 13, 12, 0.17);
+  box-shadow: 0 1px 2px rgba(13, 13, 12, 0.12);
 }
 
 .gos-onboarding-primary:hover {
-  box-shadow: 0 10px 24px rgba(13, 13, 12, 0.21);
+  box-shadow: 0 2px 7px rgba(13, 13, 12, 0.16);
 }
 
 .gos-onboarding-primary:focus:focus-visible {
   box-shadow: 0 0 0 3px @gos_focus,
-              0 8px 20px rgba(13, 13, 12, 0.22);
+              0 2px 7px rgba(13, 13, 12, 0.16);
 }
 
 /* The one irreversible action in the OS — "Erase disk and install" — must NOT read
@@ -1031,9 +1029,9 @@ button:active {
 
 .gos-home-headline {
   color: @gos_ink;
-  font-size: 38px;
-  font-weight: 700;
-  letter-spacing: 0;
+  font-size: 36px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
 }
 
 .gos-home-sub {
@@ -1089,7 +1087,7 @@ button:active {
   padding: 0 22px;
   border-radius: 12px;
   color: @gos_on_primary;
-  background: linear-gradient(180deg, @gos_primary_top, @gos_primary_bottom);
+  background: @gos_primary_top;
   border: 1px solid @gos_primary_border;
   font-size: 15px;
   font-weight: 700;
@@ -1112,7 +1110,7 @@ button:active {
 
 .gos-home-field .gos-home-build:hover {
   box-shadow: none;
-  background: linear-gradient(180deg, @gos_primary_top, @gos_primary_bottom);
+  background: @gos_primary_top;
   opacity: 0.92;
 }
 
@@ -1227,6 +1225,12 @@ button:active {
 .gos-detail-body {
   color: @gos_ink;
   font-size: 15px;
+}
+
+/* The rendered Markdown plan reads as a document — give multi-paragraph prose
+   its own leading so headings, bullets, and paragraphs breathe. */
+.gos-prose {
+  line-height: 1.5;
 }
 
 /* Three-dot "thinking" pulse shown while the on-device model is working. The
@@ -1545,20 +1549,6 @@ button:active {
   font-size: 12px;
 }
 
-.gos-studio-diff-add {
-  color: @gos_studio_diff_add;
-  font-family: monospace;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.gos-studio-diff-del {
-  color: @gos_studio_diff_del;
-  font-family: monospace;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 /* Composer: the input with a model/reasoning/mode/access control row and a round
    send button. The model picker is our engine switch. */
 .gos-studio-composer {
@@ -1681,9 +1671,9 @@ button:active {
 .gos-net-title {
   margin-bottom: 16px;
   color: @gos_ink;
-  font-size: 42px;
-  font-weight: 700;
-  letter-spacing: 0;
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
 }
 
 .gos-net-status-label {
@@ -1740,7 +1730,7 @@ button:active {
 }
 
 .gos-net-row.gos-blocked-soft {
-  border: 1px solid rgba(140, 58, 46, 0.2);
+  border: 1px solid alpha(@gos_blocked, 0.2);
   color: @gos_blocked;
 }
 
@@ -1846,14 +1836,23 @@ button:active {
    both Light and Dark — the first-boot person always sees what they picked. */
 .gos-setup-choice-selected {
   border: 1px solid @gos_accent;
-  background: @gos_surface;
+  background: alpha(@gos_accent, 0.10);
   box-shadow: 0 0 0 3px @gos_focus, 0 1px 0 @gos_panel_sheen inset;
 }
 
 .gos-setup-choice-selected:hover {
   border: 1px solid @gos_accent;
-  background: @gos_surface;
+  background: alpha(@gos_accent, 0.12);
   box-shadow: 0 0 0 3px @gos_focus, 0 8px 20px @gos_shadow_raise;
+}
+
+/* Trailing checkmark on the chosen Appearance/Accessibility setup card. Shown on
+   exactly the selected card (toggled in select_one) so single-select reads clearly
+   in both schemes, alongside the accent-tinted fill above. */
+.gos-setup-choice-check {
+  color: @gos_accent;
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .gos-setup-first-app-entry {
@@ -1909,7 +1908,7 @@ button:active {
    than a flat opacity — opacity dimmed the disqualifying reason below legibility.
    The reason itself (.gos-install-disk-state.is-blocked) stays full-strength red. */
 .gos-install-disk.is-blocked {
-  border: 1px solid rgba(140, 58, 46, 0.2);
+  border: 1px solid alpha(@gos_blocked, 0.2);
   background: @gos_surface_muted;
 }
 
@@ -2253,6 +2252,7 @@ button:active {
   font-size: 20px;
   font-weight: 700;
   letter-spacing: 0;
+  font-feature-settings: "tnum" 1;
 }
 .gos-launcher-row.is-selected .gos-launcher-answer { color: @gos_ink; }
 
@@ -2302,6 +2302,8 @@ button:active {
   border-radius: 16px;
   border: 1px solid @gos_material_border;
   background: @gos_material_ultra_thin;
+  box-shadow: 0 1px 2px rgba(13, 13, 12, 0.06),
+              inset 0 0 0 1px alpha(@gos_material_sheen, 0.30);
   transition: background 140ms cubic-bezier(0.32, 0.72, 0, 1),
               border 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
@@ -2321,7 +2323,7 @@ button:active {
   box-shadow: 0 1px 0 alpha(@gos_material_sheen, 0.46) inset,
               inset 0 0 0 1px alpha(@gos_primary_border, 0.58);
 }
-.gos-cc-tile-glyph { font-size: 18px; color: @gos_ink_secondary; }
+.gos-cc-tile-glyph { color: @gos_ink_secondary; }
 .gos-cc-tile.is-on .gos-cc-tile-glyph { color: @gos_accent; }
 .gos-cc-tile-label { color: @gos_ink; font-size: 13px; font-weight: 600; }
 .gos-cc-tile.is-on .gos-cc-tile-label { color: @gos_ink; }
@@ -2359,7 +2361,7 @@ button:active {
 
 /* Slider rows — sound + brightness; the GtkScale themes to the system-blue track. */
 .gos-cc-slider-row { padding: 8px 4px; }
-.gos-cc-slider-glyph { font-size: 16px; color: @gos_ink_secondary; min-width: 22px; }
+.gos-cc-slider-glyph { color: @gos_ink_secondary; min-width: 22px; }
 .gos-cc-slider-row scale trough {
   min-height: 6px;
   border-radius: 999px;
@@ -2415,7 +2417,7 @@ button:active {
   background-color: @gos_surface_muted;
   border: 1px solid @gos_material_border;
   border-radius: 11px;
-  box-shadow: none;
+  box-shadow: 0 1px 2px rgba(13, 13, 12, 0.05);
   font-size: 12px;
   font-weight: 600;
 }

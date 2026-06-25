@@ -195,7 +195,6 @@ struct NetworkStatus {
 struct ActiveConnection {
     name: String,
     kind: String,
-    device: String,
 }
 
 #[cfg_attr(
@@ -618,12 +617,24 @@ struct SoundPreferenceOutcome {
 }
 
 /// Codex CLI (the user's OpenAI account) status from Goblins OS. The GUI mirrors
-/// install/sign-in state and triggers `codex login`; credentials stay with Codex.
+/// install/sign-in state and asks the core to start `codex login`; the credential
+/// stays with Codex under the service-owned CODEX_HOME — the session never sees it.
 #[derive(Clone, Deserialize)]
 struct CodexStatus {
     installed: bool,
     authenticated: bool,
     detail: String,
+}
+
+/// The browser sign-in URL the core captured from `codex login`. Booleans + a URL
+/// only — never a credential.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone, Deserialize)]
+struct CodexLoginUrl {
+    #[serde(default)]
+    authenticated: bool,
+    #[serde(default)]
+    auth_url: Option<String>,
 }
 
 /// Local-voice capability from Goblins OS, mirrored read-only in Settings.
@@ -2995,7 +3006,7 @@ fn settings_state_debug_summary(state: &SettingsState) -> String {
                 network
                     .active
                     .as_ref()
-                    .map(|active| format!("{}:{}:{}", active.name, active.kind, active.device))
+                    .map(|active| format!("{}:{}", active.name, active.kind))
                     .unwrap_or_else(|| "none".to_string())
             )
         })
@@ -4249,51 +4260,63 @@ fn build_overview(panel: &gtk4::Box, state: &SettingsState) {
     panel.append(&label("Goblins OS status", &["gos-subsection-title"]));
     append_overview_summary(panel, state);
 
-    panel.append(&label("Diagnostics", &["gos-subsection-title"]));
     match &state.system {
         Some(system) => {
-            panel.append(&system_row("Desktop", &desktop_session_detail(system)));
-            panel.append(&system_row(
-                "OpenAI identity",
-                if system.identity.account_authenticated {
-                    "Signed in — your OpenAI account session is held in OS-owned secure storage."
-                } else if system.identity.provider_configured {
-                    "Provider configured — sign in to connect your OpenAI account."
-                } else {
-                    "Not connected — Goblins OS runs local-only until an OpenAI account is configured."
-                },
-            ));
-            panel.append(&system_row(
-                "Local model storage",
-                "Model cache and private credential storage are managed by Goblins OS.",
-            ));
-            panel.append(&system_row(
-                "Session readiness",
-                "Session and setup state are checked before protected actions are enabled.",
-            ));
-            panel.append(&system_row(
-                "Policy state",
-                &state
-                    .policy
-                    .as_ref()
-                    .map(policy_profile_summary_detail)
-                    .unwrap_or_else(|| "Waiting for policy status.".to_string()),
-            ));
-            panel.append(&system_row(
-                "System services",
-                &format!(
-                    "System image {} · Health checks {} · Network {}",
-                    ready_word(system.services.bootc_available),
-                    ready_word(system.services.systemctl_available),
-                    ready_word(system.services.network_manager_available)
-                ),
-            ));
-            panel.append(&system_row(
-                "Detailed diagnostics",
-                "Diagnostics keeps service health, logs, update history, and device status available without exposing secrets.",
-            ));
+            // Diagnostics are a clean grouped list of read-only facts, not a
+            // stack of floating dashboard cards: one inset card with hairline
+            // dividers between rows.
+            append_preference_group(
+                panel,
+                "Diagnostics",
+                vec![
+                    system_row("Desktop", &desktop_session_detail(system)),
+                    system_row(
+                        "OpenAI identity",
+                        if system.identity.account_authenticated {
+                            "Signed in — your OpenAI account session is held in OS-owned secure storage."
+                        } else if system.identity.provider_configured {
+                            "Provider configured — sign in to connect your OpenAI account."
+                        } else {
+                            "Not connected — Goblins OS runs local-only until an OpenAI account is configured."
+                        },
+                    ),
+                    system_row(
+                        "Local model storage",
+                        "Model cache and private credential storage are managed by Goblins OS.",
+                    ),
+                    system_row(
+                        "Session readiness",
+                        "Session and setup state are checked before protected actions are enabled.",
+                    ),
+                    system_row(
+                        "Policy state",
+                        &state
+                            .policy
+                            .as_ref()
+                            .map(policy_profile_summary_detail)
+                            .unwrap_or_else(|| "Waiting for policy status.".to_string()),
+                    ),
+                    system_row(
+                        "System services",
+                        &format!(
+                            "System image {} · Health checks {} · Network {}",
+                            ready_word(system.services.bootc_available),
+                            ready_word(system.services.systemctl_available),
+                            ready_word(system.services.network_manager_available)
+                        ),
+                    ),
+                    system_row(
+                        "Detailed diagnostics",
+                        "Diagnostics keeps service health, logs, update history, and device status available without exposing secrets.",
+                    ),
+                ],
+            );
         }
-        None => panel.append(&system_row("Goblins OS", "Waiting for system settings.")),
+        None => append_preference_group(
+            panel,
+            "Diagnostics",
+            vec![system_row("Goblins OS", "Waiting for system settings.")],
+        ),
     }
 }
 
@@ -4418,6 +4441,9 @@ fn append_overview_native_settings(panel: &gtk4::Box, state: &SettingsState) {
     }
     controls.append(&action);
     row.append(&controls);
+    if ready {
+        row.append(&nav_chevron());
+    }
     panel.append(&row);
 }
 
@@ -4712,7 +4738,7 @@ fn build_desktop_dock(panel: &gtk4::Box, state: &SettingsState) {
         (
             "Dock",
             dock_state.to_string(),
-            session_ready,
+            true,
             "The Goblins dock anchors favorites and running apps with the OS theme.".to_string(),
         ),
         (
@@ -4761,7 +4787,7 @@ fn build_menu_bar_control_center(panel: &gtk4::Box, state: &SettingsState) {
         (
             "Menu bar",
             bar_state.to_string(),
-            session_ready,
+            true,
             "The translucent top bar carries the Goblins mark, the clock, and system status menus.".to_string(),
         ),
         (
@@ -6025,7 +6051,7 @@ fn append_notifications_ai_context(panel: &gtk4::Box, state: &SettingsState) {
         None => health_row(
             "Ask Goblin about a notification",
             "checking",
-            false,
+            true,
             "Checking the OS action catalog before showing notification AI readiness.",
         ),
     };
@@ -6144,7 +6170,6 @@ fn build_users_accounts(panel: &gtk4::Box, state: &SettingsState) {
     let has_openai_action = append_openai_account_settings(panel, state, &feedback);
     panel.append(&label("Codex", &["gos-subsection-title"]));
     let has_codex_action = append_codex_settings(panel, state, &feedback);
-    panel.append(&label("Local User", &["gos-subsection-title"]));
     append_local_user_settings(panel, state);
     panel.append(&label("Desktop", &["gos-subsection-title"]));
     append_desktop_session_identity(panel, state);
@@ -6292,66 +6317,67 @@ fn append_openai_account_settings(
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_local_user_settings(panel: &gtk4::Box, state: &SettingsState) {
+    // The local-user facts are read-only, so they sit in one grouped inset card
+    // with hairline dividers rather than as separate floating dashboard cards.
+    let mut rows: Vec<gtk4::Box> = Vec::new();
     if let Some(system) = &state.system {
-        let Some(account) = system.local_account.as_ref() else {
-            panel.append(&system_row(
+        if let Some(account) = system.local_account.as_ref() {
+            let identity_ready = local_account_identity_ready(account);
+            // Until the local identity is populated, the detail rows would echo
+            // raw boot-transient values ("/root", "Unknown computer", an unknown
+            // login shell). Show a calm "still being read" line for those rows
+            // instead of leaking the placeholder, while keeping every honest row
+            // in place.
+            let pending = "Still being read.";
+            rows.push(system_row(
+                "Local account",
+                &local_account_identity_detail(account),
+            ));
+            rows.push(system_row(
+                "Account type",
+                &local_account_type_detail(account),
+            ));
+            rows.push(system_row(
+                "Home folder",
+                if identity_ready {
+                    &account.home
+                } else {
+                    pending
+                },
+            ));
+            rows.push(system_row(
+                "Login shell",
+                if identity_ready {
+                    &account.shell
+                } else {
+                    pending
+                },
+            ));
+            rows.push(system_row(
+                "Computer name",
+                if identity_ready {
+                    &account.hostname
+                } else {
+                    pending
+                },
+            ));
+        } else {
+            rows.push(system_row(
                 "Local account",
                 "Waiting for local account status.",
             ));
-            panel.append(&system_row(
-                "User management",
-                "Read-only until secure account actions are available. Creating users, changing passwords, and changing administrator rights stay disabled for now.",
-            ));
-            return;
-        };
-        let identity_ready = local_account_identity_ready(account);
-        // Until the local identity is populated, the detail rows would echo raw
-        // boot-transient values ("/root", "Unknown computer", an unknown login
-        // shell). Show a calm "still being read" line for those rows instead of
-        // leaking the placeholder, while keeping every honest row in place.
-        let pending = "Still being read.";
-        panel.append(&system_row(
-            "Local account",
-            &local_account_identity_detail(account),
-        ));
-        panel.append(&system_row(
-            "Account type",
-            &local_account_type_detail(account),
-        ));
-        panel.append(&system_row(
-            "Home folder",
-            if identity_ready {
-                &account.home
-            } else {
-                pending
-            },
-        ));
-        panel.append(&system_row(
-            "Login shell",
-            if identity_ready {
-                &account.shell
-            } else {
-                pending
-            },
-        ));
-        panel.append(&system_row(
-            "Computer name",
-            if identity_ready {
-                &account.hostname
-            } else {
-                pending
-            },
-        ));
+        }
     } else {
-        panel.append(&system_row(
+        rows.push(system_row(
             "Local account",
             "Waiting for local account status.",
         ));
     }
-    panel.append(&system_row(
+    rows.push(system_row(
         "User management",
         "Read-only until secure account actions are available. Creating users, changing passwords, and changing administrator rights stay disabled for now.",
     ));
+    append_preference_group(panel, "Local User", rows);
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -6374,33 +6400,35 @@ fn build_privacy_permissions(panel: &gtk4::Box, state: &SettingsState) {
     append_privacy_summary(panel, state);
     append_privacy_settings(panel, state);
     append_desktop_privacy_settings(panel, state);
+    // The boundary facts and facility readiness are read-only status, so they
+    // sit together in one grouped inset card with hairline dividers rather than
+    // floating as separate dashboard cards.
+    let mut boundary_rows: Vec<gtk4::Box> = Vec::new();
     if let Some(policy) = &state.policy {
-        panel.append(&system_row("Data boundary", &policy.data_boundary));
-        panel.append(&system_row("Secret boundary", &policy.secret_boundary));
+        boundary_rows.push(system_row("Data boundary", &policy.data_boundary));
+        boundary_rows.push(system_row("Secret boundary", &policy.secret_boundary));
     } else {
-        panel.append(&system_row("Policy boundary", "Waiting for policy status."));
+        boundary_rows.push(system_row("Policy boundary", "Waiting for policy status."));
     }
-    append_facility_status(
-        panel,
+    boundary_rows.push(facility_status_row(
         state,
         "desktop-portals",
         "Desktop portals",
         "Waiting for desktop portal status.",
-    );
-    append_facility_status(
-        panel,
+    ));
+    boundary_rows.push(facility_status_row(
         state,
         "keyring",
         "Keyring",
         "Waiting for keyring status.",
-    );
-    append_facility_status(
-        panel,
+    ));
+    boundary_rows.push(facility_status_row(
         state,
         "policy",
         "Policy prompts",
         "Waiting for protected action prompt status.",
-    );
+    ));
+    append_preference_group(panel, "Boundaries & access", boundary_rows);
     panel.append(&label("Advanced controls", &["gos-subsection-title"]));
     append_device_settings_handoff(
         panel,
@@ -7247,6 +7275,9 @@ fn append_native_app_handoff(
 
     controls.append(&action);
     row.append(&controls);
+    if available {
+        row.append(&nav_chevron());
+    }
     panel.append(&row);
 }
 
@@ -8047,7 +8078,7 @@ fn append_goblins_ai_history(panel: &gtk4::Box, history: Option<&AiActionHistory
             vec![health_row(
                 "Action history",
                 "checking",
-                false,
+                true,
                 "Checking the OS action history. Goblins AI history stores metadata only.",
             )],
         );
@@ -8371,11 +8402,12 @@ fn append_appearance_settings(panel: &gtk4::Box, state: &SettingsState) {
 
     let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
     row.add_css_class("gos-segmented-control");
+    // A macOS-style segmented control sizes to its content rather than stretching
+    // edge to edge: keep the pill compact and left-aligned with the cards above,
+    // so each segment is its intrinsic width (min 96px) instead of one wide bar.
+    row.set_halign(gtk4::Align::Start);
     for (theme, name) in [("light", "Light"), ("dark", "Dark"), ("auto", "Auto")] {
         let option = button(name, &["gos-segmented-option"]);
-        // The three segments share the column's full width, ending flush on the
-        // same right margin as the cards above and below.
-        option.set_hexpand(true);
         set_accessible_label_description(
             &option,
             &format!("{name} appearance"),
@@ -8832,8 +8864,8 @@ fn overview_network_detail(network: Option<&NetworkStatus>) -> String {
 
     match &network.active {
         Some(active) => format!(
-            "{} via {} on {}; connectivity {}.",
-            active.name, active.kind, active.device, network.connectivity
+            "{} via {}; connectivity {}.",
+            active.name, active.kind, network.connectivity
         ),
         None if !network.manager_available => {
             "Networking is not reachable in this session. Connectivity and active connection details are not ready.".to_string()
@@ -8932,7 +8964,7 @@ fn active_connection_summary_spec(network: Option<&NetworkStatus>) -> NetworkSum
             "Active connection",
             "connected",
             true,
-            format!("{} via {} on {}.", active.name, active.kind, active.device),
+            format!("{} via {}.", active.name, active.kind),
         ),
         None => network_summary_spec(
             "Active connection",
@@ -9130,8 +9162,6 @@ fn overview_native_settings_detail(
             "Manage display, sound, keyboard, power, accounts, apps, printers, and other device controls. OpenAI, policy, models, storage, and recovery stay here.".to_string()
         }
         DeviceSettingsReadiness::IntegratedDesktopUnavailable => {
-            let _system =
-                system.expect("session-unavailable readiness always includes session details");
             "Device controls open after the desktop finishes loading.".to_string()
         }
         DeviceSettingsReadiness::WaitingForSession => "Checking device controls.".to_string(),
@@ -10174,7 +10204,7 @@ fn settings_status_display_label(state: &str) -> String {
                 (Some(num), Some(unit), None)
                     if !num.is_empty()
                         && num.chars().all(|c| c.is_ascii_digit() || c == '.')
-                        && matches!(unit, "ms" | "s" | "min" | "hz" | "khz" | "k" | "kb" | "mb" | "gb")
+                        && matches!(unit, "ms" | "s" | "min" | "hz" | "khz" | "mhz" | "ghz" | "k" | "kb" | "mb" | "gb")
             )
         } =>
         {
@@ -10283,7 +10313,7 @@ fn settings_status_state_is_quiet(state: &str) -> bool {
                 && num.chars().all(|c| c.is_ascii_digit() || c == '.')
                 && matches!(
                     unit,
-                    "ms" | "s" | "min" | "hz" | "khz" | "k" | "kb" | "mb" | "gb"
+                    "ms" | "s" | "min" | "hz" | "khz" | "mhz" | "ghz" | "k" | "kb" | "mb" | "gb"
                 )
             {
                 return true;
@@ -10298,9 +10328,12 @@ fn settings_status_state_is_quiet(state: &str) -> bool {
     matches!(
         normalized.as_str(),
         "active"
+            | "admin managed"
             | "auto"
             | "available"
+            | "checking"
             | "configured"
+            | "custom"
             | "full motion"
             | "goblins theme"
             | "inter"
@@ -10323,6 +10356,7 @@ fn settings_status_state_is_quiet(state: &str) -> bool {
             | "server-side"
             | "signed in"
             | "signed-in"
+            | "team"
             | "provider-ready"
             | "unlocked"
     )
@@ -10357,6 +10391,24 @@ fn append_facility_status(
             ));
         }
         None => panel.append(&system_row(title, fallback)),
+    }
+}
+
+/// Same status mapping as [`append_facility_status`] but returns the row so it can
+/// be collected into a grouped inset card instead of floating on its own.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn facility_status_row(state: &SettingsState, id: &str, title: &str, fallback: &str) -> gtk4::Box {
+    match facility_by_id(state, id) {
+        Some(facility) => {
+            let detail = facility_user_detail(facility);
+            health_row(
+                title,
+                facility_state_label(&facility.state),
+                facility_state_is_ready(&facility.state),
+                &detail,
+            )
+        }
+        None => system_row(title, fallback),
     }
 }
 
@@ -15210,6 +15262,9 @@ fn append_device_settings_handoff(
     }
     controls.append(&action);
     row.append(&controls);
+    if ready {
+        row.append(&nav_chevron());
+    }
     panel.append(&row);
 }
 
@@ -15396,6 +15451,21 @@ fn button(text: &str, classes: &[&str]) -> gtk4::Button {
     button
 }
 
+/// Trailing disclosure chevron for rows that genuinely navigate to (or open)
+/// another surface. A quiet @gos_ink_muted glyph — the macOS "this row goes
+/// somewhere" affordance. Decorative only: never wire it to its own action, so
+/// it stays honest about the row's single real target.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn nav_chevron() -> gtk4::Label {
+    use gtk4::prelude::*;
+
+    let chevron = gtk4::Label::new(Some("\u{203a}"));
+    chevron.set_xalign(0.5);
+    chevron.add_css_class("gos-row-chevron");
+    chevron.set_valign(gtk4::Align::Center);
+    chevron
+}
+
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn spacer() -> gtk4::Box {
     use gtk::prelude::*;
@@ -15563,8 +15633,8 @@ fn settings_ai_panel_status_summary(panel: SettingsPanel, state: &SettingsState)
                 ));
                 if let Some(active) = network.active.as_ref() {
                     parts.push(format!(
-                        "Active connection: {} over {} on {}",
-                        active.name, active.kind, active.device
+                        "Active connection: {} over {}",
+                        active.name, active.kind
                     ));
                 }
             }
@@ -16163,16 +16233,33 @@ fn append_codex_settings(panel: &gtk4::Box, state: &SettingsState, feedback: &gt
             set_accessible_label_description(
                 &signin,
                 "Sign in to Codex with your OpenAI account",
-                "Starts codex login. Credentials remain owned by Codex.",
+                "Asks Goblins OS to start codex login and opens the browser. The credential stays with the OS service, never the session.",
             );
             let feedback = feedback.clone();
-            signin.connect_clicked(move |_| match codex_login() {
-                Ok(()) => feedback.set_text(
-                    "Opening Codex sign-in — finish in the browser, then reopen Settings.",
+            let core_url = config_core_url(state);
+            signin.connect_clicked(move |_| match start_codex_login(&core_url) {
+                Ok(Some(url)) => {
+                    if gtk4::gio::AppInfo::launch_default_for_uri(
+                        &url,
+                        None::<&gtk4::gio::AppLaunchContext>,
+                    )
+                    .is_ok()
+                    {
+                        feedback.set_text(
+                            "Opening Codex sign-in — finish in the browser, then reopen Settings.",
+                        );
+                    } else {
+                        feedback.set_text(
+                            "Codex sign-in is ready — open the link in your browser, then reopen Settings.",
+                        );
+                    }
+                }
+                Ok(None) => feedback.set_text(
+                    "Codex sign-in started — finish in the browser, then reopen Settings.",
                 ),
                 Err(error) => {
                     feedback.set_text("Goblins OS could not start Codex sign-in.");
-                    eprintln!("settings_codex_login_error={error}");
+                    eprintln!("settings_codex_login_error={error:?}");
                 }
             });
             panel.append(&signin);
@@ -16186,17 +16273,31 @@ fn append_codex_settings(panel: &gtk4::Box, state: &SettingsState, feedback: &gt
     }
 }
 
-/// Start `codex login` (browser-based ChatGPT sign-in). The umask makes Codex's
-/// `auth.json` group-readable so Goblins OS — a different system user — can use
-/// the account; Goblins OS itself never reads the credentials. CODEX_HOME is set
-/// OS-wide so the GUI and core agree on where the sign-in lives.
+/// Begin Codex sign-in **through the core service**, returning the browser sign-in
+/// URL for the session to open. The core runs `codex login` as the `goblins-os`
+/// service user, so the OpenAI account token is written under the 0700
+/// service-owned CODEX_HOME and is never reachable by this desktop session — the
+/// GUI only POSTs to the core and opens the URL the core captured. Ok(None) means
+/// sign-in started but no URL was captured yet (Codex may open the browser itself).
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn codex_login() -> std::io::Result<()> {
-    std::process::Command::new("sh")
-        .arg("-c")
-        .arg("umask 0007; exec codex login")
-        .spawn()
-        .map(|_| ())
+fn start_codex_login(core_url: &str) -> Result<Option<String>, CoreFetchError> {
+    let response = http_post_json_response(core_url, "/v1/codex/login", "{}")?;
+    if !(200..=299).contains(&response.status) {
+        return Err(CoreFetchError::Status(response.status));
+    }
+    // Poll briefly for the browser URL Codex prints just after it starts.
+    for _ in 0..4 {
+        if let Ok(status) = get_core_json::<CodexLoginUrl>(core_url, "/v1/codex/login/url") {
+            if status.authenticated {
+                return Ok(None);
+            }
+            if let Some(url) = status.auth_url {
+                return Ok(Some(url));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(350));
+    }
+    Ok(None)
 }
 
 fn http_get_response(base_url: &str, path: &str) -> Result<HttpResponse, CoreFetchError> {
@@ -16588,7 +16689,6 @@ window.gos-settings-window {
 .gos-side-icon-well.gos-tint-pink     { background: @gos_tint_pink; }
 .gos-side-icon-well.gos-tint-red      { background: @gos_tint_red; }
 .gos-side-icon-well.gos-tint-orange   { background: @gos_tint_orange; }
-.gos-side-icon-well.gos-tint-yellow   { background: @gos_tint_yellow; }
 .gos-side-icon-well.gos-tint-green    { background: @gos_tint_green; }
 .gos-side-icon-well.gos-tint-graphite { background: @gos_tint_graphite; }
 
@@ -16735,10 +16835,11 @@ window.gos-settings-window {
 
 .gos-settings-root .gos-preference-group {
   margin-top: 0;
-  border: 1px solid alpha(@gos_hairline, 0.78);
+  border: 1px solid alpha(@gos_hairline, 0.55);
   border-radius: 12px;
   background: alpha(@gos_surface, 0.82);
-  box-shadow: 0 1px 0 alpha(@gos_panel_sheen, 0.28) inset;
+  box-shadow: 0 1px 0 alpha(@gos_panel_sheen, 0.28) inset,
+              0 1px 3px alpha(@gos_shadow_panel, 0.6);
 }
 
 .gos-settings-root .gos-preference-group .gos-row {
@@ -16825,11 +16926,49 @@ window.gos-settings-window {
   padding: 4px 16px;
 }
 
+/* Native macOS push button: accent text on a borderless tinted fill, not a
+   gray-bordered rectangle. Scoped under the root (two classes) so it beats the
+   shared single-class .gos-permission-action base/hover/focus that follows it
+   in source order. The hue lives in a soft wash so the row stays calm in light
+   and dark. */
+.gos-settings-root .gos-device-handoff-action {
+  color: @gos_on_primary;
+  border: 1px solid @gos_primary_border;
+  background: @gos_primary_top;
+  box-shadow: 0 1px 2px rgba(13, 13, 12, 0.12);
+}
+
+.gos-settings-root .gos-device-handoff-action:hover {
+  border-color: @gos_primary_border;
+  background: @gos_primary_top;
+  box-shadow: 0 2px 6px rgba(13, 13, 12, 0.16);
+}
+
+.gos-settings-root .gos-device-handoff-action:focus {
+  border-color: transparent;
+  box-shadow: 0 0 0 3px @gos_focus;
+}
+
 .gos-device-handoff-action:disabled {
   opacity: 1;
   color: @gos_label_secondary;
   border-color: alpha(@gos_hairline_strong, 0.84);
   background: alpha(@gos_fill_secondary, 0.72);
+}
+
+/* Trailing disclosure chevron — a quiet "this row goes somewhere" glyph that
+   sits after the controls on handoff rows that actually open another surface. */
+.gos-settings-root .gos-row-chevron {
+  margin-left: 2px;
+  padding: 0 2px;
+  min-width: 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: @gos_ink_muted;
+}
+
+.gos-settings-root .gos-row:hover .gos-row-chevron {
+  color: @gos_ink;
 }
 
 .gos-settings-root .gos-overview-summary-grid {
@@ -16950,7 +17089,7 @@ window.gos-settings-window {
 .gos-segmented-control {
   margin-top: 0;
   margin-bottom: 0;
-  padding: 2px;
+  padding: 3px;
   border: 1px solid @gos_hairline;
   border-radius: 11px;
   background: @gos_surface_muted;
@@ -16983,10 +17122,10 @@ window.gos-settings-window {
 
 .gos-segmented-option.is-selected {
   color: @gos_ink;
-  border-color: @gos_hairline_strong;
+  border-color: transparent;
   background: @gos_control_raised;
   box-shadow: 0 1px 0 alpha(@gos_panel_sheen, 0.56) inset,
-              0 2px 6px @gos_shadow_panel;
+              0 1px 3px @gos_shadow_panel;
 }
 
 .gos-segmented-option.is-selected:focus {
@@ -17196,6 +17335,8 @@ window.gos-settings-window {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .gos-settings-root .gos-ready {
@@ -17206,8 +17347,9 @@ window.gos-settings-window {
 
 .gos-settings-root .gos-status-quiet {
   color: @gos_label_secondary;
-  background: @gos_fill_secondary;
-  border-color: alpha(@gos_hairline, 0.92);
+  background: transparent;
+  border-color: transparent;
+  font-weight: 500;
 }
 
 .gos-settings-root .gos-waiting {
@@ -18350,9 +18492,11 @@ mod tests {
     fn ordinary_settings_statuses_are_visually_quiet() {
         for state in [
             "active",
+            "admin managed",
             "auto",
             "available",
             "configured",
+            "custom",
             "full motion",
             "Inter",
             "left-aligned",
@@ -18365,6 +18509,7 @@ mod tests {
             "ready",
             "ready to download",
             "signed in",
+            "team",
             "125%",
         ] {
             assert!(
@@ -18444,7 +18589,17 @@ mod tests {
         // A configured measurement or percentage is a descriptive value, not an
         // affirmative health state — it must read as the calm neutral pill so green
         // stays reserved for genuinely-good status (macOS reserves green likewise).
-        for quiet in ["500 ms", "30 ms", "2.4 ghz", "125%", "off", "available"] {
+        for quiet in [
+            "500 ms",
+            "30 ms",
+            "2.4 ghz",
+            "125%",
+            "off",
+            "available",
+            "team",
+            "admin managed",
+            "custom",
+        ] {
             assert!(
                 super::settings_status_state_is_quiet(quiet),
                 "{quiet} should be a neutral/quiet pill, not green"
@@ -19379,7 +19534,6 @@ mod tests {
             active: Some(super::ActiveConnection {
                 name: "Studio Wi-Fi".to_string(),
                 kind: "wifi".to_string(),
-                device: "wlp0s20f3".to_string(),
             }),
             proxy: Some(super::ProxyStatus {
                 gsettings_available: true,
@@ -19417,7 +19571,7 @@ mod tests {
         let active = super::active_connection_summary_spec(Some(&online));
         assert_eq!(active.state, "connected");
         assert!(active.ready);
-        assert!(active.detail.contains("Studio Wi-Fi via wifi on wlp0s20f3"));
+        assert!(active.detail.contains("Studio Wi-Fi via wifi."));
 
         let manager = super::network_manager_summary_spec(Some(&online));
         assert_eq!(manager.state, "available");

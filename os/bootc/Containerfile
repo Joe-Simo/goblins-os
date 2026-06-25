@@ -159,9 +159,9 @@ RUN useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/s
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/policy \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/ai \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/models \
-    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/apps \
+    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/apps /var/lib/goblins-os/apps/codex-work \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/voice/stt /var/lib/goblins-os/voice/tts /var/lib/goblins-os/voice/work \
-    && install -d -o goblins-os -g goblins-os -m 2770 /var/lib/goblins-os/codex /var/lib/goblins-os/codex/work \
+    && install -d -o goblins-os -g goblins-os -m 0700 /var/lib/goblins-os/codex \
     && install -d -m 0700 -o goblins-os -g goblins-os /var/lib/goblins-os/secrets/openai \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.local/bin \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.config \
@@ -169,10 +169,13 @@ RUN useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/s
 
 # Human desktop login user. Goblins OS authenticates people through the in-session
 # OpenAI identity gate, so the machine auto-enters the OS session as this user;
-# the home lives under /var/home for bootc/ostree persistence.
+# the home lives under /var/home for bootc/ostree persistence. The login user is
+# deliberately NOT a member of the `goblins-os` service group: the OS account
+# credential (CODEX_HOME/auth.json) and the operator secrets are owned by the
+# service user only, so the desktop session — and anything it launches — can
+# never read them. Codex sign-in is driven by the core service, not the session.
 RUN install -d /var/home \
     && useradd --uid 1000 --create-home --home-dir /var/home/goblin --shell /bin/bash goblin \
-    && usermod -aG goblins-os goblin \
     && install -d -o goblin -g goblin /var/home/goblin/.config/environment.d \
     && touch /var/home/goblin/.config/gnome-initial-setup-done \
     && chown -R goblin:goblin /var/home/goblin

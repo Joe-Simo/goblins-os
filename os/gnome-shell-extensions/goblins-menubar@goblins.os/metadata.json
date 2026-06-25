@@ -3,6 +3,5 @@
   "name": "Goblins Menu Bar",
   "description": "Places the Goblins OS mark at the far left of the top panel and OS-owned Goblins AI plus Control Center affordances at the right. Overview-independent; loads in the goblins-os session mode.",
   "shell-version": ["46", "47", "48", "49", "50"],
-  "session-modes": ["user", "goblins-os"],
-  "settings-schema": ""
+  "session-modes": ["user", "goblins-os"]
 }

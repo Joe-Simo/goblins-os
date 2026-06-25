@@ -14,6 +14,8 @@ use std::process::Command;
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::policy::{policy_state_for_control, PolicyControlState};
+
 const PROXY_SCHEMA: &str = "org.gnome.system.proxy";
 const HTTP_PROXY_SCHEMA: &str = "org.gnome.system.proxy.http";
 const HTTPS_PROXY_SCHEMA: &str = "org.gnome.system.proxy.https";
@@ -172,12 +174,44 @@ pub async fn wifi_scan() -> Json<WifiScan> {
 pub async fn wifi_connect(
     Json(request): Json<WifiConnectRequest>,
 ) -> (StatusCode, Json<WifiConnectOutcome>) {
+    // Joining a network mutates system state, so it is gated by the active policy
+    // profile exactly like the AI settings-control and app-builder write paths.
+    match policy_state_for_control("settings-control") {
+        PolicyControlState::Allowed => {}
+        PolicyControlState::Denied => {
+            return outcome(
+                StatusCode::FORBIDDEN,
+                request.ssid.trim(),
+                "Changing the network is blocked by the active Goblins OS policy profile.",
+            );
+        }
+        PolicyControlState::PermissionGated => {
+            return outcome(
+                StatusCode::FORBIDDEN,
+                request.ssid.trim(),
+                "Changing the network requires an explicit Goblins OS permission review first.",
+            );
+        }
+    }
+
     let ssid = request.ssid.trim();
     if ssid.is_empty() {
         return outcome(
             StatusCode::BAD_REQUEST,
             ssid,
             "A Wi-Fi network name is required.",
+        );
+    }
+    // `nmcli device wifi connect` takes the SSID as a positional argument; a name
+    // beginning with '-' would be parsed as an option, so reject it as the
+    // root-cause fix for argument injection. (A `--` terminator is intentionally
+    // not used here: its effect on this shorthand subcommand is version-dependent
+    // and would not, on its own, prevent an option-shaped SSID from being misread.)
+    if ssid_looks_like_option(ssid) {
+        return outcome(
+            StatusCode::BAD_REQUEST,
+            ssid,
+            "A Wi-Fi network name cannot start with a dash.",
         );
     }
 
@@ -222,6 +256,13 @@ fn outcome(status: StatusCode, ssid: &str, text: &str) -> (StatusCode, Json<Wifi
             text: text.to_string(),
         }),
     )
+}
+
+/// True when an SSID would be misread by `nmcli` as an option rather than a value,
+/// i.e. it starts with '-'. Passing such a name as a positional argument is the
+/// argument-injection vector this rejects at the root.
+fn ssid_looks_like_option(ssid: &str) -> bool {
+    ssid.starts_with('-')
 }
 
 /// Defensive: never let a Wi-Fi password leak through an error string, and give a
@@ -668,7 +709,7 @@ mod tests {
     use super::{
         normalize_proxy_mode, parse_active_connection, parse_general_status, parse_gsettings_i32,
         parse_gsettings_string, parse_gsettings_strv, parse_wifi_list, sanitize_connect_error,
-        split_terse, ActiveConnection,
+        split_terse, ssid_looks_like_option, ActiveConnection,
     };
 
     #[test]
@@ -724,6 +765,18 @@ mod tests {
         assert_eq!(networks[1].ssid, "OpenCafe");
         assert_eq!(networks[1].security, "");
         assert_eq!(networks[2].ssid, "FarNet");
+    }
+
+    #[test]
+    fn option_shaped_ssids_are_rejected() {
+        // A leading '-' would let an SSID be parsed by nmcli as an option, so it is
+        // rejected before ever reaching the command line.
+        assert!(ssid_looks_like_option("-x"));
+        assert!(ssid_looks_like_option("--rescan"));
+        // Ordinary names — including ones that merely contain a dash — are fine.
+        assert!(!ssid_looks_like_option("HomeNet"));
+        assert!(!ssid_looks_like_option("Cafe-Free"));
+        assert!(!ssid_looks_like_option("password"));
     }
 
     #[test]

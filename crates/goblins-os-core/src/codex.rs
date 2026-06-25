@@ -8,9 +8,12 @@
 //! account credentials itself — Codex owns them under an OS-set `CODEX_HOME`.
 
 use std::{
-    env, fs,
+    env,
+    fs::{self, OpenOptions},
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, Stdio},
+    sync::{Mutex, OnceLock},
 };
 
 use axum::Json;
@@ -29,6 +32,40 @@ pub struct CodexStatus {
 
 pub async fn codex_status() -> Json<CodexStatus> {
     Json(build_status())
+}
+
+/// Result of asking the core to begin Codex sign-in. The GUI receives only
+/// booleans + a status line — never the token.
+#[derive(Serialize)]
+pub struct CodexLoginStart {
+    started: bool,
+    authenticated: bool,
+    already_running: bool,
+    detail: String,
+}
+
+/// The browser sign-in URL the core captured from `codex login`, handed to the
+/// session to open. Carries no credential (the token is written to auth.json,
+/// which lives only under the service-owned CODEX_HOME).
+#[derive(Serialize)]
+pub struct CodexLoginUrl {
+    authenticated: bool,
+    auth_url: Option<String>,
+    detail: String,
+}
+
+/// Begin `codex login` as the core service user (`goblins-os`), so the OpenAI
+/// account token is written under the 0700 service-owned CODEX_HOME and is never
+/// reachable by the desktop session. The browser handoff URL Codex prints is
+/// captured to a 0600 log the session reads back via [`codex_login_url`].
+pub async fn codex_login_start() -> Json<CodexLoginStart> {
+    Json(start_login())
+}
+
+/// Report the captured browser sign-in URL (if Codex has emitted it yet) or that
+/// the account is already connected. The session opens the returned URL.
+pub async fn codex_login_url() -> Json<CodexLoginUrl> {
+    Json(read_login_url())
 }
 
 pub(crate) fn codex_installed() -> bool {
@@ -173,7 +210,157 @@ fn auth_file() -> PathBuf {
 }
 
 fn work_dir() -> PathBuf {
-    codex_home().join("work")
+    // The agent's scratch workspace lives OUTSIDE CODEX_HOME so a `codex exec` step
+    // never reads or writes next to the account credential (auth.json).
+    crate::app_builder::apps_dir().join("codex-work")
+}
+
+fn login_log_path() -> PathBuf {
+    codex_home().join("login.log")
+}
+
+/// Tracks the in-flight `codex login` child so a repeated request does not spawn a
+/// duplicate sign-in, and so the process is reaped once it finishes.
+fn login_child() -> &'static Mutex<Option<Child>> {
+    static CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
+    CHILD.get_or_init(|| Mutex::new(None))
+}
+
+fn login_start(
+    detail: &str,
+    started: bool,
+    authenticated: bool,
+    already_running: bool,
+) -> CodexLoginStart {
+    CodexLoginStart {
+        started,
+        authenticated,
+        already_running,
+        detail: detail.to_string(),
+    }
+}
+
+fn start_login() -> CodexLoginStart {
+    if !codex_installed() {
+        return login_start(
+            "Codex account support is not included in this build.",
+            false,
+            false,
+            false,
+        );
+    }
+    if codex_authenticated() {
+        return login_start(
+            "Already signed in to Codex with your OpenAI account.",
+            false,
+            true,
+            false,
+        );
+    }
+
+    let mut guard = login_child()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Reap a finished prior attempt; a still-running one is reported in progress.
+    if let Some(child) = guard.as_mut() {
+        match child.try_wait() {
+            Ok(None) => {
+                return login_start(
+                    "Codex sign-in is already in progress. Finish it in your browser.",
+                    false,
+                    false,
+                    true,
+                );
+            }
+            _ => *guard = None,
+        }
+    }
+
+    let home = codex_home();
+    if fs::create_dir_all(&home).is_err() {
+        return login_start(
+            "Codex sign-in could not prepare its home directory.",
+            false,
+            false,
+            false,
+        );
+    }
+
+    // Capture Codex's stdout+stderr (which carries the browser URL) to an
+    // owner-only log; the token itself is written separately to auth.json.
+    let log = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(login_log_path())
+    {
+        Ok(file) => file,
+        Err(_) => return login_start("Codex sign-in could not open its log.", false, false, false),
+    };
+    let log_err = match log.try_clone() {
+        Ok(file) => file,
+        Err(_) => return login_start("Codex sign-in could not open its log.", false, false, false),
+    };
+
+    match Command::new(codex_bin())
+        .env("CODEX_HOME", &home)
+        .arg("login")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err))
+        .spawn()
+    {
+        Ok(child) => {
+            *guard = Some(child);
+            login_start(
+                "Codex sign-in started. Opening your browser to finish.",
+                true,
+                false,
+                false,
+            )
+        }
+        Err(_) => login_start("Codex sign-in could not start.", false, false, false),
+    }
+}
+
+fn read_login_url() -> CodexLoginUrl {
+    if codex_authenticated() {
+        return CodexLoginUrl {
+            authenticated: true,
+            auth_url: None,
+            detail: "Signed in to Codex with your OpenAI account.".to_string(),
+        };
+    }
+    let log = fs::read_to_string(login_log_path()).unwrap_or_default();
+    match first_https_url(&log) {
+        Some(url) => CodexLoginUrl {
+            authenticated: false,
+            auth_url: Some(url),
+            detail: "Open the sign-in link to finish connecting your OpenAI account.".to_string(),
+        },
+        None => CodexLoginUrl {
+            authenticated: false,
+            auth_url: None,
+            detail: "Codex sign-in is starting. The browser link will appear shortly.".to_string(),
+        },
+    }
+}
+
+/// Extract the first `https://` sign-in link Codex prints, trimming surrounding
+/// quotes/punctuation. Never returns a bare scheme and never exposes a credential
+/// (the token is in auth.json, not the captured log).
+fn first_https_url(text: &str) -> Option<String> {
+    text.split(char::is_whitespace).find_map(|token| {
+        let start = token.find("https://")?;
+        let url = token[start..].trim_end_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | '.' | ';'
+            )
+        });
+        (url.len() > "https://".len()).then(|| url.to_string())
+    })
 }
 
 fn binary_present(binary: &str) -> bool {
@@ -186,7 +373,26 @@ fn binary_present(binary: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{status_detail, CodexStatus};
+    use super::{first_https_url, status_detail, CodexStatus};
+
+    #[test]
+    fn first_https_url_extracts_and_trims_browser_link() {
+        assert_eq!(
+            first_https_url(
+                "To sign in, open this URL:\n  https://auth.openai.com/authorize?code=abc-123 \n"
+            ),
+            Some("https://auth.openai.com/authorize?code=abc-123".to_string())
+        );
+        assert_eq!(
+            first_https_url("Visit (https://auth.openai.com/x)."),
+            Some("https://auth.openai.com/x".to_string())
+        );
+        assert_eq!(first_https_url("no link in this output"), None);
+        // Never returns a bare scheme.
+        assert_eq!(first_https_url("https://"), None);
+        // http:// is not surfaced — only the https sign-in link.
+        assert_eq!(first_https_url("http://insecure.example/x"), None);
+    }
 
     #[test]
     fn detail_tracks_install_and_sign_in_state() {

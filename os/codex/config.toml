@@ -2,10 +2,13 @@
 #
 # Codex is THE builder in Goblins OS. By default it targets the on-device GPT-OSS
 # model through a keyless, loopback OpenAI-compatible endpoint, so the OS builds
-# apps with no OpenAI account and no API key out of the box — there is no secret to
-# leak (the endpoint is local-only). Signing in with an OpenAI account (Codex
-# "Sign in with ChatGPT") upgrades Codex to that plan's hosted models; the account
-# credentials live only under CODEX_HOME, never in the desktop session.
+# apps with no OpenAI account and no API key out of the box. On THAT default
+# keyless path there is no secret to leak (the endpoint is local-only). Signing in
+# with an OpenAI account (Codex "Sign in with ChatGPT") upgrades Codex to that
+# plan's hosted models; the account credentials live only under CODEX_HOME (0700,
+# service-user-owned), never in the desktop session. NOTE: the approval/sandbox
+# policy below governs ALL runs, including account-authenticated ones — so the
+# agent's writable workspace is kept outside CODEX_HOME (see below).
 #
 # This file is the shipped default seed (installed read-only under /usr and copied
 # into the persistent CODEX_HOME on first boot via tmpfiles). The on-device GPT-OSS
@@ -15,8 +18,11 @@
 model = "gpt-oss"
 model_provider = "goblins-local"
 
-# Non-interactive OS builder: no per-step approval prompts; Codex may read/write
-# within its workspace (the OS-owned scratch dir under CODEX_HOME).
+# Non-interactive OS builder: `never` is required so `codex exec` does not block on
+# approval prompts there is no TTY to answer. Codex may read/write only within its
+# workspace, which the core sets to an OS-owned scratch dir OUTSIDE CODEX_HOME
+# (/var/lib/goblins-os/apps/codex-work) so an agent step never operates next to the
+# account token (auth.json).
 approval_policy = "never"
 sandbox_mode = "workspace-write"
 

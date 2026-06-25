@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::auth::{openai_account_authenticated, openai_auth_provider_configured};
+use crate::http_error::error_response;
 use crate::model_manager::build_local_model_catalog;
 use crate::session_gate::persist_session_gate;
 
@@ -324,16 +325,6 @@ fn create_state_dir(path: &Path) -> std::io::Result<()> {
     }
 
     Ok(())
-}
-
-fn error_response(status: StatusCode, text: &'static str) -> Response {
-    (
-        status,
-        Json(serde_json::json!({
-            "text": text
-        })),
-    )
-        .into_response()
 }
 
 #[cfg(test)]

@@ -977,18 +977,20 @@ fn build_home(
         column.append(&empty);
     } else {
         empty.set_visible(false);
-        for app in apps.iter().take(6) {
+        for app in apps.iter() {
             ledger.append(&build_app_row(app, stack, detail));
         }
     }
     column.append(&ledger_kicker);
-    column.append(&ledger);
-    if apps.len() > 6 {
-        column.append(&label(
-            &format!("+{} more", apps.len() - 6),
-            &["gos-home-app-more"],
-        ));
-    }
+    // Wrap the ledger so an unbounded number of built apps stays reachable by
+    // scrolling instead of truncating. The inner `ledger` Box is unchanged, so
+    // `finish_build` can still prepend a freshly built row in place.
+    let ledger_scroll = gtk::ScrolledWindow::new();
+    ledger_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    ledger_scroll.set_max_content_height(360);
+    ledger_scroll.set_propagate_natural_height(true);
+    ledger_scroll.set_child(Some(&ledger));
+    column.append(&ledger_scroll);
 
     let ui = BuildUi {
         core_url: config.core_url.clone(),
@@ -1538,7 +1540,8 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
         .as_ref()
         .map(|engine| engine.engine.as_str())
         .unwrap_or("local-gpt-oss");
-    head.append(&label(&engine_label(header_engine), &["gos-studio-badge"]));
+    let engine_badge = label(&engine_label(header_engine), &["gos-studio-badge"]);
+    head.append(&engine_badge);
     sidebar.append(&head);
 
     let search = gtk::Entry::new();
@@ -1657,7 +1660,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
         .unwrap_or_else(|| "local-gpt-oss".to_string());
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     controls.add_css_class("gos-studio-controls");
-    controls.append(&engine_pill(config, &active_engine));
+    controls.append(&engine_pill(config, &active_engine, &engine_badge));
     controls.append(&spacer());
     let thinking = thinking_dots();
     thinking.set_visible(false);
@@ -1848,7 +1851,7 @@ fn sidebar_thread(thread: &StudioThreadItem) -> gtk4::Button {
 /// Codex → your key; the core validates (Codex needs sign-in, the key engine
 /// needs a key, both need the internet), and the pill relabels on success.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn engine_pill(config: &ShellConfig, active: &str) -> gtk4::Button {
+fn engine_pill(config: &ShellConfig, active: &str, badge: &gtk4::Label) -> gtk4::Button {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
@@ -1857,11 +1860,16 @@ fn engine_pill(config: &ShellConfig, active: &str) -> gtk4::Button {
         &["gos-studio-control", "gos-studio-engine"],
     );
     let core_url = config.core_url.clone();
+    let badge = badge.clone();
     pill.connect_clicked(move |pill| {
         let current = engine_from_display(pill.label().map(|g| g.to_string()).unwrap_or_default());
         let next = next_engine(current);
         if set_engine_shell(&core_url, next).is_ok() {
             pill.set_label(&format!("{} ▾", engine_display(next)));
+            // Keep the Studio header badge consistent with the composer pill —
+            // both now name the engine the next build runs on. The badge uses
+            // engine_label (matching how it was built above), not engine_display.
+            badge.set_text(&engine_label(next));
         }
     });
     pill
@@ -1871,7 +1879,7 @@ fn engine_pill(config: &ShellConfig, active: &str) -> gtk4::Button {
 fn engine_display(engine: &str) -> &'static str {
     match engine {
         "codex" => "Codex",
-        "openai-api" => "Your key",
+        "openai-api" => "Your OpenAI API key",
         _ => "GPT-OSS",
     }
 }
@@ -1880,7 +1888,7 @@ fn engine_display(engine: &str) -> &'static str {
 fn engine_from_display(label: String) -> &'static str {
     if label.starts_with("Codex") {
         "codex"
-    } else if label.starts_with("Your key") {
+    } else if label.starts_with("Your OpenAI API key") {
         "openai-api"
     } else {
         "local-gpt-oss"
@@ -1908,14 +1916,9 @@ fn rebuild_conversation(conv: &gtk4::Box, view: &StudioSessionView) {
         conv.append(&studio_message(&message.role, &message.text));
     }
     if !view.files.is_empty() {
-        let rows: Vec<(String, String, String)> = view
-            .files
-            .iter()
-            .map(|path| (path.clone(), String::new(), String::new()))
-            .collect();
         conv.append(&studio_diff_block(
             &format!("Changed files ({})", view.files.len()),
-            &rows,
+            &view.files,
         ));
     }
 }
@@ -1944,26 +1947,18 @@ fn studio_message(role: &str, text: &str) -> gtk4::Box {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn studio_diff_block(head: &str, rows: &[(String, String, String)]) -> gtk4::Box {
+fn studio_diff_block(head: &str, files: &[String]) -> gtk4::Box {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
     let block = gtk::Box::new(gtk::Orientation::Vertical, 4);
     block.add_css_class("gos-studio-block");
     block.append(&label(head, &["gos-studio-block-head"]));
-    // A zero count carries no information, so never render a "+0" or a red "-0".
-    let nonzero = |count: &str| !matches!(count, "" | "0" | "+0" | "-0" | "−0");
-    for (path, add, del) in rows {
+    for path in files {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let file = studio_text(path, "gos-studio-diff-file", true, false);
         file.set_hexpand(true);
         row.append(&file);
-        if nonzero(add) {
-            row.append(&label(add, &["gos-studio-diff-add"]));
-        }
-        if nonzero(del) {
-            row.append(&label(del, &["gos-studio-diff-del"]));
-        }
         block.append(&row);
     }
     block

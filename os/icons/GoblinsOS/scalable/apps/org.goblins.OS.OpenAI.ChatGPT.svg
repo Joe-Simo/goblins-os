@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="chatgptTile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2c30"/>
+      <stop offset="1" stop-color="#141417"/>
+    </linearGradient>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="208" fill="url(#chatgptTile)"/>
+  <rect x="97" y="97" width="830" height="830" rx="207" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="2"/>
+  <rect x="120" y="120" width="784" height="392" rx="184" fill="#ffffff" fill-opacity="0.04"/>
+  <!-- Conversation: a rounded speech bubble with a tail and three dots. -->
+  <path d="M320 300 H704 C757 300 800 343 800 396 V560 C800 613 757 656 704 656 H520 L408 744 V656 H320 C267 656 224 613 224 560 V396 C224 343 267 300 320 300 Z" fill="#f5f5f4"/>
+  <circle cx="384" cy="478" r="34" fill="#141417"/>
+  <circle cx="512" cy="478" r="34" fill="#141417"/>
+  <circle cx="640" cy="478" r="34" fill="#141417"/>
+</svg>

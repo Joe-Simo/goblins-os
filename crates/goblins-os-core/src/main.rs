@@ -10,6 +10,7 @@ mod boot_lock;
 mod codex;
 mod displays;
 mod hardware;
+mod http_error;
 mod input;
 mod install_targets;
 mod installer;
@@ -43,8 +44,7 @@ use crate::{
     ai::{
         ai_action_catalog, ai_action_history, ask_file_context, ask_notification_context,
         ask_screen_context, ask_selected_text_context, ask_settings_context, ask_system_status,
-        change_safe_setting, open_settings_panel, record_ai_action_history,
-        write_selected_text_context,
+        change_safe_setting, open_settings_panel, write_selected_text_context,
     },
     app_builder::{app_builder_catalog, create_app_build, list_apps},
     appearance::{
@@ -60,7 +60,7 @@ use crate::{
     },
     bluetooth::{bluetooth_status, set_bluetooth_power},
     boot_lock::boot_lock_status,
-    codex::codex_status,
+    codex::{codex_login_start, codex_login_url, codex_status},
     displays::displays_status,
     hardware::hardware_status,
     input::{input_status, set_input_preference},
@@ -105,7 +105,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/boot-lock", get(boot_lock_status))
         .route("/v1/ai/actions", get(ai_action_catalog))
         .route("/v1/ai/action-history", get(ai_action_history))
-        .route("/v1/ai/action-history", post(record_ai_action_history))
         .route("/v1/ai/safe-setting-change", post(change_safe_setting))
         .route("/v1/ai/open-settings-panel", post(open_settings_panel))
         .route("/v1/ai/system-status", post(ask_system_status))
@@ -189,6 +188,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/studio/session", get(studio_session))
         .route("/v1/studio/file", get(studio_file))
         .route("/v1/codex/status", get(codex_status))
+        .route("/v1/codex/login", post(codex_login_start))
+        .route("/v1/codex/login/url", get(codex_login_url))
         .route("/v1/models/openai-key", get(openai_key_status))
         .route("/v1/models/openai-key", post(set_openai_key))
         .route("/v1/models/engine", post(set_resident_engine))

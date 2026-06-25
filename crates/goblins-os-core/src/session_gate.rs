@@ -12,6 +12,7 @@ use std::{
 
 use crate::{
     auth::{openai_account_authenticated, openai_auth_provider_configured},
+    http_error::error_response,
     installer::first_boot_completion_mode,
 };
 
@@ -183,7 +184,12 @@ pub(crate) fn persist_session_gate(mode: &'static str) -> std::io::Result<()> {
         mode: mode.to_string(),
         unlocked_at: format!("{:?}", SystemTime::now()),
     })?;
-    fs::write(path, body)
+    // Write to a sibling temp file then rename onto the final path, so a crash or
+    // concurrent overwrite can never leave a truncated session.json that parses to
+    // None and silently fails the gate open.
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, body)?;
+    fs::rename(tmp, path)
 }
 
 fn read_session_gate() -> Option<StoredSessionGate> {
@@ -208,10 +214,6 @@ fn create_state_dir(path: &Path) -> std::io::Result<()> {
     }
 
     Ok(())
-}
-
-fn error_response(status: StatusCode, text: &'static str) -> Response {
-    (status, Json(serde_json::json!({ "text": text }))).into_response()
 }
 
 #[cfg(test)]

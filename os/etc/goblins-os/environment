@@ -22,9 +22,11 @@ GOBLINS_OS_SESSION_STATE=/var/lib/goblins-os/session
 GOBLINS_OS_POLICY_STATE=/var/lib/goblins-os/policy
 GOBLINS_OS_RESIDENT_STATE=/var/lib/goblins-os/resident
 GOBLINS_OS_RESIDENT_SOCKET=/run/goblins-os/resident.sock
-# Codex CLI (the user's OpenAI account). OS-owned, group-shared so the session
-# can sign in (browser OAuth) and the core can use it; credentials stay in Codex
-# under this directory — the path is not a secret, only its contents are.
+# Codex CLI (the user's OpenAI account). Owned by the goblins-os service user and
+# locked 0700: only the core service reads or writes it. The desktop session is
+# NOT in the goblins-os group, so it cannot read auth.json — sign-in (browser
+# OAuth) is driven by the core, which opens the URL through the session. The path
+# itself is not a secret (so it is safe to publish here); its contents are.
 CODEX_HOME=/var/lib/goblins-os/codex
 GOBLINS_OS_VOICE_DIR=/var/lib/goblins-os/voice
 GOBLINS_OS_POLICY_PROFILE=consumer

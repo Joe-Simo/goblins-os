@@ -1,5 +1,7 @@
-/* The Goblins mark + wordmark at the left of the menu bar. White on the dark glass
-   panel (which is translucent-dark in both schemes), spaced like a macOS title. */
+/* The Goblins mark + wordmark at the left of the menu bar. The panel is light
+   frosted glass in light mode and dark glass in dark mode (the gnome-shell-light.css
+   overlay re-colors it), so the mark and the glyphs below must be scheme-adaptive —
+   symbolic + per-scheme color — not fixed white. Spaced like a macOS title. */
 .goblins-menubar {
   spacing: 7px;
   padding: 0 4px;
@@ -21,7 +23,9 @@
 }
 
 /* The control-center button at the right of the menu bar — a monochrome sliders
-   glyph, white on the dark glass panel, matching the menu-bar mark's weight. */
+   glyph. This base sheet inks it white for the dark glass panel; the light overlay
+   re-colors it to #1a1a1f for the light frosted panel (it is symbolic, so CSS color
+   recolors it), matching the menu-bar mark's weight. */
 .goblins-control-icon {
   icon-size: 16px;
   color: #f5f5f7;

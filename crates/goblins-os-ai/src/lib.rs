@@ -276,6 +276,31 @@ pub const ACTIONS: &[AiAction] = &[
     },
 ];
 
+/// Shared resident-turn timeout policy.
+///
+/// Both the core daemon (which waits on the model relay) and the resident binary
+/// (which waits on core's IPC/HTTP response) must agree on one clamp source so the
+/// resident never aborts a turn that core would still legitimately answer. Keeping
+/// the default and bounds here means a single place owns the policy.
+pub mod resident_timeout {
+    /// Default wait for a resident relay to answer one turn, in seconds.
+    pub const DEFAULT_SECS: u64 = 120;
+    /// Lower bound so a bad override can never disable the timeout entirely.
+    pub const MIN_SECS: u64 = 5;
+    /// Upper bound so a bad override can never wait effectively forever.
+    pub const MAX_SECS: u64 = 3600;
+
+    /// Pure timeout policy (testable without touching the process environment):
+    /// keep the 120s default when unset/unparsable, otherwise clamp the override
+    /// to 5s..=3600s.
+    pub fn clamp_secs(parsed: Option<u64>) -> u64 {
+        match parsed {
+            Some(secs) => secs.clamp(MIN_SECS, MAX_SECS),
+            None => DEFAULT_SECS,
+        }
+    }
+}
+
 pub fn action_registry() -> &'static [AiAction] {
     ACTIONS
 }

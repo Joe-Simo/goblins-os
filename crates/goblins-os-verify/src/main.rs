@@ -211,7 +211,7 @@ struct Config {
     release_arch: Option<String>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum CheckState {
     Ready,
     Blocked,
@@ -560,6 +560,19 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root,
         "bootc-source-does-not-install-debug-kernel",
         "kernel-debug",
+    ));
+    // The OpenAI account credential (CODEX_HOME/auth.json) must be reachable only
+    // by the goblins-os service user: CODEX_HOME is created owner-only 0700, and
+    // the desktop login user is NOT placed in the goblins-os service group.
+    checks.push(container_contains_check(
+        root,
+        "codex-home-owner-only-0700",
+        "-m 0700 /var/lib/goblins-os/codex",
+    ));
+    checks.push(container_absent_check(
+        root,
+        "codex-login-user-not-in-service-group",
+        "usermod -aG goblins-os goblin",
     ));
     checks.push(container_contains_check(
         root,
@@ -1341,6 +1354,13 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         0o600,
         "installed-openai-secret-file-mode-0600",
     ));
+    checks.push(path_owner_check(
+        root,
+        "etc/goblins-os/openai-secrets.env",
+        0,
+        0,
+        "installed-openai-secret-file-owner-root",
+    ));
     checks.push(file_has_no_active_secrets_check(
         root,
         "etc/goblins-os/openai-secrets.env",
@@ -1411,21 +1431,26 @@ fn installed_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(installed_session_check(root));
     checks.push(installed_secret_dir_check(root));
-    checks.push(installed_state_dir_check(root, "var/lib/goblins-os/models"));
-    checks.push(installed_state_dir_check(root, "var/lib/goblins-os/apps"));
-    checks.push(installed_state_dir_check(
+    checks.push(secret_dir_not_session_readable_check(
         root,
+        "var/lib/goblins-os/secrets/openai",
+        "installed-secret-storage-owner",
+    ));
+    for relative in [
+        "var/lib/goblins-os/models",
+        "var/lib/goblins-os/apps",
         "var/lib/goblins-os/installer",
-    ));
-    checks.push(installed_state_dir_check(
-        root,
         "var/lib/goblins-os/session",
-    ));
-    checks.push(installed_state_dir_check(root, "var/lib/goblins-os/policy"));
-    checks.push(installed_state_dir_check(
-        root,
+        "var/lib/goblins-os/policy",
         "var/lib/goblins-os/resident",
-    ));
+    ] {
+        checks.push(installed_state_dir_check(root, relative));
+        checks.push(installed_state_dir_owner_check(
+            root,
+            relative,
+            &format!("{relative}-owner"),
+        ));
+    }
     checks.push(file_check(root, "etc/gdm/custom.conf"));
     checks.push(contains_check(
         root.join("etc/gdm/custom.conf"),
@@ -1860,7 +1885,7 @@ fn path_mode_check(root: &Path, relative: &str, expected: u32, id: &str) -> Chec
     let path = root.join(relative);
     match fs::metadata(&path) {
         Ok(metadata) => {
-            let mode = metadata.permissions().mode() & 0o777;
+            let mode = metadata.permissions().mode() & 0o7777;
             if mode == expected {
                 ready(id, &format!("{} mode is {:03o}", path.display(), expected))
             } else {
@@ -1881,9 +1906,111 @@ fn path_mode_check(root: &Path, relative: &str, expected: u32, id: &str) -> Chec
 
 #[cfg(not(unix))]
 fn path_mode_check(_root: &Path, relative: &str, _expected: u32, id: &str) -> Check {
-    ready(
+    blocked(
         id,
-        &format!("mode check skipped for {relative} on non-Unix host"),
+        &format!("mode check for {relative} cannot be verified on a non-Unix host"),
+    )
+}
+
+#[cfg(unix)]
+fn path_owner_check(
+    root: &Path,
+    relative: &str,
+    expected_uid: u32,
+    expected_gid: u32,
+    id: &str,
+) -> Check {
+    use std::os::unix::fs::MetadataExt;
+
+    let path = root.join(relative);
+    match fs::metadata(&path) {
+        Ok(metadata) => {
+            let uid = metadata.uid();
+            let gid = metadata.gid();
+            if uid == expected_uid && gid == expected_gid {
+                ready(id, &format!("{} owned by uid {uid}:{gid}", path.display()))
+            } else {
+                blocked(
+                    id,
+                    &format!(
+                        "{} owned by uid {uid}:{gid}; expected {expected_uid}:{expected_gid}",
+                        path.display()
+                    ),
+                )
+            }
+        }
+        Err(_) => blocked(id, &format!("missing {}", path.display())),
+    }
+}
+
+#[cfg(not(unix))]
+fn path_owner_check(
+    _root: &Path,
+    relative: &str,
+    _expected_uid: u32,
+    _expected_gid: u32,
+    id: &str,
+) -> Check {
+    blocked(
+        id,
+        &format!("owner check for {relative} cannot be verified on a non-Unix host"),
+    )
+}
+
+/// Assert that a secret directory is NOT readable by the auto-login desktop
+/// session user. The directory under /var/lib/goblins-os is owned by the
+/// dynamically-allocated `goblins-os --system` account, so we do not hardcode
+/// root; instead we encode the actual security property: the directory must not
+/// be owned by the desktop user (uid 1000 / `goblin`) and must expose no group
+/// or other read/execute bits, so the GUI session can never traverse or read it.
+#[cfg(unix)]
+fn secret_dir_not_session_readable_check(root: &Path, relative: &str, id: &str) -> Check {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    const DESKTOP_USER_UID: u32 = 1000;
+
+    let path = root.join(relative);
+    match fs::metadata(&path) {
+        Ok(metadata) => {
+            let uid = metadata.uid();
+            let group_other_bits = metadata.permissions().mode() & 0o077;
+            if uid == DESKTOP_USER_UID {
+                blocked(
+                    id,
+                    &format!(
+                        "{} is owned by the desktop session user (uid {uid})",
+                        path.display()
+                    ),
+                )
+            } else if group_other_bits != 0 {
+                blocked(
+                    id,
+                    &format!(
+                        "{} grants group/other access ({:03o})",
+                        path.display(),
+                        group_other_bits
+                    ),
+                )
+            } else {
+                ready(
+                    id,
+                    &format!(
+                        "{} is owned by uid {uid} with no group/other access",
+                        path.display()
+                    ),
+                )
+            }
+        }
+        Err(_) => blocked(id, &format!("missing {}", path.display())),
+    }
+}
+
+#[cfg(not(unix))]
+fn secret_dir_not_session_readable_check(_root: &Path, relative: &str, id: &str) -> Check {
+    blocked(
+        id,
+        &format!("secret-dir ownership for {relative} cannot be verified on a non-Unix host"),
     )
 }
 
@@ -1976,6 +2103,20 @@ fn session_contains_check(root: &Path, id: &str, needle: &str) -> Check {
 fn contains_check(path: PathBuf, id: &str, needle: &str) -> Check {
     let text = read_to_string(&path);
     if text.contains(needle) {
+        ready(id, &format!("{} contains {}", path.display(), needle))
+    } else {
+        blocked(id, &format!("{} is missing {}", path.display(), needle))
+    }
+}
+
+/// Like `contains_check`, but collapses runs of whitespace in the file to a
+/// single space before searching, so the needle survives any benign re-wrap or
+/// reflow of the source document. Used for prose checks where the asserted
+/// adjacency (e.g. `0600 root:root`) must hold but the line breaks may move.
+fn whitespace_normalized_contains_check(path: PathBuf, id: &str, needle: &str) -> Check {
+    let text = read_to_string(&path);
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.contains(needle) {
         ready(id, &format!("{} contains {}", path.display(), needle))
     } else {
         blocked(id, &format!("{} is missing {}", path.display(), needle))
@@ -2080,7 +2221,40 @@ fn is_suspicious_secret_line(line: &str) -> bool {
         return true;
     }
 
+    if is_populated_key_secret_token_assignment(trimmed) {
+        return true;
+    }
+
     contains_realish_openai_key(trimmed)
+}
+
+/// Line-anchored mirror of the Containerfile guard
+/// `^[[:space:]]*[A-Za-z0-9_]*(KEY|SECRET|TOKEN)[[:space:]]*=`: flag a line whose
+/// leading identifier (optionally preceded by `export `) matches
+/// `^[A-Za-z0-9_]*(KEY|SECRET|TOKEN)$` immediately followed by `=`, with a
+/// non-empty RHS that is neither a `<placeholder>` nor an allowed dummy. Anchored
+/// to line start (never a mid-line `.contains`) so the whole-repo source scan does
+/// not produce false positives.
+fn is_populated_key_secret_token_assignment(trimmed: &str) -> bool {
+    let candidate = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+    let Some((name, value)) = candidate.split_once('=') else {
+        return false;
+    };
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return false;
+    }
+    let upper = name.to_ascii_uppercase();
+    if !(upper.ends_with("KEY") || upper.ends_with("SECRET") || upper.ends_with("TOKEN")) {
+        return false;
+    }
+    if value.is_empty() || value.starts_with('<') {
+        return false;
+    }
+    !is_allowed_dummy_secret(value)
 }
 
 fn contains_realish_openai_key(line: &str) -> bool {
@@ -2105,11 +2279,13 @@ fn contains_realish_openai_key(line: &str) -> bool {
 }
 
 fn is_allowed_dummy_secret(token: &str) -> bool {
-    let lowered = token.to_ascii_lowercase();
-    lowered.contains("secretvalue")
-        || lowered.contains("placeholder")
-        || lowered.contains("example")
-        || lowered.contains("abcdefghijklmnopqrstuvwxyz")
+    // Only shield tokens that are structurally non-random: a real key will never
+    // contain the full 26-letter sequential alphabet run. English-word
+    // substrings ("example", "placeholder", ...) are intentionally NOT exempted,
+    // because a genuine leaked key can contain such a fragment.
+    token
+        .to_ascii_lowercase()
+        .contains("abcdefghijklmnopqrstuvwxyz")
 }
 
 fn desktop_exec_checks(root: &Path) -> Vec<Check> {
@@ -4310,9 +4486,29 @@ fn secret_hygiene_checks(root: &Path) -> Vec<Check> {
             "install -d -m 0700 -o goblins-os -g goblins-os /var/lib/goblins-os/secrets/openai",
         ),
         contains_check(
+            root.join("os/bootc/Containerfile"),
+            "openai-secret-file-mode-asserted",
+            "test \"$(stat -c '%U:%G:%a' /etc/goblins-os/openai-secrets.env)\" = \"root:root:600\"",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "openai-secret-file-no-baked-secret",
+            "(KEY|SECRET|TOKEN)[[:space:]]*=' /etc/goblins-os/openai-secrets.env",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "environment-file-no-baked-secret",
+            "(KEY|SECRET|TOKEN)[[:space:]]*=' /etc/goblins-os/environment",
+        ),
+        contains_check(
             root.join("crates/goblins-os-verify/src/main.rs"),
             "installed-root-verifier-secret-file-mode",
             "installed-openai-secret-file-mode-0600",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-verify/src/main.rs"),
+            "installed-root-verifier-secret-file-owner",
+            "installed-openai-secret-file-owner-root",
         ),
         contains_check(
             root.join("crates/goblins-os-verify/src/main.rs"),
@@ -4324,10 +4520,10 @@ fn secret_hygiene_checks(root: &Path) -> Vec<Check> {
             "installed-root-verifier-secret-dir-mode",
             "var/lib/goblins-os/secrets/openai",
         ),
-        contains_check(
+        whitespace_normalized_contains_check(
             root.join("SHIP.md"),
             "ship-documents-secret-file-permissions",
-            "mode `0600\nroot:root`",
+            "mode `0600 root:root`",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -7542,6 +7738,72 @@ fn installed_state_dir_check(root: &Path, relative: &str) -> Check {
     }
 }
 
+/// Resolve a username's uid/gid by parsing `<root>/etc/passwd`. Returns `None`
+/// when the rootfs has no passwd database (e.g. a staged DESTDIR) or the user is
+/// not present, so callers can `ready`/skip instead of failing closed.
+#[cfg(unix)]
+fn resolve_passwd_id(root: &Path, username: &str) -> Option<(u32, u32)> {
+    let passwd = fs::read_to_string(root.join("etc/passwd")).ok()?;
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        if fields.next()? != username {
+            return None;
+        }
+        let _password = fields.next()?;
+        let uid = fields.next()?.parse().ok()?;
+        let gid = fields.next()?.parse().ok()?;
+        Some((uid, gid))
+    })
+}
+
+/// Assert an installed state directory is owned by the `goblins-os` service
+/// account. This only has teeth against a real installed `/` (where
+/// `etc/passwd` exists); against a staged DESTDIR the passwd database is absent,
+/// so the check resolves to `ready`/skip and never fails the stage gate. We do
+/// not assert a uniform mode — those diverge per directory in the Containerfile.
+#[cfg(unix)]
+fn installed_state_dir_owner_check(root: &Path, relative: &str, id: &str) -> Check {
+    use std::os::unix::fs::MetadataExt;
+
+    let Some((expected_uid, expected_gid)) = resolve_passwd_id(root, "goblins-os") else {
+        return ready(
+            id,
+            &format!("ownership check skipped for {relative}: goblins-os not resolvable from rootfs passwd"),
+        );
+    };
+
+    let path = root.join(relative);
+    match fs::metadata(&path) {
+        Ok(metadata) => {
+            let uid = metadata.uid();
+            let gid = metadata.gid();
+            if uid == expected_uid && gid == expected_gid {
+                ready(
+                    id,
+                    &format!("{} owned by goblins-os ({uid}:{gid})", path.display()),
+                )
+            } else {
+                blocked(
+                    id,
+                    &format!(
+                        "{} owned by uid {uid}:{gid}; expected goblins-os {expected_uid}:{expected_gid}",
+                        path.display()
+                    ),
+                )
+            }
+        }
+        Err(_) => blocked(id, &format!("missing {}", path.display())),
+    }
+}
+
+#[cfg(not(unix))]
+fn installed_state_dir_owner_check(_root: &Path, relative: &str, id: &str) -> Check {
+    ready(
+        id,
+        &format!("ownership check skipped for {relative} on non-Unix host"),
+    )
+}
+
 fn desktop_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     text.lines()
         .find_map(|line| line.strip_prefix(&format!("{key}=")))
@@ -7588,7 +7850,8 @@ fn stable_id(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cargo_lock_packages, desktop_field, install_files, native_design_system_checks,
+        cargo_lock_packages, contains_realish_openai_key, desktop_field, install_files,
+        is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
         source_manifest_classifies_top_level, stable_id, write_release_evidence, CheckState,
         APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES, GNOME_SHELL_EXTENSION_FILES,
         ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS, SETTINGS_INTERACTION_SCREENSHOTS,
@@ -7914,5 +8177,193 @@ checksum = "abc123"
 
         let _ = fs::remove_dir_all(&root);
         assert_eq!(blocked, 0);
+    }
+
+    #[test]
+    fn dummy_secret_allowlist_only_shields_sequential_alphabet_runs() {
+        // Build the real-shaped "example" token via concatenation so the source
+        // scanner never sees a contiguous 32+ char sk- literal in this file.
+        let example_token = concat!("sk-", "proj-", "exampleA9f4kQ2mZ7tR1bX8nL3vC6dW0pY5hJ");
+        // The load-bearing sequential-alphabet dummy stays shielded.
+        assert!(is_allowed_dummy_secret(
+            "sk-proj-abcdefghijklmnopqrstuvwxyz"
+        ));
+        // English-word substrings no longer grant a free pass: a real-shaped key
+        // that merely contains "example" must NOT be treated as a dummy.
+        assert!(!is_allowed_dummy_secret(example_token));
+    }
+
+    #[test]
+    fn realish_key_scanner_flags_example_token_but_not_alphabet_dummy() {
+        let example_line = concat!(
+            "OPENAI_API_KEY=sk-",
+            "proj-",
+            "exampleA9f4kQ2mZ7tR1bX8nL3vC6dW0pY5hJ"
+        );
+        // A real-shaped 32+ char token containing "example" is reported.
+        assert!(contains_realish_openai_key(example_line));
+        // The sequential-alphabet dummy is still shielded.
+        assert!(!contains_realish_openai_key(
+            "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz"
+        ));
+    }
+
+    #[test]
+    fn suspicious_secret_line_flags_generic_key_secret_token_assignments() {
+        // Generic *_KEY/_SECRET/_TOKEN assignments are now flagged when populated.
+        assert!(is_suspicious_secret_line(
+            "GOBLINS_OS_RESIDENT_RELAY_TOKEN=actual-bearer-value"
+        ));
+        assert!(is_suspicious_secret_line(
+            "export SOME_CLIENT_SECRET=real-value"
+        ));
+        // Placeholders, empty values, and commented lines stay clean.
+        assert!(!is_suspicious_secret_line("OPENAI_ACCOUNT_TOKEN_URL=<url>"));
+        assert!(!is_suspicious_secret_line("CUSTOM_TOKEN="));
+        assert!(!is_suspicious_secret_line(
+            "# OPENAI_ACCOUNT_AUTH_TOKEN=set-server-side"
+        ));
+        // Mid-line matches must not trip the line-anchored rule.
+        assert!(!is_suspicious_secret_line(
+            "let label = \"the API_KEY=value pair\";"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_mode_check_rejects_setuid_setgid_sticky_bits() {
+        use super::path_mode_check;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("goblins-os-verify-mode-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("secret"), b"x").unwrap();
+
+        fs::set_permissions(root.join("secret"), fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            path_mode_check(&root, "secret", 0o600, "test").state,
+            CheckState::Ready
+        );
+
+        // setuid bit set: now masked with 0o7777, so 04600 != 0600 and is blocked.
+        fs::set_permissions(root.join("secret"), fs::Permissions::from_mode(0o4600)).unwrap();
+        assert_eq!(
+            path_mode_check(&root, "secret", 0o600, "test").state,
+            CheckState::Blocked
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_owner_check_reports_owner_mismatch() {
+        use super::path_owner_check;
+        use std::os::unix::fs::MetadataExt;
+
+        let root =
+            std::env::temp_dir().join(format!("goblins-os-verify-owner-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("secret"), b"x").unwrap();
+
+        let metadata = fs::metadata(root.join("secret")).unwrap();
+        let uid = metadata.uid();
+        let gid = metadata.gid();
+
+        // Matching uid/gid is ready.
+        assert_eq!(
+            path_owner_check(&root, "secret", uid, gid, "test").state,
+            CheckState::Ready
+        );
+        // A root:root expectation against a non-root-owned fixture is blocked
+        // (the test harness does not run as root, so uid != 0).
+        if uid != 0 {
+            assert_eq!(
+                path_owner_check(&root, "secret", 0, 0, "test").state,
+                CheckState::Blocked
+            );
+        }
+        // Missing path is blocked.
+        assert_eq!(
+            path_owner_check(&root, "absent", uid, gid, "test").state,
+            CheckState::Blocked
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_dir_check_blocks_group_other_read_bits() {
+        use super::secret_dir_not_session_readable_check;
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-secret-dir-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("dir")).unwrap();
+        let owner_uid = fs::metadata(root.join("dir")).unwrap().uid();
+
+        // 0700 with no group/other access is ready — unless the test harness
+        // itself runs as the desktop session uid 1000, which is itself a block.
+        fs::set_permissions(root.join("dir"), fs::Permissions::from_mode(0o700)).unwrap();
+        let expected_clean = if owner_uid == 1000 {
+            CheckState::Blocked
+        } else {
+            CheckState::Ready
+        };
+        assert_eq!(
+            secret_dir_not_session_readable_check(&root, "dir", "test").state,
+            expected_clean
+        );
+
+        // Any group/other bit makes the secret dir session-reachable: blocked.
+        fs::set_permissions(root.join("dir"), fs::Permissions::from_mode(0o750)).unwrap();
+        assert_eq!(
+            secret_dir_not_session_readable_check(&root, "dir", "test").state,
+            CheckState::Blocked
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_state_dir_owner_check_skips_when_passwd_unresolvable() {
+        use super::installed_state_dir_owner_check;
+
+        // A staged DESTDIR has no etc/passwd, so goblins-os is unresolvable and
+        // the ownership assertion resolves to ready/skip rather than failing.
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-state-owner-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("var/lib/goblins-os/apps")).unwrap();
+
+        assert_eq!(
+            installed_state_dir_owner_check(&root, "var/lib/goblins-os/apps", "test").state,
+            CheckState::Ready
+        );
+
+        // With a resolvable passwd entry, ownership is enforced; a mismatch blocks.
+        fs::create_dir_all(root.join("etc")).unwrap();
+        fs::write(
+            root.join("etc/passwd"),
+            "root:x:0:0:root:/root:/bin/bash\ngoblins-os:x:991:991::/var/lib/goblins-os:/usr/sbin/nologin\n",
+        )
+        .unwrap();
+        assert_eq!(
+            installed_state_dir_owner_check(&root, "var/lib/goblins-os/apps", "test").state,
+            CheckState::Blocked
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -49,6 +49,10 @@ workspaces-only-on-primary=true
 # which the native session disables anyway (one keyboard layout, IBus off).
 switch-input-source=@as []
 switch-input-source-backward=@as []
+# Free <Super>Tab so the Goblins window-switcher (goblins-wm) owns it cleanly —
+# GNOME's switch-applications defaults to <Super>Tab and would collide otherwise.
+switch-applications=@as []
+switch-applications-backward=@as []
 
 [org/gnome/settings-daemon/plugins/media-keys]
 # Super+Space opens the bespoke Goblins launcher (Spotlight); Super+Shift+Space

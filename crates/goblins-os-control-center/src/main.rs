@@ -48,9 +48,11 @@ use native::run_control_center;
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 mod native {
     use std::{
+        cell::Cell,
         io::{Read, Write},
         net::{TcpStream, ToSocketAddrs},
         process::Command,
+        rc::Rc,
         time::Duration,
     };
 
@@ -226,7 +228,12 @@ mod native {
             |value| {
                 let _ = run(
                     "brightnessctl",
-                    &["set", &format!("{}%", value.round() as i64)],
+                    &[
+                        "-c",
+                        "backlight",
+                        "set",
+                        &format!("{}%", value.round() as i64),
+                    ],
                 );
             },
             "No adjustable display.",
@@ -417,16 +424,15 @@ mod native {
         local.add_css_class("gos-cc-seg");
         let codex = gtk::Button::with_label("OpenAI · Codex");
         codex.add_css_class("gos-cc-seg");
-        if current.as_deref() == Some("codex") {
-            codex.add_css_class("is-active");
-        } else {
+        // Honest three-way: highlight on-device only for local-gpt-oss, codex only
+        // for codex, and neither for the hosted openai-api engine or an unreachable
+        // core (None) — never optimistically claim local.
+        if current.as_deref() == Some("local-gpt-oss") {
             local.add_css_class("is-active");
+        } else if current.as_deref() == Some("codex") {
+            codex.add_css_class("is-active");
         }
-        update_engine_accessibility(
-            &local,
-            &codex,
-            current.as_deref().unwrap_or("local-gpt-oss"),
-        );
+        update_engine_accessibility(&local, &codex, current.as_deref());
 
         let wire =
             |button: &gtk::Button, engine: &'static str, sibling: &gtk::Button, url: String| {
@@ -440,9 +446,9 @@ mod native {
                             button.add_css_class("is-active");
                             sibling.remove_css_class("is-active");
                             if engine == "codex" {
-                                update_engine_accessibility(&sibling, &button, engine);
+                                update_engine_accessibility(&sibling, &button, Some(engine));
                             } else {
-                                update_engine_accessibility(&button, &sibling, engine);
+                                update_engine_accessibility(&button, &sibling, Some(engine));
                             }
                         }
                     }
@@ -456,15 +462,22 @@ mod native {
         row
     }
 
-    fn update_engine_accessibility(local: &gtk::Button, codex: &gtk::Button, selected: &str) {
-        let local_current = selected != "codex";
+    fn update_engine_accessibility(
+        local: &gtk::Button,
+        codex: &gtk::Button,
+        selected: Option<&str>,
+    ) {
+        // Each segment is "current" only for its own engine; openai-api / None
+        // (unreachable core) report neither segment as current.
+        let local_current = selected == Some("local-gpt-oss");
+        let codex_current = selected == Some("codex");
         set_segment_accessibility(
             local,
             "Use on-device GPT-OSS",
             "on-device GPT-OSS",
             local_current,
         );
-        set_segment_accessibility(codex, "Use OpenAI Codex", "OpenAI Codex", !local_current);
+        set_segment_accessibility(codex, "Use OpenAI Codex", "OpenAI Codex", codex_current);
     }
 
     fn set_segment_accessibility(
@@ -512,11 +525,29 @@ mod native {
                 let description = percent_description(label, value);
                 set_accessible_label_description(&scale, label, &description);
                 let label_text = label.to_string();
+                // GtkScale fires value-changed continuously while dragging. Update
+                // the accessible description synchronously (cheap, in-process), but
+                // coalesce the backend subprocess through a trailing-edge ~50ms
+                // timer so at most one call is in flight and the settled value
+                // always applies.
+                let on_change = Rc::new(on_change);
+                let latest = Rc::new(Cell::new(value));
+                let pending = Rc::new(Cell::new(false));
                 scale.connect_value_changed(move |scale| {
                     let value = scale.value();
-                    on_change(value);
                     let description = percent_description(&label_text, value);
                     set_accessible_label_description(scale, &label_text, &description);
+                    latest.set(value);
+                    if pending.replace(true) {
+                        return;
+                    }
+                    let on_change = Rc::clone(&on_change);
+                    let latest = Rc::clone(&latest);
+                    let pending = Rc::clone(&pending);
+                    glib::timeout_add_local_once(Duration::from_millis(50), move || {
+                        pending.set(false);
+                        (*on_change)(latest.get());
+                    });
                 });
             }
             None => {
@@ -660,9 +691,18 @@ mod native {
 
     /// Backlight brightness as a 0–100 percentage (None when there's no backlight).
     fn brightness_percent() -> Option<f64> {
-        let out = run("brightnessctl", &["-m"])?;
+        // Pin to the backlight class so the read addresses the same device the
+        // setter (`brightnessctl -c backlight set`) writes — `-m` alone enumerates
+        // every device (e.g. keyboard LEDs) and the first row isn't guaranteed to
+        // be the display backlight.
+        let out = run("brightnessctl", &["-m", "-c", "backlight"])?;
         // "name,type,current,percent,max" → e.g. "intel_backlight,backlight,3500,35%,10000"
-        let percent = out.lines().next()?.split(',').nth(3)?.trim_end_matches('%');
+        let percent = out
+            .lines()
+            .find(|line| line.split(',').nth(1) == Some("backlight"))?
+            .split(',')
+            .nth(3)?
+            .trim_end_matches('%');
         percent.parse::<f64>().ok()
     }
 
@@ -675,7 +715,23 @@ mod native {
         let out = run("nmcli", &["-t", "-f", "active,ssid", "dev", "wifi"])?;
         out.lines()
             .find_map(|line| line.strip_prefix("yes:"))
-            .map(|ssid| ssid.to_string())
+            .map(|ssid| {
+                // nmcli terse mode backslash-escapes literal `:` and `\` inside
+                // values (e.g. SSID `Café:5G` → `Café\:5G`). Unescape in a single
+                // left-to-right pass so `\\` adjacent to `\:` is handled correctly.
+                let mut out = String::with_capacity(ssid.len());
+                let mut chars = ssid.chars();
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        if let Some(n) = chars.next() {
+                            out.push(n);
+                        }
+                    } else {
+                        out.push(c);
+                    }
+                }
+                out
+            })
     }
 
     #[derive(Deserialize)]
@@ -760,7 +816,7 @@ mod native {
 
         let request = match body {
             Some(payload) => format!(
-                "POST {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
                 payload.len()
             ),
             None => format!(

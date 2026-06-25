@@ -6352,10 +6352,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "launcher-screenshot-result-routes-to-helper",
             "OpenScreenshotContext",
         ),
+        // Behavioral anchor: the helper actually drives the capture through the
+        // ashpd portal API (not the blocked GNOME-Shell D-Bus service).
         contains_check(
             root.join("crates/goblins-os-screenshot-context/src/main.rs"),
-            "screenshot-context-helper-uses-gnome-dbus",
-            "org.gnome.Shell.Screenshot.Screenshot",
+            "screenshot-context-helper-drives-portal-via-ashpd",
+            "ashpd::desktop::screenshot::Screenshot",
+        ),
+        // Documentation anchor: the source names the sanctioned portal interface
+        // so future editors keep the explanation of which API is used.
+        contains_check(
+            root.join("crates/goblins-os-screenshot-context/src/main.rs"),
+            "screenshot-context-helper-documents-portal-interface",
+            "org.freedesktop.portal.Screenshot.Screenshot",
+        ),
+        // The blocked path was a `gdbus` subprocess; assert that exact call site
+        // is gone (the doc comment still names the interface, so pin the code).
+        absent_check(
+            root.join("crates/goblins-os-screenshot-context/src/main.rs"),
+            "screenshot-context-helper-drops-gdbus-subprocess",
+            "Command::new(\"gdbus\")",
         ),
         contains_check(
             root.join("crates/goblins-os-screenshot-context/src/main.rs"),
@@ -6376,6 +6392,18 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-screenshot-context/src/main.rs"),
             "screenshot-context-helper-preserves-path-for-future-vision",
             "GOBLINS_OS_SCREENSHOT_CONTEXT_PATH",
+        ),
+        // The portal screenshot helper only works if the image ships the portal
+        // service and its GNOME backend; pin both so they cannot be dropped.
+        container_contains_check(
+            root,
+            "screenshot-context-portal-service-shipped",
+            "xdg-desktop-portal \\",
+        ),
+        container_contains_check(
+            root,
+            "screenshot-context-portal-gnome-backend-shipped",
+            "xdg-desktop-portal-gnome \\",
         ),
         contains_check(
             root.join("crates/goblins-os-control-center/src/main.rs"),

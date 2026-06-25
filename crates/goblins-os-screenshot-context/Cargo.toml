@@ -7,3 +7,21 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# xdg-desktop-portal Screenshot is the sanctioned, consent-gated capture path on
+# modern GNOME/Wayland (GNOME 42+ blocks external org.gnome.Shell.Screenshot
+# callers). ashpd is the maintained Rust binding for the freedesktop portals; it
+# drives the async Request/Response handshake the portal requires. Only the
+# screenshot portal is enabled, on the Tokio runtime we already vendor elsewhere.
+ashpd = { version = "0.13", default-features = false, features = [
+  "screenshot",
+  "tokio",
+] }
+tokio = { version = "1", default-features = false, features = [
+  "rt",
+  "net",
+  "time",
+] }
+# Decode the portal's percent-escaped file:// screenshot URI into a real path.
+# (percent-encoding is dependency-free; the full `url` crate would drag in the
+# idna/icu stack this tiny helper has no use for.)
+percent-encoding = "2"

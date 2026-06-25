@@ -8,6 +8,13 @@ set -x
 H=10.0.2.2:8099
 B=/usr/libexec/goblins-os
 export GDK_BACKEND=wayland XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
+# Maximize every captured GTK surface so the host QMP screendump catches it filling
+# the work area (keeping window chrome + the menu bar/dock) instead of an ambiguous
+# windowed surface that may not be foregrounded at screendump time — the root cause
+# of the prior duplicate-capture plateau. Honest: a framebuffer read of the real
+# maximized surface, no compositor/session change. Login + installer already
+# fullscreen by design.
+export GOBLINS_OS_RENDER_FULLSCREEN=1
 sig(){ curl -s "http://$H/ready/$1" >/dev/null 2>&1; sleep 5; }
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication

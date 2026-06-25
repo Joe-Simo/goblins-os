@@ -732,6 +732,14 @@ fn run_native_shell(config: ShellConfig, shell_state: ShellState) -> ShellResult
             window.set_default_size(1440, 900);
             window.fullscreen();
         }
+        // Capture affordance (off by default, like the other GOBLINS_OS_RENDER_*
+        // envs): the hardware-gate harness maximizes each surface so a framebuffer
+        // screendump captures it filling the work area (keeping window chrome + the
+        // menu bar/dock) — solving the foreground/z-order ambiguity of windowed
+        // capture without any compositor/session change.
+        if std::env::var_os("GOBLINS_OS_RENDER_FULLSCREEN").is_some() {
+            window.maximize();
+        }
         window.present();
 
         if !session_is_unlocked(&state.borrow()) {

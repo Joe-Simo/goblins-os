@@ -3099,6 +3099,12 @@ fn run_native_settings(config: SettingsConfig, state: SettingsState) -> Settings
 
         window.add_css_class("gos-settings-window");
         window.set_child(Some(&build_settings(&config, &state, &window)));
+        // Capture affordance (off by default, like the other GOBLINS_OS_RENDER_*
+        // envs): maximize each surface so a framebuffer screendump captures it
+        // filling the work area (keeping chrome) for the hardware-gate harness.
+        if std::env::var_os("GOBLINS_OS_RENDER_FULLSCREEN").is_some() {
+            window.maximize();
+        }
         window.present();
     });
 

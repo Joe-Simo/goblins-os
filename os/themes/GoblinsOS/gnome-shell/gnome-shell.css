@@ -292,3 +292,89 @@ stage {
 .search-provider-icon {
   border-radius: 16px;
 }
+
+/* ── Screenshot / screencast capture overlay (Cmd+Shift+4 / Cmd+Shift+5) ────
+   GNOME's native interactive capture UI (area/window/screen + record) is the
+   Cmd+Shift+5 equivalent; brand it to the same dark glass as the chrome so the
+   macOS muscle-memory lands on a surface that looks like the rest of the OS.
+   Refine against os/bootc/render-desktop.sh (triggers the overlay via Eval). */
+.screenshot-ui-panel {
+  background-color: rgba(24, 24, 30, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 22px;
+  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.52);
+  padding: 10px 14px;
+  spacing: 8px;
+}
+
+/* The Screenshot ⇄ Screencast switch and the area/window/screen type toggles —
+   calm hairline pills, ink-filled when active (the chrome's selection idiom). */
+.screenshot-ui-shot-cast-container,
+.screenshot-ui-type-button-container {
+  border-radius: 14px;
+  background-color: rgba(255, 255, 255, 0.06);
+  padding: 3px;
+  spacing: 3px;
+}
+.screenshot-ui-type-button,
+.screenshot-ui-shot-cast-button {
+  border-radius: 11px;
+  color: #ededf0;
+  padding: 6px 12px;
+  transition-duration: 140ms;
+}
+.screenshot-ui-type-button:hover,
+.screenshot-ui-shot-cast-button:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+.screenshot-ui-type-button:checked,
+.screenshot-ui-shot-cast-button:checked {
+  background-color: #f5f5f4;
+  color: #161616;
+}
+
+/* The big round capture button — a calm white shutter; turns macOS-red in the
+   screencast (record) state. */
+.screenshot-ui-capture-button .screenshot-ui-capture-button-circle {
+  background-color: #f5f5f4;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+}
+.screenshot-ui-capture-button:hover .screenshot-ui-capture-button-circle {
+  background-color: #ffffff;
+}
+.screenshot-ui-capture-button.screencast .screenshot-ui-capture-button-circle {
+  background-color: #ff453a;
+  border-color: rgba(255, 69, 58, 0.5);
+}
+
+/* Pointer-visibility + close affordances — hairline pills like the chrome. */
+.screenshot-ui-show-pointer-button,
+.screenshot-ui-close-button {
+  border-radius: 11px;
+  color: #ededf0;
+  background-color: rgba(255, 255, 255, 0.06);
+  transition-duration: 140ms;
+}
+.screenshot-ui-show-pointer-button:hover,
+.screenshot-ui-close-button:hover { background-color: rgba(255, 255, 255, 0.14); }
+.screenshot-ui-show-pointer-button:checked {
+  background-color: #f5f5f4;
+  color: #161616;
+}
+
+/* Area selection handles + the window-picker tiles — accent-tinted glass,
+   matching the snap-assist tile preview and overview window-clone borders. */
+.screenshot-ui-area-selector-handle {
+  background-color: #f5f5f7;
+  border-radius: 999px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.screenshot-ui-window-selector-window {
+  border-radius: 14px;
+  border: 2px solid transparent;
+}
+.screenshot-ui-window-selector-window:hovered,
+.screenshot-ui-window-selector-window:selected {
+  border-color: rgba(245, 245, 247, 0.7);
+}

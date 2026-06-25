@@ -719,6 +719,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "goblins-os-markup"
+version = "0.1.0"
+dependencies = [
+ "goblins-os-design",
+ "goblins-os-ui",
+ "gtk4",
+]
+
+[[package]]
 name = "goblins-os-open"
 version = "0.1.0"
 dependencies = [

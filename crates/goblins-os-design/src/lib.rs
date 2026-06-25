@@ -32,6 +32,16 @@ pub const GOBLINS_MARK_DARK: &str = "/usr/share/goblins-os/brand/Goblins-black-m
 /// The Goblins OS system mark (white), for night surfaces (menu bar, lock, hero).
 pub const GOBLINS_MARK_LIGHT: &str = "/usr/share/goblins-os/brand/Goblins-white-mark.svg";
 
+/// The desktop wallpaper (dark variant). A crafted window samples this asset to
+/// paint a real GSK backdrop-blur vibrancy material — the blur the compositor
+/// cannot give an isolated app surface, drawn from the one image the OS controls.
+pub const GOBLINS_WALLPAPER_DARK: &str =
+    "/usr/share/goblins-os/brand/wallpaper/goblins-os-dark.svg";
+
+/// The desktop wallpaper (light variant), source for the light vibrancy material.
+pub const GOBLINS_WALLPAPER_LIGHT: &str =
+    "/usr/share/goblins-os/brand/wallpaper/goblins-os-light.svg";
+
 // ── Motion tokens (the macOS-blend half of the language) ─────────────────────
 // One motion vocabulary for the whole OS. Durations are expressed in ms and the
 // easing curves are GTK4 `cubic-bezier()` strings, so a Rust animation (the
@@ -2108,7 +2118,7 @@ button:active {
 .gos-material {
   border: 1px solid @gos_material_border;
   border-radius: 16px;
-  background: @gos_material_regular;
+  background: @gos_material_ultra_thick;
   box-shadow: 0 1px 0 @gos_material_sheen inset,
               0 30px 80px @gos_material_shadow;
 }
@@ -2126,7 +2136,9 @@ button:active {
   padding: 10px;
   border: 1px solid @gos_material_border;
   border-radius: 16px;
-  background: @gos_material_ultra_thick;
+  /* Transparent: the GSK VibrancyBackdrop behind the card paints the blurred
+     wallpaper material; the border, sheen, and shadow remain the card's chrome. */
+  background: transparent;
   box-shadow: 0 1px 0 @gos_material_sheen inset,
               0 36px 96px @gos_material_shadow;
 }
@@ -2272,7 +2284,10 @@ button:active {
   padding: 14px;
   border: 1px solid @gos_material_border;
   border-radius: 16px;
-  background: @gos_material_ultra_thick;
+  /* Transparent: the GSK VibrancyBackdrop behind this card paints the blurred
+     wallpaper + tint material, so the flat fill would only mask the blur. The
+     border, sheen, and drop shadow stay here as the card's chrome. */
+  background: transparent;
   box-shadow: 0 1px 0 @gos_material_sheen inset,
               0 28px 72px @gos_material_shadow;
 }

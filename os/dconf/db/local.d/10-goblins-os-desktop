@@ -62,6 +62,12 @@ switch-applications-backward=@as []
 # plugin is a RequiredComponent of the goblins-os session, so these bindings
 # are live in the session.
 custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-launcher/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-assistant/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-selected-text/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-writing-tools/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-screen-context/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-visual-context/']
+# macOS screenshot muscle-memory on GNOME's own (Wayland-correct) capture stack.
+# Cmd+Shift+3 → whole screen saved to ~/Pictures/Screenshots; +Ctrl → clipboard
+# (macOS uses Control to divert to the clipboard). Cmd+Shift+4/5 live below in the
+# shell-keybindings group (the interactive capture/record overlay).
+screenshot=['<Shift><Super>3']
+screenshot-clip=['<Shift><Super><Control>3']
 
 [org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-launcher]
 name='Goblins Launcher'
@@ -92,6 +98,14 @@ binding='<Super><Alt>s'
 name='Goblins AI Screenshot Context'
 command='/usr/libexec/goblins-os/goblins-os-screenshot-context'
 binding='<Super><Alt>v'
+
+[org/gnome/shell/keybindings]
+# The interactive capture overlay (area/window/screen toggle + record button +
+# selection handles + clipboard copy) is GNOME's native Cmd+Shift+5 equivalent.
+# Cmd+Shift+4 → capture (defaults to area; press W for window, S for screen);
+# Cmd+Shift+5 → the same overlay switched to screen-recording. Print still works.
+show-screenshot-ui=['<Shift><Super>4', 'Print']
+show-screen-recording-ui=['<Shift><Super>5']
 
 [org/gnome/shell]
 # Desktop surfaces: the GoblinsOS theme (menu bar / control center) + our

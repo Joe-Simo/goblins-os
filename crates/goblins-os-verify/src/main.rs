@@ -13,6 +13,7 @@ const BINARIES: &[&str] = &[
     "goblins-os-installer",
     "goblins-os-launcher",
     "goblins-os-login",
+    "goblins-os-markup",
     "goblins-os-open",
     "goblins-os-resident",
     "goblins-os-screenshot-context",

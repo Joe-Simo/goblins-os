@@ -8,6 +8,7 @@ members = [
   "crates/goblins-os-installer",
   "crates/goblins-os-launcher",
   "crates/goblins-os-login",
+  "crates/goblins-os-markup",
   "crates/goblins-os-open",
   "crates/goblins-os-resident",
   "crates/goblins-os-screenshot-context",

@@ -807,7 +807,11 @@ mod native {
         scroll.set_child(Some(&list));
         card.append(&scroll);
 
-        window.set_child(Some(&card));
+        // Spotlight-grade vibrancy: the launcher is a centered overlay over the
+        // wallpaper, the canonical macOS material surface. Wrap the card in the
+        // shared GSK backdrop-blur so the wallpaper blooms through the glass.
+        let backdrop = goblins_os_ui::VibrancyBackdrop::new(goblins_os_ui::resolve_dark(), &card);
+        window.set_child(Some(&backdrop));
 
         let ui = Rc::new(LauncherUi {
             core_url: config.core_url.clone(),

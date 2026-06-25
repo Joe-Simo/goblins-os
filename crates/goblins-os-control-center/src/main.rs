@@ -260,7 +260,11 @@ mod native {
         }
         card.append(&settings);
 
-        window.set_child(Some(&card));
+        // Wrap the card in a real GSK backdrop-blur vibrancy material: the blurred
+        // wallpaper the compositor cannot give an isolated surface, drawn in-process
+        // from the shipped wallpaper so it survives the headless software renderer.
+        let backdrop = goblins_os_ui::VibrancyBackdrop::new(goblins_os_ui::resolve_dark(), &card);
+        window.set_child(Some(&backdrop));
 
         // Escape dismisses; losing focus dismisses (a real popover) unless the
         // render harness pins the only captured window on screen.

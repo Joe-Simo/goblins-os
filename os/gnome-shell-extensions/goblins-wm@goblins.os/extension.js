@@ -76,6 +76,11 @@ export default class GoblinsWindowManagement extends Extension {
         this._groupFilter = null;
         this._snapApplyTimeout = 0;
         this._signals = [];
+        this._screenshotMonitor = null;
+        this._screenshotThumb = null;
+        this._screenshotTimeout = 0;
+        this._screenshotThumbTimeout = 0;
+        this._lastShot = null;
 
         for (const [name, method] of KEYBINDINGS) {
             Main.wm.addKeybinding(
@@ -93,6 +98,8 @@ export default class GoblinsWindowManagement extends Extension {
         ]);
         this._rememberFocus(global.display.focus_window);
 
+        this._setupScreenshotWatch();
+
         globalThis.goblinsWindowManager = this;
     }
 
@@ -106,6 +113,7 @@ export default class GoblinsWindowManagement extends Extension {
 
         this.hide();
         this._clearSnapPreview();
+        this._teardownScreenshotWatch();
         if (globalThis.goblinsWindowManager === this)
             delete globalThis.goblinsWindowManager;
 
@@ -115,6 +123,136 @@ export default class GoblinsWindowManagement extends Extension {
         this._appSystem = null;
         this._geometryBeforeSnap = null;
         this._recentWindows = null;
+    }
+
+    // ── macOS-style screenshot thumbnail ──────────────────────────────────────
+    // Watch the folder GNOME's capture overlay writes to; when a new shot lands,
+    // drop a framed thumbnail in the corner that fades on its own, or — clicked —
+    // opens the Goblins markup editor on that file. The macOS capture-thumbnail
+    // idiom, riding GNOME's own Wayland-correct capture stack. The whole path is
+    // contained so a watch failure can never take the rest of the shell down.
+    _setupScreenshotWatch() {
+        try {
+            const base =
+                GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES) ||
+                GLib.get_home_dir();
+            this._screenshotDir = GLib.build_filenamev([base, 'Screenshots']);
+            const dir = Gio.File.new_for_path(this._screenshotDir);
+            if (!dir.query_exists(null))
+                dir.make_directory_with_parents(null);
+            this._screenshotMonitor = dir.monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, null);
+            this._screenshotMonitor.connect('changed', (_monitor, file, _other, type) => {
+                if (
+                    type === Gio.FileMonitorEvent.CREATED ||
+                    type === Gio.FileMonitorEvent.MOVED_IN
+                )
+                    this._onScreenshotCreated(file);
+            });
+        } catch (_error) {
+            this._screenshotMonitor = null;
+        }
+    }
+
+    _teardownScreenshotWatch() {
+        if (this._screenshotTimeout) {
+            GLib.source_remove(this._screenshotTimeout);
+            this._screenshotTimeout = 0;
+        }
+        this._dismissScreenshotThumb();
+        if (this._screenshotMonitor) {
+            this._screenshotMonitor.cancel();
+            this._screenshotMonitor = null;
+        }
+        this._screenshotDir = null;
+        this._lastShot = null;
+    }
+
+    _onScreenshotCreated(file) {
+        const path = file?.get_path?.();
+        if (!path || !path.toLowerCase().endsWith('.png') || path === this._lastShot)
+            return;
+        this._lastShot = path;
+        // Let the capture finish writing before we read it for the thumbnail.
+        if (this._screenshotTimeout)
+            GLib.source_remove(this._screenshotTimeout);
+        this._screenshotTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 350, () => {
+            this._screenshotTimeout = 0;
+            this._showScreenshotThumbnail(path);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _showScreenshotThumbnail(path) {
+        this._dismissScreenshotThumb();
+        const width = 224;
+        const height = 140;
+        const thumb = new St.Button({
+            style_class: 'goblins-screenshot-thumb',
+            can_focus: true,
+            reactive: true,
+            track_hover: true,
+            width,
+            height,
+        });
+        thumb.set_style(`background-image: url("file://${path}");`);
+
+        const monitor = Main.layoutManager.primaryMonitor;
+        const margin = 28;
+        Main.layoutManager.addChrome(thumb);
+        thumb.set_position(
+            monitor.x + monitor.width - width - margin,
+            monitor.y + monitor.height - height - margin
+        );
+        thumb.set_pivot_point(0.5, 1.0);
+        thumb.opacity = 0;
+        thumb.scale_x = 0.92;
+        thumb.scale_y = 0.92;
+        thumb.ease({
+            opacity: 255,
+            scale_x: 1,
+            scale_y: 1,
+            duration: OVERLAY_FADE_MS,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+
+        thumb.connect('clicked', () => {
+            this._dismissScreenshotThumb();
+            try {
+                Gio.Subprocess.new(
+                    ['/usr/libexec/goblins-os/goblins-os-markup', path],
+                    Gio.SubprocessFlags.NONE
+                );
+            } catch (_error) {
+                // Best-effort: the saved screenshot already exists on disk.
+            }
+        });
+
+        this._screenshotThumb = thumb;
+        this._screenshotThumbTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+            this._screenshotThumbTimeout = 0;
+            this._dismissScreenshotThumb();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _dismissScreenshotThumb() {
+        if (this._screenshotThumbTimeout) {
+            GLib.source_remove(this._screenshotThumbTimeout);
+            this._screenshotThumbTimeout = 0;
+        }
+        const thumb = this._screenshotThumb;
+        if (!thumb)
+            return;
+        this._screenshotThumb = null;
+        thumb.ease({
+            opacity: 0,
+            duration: OVERLAY_FADE_MS,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onComplete: () => {
+                Main.layoutManager.removeChrome(thumb);
+                thumb.destroy();
+            },
+        });
     }
 
     // Stable hooks used by render-desktop.sh for real-pixel proof captures.

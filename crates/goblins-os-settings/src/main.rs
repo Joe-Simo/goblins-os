@@ -17341,8 +17341,9 @@ window.gos-settings-window {
 
 .gos-settings-root .gos-ready {
   color: @gos_ready;
-  background: @gos_ready_soft;
-  border-color: alpha(@gos_ready, 0.34);
+  background: transparent;
+  border-color: transparent;
+  font-weight: 600;
 }
 
 .gos-settings-root .gos-status-quiet {
@@ -17354,8 +17355,9 @@ window.gos-settings-window {
 
 .gos-settings-root .gos-waiting {
   color: @gos_waiting;
-  background: alpha(@gos_waiting, 0.12);
-  border-color: alpha(@gos_waiting, 0.36);
+  background: transparent;
+  border-color: transparent;
+  font-weight: 600;
 }
 "#;
 
@@ -18454,15 +18456,17 @@ mod tests {
             )
         );
         assert!(css.contains(".gos-settings-root .gos-status-pill {\n  padding: 4px 9px;"));
-        assert!(css.contains(".gos-settings-root .gos-ready {\n  color: @gos_ready;"));
-        assert!(css.contains("background: @gos_ready_soft;"));
-        assert!(css.contains("border-color: alpha(@gos_ready, 0.34);"));
-        assert!(
-            css.contains(".gos-settings-root .gos-status-quiet {\n  color: @gos_label_secondary;")
-        );
-        assert!(css.contains("background: @gos_fill_secondary;"));
-        assert!(css.contains(".gos-settings-root .gos-waiting {\n  color: @gos_waiting;"));
-        assert!(css.contains("background: alpha(@gos_waiting, 0.12);"));
+        // Status states render as plain trailing text (no chip): neutral, ready, and
+        // attention differ by color + weight only, matching macOS System Settings.
+        assert!(css.contains(
+            ".gos-settings-root .gos-ready {\n  color: @gos_ready;\n  background: transparent;"
+        ));
+        assert!(css.contains(
+            ".gos-settings-root .gos-status-quiet {\n  color: @gos_label_secondary;\n  background: transparent;"
+        ));
+        assert!(css.contains(
+            ".gos-settings-root .gos-waiting {\n  color: @gos_waiting;\n  background: transparent;"
+        ));
         assert!(!css.contains(".gos-status-pill {\n  padding: 6px 10px;"));
         let status_pill_block = css
             .split(".gos-settings-root .gos-status-pill {")

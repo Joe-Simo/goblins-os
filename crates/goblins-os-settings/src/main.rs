@@ -5227,6 +5227,7 @@ fn append_bluetooth_power_control(
     row.append(&copy);
 
     let toggle = gtk4::Switch::new();
+    toggle.add_css_class("gos-switch");
     toggle.set_active(powered);
     toggle.set_valign(gtk4::Align::Center);
     toggle.set_tooltip_text(Some("Bluetooth power"));
@@ -8432,6 +8433,7 @@ fn append_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
     row.append(&copy);
 
     let toggle = gtk4::Switch::new();
+    toggle.add_css_class("gos-switch");
     toggle.set_active(offline);
     toggle.set_valign(gtk4::Align::Center);
     toggle.set_tooltip_text(Some("Private mode"));
@@ -14158,6 +14160,7 @@ fn switch_row_dynamic(
     row.append(&copy);
 
     let toggle = gtk4::Switch::new();
+    toggle.add_css_class("gos-switch");
     toggle.set_active(active);
     toggle.set_sensitive(sensitive);
     toggle.set_valign(gtk4::Align::Center);

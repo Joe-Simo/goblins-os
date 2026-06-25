@@ -388,7 +388,8 @@ window.gos-windowed {
 
 window.gos-windowed .gos-root {
   margin: 28px;
-  border-radius: 16px;
+  /* ~12px window radius reads as a Mac window; 16px drifted toward iOS/GTK. */
+  border-radius: 12px;
   border: 1px solid @gos_hairline;
   box-shadow: 0 1px 0 @gos_panel_sheen inset,
               0 24px 62px @gos_shadow_window;
@@ -408,7 +409,7 @@ window.gos-windowed .gos-root {
   min-height: 50px;
   border: none;
   border-bottom: 1px solid @gos_hairline;
-  border-radius: 16px 16px 0 0;
+  border-radius: 12px 12px 0 0;
   background: alpha(@gos_surface, 0.82);
   box-shadow: none;
 }
@@ -473,7 +474,8 @@ window.gos-windowed .gos-root {
 .gos-main-panel {
   padding: 28px;
   border: 1px solid @gos_hairline;
-  border-radius: 14px;
+  /* Match the 12px window radius so inset panels never out-round the window. */
+  border-radius: 12px;
   background: alpha(@gos_surface, 0.9);
   /* Layered macOS-grade elevation: a hairline top sheen, a tight contact shadow,
      and a soft ambient cast — depth without heaviness. */
@@ -541,6 +543,7 @@ window.gos-windowed .gos-root {
 .gos-state-label {
   color: @gos_label_secondary;
   font-size: 14px;
+  line-height: 1.45;
 }
 
 .gos-footnote {
@@ -553,16 +556,20 @@ window.gos-windowed .gos-root {
   color: @gos_ink;
   font-size: 28px;
   font-weight: 600;
-  letter-spacing: 0;
+  /* macOS tightens tracking on display sizes; Inter needs the same negative
+     letter-spacing at large sizes to read as crafted rather than loose. */
+  letter-spacing: -0.3px;
 }
 
 .gos-hero-title,
 .gos-lock-title {
   /* Hero and lock titles always sit on the dark night gradient, so the title is
-     white in both schemes by design — intentionally literal, not tokenized. */
+     white in both schemes by design — intentionally literal, not tokenized.
+     Semibold (not bold) with negative tracking matches the macOS large-title feel
+     instead of reading over-heavy. */
   color: #ffffff;
-  font-weight: 700;
-  letter-spacing: 0;
+  font-weight: 600;
+  letter-spacing: -0.5px;
 }
 
 .gos-hero-title {
@@ -571,7 +578,7 @@ window.gos-windowed .gos-root {
 
 .gos-lock-title {
   font-size: 52px;
-  letter-spacing: 0;
+  letter-spacing: -0.8px;
 }
 
 .gos-hero-copy,
@@ -731,6 +738,7 @@ window.gos-windowed .gos-root {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
+  font-feature-settings: "tnum" 1;
 }
 
 /* Inline + top-bar status pills carry functional color. */
@@ -744,6 +752,51 @@ window.gos-windowed .gos-root {
   color: @gos_waiting;
   background: alpha(@gos_waiting, 0.12);
   border-color: alpha(@gos_waiting, 0.36);
+}
+
+/* ── Toggle switches ─────────────────────────────────────────────────── */
+/* macOS uses system GREEN for an "on" switch (blue is reserved for selection) with
+   a raised white knob; GTK's stock switch is flat Adwaita blue — the loudest
+   non-native control signal. .gos-switch restyles the track + slider to the macOS
+   idiom, scheme-aware: the off-track derives from the ink so it reads on both light
+   and dark, the knob stays white in both schemes (as on macOS). */
+switch.gos-switch {
+  min-width: 42px;
+  min-height: 25px;
+  border: none;
+  border-radius: 999px;
+  background-color: alpha(@gos_ink, 0.16);
+}
+
+switch.gos-switch:checked {
+  background-color: @gos_system_green;
+}
+
+switch.gos-switch:disabled {
+  opacity: 0.5;
+}
+
+switch.gos-switch slider {
+  min-width: 21px;
+  min-height: 21px;
+  margin: 2px;
+  border-radius: 999px;
+  background-color: #ffffff;
+  box-shadow: 0 1px 3px alpha(@gos_shadow_ambient, 0.5),
+              0 0 0 0.5px alpha(@gos_ink, 0.05);
+}
+
+switch.gos-switch:focus:focus-visible {
+  box-shadow: 0 0 0 3px @gos_focus;
+}
+
+/* Tabular figures so numeric value/measurement columns align like macOS instead
+   of drifting with proportional digits. */
+.gos-install-row-value,
+.gos-row-value,
+.gos-studio-diff-add,
+.gos-studio-diff-del {
+  font-feature-settings: "tnum" 1;
 }
 
 /* App tiles stay neutral by default — readiness reads from the calm surface, so

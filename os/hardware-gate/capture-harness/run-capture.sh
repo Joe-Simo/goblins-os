@@ -35,11 +35,11 @@ pick() { for f in "$@"; do [ -n "$f" ] && [ -f "$f" ] && { echo "$f"; return 0; 
 VARS_TEMPLATE=""
 if [ "$ARCH" = aarch64 ]; then
   MACHINE="virt,accel=$ACCEL,gic-version=max"
-  CODE="$(pick "$AARCH64_UEFI_CODE" /opt/homebrew/share/qemu/edk2-aarch64-code.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/edk2/aarch64/QEMU_EFI-silent.fd)"
-  VARS_TEMPLATE="$(pick "$AARCH64_UEFI_VARS" /usr/share/AAVMF/AAVMF_VARS.fd || true)"  # empty 64M also works on edk2-aarch64
+  CODE="$(pick "${AARCH64_UEFI_CODE:-}" /opt/homebrew/share/qemu/edk2-aarch64-code.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/edk2/aarch64/QEMU_EFI-silent.fd)"
+  VARS_TEMPLATE="$(pick "${AARCH64_UEFI_VARS:-}" /usr/share/AAVMF/AAVMF_VARS.fd || true)"  # empty 64M also works on edk2-aarch64
 else
   MACHINE="q35,accel=$ACCEL"
-  CODE="$(pick "$X86_UEFI_CODE" /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/ovmf/OVMF_CODE.fd)"
+  CODE="$(pick "${X86_UEFI_CODE:-}" /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/ovmf/OVMF_CODE.fd)"
   # x86_64 OVMF requires a real VARS template matching the code build (4M code -> 4M vars).
   case "$CODE" in
     *_4M.fd) VARS_TEMPLATE="$(pick /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/ovmf/OVMF_VARS.fd)";;
@@ -79,6 +79,26 @@ export GOS_QMP="$WORK/qmp.sock" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_D
 # Phase the run with the QMP driver (waits for Anaconda, drives it, waits for the
 # desktop, dismisses onboarding, launches the orchestrator, captures on signals).
 python3 "$HERE/drive-capture.py"
+
+# HONESTY GUARD: refuse to write a signoff for a run whose surfaces aren't all
+# distinct. GNOME 42+ returns AccessDenied to scripted screenshots (org.gnome.
+# Shell.Screenshot), so the only automation path is the host QMP framebuffer
+# screendump, which collapses some surfaces to byte-identical duplicates when a
+# window doesn't foreground in time. close-signoff.sh only checks PNG validity,
+# not distinctness — so without this guard, duplicates would falsely read as
+# distinct proof and the shipping gate would go green on a lie. A human operator
+# (the gate's by-design path) visually confirms each surface; an unattended agent
+# cannot. Fail loudly rather than commit a dishonest run.
+md5cmd() { command -v md5sum >/dev/null && md5sum "$@" || md5 -r "$@"; }
+_total="$(ls "$RUN_DIR"/*.png 2>/dev/null | wc -l | tr -d ' ')"
+_distinct="$(md5cmd "$RUN_DIR"/*.png 2>/dev/null | awk '{print $1}' | sort -u | wc -l | tr -d ' ')"
+if [ "${_distinct:-0}" -lt "${_total:-1}" ]; then
+  echo "HONESTY GUARD: only $_distinct/$_total captured surfaces are distinct."
+  echo "GNOME Wayland blocks scripted per-window capture (AccessDenied); duplicate"
+  echo "surfaces cannot be passed off as distinct proof. This run requires a human"
+  echo "operator at the display (run-external-gate.sh) — refusing to close-signoff."
+  exit 3
+fi
 
 # Write the proof manifest + run close-signoff.
 python3 - "$RUN_DIR" "$ARCH" "$ISO" "$ISO_SHA" "$DATE" <<'PY'

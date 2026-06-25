@@ -3204,7 +3204,27 @@ fn append_target_dual_boot_plan(panel: &gtk4::Box, target: &InstallTarget) {
             dual_boot_status_label(&target.dual_boot_plan.status)
         )
     };
-    panel.append(&review_row(&heading, &dual_boot_plan_summary(target)));
+    // macOS Disk Utility / Installer presents storage facts as labeled rows, not a
+    // run-on sentence. A real structured plan is broken into Action / Target /
+    // Preserve / Bootloader / Finish rows; the no-structured-plan fallback keeps the
+    // single guidance line.
+    if target.dual_boot_plan.title.is_empty() {
+        panel.append(&review_row(&heading, &dual_boot_plan_summary(target)));
+    } else {
+        let plan = &target.dual_boot_plan;
+        panel.append(&review_row(&heading, &plan.summary));
+        for (field, value) in [
+            ("Action", plan.primary_action.as_str()),
+            ("Target", plan.storage_target.as_str()),
+            ("Preserve", plan.preserve.as_str()),
+            ("Bootloader", plan.bootloader.as_str()),
+            ("Finish", plan.finish.as_str()),
+        ] {
+            if !value.is_empty() {
+                panel.append(&review_row(field, value));
+            }
+        }
+    }
     for (index, step) in target.dual_boot_plan.steps.iter().enumerate() {
         panel.append(&review_row(&format!("Step {}", index + 1), step));
     }
@@ -4372,37 +4392,51 @@ fn populate_install_confirm(
     helper.set_wrap(true);
     helper.set_xalign(0.0);
     panel.append(&helper);
+    // The destructive action and its phrase field must stay in view — macOS keeps
+    // erase confirmations on a single screen. The dual-boot plan + verbose storage/
+    // boot facts go behind a collapsed "Storage & boot details" disclosure (the same
+    // pattern the review screen uses), so "Erase disk and install" is never pushed
+    // below the fold. The critical erase scope is already stated in the hero subtitle.
+    let details = gtk::Box::new(gtk::Orientation::Vertical, 10);
     if let Some(target) = selected.as_ref() {
-        append_target_dual_boot_plan(&panel, target);
+        append_target_dual_boot_plan(&details, target);
     }
     if let Some(status) = flow.state.install_targets.as_ref() {
-        append_install_environment(&panel, &status.environment);
-        append_boot_entries(&panel, &status.boot_entries);
-        append_pre_install_safety(&panel, &status.policy);
+        append_install_environment(&details, &status.environment);
+        append_boot_entries(&details, &status.boot_entries);
+        append_pre_install_safety(&details, &status.policy);
         if !status.policy.simple_install_scope.is_empty() {
-            panel.append(&review_row(
+            details.append(&review_row(
                 "Erase scope",
                 &status.policy.simple_install_scope,
             ));
         }
         if !status.policy.formatting_guidance.is_empty() {
-            panel.append(&review_row(
+            details.append(&review_row(
                 "Formatting",
                 &status.policy.formatting_guidance,
             ));
         }
-        append_pre_write_install_plan(&panel, &status.policy);
+        append_pre_write_install_plan(&details, &status.policy);
         if !status.policy.bootloader_recovery.is_empty() {
-            panel.append(&review_row(
+            details.append(&review_row(
                 "After reboot",
                 &status.policy.bootloader_recovery,
             ));
         }
-        append_post_install_verification(&panel, &status.policy);
+        append_post_install_verification(&details, &status.policy);
     }
+    let disclosure = gtk::Expander::new(Some("Storage & boot details"));
+    disclosure.set_expanded(false);
+    disclosure.set_margin_top(8);
+    disclosure.set_child(Some(&details));
+    panel.append(&disclosure);
     column.append(&panel);
 
-    let install = button("Erase disk and install", &["gos-onboarding-primary"]);
+    let install = button(
+        "Erase disk and install",
+        &["gos-onboarding-primary", "gos-onboarding-destructive"],
+    );
     install.set_halign(gtk::Align::Center);
     install.set_margin_top(22);
     install.set_sensitive(false);

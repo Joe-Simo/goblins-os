@@ -920,6 +920,25 @@ button:active {
               0 8px 20px rgba(13, 13, 12, 0.22);
 }
 
+/* The one irreversible action in the OS — "Erase disk and install" — must NOT read
+   as a benign blue Continue. macOS marks irreversible actions in red; this overlays
+   the primary geometry with the system-red fill + a red focus ring, while the
+   .gos-onboarding-primary:disabled rule below (higher specificity) still recedes it
+   into the honest sunken state until the exact erase phrase is typed. */
+.gos-onboarding-destructive {
+  background: @gos_system_red;
+  border: 1px solid alpha(@gos_system_red, 0.55);
+}
+
+.gos-onboarding-destructive:hover {
+  box-shadow: 0 10px 24px alpha(@gos_system_red, 0.38);
+}
+
+.gos-onboarding-destructive:focus:focus-visible {
+  box-shadow: 0 0 0 3px alpha(@gos_system_red, 0.5),
+              0 8px 20px rgba(13, 13, 12, 0.22);
+}
+
 /* A disabled primary must read as disabled — the install flow leaves Continue and
    "Erase disk and install" disabled until a disk is chosen and the exact phrase is
    typed, and an honest OS never shows a heavy, clickable-looking button it won’t

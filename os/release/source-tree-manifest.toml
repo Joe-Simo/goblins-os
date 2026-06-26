@@ -45,6 +45,7 @@ paths = [
   "CONTRIBUTING.md",
   "README.md",
   "GO-LIVE.md",
+  "ROADMAP.md",
   "GOAL.md",
 ]
 

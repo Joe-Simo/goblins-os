@@ -16730,13 +16730,13 @@ window.gos-settings-window {
 
 .gos-settings-root .gos-side-nav.is-current {
   border-color: transparent;
-  background: alpha(@gos_accent, 0.16);
+  background: alpha(@gos_accent, 0.22);
   color: @gos_ink;
   font-weight: 600;
 }
 
 .gos-settings-root .gos-side-nav.is-current:hover {
-  background: alpha(@gos_accent, 0.20);
+  background: alpha(@gos_accent, 0.26);
 }
 
 .gos-settings-root .gos-side-nav.is-current .gos-side-icon-well {
@@ -16835,11 +16835,11 @@ window.gos-settings-window {
 
 .gos-settings-root .gos-preference-group {
   margin-top: 0;
-  border: 1px solid alpha(@gos_hairline, 0.55);
+  border: 1px solid alpha(@gos_hairline, 0.6);
   border-radius: 12px;
-  background: alpha(@gos_surface, 0.82);
+  background: alpha(@gos_surface, 0.96);
   box-shadow: 0 1px 0 alpha(@gos_panel_sheen, 0.28) inset,
-              0 1px 3px alpha(@gos_shadow_panel, 0.6);
+              0 1px 3px alpha(@gos_shadow_panel, 0.7);
 }
 
 .gos-settings-root .gos-preference-group .gos-row {

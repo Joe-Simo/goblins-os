@@ -5717,17 +5717,12 @@ const GOBLINS_OS_INSTALLER_CSS: &str = r#"
   font-weight: 600;
 }
 
-/* Unify the row-container language across the wizard. Review (step 2) and Done
-   (step 4) seat their rows on the tinted-grey inset of .gos-row (gos_fill_tertiary)
-   inside the white card; the step-1 disk rows previously sat white-on-white, set off
-   only by a hairline, so the three consecutive steps used two different materials.
-   Lift the resting disk row to the same tinted inset so every step shares one nested-
-   card surface and inset radius. The interactive hover/selected/blocked treatments
-   from the design crate still layer on top unchanged. */
-.gos-install-disk {
-  background: @gos_fill_tertiary;
-  border-radius: 10px;
-}
+/* Disk rows keep the design crate's single container treatment so all three rows
+   ladder: the eligible disk rests on the brighter base surface while blocked disks
+   recede to the muted surface (.is-blocked) — the eligible target reads as the
+   strongest row without a per-row fill swap. (An earlier installer-local background
+   override only repainted the eligible row, leaving blocked rows muted, which made
+   the list read as three different container systems and inverted the emphasis.) */
 
 /* One shared badge style for every disk-type chip (SSD / HDD / Removable). The chips
    share a class already, but mixed casing ("SSD" vs "Removable") under the eyebrow's

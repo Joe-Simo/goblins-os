@@ -356,13 +356,13 @@ fn build_login(
             }
         });
         identity.append(&sign_in);
-    } else {
+    } else if auth_authenticated {
+        // Authenticated: a calm ready status. The not-configured case needs no
+        // note here — the hero copy already states the situation and the
+        // feedback line states the choice, so a third paraphrase would only
+        // repeat them.
         identity.append(&centered_label(
-            if auth_authenticated {
-                "OpenAI account ready."
-            } else {
-                "OpenAI sign-in isn't set up yet — continue locally, or finish setup in Settings."
-            },
+            "OpenAI account ready.",
             &["gos-identity-note"],
         ));
     }

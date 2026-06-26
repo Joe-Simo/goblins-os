@@ -968,6 +968,46 @@ mod native {
         apply_selection(ui);
     }
 
+    /// The Goblins AI spark, drawn directly with Cairo rather than loaded as a
+    /// themed `-symbolic` icon. The custom symbolic SVG resolves to its file but
+    /// fails to recolor in the launcher's icon context (faint in light, a filled
+    /// box in dark), while a Cairo glyph that reads the widget's CSS ink renders
+    /// crisp and recolors with the row in both schemes (and takes the accent on
+    /// the selected row, since it carries the same `gos-launcher-row-icon` class).
+    fn engine_glyph(px: i32, dark: bool) -> gtk::DrawingArea {
+        let area = gtk::DrawingArea::new();
+        area.set_content_width(px);
+        area.set_content_height(px);
+        area.set_draw_func(move |_widget, cr, w, h| {
+            // Match the row's inherited foreground ink (the same near-black/near-
+            // white the sibling symbolic glyphs recolor to): gtk4 0.9 has no
+            // WidgetExt::color(), so the scheme is resolved by the caller.
+            if dark {
+                cr.set_source_rgba(0.92, 0.92, 0.96, 1.0);
+            } else {
+                cr.set_source_rgba(0.15, 0.15, 0.17, 1.0);
+            }
+            let s = w.min(h) as f64;
+            let cx = w as f64 / 2.0;
+            let cy = h as f64 / 2.0;
+            // A four-point spark: full-length axes with shorter diagonal rays.
+            let r = s * 0.44;
+            let rd = s * 0.21;
+            cr.set_line_width((s * 0.1).max(1.0));
+            cr.set_line_cap(gtk::cairo::LineCap::Round);
+            cr.move_to(cx, cy - r);
+            cr.line_to(cx, cy + r);
+            cr.move_to(cx - r, cy);
+            cr.line_to(cx + r, cy);
+            cr.move_to(cx - rd, cy - rd);
+            cr.line_to(cx + rd, cy + rd);
+            cr.move_to(cx + rd, cy - rd);
+            cr.line_to(cx - rd, cy + rd);
+            let _ = cr.stroke();
+        });
+        area
+    }
+
     fn result_row(item: &LauncherItem) -> gtk::Button {
         let row = gtk::Button::new();
         row.add_css_class("gos-launcher-row");
@@ -991,18 +1031,25 @@ mod native {
         // One optical icon rail: every leading mark is a themed symbolic image at
         // a single pixel size, inheriting one ink color (and the accent on the
         // selected row via CSS) — never a grab-bag of differently sized dingbats.
-        let icon = gtk::Image::from_icon_name(item.icon);
+        let px = if item.answer.is_some() { 20 } else { 16 };
+        // The Goblins AI spark is Cairo-drawn (engine_glyph); every other mark is
+        // a themed symbolic image. Both carry one ink class and one pixel size.
+        let icon: gtk::Widget = if item.icon == "goblins-engine-symbolic" {
+            engine_glyph(px, goblins_os_ui::resolve_dark()).upcast()
+        } else {
+            let image = gtk::Image::from_icon_name(item.icon);
+            image.set_pixel_size(px);
+            image.upcast()
+        };
         icon.add_css_class("gos-launcher-row-icon");
         icon.set_halign(gtk::Align::Center);
         if item.answer.is_some() {
             // On a quick-answer row the glyph is the operator next to a large
-            // 20px/700 result; size it up and pin it to the headline's top line
-            // so it reads as a baseline-matched operator, not a floating accent.
+            // 20px/700 result; pin it to the headline's top line so it reads as a
+            // baseline-matched operator, not a floating accent.
             row.add_css_class("has-answer");
-            icon.set_pixel_size(20);
             icon.set_valign(gtk::Align::Start);
         } else {
-            icon.set_pixel_size(16);
             icon.set_valign(gtk::Align::Center);
         }
         content.append(&icon);

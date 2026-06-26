@@ -10351,22 +10351,24 @@ fn settings_status_display_label(state: &str) -> String {
         {
             trimmed.to_string()
         }
-        _ => trimmed
-            .split(['-', '_', ' '])
-            .filter(|part| !part.is_empty())
-            .map(|part| {
-                let mut chars = part.chars();
-                match chars.next() {
-                    Some(first) => {
-                        let mut word = first.to_uppercase().collect::<String>();
-                        word.push_str(&chars.as_str().to_ascii_lowercase());
-                        word
-                    }
-                    None => String::new(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" "),
+        // Sentence case (capitalize the FIRST word only) — not Title Case — so
+        // already-humanized multi-word states ("ready to download", "local
+        // only", "full motion", "needs attention") read as "Ready to download",
+        // matching the canonical sentence-case branches above and the row copy,
+        // instead of the grammatically-wrong "Ready To Download".
+        _ => {
+            let words = trimmed
+                .split(['-', '_', ' '])
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase();
+            let mut chars = words.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
     }
 }
 

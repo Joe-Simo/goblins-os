@@ -593,6 +593,43 @@ fn fuzzy_score(query: &str, candidate: &str) -> Option<i32> {
     Some(score)
 }
 
+/// A user file the launcher can surface. macOS Spotlight finds any file; the
+/// launcher is the OS's ONLY search surface (the shell mode runs with
+/// `hasOverview:false`), so file search lives here. The pure ranking below is
+/// unit-tested; the directory scan + indexer query live in `mod native`.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileHit {
+    /// Absolute path — opens the file and reads as the row subtitle.
+    path: String,
+    /// The file name — the search target.
+    name: String,
+    /// Modified-time (epoch seconds); more-recent breaks score ties.
+    mtime: u64,
+}
+
+/// Rank file hits for a query: fuzzy NAME score first, then more-recent mtime
+/// breaks ties — so "report" surfaces the report you touched today. Pure and
+/// unit-tested; an empty query yields nothing (file rows only appear on input).
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn rank_file_hits(query: &str, hits: &[FileHit], limit: usize) -> Vec<FileHit> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut scored: Vec<(i32, u64, &FileHit)> = hits
+        .iter()
+        .filter_map(|h| fuzzy_score(trimmed, &h.name).map(|s| (s, h.mtime, h)))
+        .collect();
+    // Higher score first; equal score → newer file first.
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, _, h)| h.clone())
+        .collect()
+}
+
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
 fn run_launcher(config: LauncherConfig) -> LauncherResult<()> {
     let _ = config.core_url.as_str();
@@ -625,8 +662,8 @@ mod native {
     use serde::Deserialize;
 
     use super::{
-        bounded_context_value, convert_units, eval_math, fuzzy_score, LauncherConfig, LauncherMode,
-        LauncherResult, VISUAL_CONTEXT_SUBTITLE,
+        bounded_context_value, convert_units, eval_math, fuzzy_score, rank_file_hits, FileHit,
+        LauncherConfig, LauncherMode, LauncherResult, VISUAL_CONTEXT_SUBTITLE,
     };
 
     const MAX_BODY_BYTES: u64 = 1024 * 1024;
@@ -639,6 +676,124 @@ mod native {
     const CONTEXT_WINDOW_TITLE_ENV: &str = "GOBLINS_OS_CONTEXT_WINDOW_TITLE";
     const CONTEXT_TEXT_MAX_CHARS: usize = 4_000;
     const CONTEXT_METADATA_MAX_CHARS: usize = 180;
+
+    // ── File search ─────────────────────────────────────────────────────────
+    // A snappy one-shot scan of the user's own directories, cached for the
+    // launcher's lifetime (mirrors how built apps are fetched once) and ranked
+    // per keystroke. Content search is delegated to the system indexer when present.
+    const FILE_SCAN_MAX: usize = 4_000;
+    const FILE_SCAN_DEPTH: usize = 3;
+
+    /// The directories file-name search covers: the user's document folders plus
+    /// the workdirs of apps the on-device model has built (searchable like any file).
+    fn user_search_dirs() -> Vec<std::path::PathBuf> {
+        let mut dirs = Vec::new();
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = std::path::PathBuf::from(home);
+            for sub in ["Documents", "Desktop", "Downloads"] {
+                dirs.push(home.join(sub));
+            }
+        }
+        dirs.push(std::path::PathBuf::from("/var/lib/goblins-os/apps"));
+        dirs
+    }
+
+    /// Breadth-first, shallow, capped scan; hidden entries skipped. One-shot at
+    /// launch so per-keystroke ranking stays instant.
+    fn scan_user_files() -> Vec<FileHit> {
+        let mut hits = Vec::new();
+        let mut queue: std::collections::VecDeque<(std::path::PathBuf, usize)> =
+            user_search_dirs().into_iter().map(|d| (d, 0)).collect();
+        while let Some((dir, depth)) = queue.pop_front() {
+            if hits.len() >= FILE_SCAN_MAX {
+                break;
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') {
+                    continue; // skip hidden files and dotdirs
+                }
+                let Ok(meta) = entry.metadata() else { continue };
+                if meta.is_dir() {
+                    if depth + 1 < FILE_SCAN_DEPTH {
+                        queue.push_back((entry.path(), depth + 1));
+                    }
+                    continue;
+                }
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                hits.push(FileHit {
+                    path: entry.path().to_string_lossy().into_owned(),
+                    name,
+                    mtime,
+                });
+                if hits.len() >= FILE_SCAN_MAX {
+                    break;
+                }
+            }
+        }
+        hits
+    }
+
+    /// Best-effort CONTENT search via the system file indexer (localsearch /
+    /// tracker3) when it is installed and has indexed. A no-op (empty) when the
+    /// CLI or index is absent, so content search degrades HONESTLY rather than
+    /// pretending — name search above always works regardless.
+    fn content_search_hits(query: &str, limit: usize) -> Vec<FileHit> {
+        let trimmed = query.trim();
+        if trimmed.len() < 3 {
+            return Vec::new(); // content search needs a real term
+        }
+        let run = |bin: &str| {
+            Command::new(bin)
+                .args(["search", "--files", "--limit", &limit.to_string(), trimmed])
+                .output()
+        };
+        let Ok(out) = run("tracker3").or_else(|_| run("tracker")) else {
+            return Vec::new();
+        };
+        if !out.status.success() {
+            return Vec::new();
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let p = line.trim();
+                let p = p.strip_prefix("file://").unwrap_or(p);
+                if !p.starts_with('/') {
+                    return None;
+                }
+                let name = std::path::Path::new(p)
+                    .file_name()?
+                    .to_string_lossy()
+                    .into_owned();
+                Some(FileHit {
+                    path: p.to_string(),
+                    name,
+                    mtime: 0,
+                })
+            })
+            .take(limit)
+            .collect()
+    }
+
+    /// A compact, $HOME-relative path for the file row's subtitle (`~/Documents/x`).
+    fn friendly_path(path: &str) -> String {
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = home.to_string_lossy();
+            if let Some(rest) = path.strip_prefix(home.as_ref()) {
+                return format!("~{rest}");
+            }
+        }
+        path.to_string()
+    }
 
     fn placeholder_for_mode(mode: LauncherMode) -> &'static str {
         match mode {
@@ -703,6 +858,8 @@ mod native {
         Noop,
         /// Open a built app in a standalone Build Studio window.
         OpenApp(String),
+        /// Open a user file in its default application (xdg-open).
+        OpenFile(String),
         /// Open the launcher in another first-class mode.
         OpenLauncherMode(LauncherMode),
         /// Capture a screenshot through the OS helper, then open visual context.
@@ -742,11 +899,19 @@ mod native {
 
     pub fn run_launcher(config: LauncherConfig) -> LauncherResult<()> {
         let apps = Rc::new(fetch_apps(&config.core_url));
+        // One-shot file scan, cached for the launcher's lifetime (like apps).
+        let files = Rc::new(scan_user_files());
         let ai_actions = Rc::new(fetch_ai_actions(&config.core_url));
         let app = gtk::Application::builder().application_id(APP_ID).build();
         app.connect_activate(move |app| {
             goblins_os_ui::init_theming("");
-            build_window(app, &config, apps.clone(), ai_actions.clone());
+            build_window(
+                app,
+                &config,
+                apps.clone(),
+                files.clone(),
+                ai_actions.clone(),
+            );
         });
         // The launcher parses its own environment, not GTK CLI args.
         app.run_with_args(&["goblins-os-launcher"]);
@@ -757,6 +922,7 @@ mod native {
         app: &gtk::Application,
         config: &LauncherConfig,
         apps: Rc<Vec<BuiltApp>>,
+        files: Rc<Vec<FileHit>>,
         ai_actions: Rc<AiActions>,
     ) {
         let window = gtk::ApplicationWindow::builder()
@@ -820,6 +986,7 @@ mod native {
             list,
             scroll,
             apps,
+            files,
             ai_actions,
             mode: config.mode,
             items: RefCell::new(Vec::new()),
@@ -891,6 +1058,7 @@ mod native {
         list: gtk::Box,
         scroll: gtk::ScrolledWindow,
         apps: Rc<Vec<BuiltApp>>,
+        files: Rc<Vec<FileHit>>,
         ai_actions: Rc<AiActions>,
         mode: LauncherMode,
         items: RefCell<Vec<LauncherItem>>,
@@ -937,7 +1105,7 @@ mod native {
         if *ui.building.borrow() {
             return;
         }
-        let items = build_items(query, &ui.apps, &ui.ai_actions, ui.mode);
+        let items = build_items(query, &ui.apps, &ui.files, &ui.ai_actions, ui.mode);
         // Rebuild the visible rows.
         while let Some(child) = ui.list.first_child() {
             ui.list.remove(&child);
@@ -1136,6 +1304,11 @@ mod native {
             Action::Noop => {}
             Action::OpenApp(name) => {
                 spawn_shell(&["--open-app", &name]);
+                ui.window.close();
+            }
+            Action::OpenFile(path) => {
+                // Open in the default app (xdg-open handles files and folders).
+                spawn("xdg-open", &[&path]);
                 ui.window.close();
             }
             Action::OpenLauncherMode(mode) => {
@@ -1436,6 +1609,7 @@ mod native {
     fn build_items(
         query: &str,
         apps: &[BuiltApp],
+        files: &[FileHit],
         ai_actions: &AiActions,
         mode: LauncherMode,
     ) -> Vec<LauncherItem> {
@@ -1617,6 +1791,30 @@ mod native {
                 answer: None,
                 action: Action::OpenApp(app.name.clone()),
             });
+        }
+
+        // 2b) The user's files — by NAME from the cached scan, plus CONTENT matches
+        //     from the system indexer when present (Spotlight-grade reach for the
+        //     one search surface in the OS). Only on a real query.
+        if !trimmed.is_empty() {
+            let mut file_hits = rank_file_hits(trimmed, files, 6);
+            let mut seen: std::collections::HashSet<String> =
+                file_hits.iter().map(|h| h.path.clone()).collect();
+            for hit in content_search_hits(trimmed, 4) {
+                if seen.insert(hit.path.clone()) {
+                    file_hits.push(hit);
+                }
+            }
+            for hit in file_hits.into_iter().take(6) {
+                items.push(LauncherItem {
+                    icon: "text-x-generic-symbolic",
+                    title: hit.name.clone(),
+                    subtitle: friendly_path(&hit.path),
+                    kind: "File",
+                    answer: None,
+                    action: Action::OpenFile(hit.path),
+                });
+            }
         }
 
         // 3) Settings sections + quick actions.
@@ -2357,8 +2555,46 @@ mod native {
 mod tests {
     use super::{
         bounded_context_value, convert_units, eval_math, fuzzy_score, looks_like_math,
-        LauncherMode, VISUAL_CONTEXT_SUBTITLE,
+        rank_file_hits, FileHit, LauncherMode, VISUAL_CONTEXT_SUBTITLE,
     };
+
+    fn hit(name: &str, mtime: u64) -> FileHit {
+        FileHit {
+            path: format!("/home/goblin/Documents/{name}"),
+            name: name.to_string(),
+            mtime,
+        }
+    }
+
+    #[test]
+    fn file_search_ranks_by_name_then_recency() {
+        let hits = vec![
+            hit("budget-2024.md", 100),
+            hit("budget-2025.md", 200), // newer, same-quality match
+            hit("groceries.txt", 300),  // no "budget" match at all
+            hit("my-budget-notes.md", 50),
+        ];
+        let ranked = rank_file_hits("budget", &hits, 6);
+        // Only the three "budget" files match; groceries is filtered out.
+        assert_eq!(ranked.len(), 3);
+        assert!(ranked.iter().all(|h| h.name.contains("budget")));
+        // Equal-quality prefix matches break ties by recency → 2025 before 2024.
+        let names: Vec<&str> = ranked.iter().map(|h| h.name.as_str()).collect();
+        let i25 = names.iter().position(|n| *n == "budget-2025.md").unwrap();
+        let i24 = names.iter().position(|n| *n == "budget-2024.md").unwrap();
+        assert!(
+            i25 < i24,
+            "newer file should rank above the older equal match"
+        );
+    }
+
+    #[test]
+    fn file_search_empty_query_yields_nothing_and_limit_caps() {
+        let hits: Vec<FileHit> = (0..20).map(|i| hit(&format!("report-{i}.md"), i)).collect();
+        assert!(rank_file_hits("", &hits, 6).is_empty());
+        assert!(rank_file_hits("   ", &hits, 6).is_empty());
+        assert_eq!(rank_file_hits("report", &hits, 6).len(), 6); // limit honored
+    }
 
     #[test]
     fn evaluates_arithmetic_with_precedence() {

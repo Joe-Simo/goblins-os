@@ -11,6 +11,8 @@
 #panel {
   background-color: rgba(249, 249, 251, 0.78);
   border-bottom: 1px solid rgba(0, 0, 0, 0.09);
+  /* Brighter top-edge sheen for the light frosted panel (single box-shadow). */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
   color: #1a1a1f;
 }
 

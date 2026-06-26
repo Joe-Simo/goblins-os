@@ -3174,6 +3174,9 @@ fn build_settings(
     main_scroll.set_hexpand(true);
     main_scroll.set_vexpand(true);
     main_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    // Non-overlay scrollbar so the styled slim slider reads as a persistent macOS
+    // scrollbar (matching the sidebar's nav_scroll), not the stock overlay fade.
+    main_scroll.set_overlay_scrolling(false);
     main_scroll.set_propagate_natural_height(false);
 
     let side = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -16734,15 +16737,25 @@ window.gos-settings-window {
   background: transparent;
 }
 
-.gos-settings-root .gos-side-scroll scrollbar.vertical {
+.gos-settings-root .gos-side-scroll scrollbar.vertical,
+.gos-settings-root .gos-main-scroll scrollbar.vertical {
   min-width: 6px;
   margin: 6px 0;
 }
 
-.gos-settings-root .gos-side-scroll scrollbar.vertical slider {
+/* The main content pane gets the SAME slim macOS scrollbar as the sidebar — it
+   was falling through to the stock Adwaita scrollbar. A hover darkens the slider
+   the way macOS does. */
+.gos-settings-root .gos-side-scroll scrollbar.vertical slider,
+.gos-settings-root .gos-main-scroll scrollbar.vertical slider {
   min-height: 44px;
   border-radius: 999px;
   background: @gos_label_tertiary;
+}
+
+.gos-settings-root .gos-side-scroll scrollbar.vertical slider:hover,
+.gos-settings-root .gos-main-scroll scrollbar.vertical slider:hover {
+  background: @gos_label_secondary;
 }
 
 .gos-brand {
@@ -16774,9 +16787,12 @@ window.gos-settings-window {
 }
 
 .gos-section-title {
+  /* Size/weight kept local; tracking + leading come from the shared lib rule
+     (it is appended after this CSS, so its -0.3px display tracking and 1.2 leading
+     win) — settings titles read with the same crafted display tracking as the
+     shell instead of being flattened to letter-spacing: 0. */
   font-size: 28px;
   font-weight: 600;
-  letter-spacing: 0;
 }
 
 .gos-subsection-title {
@@ -16862,7 +16878,8 @@ window.gos-settings-window {
 .gos-side-icon-well {
   min-width: 26px;
   min-height: 26px;
-  border-radius: 7px;
+  /* 8px = the control rung (GOS_RADIUS_CONTROL_PX); was a one-off 7px. */
+  border-radius: 8px;
   background: @gos_tint_graphite;
   box-shadow: inset 0 1px 0 alpha(@gos_material_sheen, 0.45),
               0 0.5px 1.5px @gos_shadow_raise;

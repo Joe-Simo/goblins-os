@@ -94,6 +94,45 @@ pub const GOS_RADIUS_OVERLAY_PX: u32 = 22;
 /// Fully-round pills, dots, and capsules.
 pub const GOS_RADIUS_PILL_PX: u32 = 999;
 
+// ── Type ramp (one size+leading ladder, kit-aligned, rendered in Inter) ───────
+// GTK CSS has no length variables, so — exactly like GOS_RADIUS_* — these consts
+// are the single source of truth and the tests pin the CSS literals to them. The
+// macOS 27 kit expresses type as named steps each carrying BOTH a size and a
+// line-height; Goblins translates that *structure* into Inter (never SF Pro): the
+// content ramp matches the kit's steps, and a small display tier sits above it for
+// the OS's hero surfaces (login, first boot, the Build home). Each step is a
+// `(size_px, line_height_px)` pair; CSS expresses the leading as the unitless
+// `line-height` ratio (≈ leading / size), so the kit relationship stays legible.
+//
+// Content ramp — mirrors the kit content text styles (LargeTitle … Footnote):
+pub const GOS_TYPE_LARGE_TITLE: (u32, u32) = (26, 32);
+pub const GOS_TYPE_TITLE_1: (u32, u32) = (22, 26);
+pub const GOS_TYPE_TITLE_2: (u32, u32) = (17, 22);
+pub const GOS_TYPE_TITLE_3: (u32, u32) = (15, 20);
+pub const GOS_TYPE_BODY: (u32, u32) = (13, 16);
+pub const GOS_TYPE_CALLOUT: (u32, u32) = (12, 15);
+pub const GOS_TYPE_SUBHEADLINE: (u32, u32) = (11, 14);
+pub const GOS_TYPE_FOOTNOTE: (u32, u32) = (10, 13);
+//
+// Display tier — above the kit content ramp, for the OS's hero moments. One step
+// per surface weight; the hero step is shared by login/onboarding/network so those
+// sibling first-run screens can never re-pick a one-off display size again.
+pub const GOS_TYPE_SECTION: (u32, u32) = (28, 34);
+pub const GOS_TYPE_DISPLAY: (u32, u32) = (36, 42);
+pub const GOS_TYPE_HERO: (u32, u32) = (44, 52);
+pub const GOS_TYPE_LOCK: (u32, u32) = (52, 60);
+
+// ── Control-height ramp (one height ladder for interactive controls) ──────────
+// The kit ships every control in five sizes (Mini/Small/Regular/Large/XL); Goblins
+// needs four practical rungs. Like the radius ladder these are the source of truth
+// and tests pin representative CSS `min-height`s to them, so a new control can't
+// re-invent a one-off height. SM = compact chips/segments, RG = the default
+// in-panel control, LG = primary/in-panel action buttons, XL = the hero Build field.
+pub const GOS_CTRL_H_SM: u32 = 24;
+pub const GOS_CTRL_H_RG: u32 = 30;
+pub const GOS_CTRL_H_LG: u32 = 38;
+pub const GOS_CTRL_H_XL: u32 = 46;
+
 // ── Chrome accent (single source for the gnome-shell St chrome) ──────────────
 // St CSS can't read GTK @define-color, so the dock/WM extensions inline the accent.
 // This prefix is the ONE canonical value (the dark-scheme @gos_accent); a test pins
@@ -149,9 +188,14 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_system_blue         rgba(0, 136, 255, 1);
 
 @define-color gos_ink                 rgba(0, 0, 0, 0.85);
-@define-color gos_ink_secondary       #3d3d42;
-@define-color gos_ink_muted           #6e6e77;
-@define-color gos_ink_faint           #74747e;
+/* Subordinate inks are alpha (not opaque hex) so over-glass surfaces (launcher,
+   control center) let the wallpaper modulate the type the way the kit's vibrant
+   labels do. The alphas equal the old hexes' rendered weight on a white panel
+   (#3d3d42≈.76, #6e6e77≈.57), so opaque Settings panels are unchanged; faint is
+   nudged lighter to restore a clear faint<muted tier. */
+@define-color gos_ink_secondary       rgba(0, 0, 0, 0.76);
+@define-color gos_ink_muted           rgba(0, 0, 0, 0.57);
+@define-color gos_ink_faint           rgba(0, 0, 0, 0.42);
 
 @define-color gos_hairline            rgba(0, 0, 0, 0.08);
 @define-color gos_hairline_strong     rgba(0, 0, 0, 0.14);
@@ -212,9 +256,10 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_studio_panel_sheen  rgba(255, 255, 255, 0.80);
 @define-color gos_studio_shadow       rgba(13, 13, 12, 0.10);
 
-/* Studio functional accents use the same system-blue action role. */
-@define-color gos_studio_send_top     rgba(0, 136, 255, 1);
-@define-color gos_studio_send_bottom  rgba(0, 120, 240, 1);
+/* Studio send derives from the ONE accent blue, flat like every other OS CTA — no
+   private 3-stop send gradient. Hover is a single darkened accent tone. */
+@define-color gos_studio_send_top     @gos_accent;
+@define-color gos_studio_send_bottom  @gos_accent;
 @define-color gos_studio_send_hover   rgba(0, 102, 214, 1);
 @define-color gos_studio_send_text    #ffffff;
 /* Studio tool chrome stays in the label/fill system instead of turning into a
@@ -235,20 +280,31 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_shadow_panel        rgba(13, 13, 12, 0.10);
 @define-color gos_shadow_raise        rgba(13, 13, 12, 0.06);
 @define-color gos_shadow_ambient      rgba(13, 13, 12, 0.16);
+/* Grouped-card elevation, kept SEPARATE from the window/resident shadows so the
+   dark scheme can honor its own contract (cards lean on hairline + sheen, not a
+   heavy black drop) without lowering the shared tokens. Light: a soft contact +
+   ambient cast. Dark (below): no contact, only a faint seating ambient. */
+@define-color gos_shadow_card_contact rgba(13, 13, 12, 0.10);
+@define-color gos_shadow_card_ambient rgba(13, 13, 12, 0.16);
 
 /* ── Sidebar category tints (colored rounded icon tiles) ──────────────────────
    Each Settings category carries a calm, saturated tile with a white glyph — the
    single strongest "system settings" cue, translated to project-owned hues (no
    Apple assets). Dark variants stay vivid against graphite. */
-@define-color gos_tint_blue           rgba(0, 122, 255, 1);
+/* The category tints that overlap a kit system hue now carry the kit's CURRENT
+   light value (blue/red/orange/yellow/green = the same swatches as gos_system_*),
+   so a Settings tile and a status dot of the same color read as one system color
+   instead of two near-misses. Teal/indigo/purple/pink/graphite have no 1:1 status
+   role and stay project-owned. */
+@define-color gos_tint_blue           rgba(0, 136, 255, 1);
 @define-color gos_tint_teal           rgba(0, 178, 168, 1);
 @define-color gos_tint_indigo         rgba(74, 92, 230, 1);
 @define-color gos_tint_purple         rgba(162, 92, 222, 1);
 @define-color gos_tint_pink           rgba(255, 64, 120, 1);
-@define-color gos_tint_red            rgba(255, 69, 58, 1);
-@define-color gos_tint_orange         rgba(255, 149, 10, 1);
-@define-color gos_tint_yellow         rgba(240, 185, 20, 1);
-@define-color gos_tint_green          rgba(40, 190, 90, 1);
+@define-color gos_tint_red            rgba(255, 56, 60, 1);
+@define-color gos_tint_orange         rgba(255, 141, 40, 1);
+@define-color gos_tint_yellow         rgba(255, 204, 0, 1);
+@define-color gos_tint_green          rgba(52, 199, 89, 1);
 @define-color gos_tint_graphite       rgba(99, 101, 113, 1);
 @define-color gos_on_tint             #ffffff;
 "#;
@@ -294,9 +350,12 @@ const DARK_TOKENS: &str = r#"
 @define-color gos_system_blue         rgba(0, 145, 255, 1);
 
 @define-color gos_ink                 rgba(255, 255, 255, 1);
-@define-color gos_ink_secondary       #c4c4cc;
-@define-color gos_ink_muted           #9a9aa2;
-@define-color gos_ink_faint           #8d8d97;
+/* Inverted for night, same idea: alpha-white inks equal to the old hexes' weight
+   on graphite (#c4c4cc≈.77, #9a9aa2≈.60) so opaque panels are unchanged while the
+   glass surfaces gain wallpaper modulation; faint nudged to a clear lower tier. */
+@define-color gos_ink_secondary       rgba(255, 255, 255, 0.77);
+@define-color gos_ink_muted           rgba(255, 255, 255, 0.60);
+@define-color gos_ink_faint           rgba(255, 255, 255, 0.45);
 
 @define-color gos_hairline            rgba(255, 255, 255, 0.10);
 @define-color gos_hairline_strong     rgba(255, 255, 255, 0.17);
@@ -360,9 +419,9 @@ const DARK_TOKENS: &str = r#"
 @define-color gos_studio_panel_sheen  rgba(255, 255, 255, 0.06);
 @define-color gos_studio_shadow       rgba(0, 0, 0, 0.34);
 
-/* Studio functional accents use the same dark system-blue action role. */
-@define-color gos_studio_send_top     rgba(0, 145, 255, 1);
-@define-color gos_studio_send_bottom  rgba(10, 153, 255, 1);
+/* Same: dark send derives from the one dark accent, flat; hover lifts one tone. */
+@define-color gos_studio_send_top     @gos_accent;
+@define-color gos_studio_send_bottom  @gos_accent;
 @define-color gos_studio_send_hover   rgba(92, 184, 255, 1);
 @define-color gos_studio_send_text    #ffffff;
 /* Same label/fill discipline inverted for dark. Added = bright ink, removed =
@@ -380,17 +439,26 @@ const DARK_TOKENS: &str = r#"
 @define-color gos_shadow_panel        rgba(0, 0, 0, 0.34);
 @define-color gos_shadow_raise        rgba(0, 0, 0, 0.0);
 @define-color gos_shadow_ambient      rgba(0, 0, 0, 0.42);
+/* Dark grouped cards: NO contact drop (a black contact on graphite reads as
+   grime), just a faint ambient to seat the card — figure/ground + the hairline
+   and inset sheen carry the lift, exactly as the dark-elevation contract states. */
+@define-color gos_shadow_card_contact rgba(0, 0, 0, 0.0);
+@define-color gos_shadow_card_ambient rgba(0, 0, 0, 0.22);
 
 /* Same category tints, brightened so the tiles stay luminous on graphite. */
-@define-color gos_tint_blue           rgba(10, 132, 255, 1);
+/* Dark category tints, kit-aligned to the DARK system values for the four hues
+   with a 1:1 status role (blue/red/orange/yellow/green = gos_system_* dark), so a
+   tile and a same-color dot stay one color on graphite too. The remaining tints
+   keep their luminous, project-owned dark values. */
+@define-color gos_tint_blue           rgba(0, 145, 255, 1);
 @define-color gos_tint_teal           rgba(38, 200, 190, 1);
 @define-color gos_tint_indigo         rgba(98, 114, 240, 1);
 @define-color gos_tint_purple         rgba(182, 120, 235, 1);
 @define-color gos_tint_pink           rgba(255, 92, 142, 1);
-@define-color gos_tint_red            rgba(255, 88, 80, 1);
-@define-color gos_tint_orange         rgba(255, 165, 42, 1);
-@define-color gos_tint_yellow         rgba(245, 200, 52, 1);
-@define-color gos_tint_green          rgba(48, 209, 100, 1);
+@define-color gos_tint_red            rgba(255, 66, 69, 1);
+@define-color gos_tint_orange         rgba(255, 146, 48, 1);
+@define-color gos_tint_yellow         rgba(255, 214, 0, 1);
+@define-color gos_tint_green          rgba(48, 209, 88, 1);
 @define-color gos_tint_graphite       rgba(120, 122, 134, 1);
 @define-color gos_on_tint             #ffffff;
 "#;
@@ -461,7 +529,9 @@ window.gos-windowed .gos-root {
   min-height: 50px;
   border: none;
   border-bottom: 1px solid @gos_hairline;
-  border-radius: 12px 12px 0 0;
+  /* Match the window root's 16px top corners exactly — a 12px titlebar under a
+     16px root left a 4px seam where the bar under-rounded its own window. */
+  border-radius: 16px 16px 0 0;
   background: alpha(@gos_surface, 0.82);
   box-shadow: none;
 }
@@ -487,6 +557,8 @@ window.gos-windowed .gos-root {
   box-shadow: 0 1px 0 alpha(@gos_material_sheen, 0.55) inset,
               0 2px 5px rgba(13, 13, 12, 0.10);
   transition: color 140ms cubic-bezier(0.32, 0.72, 0, 1),
+              background 140ms cubic-bezier(0.32, 0.72, 0, 1),
+              border 140ms cubic-bezier(0.32, 0.72, 0, 1),
               box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
@@ -505,7 +577,9 @@ window.gos-windowed .gos-root {
   border-color: rgba(26, 98, 33, 0.24);
 }
 
-.gos-window-control:hover {
+/* macOS reveals all three glyphs together the instant the pointer enters the
+   cluster — not per-button — so hovering the group lights the whole set. */
+.gos-window-controls:hover .gos-window-control {
   color: rgba(0, 0, 0, 0.58);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset,
               0 4px 10px rgba(13, 13, 12, 0.16);
@@ -513,6 +587,44 @@ window.gos-windowed .gos-root {
 
 .gos-window-control:active {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.48) inset;
+}
+
+/* Inactive window (focus is on another window): macOS drains the traffic lights
+   to one uniform gray with the glyphs hidden, so a backgrounded window reads
+   unmistakably unfocused. The titlebar fill softens with it. GTK sets :backdrop
+   on every widget of an unfocused toplevel. */
+.gos-window-control:backdrop {
+  background: @gos_fill_primary;
+  border-color: @gos_hairline;
+  color: transparent;
+  box-shadow: none;
+}
+
+.gos-top-bar:backdrop,
+.gos-login-top:backdrop,
+.gos-installer-top:backdrop,
+.gos-settings-top:backdrop {
+  background: alpha(@gos_surface, 0.6);
+}
+
+/* ── Tooltips ─────────────────────────────────────────────────────────────
+   GTK renders every set_tooltip_text() through the stock dark Adwaita bubble —
+   the loudest off-brand surface left in the OS. Restyle it to the OS material:
+   a thick glass card carrying the OS ink, hairline, radius, and a soft drop.
+   (@gos_material_thick is the OS's opaque-leaning glass tier — there is no
+   @gos_popover_bg token; this also gives the previously-dead 'thick' tier a job.) */
+tooltip {
+  background: @gos_material_thick;
+  color: @gos_ink;
+  border: 1px solid @gos_hairline;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px @gos_material_shadow;
+}
+
+tooltip label {
+  padding: 4px 8px;
+  color: @gos_ink;
+  font-size: 12px;
 }
 
 /* ── Light panels ────────────────────────────────────────────────────── */
@@ -530,10 +642,12 @@ window.gos-windowed .gos-root {
   border-radius: 12px;
   background: alpha(@gos_surface, 0.9);
   /* Layered macOS-grade elevation: a hairline top sheen, a tight contact shadow,
-     and a soft ambient cast — depth without heaviness. */
+     and a soft ambient cast — depth without heaviness. The card-specific shadow
+     tokens go near-zero in dark so grouped cards lean on the hairline + sheen
+     there instead of stacking two heavy black drops. */
   box-shadow: 0 1px 0 @gos_panel_sheen inset,
-              0 2px 6px @gos_shadow_panel,
-              0 12px 34px @gos_shadow_ambient;
+              0 2px 6px @gos_shadow_card_contact,
+              0 12px 34px @gos_shadow_card_ambient;
 }
 
 /* ── Night surfaces (login, lock, hero, identity) ────────────────────── */
@@ -580,7 +694,10 @@ window.gos-windowed .gos-root {
 .gos-home-ledger-kicker,
 .gos-panel-source,
 .gos-resident-title {
-  /* Caps section-eyebrow — ONE curve: 11px → 0.8px, weight 700 (10px → 1.2px). */
+  /* Caps section-eyebrow — the SECTION curve: 11px → 0.8px tracking, weight 700
+     (the 10px launcher/studio section header tightens to 1.2px). Tight pill badges
+     (.gos-launcher-kind, .gos-studio-badge) are a deliberate sub-role at 0.6px —
+     a smaller cap on a chip needs less tracking than a free-standing eyebrow. */
   color: @gos_label_secondary;
   font-size: 11px;
   font-weight: 700;
@@ -608,6 +725,9 @@ window.gos-windowed .gos-root {
 .gos-section-title {
   color: @gos_ink;
   font-size: 28px;
+  /* GOS_TYPE_SECTION leading 34/28 ≈ 1.2 — display steps carry explicit leading
+     (the kit sets it on every text style) instead of GTK's default font leading. */
+  line-height: 1.2;
   font-weight: 600;
   /* macOS tightens tracking on display sizes; Inter needs the same negative
      letter-spacing at large sizes to read as crafted rather than loose. */
@@ -619,14 +739,17 @@ window.gos-windowed .gos-root {
   /* Hero and lock titles always sit on the dark night gradient, so the title is
      white in both schemes by design — intentionally literal, not tokenized.
      Semibold (not bold) with negative tracking matches the macOS large-title feel
-     instead of reading over-heavy. */
+     instead of reading over-heavy. Display leading ≈ 1.15 (GOS_TYPE_HERO/_LOCK). */
   color: #ffffff;
   font-weight: 600;
+  line-height: 1.15;
   letter-spacing: -0.5px;
 }
 
 .gos-hero-title {
-  font-size: 42px;
+  /* GOS_TYPE_HERO — the one display step shared by the hero / onboarding / network
+     first-run screens, so siblings can't drift (was 42). */
+  font-size: 44px;
 }
 
 .gos-lock-title {
@@ -660,6 +783,15 @@ window.gos-windowed .gos-root {
   box-shadow: 0 6px 16px @gos_shadow_raise;
 }
 
+/* Pressed feedback on the actionable rows — the hover lift collapses to a tight
+   seated shadow. .gos-system-row is excluded: those are static settings rows that
+   suppress their own hover, so they must not pulse on click either. */
+.gos-row:active,
+.gos-command:active {
+  background: @gos_fill_secondary;
+  box-shadow: 0 1px 2px @gos_shadow_raise;
+}
+
 .gos-app-grid,
 .gos-mode-row {
   margin-top: 6px;
@@ -679,6 +811,11 @@ window.gos-windowed .gos-root {
 .gos-app-tile:hover {
   border: 1px solid @gos_hairline_strong;
   box-shadow: 0 8px 20px @gos_shadow_raise;
+}
+
+/* Pressed: the tile settles toward the surface, the physical 'pushed' feel. */
+.gos-app-tile:active {
+  box-shadow: 0 2px 6px @gos_shadow_raise;
 }
 
 .gos-row-title,
@@ -707,7 +844,10 @@ window.gos-windowed .gos-root {
 .gos-mode,
 .gos-mode-selected,
 .gos-disabled-action {
-  min-height: 46px;
+  /* GOS_CTRL_H_LG — the in-panel action rung. macOS desktop buttons sit far below
+     the old 46px (iOS touch) height; LG keeps a comfortable click target while
+     reading as a desktop control. The hero Build field stays at XL (46). */
+  min-height: 38px;
   padding: 0 20px;
   border-radius: 10px;
   font-size: 14px;
@@ -841,7 +981,25 @@ switch.gos-switch slider {
   margin: 2px;
   border-radius: 999px;
   background-color: #ffffff;
-  box-shadow: 0 1px 3px alpha(@gos_shadow_ambient, 0.5),
+  /* Layered knob like the kit's toggle: a tight contact, a soft ambient lift, and
+     a hairline containment ring — depth without the kit's 6-shadow disabled stack. */
+  box-shadow: 0 0.5px 1px alpha(@gos_shadow_ambient, 0.42),
+              0 2px 6px alpha(@gos_shadow_ambient, 0.42),
+              0 0 0 0.5px alpha(@gos_ink, 0.06);
+}
+
+/* On (green track): deepen the contact a touch so the white knob keeps separation
+   over the saturated fill. */
+switch.gos-switch:checked slider {
+  box-shadow: 0 0.5px 1px alpha(@gos_shadow_ambient, 0.5),
+              0 2px 7px alpha(@gos_shadow_ambient, 0.5),
+              0 0 0 0.5px alpha(@gos_ink, 0.08);
+}
+
+/* Pressed: the lift collapses to a tight contact for the press duration — the
+   physical 'pushed in' feel, matching the .gos-primary-action:active sink. */
+switch.gos-switch:active slider {
+  box-shadow: 0 1px 2px alpha(@gos_ink, 0.18),
               0 0 0 0.5px alpha(@gos_ink, 0.05);
 }
 
@@ -943,7 +1101,9 @@ button:active {
 .gos-onboarding-title {
   margin-bottom: 18px;
   color: @gos_ink;
+  /* GOS_TYPE_HERO — the shared first-run display step (leading ≈ 1.15). */
   font-size: 44px;
+  line-height: 1.15;
   font-weight: 600;
   letter-spacing: -0.4px;
 }
@@ -1088,7 +1248,9 @@ button:active {
 
 .gos-home-headline {
   color: @gos_ink;
+  /* GOS_TYPE_DISPLAY — leading 42/36 ≈ 1.2. */
   font-size: 36px;
+  line-height: 1.2;
   font-weight: 600;
   letter-spacing: -0.3px;
 }
@@ -1415,6 +1577,14 @@ button:active {
   caret-color: @gos_studio_text;
 }
 
+/* The sidebar search was the one OS input with no focus feedback — give it the
+   same 3px ring + accent border as the composer (8px radius kept: it matches the
+   Studio's own control idiom, not the OS field idiom). */
+.gos-studio-search:focus-within {
+  border-color: @gos_focus;
+  box-shadow: 0 0 0 3px @gos_focus;
+}
+
 .gos-studio-section {
   margin-top: 16px;
   margin-bottom: 6px;
@@ -1667,10 +1837,11 @@ button:active {
   background: @gos_studio_active;
 }
 
-/* Keyboard focus for the quiet composer controls — a 2px ring sized to their
-   smaller scale, so every Studio control is reachable without a pointer. */
+/* Keyboard focus for the quiet composer controls — the OS's one canonical 3px
+   focus ring, so every Studio control is reachable without a pointer and no ring
+   is a hair thinner than its siblings. */
 .gos-studio-control:focus:focus-visible {
-  box-shadow: 0 0 0 2px @gos_focus;
+  box-shadow: 0 0 0 3px @gos_focus;
 }
 
 .gos-studio-engine {
@@ -1688,14 +1859,15 @@ button:active {
   padding: 0;
   border-radius: 999px;
   color: @gos_studio_send_text;
-  background: linear-gradient(180deg, @gos_studio_send_top, @gos_studio_send_bottom);
+  /* Flat accent — the one OS blue, no private send gradient. */
+  background: @gos_studio_send_top;
   border: none;
   font-size: 15px;
   font-weight: 700;
 }
 
 .gos-studio-send:hover {
-  background: linear-gradient(180deg, @gos_studio_send_hover, @gos_studio_send_top);
+  background: @gos_studio_send_hover;
 }
 
 .gos-studio-send:disabled {
@@ -1731,7 +1903,9 @@ button:active {
 .gos-net-title {
   margin-bottom: 16px;
   color: @gos_ink;
-  font-size: 40px;
+  /* GOS_TYPE_HERO — same display step as the hero / onboarding titles (was 40). */
+  font-size: 44px;
+  line-height: 1.15;
   font-weight: 600;
   letter-spacing: -0.4px;
 }
@@ -2169,7 +2343,12 @@ button:active {
   border: 1px solid @gos_material_border;
   border-radius: 16px;
   background: @gos_material_ultra_thick;
+  /* Dual-lip glass: a top sheen + a faint bottom shadow lip give the edge real
+     thickness; a mid contact layer seats the card so the single wide ambient no
+     longer leaves it floating. */
   box-shadow: 0 1px 0 @gos_material_sheen inset,
+              inset 0 -1px 0 alpha(@gos_material_shadow, 0.4),
+              0 4px 12px alpha(@gos_material_shadow, 0.6),
               0 30px 80px @gos_material_shadow;
 }
 
@@ -2190,6 +2369,8 @@ button:active {
      wallpaper material; the border, sheen, and shadow remain the card's chrome. */
   background: transparent;
   box-shadow: 0 1px 0 @gos_material_sheen inset,
+              inset 0 -1px 0 alpha(@gos_material_shadow, 0.4),
+              0 4px 12px alpha(@gos_material_shadow, 0.6),
               0 36px 96px @gos_material_shadow;
 }
 
@@ -2199,7 +2380,9 @@ button:active {
 
 .gos-launcher-glyph {
   color: @gos_ink_muted;
-  font-size: 19px;
+  /* Matches .gos-launcher-entry (20px) so the glyph and the field text sit on one
+     optical line in the same search row. */
+  font-size: 20px;
 }
 
 .gos-launcher-entry {
@@ -2339,6 +2522,8 @@ button:active {
      border, sheen, and drop shadow stay here as the card's chrome. */
   background: transparent;
   box-shadow: 0 1px 0 @gos_material_sheen inset,
+              inset 0 -1px 0 alpha(@gos_material_shadow, 0.4),
+              0 4px 12px alpha(@gos_material_shadow, 0.6),
               0 28px 72px @gos_material_shadow;
 }
 
@@ -2373,6 +2558,7 @@ button:active {
               border 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .gos-cc-tile:hover { background: @gos_material_hover; }
+.gos-cc-tile:active { background: @gos_material_active; }
 .gos-cc-tile:focus:focus-visible {
   box-shadow: 0 0 0 3px @gos_focus;
 }
@@ -2401,7 +2587,10 @@ button:active {
   padding: 4px;
   border-radius: 14px;
   border: 1px solid @gos_material_border;
-  background: @gos_material_ultra_thin;
+  /* The 'thin' tier (one step above the ultra-thin tiles it sits beside) — the
+     segmented track reads a hair more substantial than the toggle tiles, which
+     also gives the previously-unused 'thin' material a real job in the ladder. */
+  background: @gos_material_thin;
 }
 .gos-cc-seg {
   min-height: 34px;
@@ -2415,6 +2604,7 @@ button:active {
   transition: background 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .gos-cc-seg:hover { background: @gos_material_hover; }
+.gos-cc-seg:active { background: @gos_material_active; }
 .gos-cc-seg:focus:focus-visible {
   box-shadow: 0 0 0 3px @gos_focus;
 }
@@ -2844,5 +3034,111 @@ mod tests {
             .and_then(|b| b.split('}').next())
             .expect("row-title rule present");
         assert!(block.contains("font-weight: 500;"));
+    }
+
+    #[test]
+    fn type_and_control_ramps_are_pinned() {
+        // The two new structural ladders are the source of truth (like GOS_RADIUS_*);
+        // pin representative rungs so a refactor can't silently drift the type sizes
+        // or control heights, and the kit-aligned content steps stay kit-aligned.
+        assert_eq!(super::GOS_TYPE_LARGE_TITLE, (26, 32));
+        assert_eq!(super::GOS_TYPE_BODY, (13, 16));
+        assert_eq!(super::GOS_TYPE_FOOTNOTE, (10, 13));
+        assert_eq!(super::GOS_TYPE_HERO, (44, 52));
+        assert_eq!(
+            (
+                super::GOS_CTRL_H_SM,
+                super::GOS_CTRL_H_RG,
+                super::GOS_CTRL_H_LG,
+                super::GOS_CTRL_H_XL,
+            ),
+            (24, 30, 38, 46)
+        );
+        // The shared in-panel action sits on the LG rung (was the 46px iOS scale);
+        // the hero Build field keeps XL.
+        assert!(GOBLINS_NATIVE_CSS.contains("min-height: 38px;"));
+        // GOS_TYPE_HERO is the ONE display step shared by hero / onboarding / network,
+        // so those first-run siblings can't drift to 40/42/44 again.
+        assert!(GOBLINS_NATIVE_CSS.contains("font-size: 44px;"));
+        assert!(!GOBLINS_NATIVE_CSS.contains("font-size: 40px;"));
+        assert!(!GOBLINS_NATIVE_CSS.contains("font-size: 42px;"));
+        // Display/title rules carry explicit leading now (the kit sets it on every
+        // text style; previously only body + prose did).
+        assert!(GOBLINS_NATIVE_CSS.contains("line-height: 1.2;"));
+        assert!(GOBLINS_NATIVE_CSS.contains("line-height: 1.15;"));
+    }
+
+    #[test]
+    fn subordinate_spine_and_card_elevation_are_pinned() {
+        // Previously-unguarded tokens that mirror the kit alpha-for-alpha — pin them
+        // so the label/fill/separator spine can't quietly drift off the kit.
+        let light = native_css("", false);
+        let dark = native_css("", true);
+        assert!(light.contains("@define-color gos_label_secondary     rgba(0, 0, 0, 0.50);"));
+        assert!(dark.contains("@define-color gos_label_secondary     rgba(255, 255, 255, 0.55);"));
+        assert!(light.contains("@define-color gos_separator           rgba(60, 60, 67, 0.29);"));
+        assert!(dark.contains("@define-color gos_separator           rgba(84, 84, 88, 0.65);"));
+        assert!(light.contains("@define-color gos_fill_primary        rgba(0, 0, 0, 0.10);"));
+        assert!(dark.contains("@define-color gos_fill_primary        rgba(255, 255, 255, 0.10);"));
+        // Subordinate inks are alpha now (over-glass vibrancy), not opaque hex.
+        assert!(light.contains("@define-color gos_ink_secondary       rgba(0, 0, 0, 0.76);"));
+        assert!(dark.contains("@define-color gos_ink_secondary       rgba(255, 255, 255, 0.77);"));
+        assert!(!light.contains("@define-color gos_ink_secondary       #3d3d42;"));
+        // Card elevation is scheme-split: light keeps a soft contact, dark drops the
+        // contact to zero so grouped cards lean on hairline + sheen (the dark contract).
+        assert!(light.contains("@define-color gos_shadow_card_contact rgba(13, 13, 12, 0.10);"));
+        assert!(dark.contains("@define-color gos_shadow_card_contact rgba(0, 0, 0, 0.0);"));
+        // The grouped-panel rule consumes the card tokens, not the window/resident ones.
+        let panel = GOBLINS_NATIVE_CSS
+            .split(".gos-main-panel {")
+            .nth(1)
+            .and_then(|b| b.split('}').next())
+            .expect("panel rule present");
+        assert!(panel.contains("@gos_shadow_card_contact"));
+        assert!(panel.contains("@gos_shadow_card_ambient"));
+    }
+
+    #[test]
+    fn focus_ring_is_the_one_canonical_three_px() {
+        // Every keyboard focus ring is 3px @gos_focus — the lone 2px Studio outlier
+        // is gone, so no control's ring is a hair thinner than its siblings.
+        assert!(
+            !GOBLINS_NATIVE_CSS.contains("0 0 0 2px @gos_focus"),
+            "no 2px focus ring may remain — the canonical ring is 3px"
+        );
+        assert!(GOBLINS_NATIVE_CSS.contains("0 0 0 3px @gos_focus"));
+    }
+
+    #[test]
+    fn inactive_window_and_tooltip_surfaces_are_styled() {
+        // The active/inactive window axis (absent before) and the tooltip surface
+        // (previously stock Adwaita) are now part of the OS material language.
+        assert!(GOBLINS_NATIVE_CSS.contains(".gos-window-control:backdrop"));
+        assert!(GOBLINS_NATIVE_CSS.contains(".gos-top-bar:backdrop"));
+        let tooltip = GOBLINS_NATIVE_CSS
+            .split("tooltip {")
+            .nth(1)
+            .and_then(|b| b.split('}').next())
+            .expect("tooltip rule present");
+        assert!(tooltip.contains("@gos_material_thick"));
+        assert!(tooltip.contains("border-radius: 8px;"));
+    }
+
+    #[test]
+    fn all_five_material_tiers_are_consumed() {
+        // No declared-but-unused material tier: each of the five thicknesses now has
+        // a real role in the chrome (token theatre retired).
+        for tier in [
+            "@gos_material_ultra_thick",
+            "@gos_material_thick",
+            "@gos_material_regular",
+            "@gos_material_thin",
+            "@gos_material_ultra_thin",
+        ] {
+            assert!(
+                GOBLINS_NATIVE_CSS.contains(tier),
+                "material tier {tier} must be consumed by a rule, not just declared"
+            );
+        }
     }
 }

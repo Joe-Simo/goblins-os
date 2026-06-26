@@ -40,6 +40,21 @@ window.csd headerbar {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
 }
 
+/* Inactive window: titlebar softens, sheen drops — the unfocused-window axis,
+   mirrored from light. */
+window.background:backdrop headerbar,
+window.csd:backdrop headerbar,
+window.nautilus-window:backdrop headerbar,
+window.org-gnome-Nautilus:backdrop headerbar {
+  background: rgba(30, 30, 30, 0.70);
+  box-shadow: none;
+}
+
+window.background:backdrop,
+window.csd:backdrop {
+  color: rgba(237, 237, 240, 0.62);
+}
+
 .navigation-sidebar,
 .sidebar,
 placessidebar,
@@ -106,7 +121,21 @@ dialog,
 window.dialog {
   background: @popover_bg_color;
   color: @popover_fg_color;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 16px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+/* Menu items inside a popover/menu read as calm rounded rows, not flush text. */
+popover modelbutton,
+popover button.model {
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+popover modelbutton:hover,
+popover button.model:hover {
+  background: @shade_color;
 }
 
 window.nautilus-window placessidebar,

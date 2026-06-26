@@ -1,7 +1,13 @@
 /* Goblins OS dock — the macOS-blend glass dock, matching the shell theme. */
+/* Dock glass aligned to a DEFINED material tier: rgba(26,26,31,0.76) is the same
+   'regular' thickness the control center's active material uses, so the dock is no
+   longer a one-off recipe (was 0.55, off every tier). A brighter rim reads as the
+   top sheen lip — St supports only ONE box-shadow per node (every St sheet here
+   uses a single value), so the lift is carried by the rim + drop, not a stacked
+   inset that would replace the drop shadow. */
 .goblins-dock {
-  background-color: rgba(18, 18, 23, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  background-color: rgba(26, 26, 31, 0.76);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 22px;
   padding: 8px 10px;
   spacing: 8px;

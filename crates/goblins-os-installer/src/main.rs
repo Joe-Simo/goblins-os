@@ -1458,6 +1458,15 @@ fn build_welcome_page(
     root
 }
 
+/// Shared top offset for the three guided setup steps (Appearance, Accessibility,
+/// First App). The steps carry bodies of different heights (different subtitle wrap
+/// counts and card sizes), so vertically centering each column made the header
+/// (back-link + mark + eyebrow + title) land at a different Y on every step — a
+/// visible baseline jump as the user advanced. Anchoring each column to the top with
+/// this one constant pins the whole header block to the same origin on all three.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+const ONBOARDING_STEP_HEADER_TOP: i32 = 96;
+
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
     use gtk::prelude::*;
@@ -1466,8 +1475,11 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gos-onboarding-root");
 
+    // Top-anchored (not centered) so the header baseline is identical across the
+    // three guided steps regardless of how tall each body is. See
+    // ONBOARDING_STEP_HEADER_TOP.
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    center.set_valign(gtk::Align::Center);
+    center.set_valign(gtk::Align::Start);
     center.set_halign(gtk::Align::Center);
     center.set_vexpand(true);
     center.set_hexpand(true);
@@ -1475,6 +1487,7 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     column.set_size_request(620, -1);
     column.set_halign(gtk::Align::Center);
+    column.set_margin_top(ONBOARDING_STEP_HEADER_TOP);
 
     let back = button("← Welcome", &["gos-onboarding-quiet"]);
     back.set_halign(gtk::Align::Start);
@@ -1568,8 +1581,10 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gos-onboarding-root");
 
+    // Top-anchored so this step's header shares the same baseline as the other two
+    // guided steps. See ONBOARDING_STEP_HEADER_TOP.
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    center.set_valign(gtk::Align::Center);
+    center.set_valign(gtk::Align::Start);
     center.set_halign(gtk::Align::Center);
     center.set_vexpand(true);
     center.set_hexpand(true);
@@ -1577,6 +1592,7 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     column.set_size_request(620, -1);
     column.set_halign(gtk::Align::Center);
+    column.set_margin_top(ONBOARDING_STEP_HEADER_TOP);
 
     let back = button("← Appearance", &["gos-onboarding-quiet"]);
     back.set_halign(gtk::Align::Start);
@@ -1699,8 +1715,10 @@ fn build_first_app_page(
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gos-onboarding-root");
 
+    // Top-anchored so this step's header shares the same baseline as the other two
+    // guided steps. See ONBOARDING_STEP_HEADER_TOP.
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    center.set_valign(gtk::Align::Center);
+    center.set_valign(gtk::Align::Start);
     center.set_halign(gtk::Align::Center);
     center.set_vexpand(true);
     center.set_hexpand(true);
@@ -1708,6 +1726,7 @@ fn build_first_app_page(
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     column.set_size_request(620, -1);
     column.set_halign(gtk::Align::Center);
+    column.set_margin_top(ONBOARDING_STEP_HEADER_TOP);
 
     let back = button("← Accessibility", &["gos-onboarding-quiet"]);
     back.set_halign(gtk::Align::Start);
@@ -1769,11 +1788,25 @@ fn build_first_app_page(
     actions.set_margin_top(24);
     let build = button("Build first app", &["gos-onboarding-primary"]);
     build.set_halign(gtk::Align::Center);
+    // The primary reads as a live CTA only once there is a real intent to build.
+    // While the field is empty it stays disabled (and GTK dims it through :disabled),
+    // so a saturated solid-blue primary never sits over an empty field promising an
+    // action it has nothing to act on — the always-available "Enter Goblins OS" skip
+    // below carries the empty-field path instead. The entry's `changed` signal flips
+    // this the moment any non-whitespace text is typed.
+    build.set_sensitive(!entry.text().trim().is_empty());
     let skip = button("Enter Goblins OS", &["gos-onboarding-quiet"]);
     skip.set_halign(gtk::Align::Center);
     actions.append(&build);
     actions.append(&skip);
     column.append(&actions);
+
+    {
+        let build = build.clone();
+        entry.connect_changed(move |entry| {
+            build.set_sensitive(!entry.text().trim().is_empty());
+        });
+    }
 
     {
         let app_handle = app.clone();
@@ -1782,6 +1815,8 @@ fn build_first_app_page(
         let feedback = feedback.clone();
         build.connect_clicked(move |_| {
             let intent = entry.text().trim().to_string();
+            // The button is only sensitive when the field has content, so this is a
+            // safety net rather than a routine path — never a silent placeholder build.
             let intent = if intent.is_empty() {
                 "A focus timer that logs writing sessions".to_string()
             } else {
@@ -2910,10 +2945,16 @@ fn preservation_handoff_prompt(target: &InstallTarget) -> String {
         );
     }
 
+    // The card states the INTENT — which systems are kept — not the raw partition
+    // device nodes. A literal "/dev/nvme0n1p1, /dev/nvme0n1p2, …" list dumped into
+    // body copy made the row unscannable; the exact node list still lives one hover
+    // away in the row tooltip (disk_card_detail_tooltip -> existing_system_summary,
+    // built from existing_system_partition_list), so nothing is lost. The leading
+    // "Open advanced storage from detected disk" verb phrase is pinned by the verify
+    // crate and the shipping gate, so it stays verbatim — only the node list is cut.
     format!(
-        "Open advanced storage from detected disk to keep {} on {}.",
-        existing_system_kind_names(&target.existing_systems),
-        existing_system_partition_list(&target.existing_systems)
+        "Open advanced storage from detected disk to keep {} and other partitions on this disk.",
+        existing_system_kind_names(&target.existing_systems)
     )
 }
 

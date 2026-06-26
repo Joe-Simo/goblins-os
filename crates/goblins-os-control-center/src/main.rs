@@ -109,7 +109,11 @@ mod native {
 .gos-cc-root .gos-cc-action:hover { background-color: @gos_material_hover; }
 
 /* `AI Settings…` is a destination, not an action verb — demote it from the chip
-   grid to a quiet full-width row so it never reads as a sixth launcher. */
+   grid to a quiet full-width row so it never reads as a sixth launcher. Both the
+   resting and hover selectors carry the full `.gos-cc-action.gos-cc-action-settings`
+   qualifier so each out-ranks the raised-chip `.gos-cc-root .gos-cc-action[:hover]`
+   rule above on specificity — otherwise the hover tie left the chip fill showing
+   and the demotion never landed. */
 .gos-cc-root .gos-cc-action.gos-cc-action-settings {
   background-color: transparent;
   border-color: transparent;
@@ -117,7 +121,7 @@ mod native {
   color: @gos_ink_muted;
   font-weight: 600;
 }
-.gos-cc-root .gos-cc-action-settings:hover {
+.gos-cc-root .gos-cc-action.gos-cc-action-settings:hover {
   background-color: @gos_surface_sunken;
   color: @gos_ink;
 }
@@ -225,8 +229,12 @@ mod native {
             &screen_context_availability,
             &window,
         ));
-        // The fifth action verb sits full-width on its own row (the grid above is
-        // two-up; this completes the action set without a half-empty slot).
+        // The fifth (odd) action verb stays ON the two-up grid rather than
+        // stretching full-width: it occupies the left column at chip width while
+        // the right column is held open by an empty filler, so all five verbs
+        // share one alignment grammar instead of one lone full-bleed chip.
+        let ai_extra = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        ai_extra.set_homogeneous(true);
         let screenshot_btn = ai_tool_button(
             "Screenshot…",
             SCREENSHOT_CONTEXT_BIN,
@@ -234,7 +242,10 @@ mod native {
             &screen_context_availability,
             &window,
         );
-        screenshot_btn.set_hexpand(true);
+        ai_extra.append(&screenshot_btn);
+        // An empty second cell keeps Screenshot at the grid's column width (the
+        // homogeneous row splits 50/50) without inventing a sixth control.
+        ai_extra.append(&gtk::Box::new(gtk::Orientation::Horizontal, 0));
         // `AI Settings…` is a destination, not an action verb. Demote it to a quiet
         // full-width row below the verbs so it never reads as a sixth launcher.
         let ai_settings_btn = tool_button(
@@ -248,7 +259,7 @@ mod native {
         ai_settings_btn.set_hexpand(true);
         ai_actions.append(&ai_primary);
         ai_actions.append(&ai_context);
-        ai_actions.append(&screenshot_btn);
+        ai_actions.append(&ai_extra);
         ai_actions.append(&ai_settings_btn);
         card.append(&ai_actions);
         if let Some(reason) = first_unavailable_ai_reason(&[

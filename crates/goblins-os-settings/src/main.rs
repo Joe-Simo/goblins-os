@@ -10332,6 +10332,12 @@ fn settings_status_display_label(state: &str) -> String {
         "signed-in" => "Signed in".to_string(),
         "local-only" => "Local only".to_string(),
         "permission-gated" => "Needs permission".to_string(),
+        // "OS" stays uppercased — the generic sentence-case path would mangle the
+        // canonical "os-owned" into "Os owned".
+        "os-owned" => "OS-owned".to_string(),
+        // Keep the hyphenated compound — the sentence-case path would split it on
+        // the hyphen into "Device bound".
+        "device-bound" => "Device-bound".to_string(),
         "confirmation-required" => "Needs confirmation".to_string(),
         "online" => "Online".to_string(),
         "offline" => "Offline".to_string(),
@@ -15077,13 +15083,93 @@ fn append_device_native_coverage(panel: &gtk4::Box, settings_panel: SettingsPane
     set_accessible_label_description(&grid, "Settings covered", &coverage_detail);
 
     for (index, capability) in capabilities.iter().enumerate() {
-        let row = system_row(capability.title, capability.detail);
+        // Panels whose coverage rows describe settings with a REAL current state
+        // (Lock Screen, Power & Battery) carry a trailing descriptive pill so the
+        // card reads as a true settings surface rather than a bare label list. The
+        // state is honest about where the truth comes from — it never implies a
+        // control this pane does not actually own.
+        let row = match device_settings_capability_status(settings_panel, capability.title) {
+            Some(state) => system_row_with_status(capability.title, capability.detail, state),
+            None => system_row(capability.title, capability.detail),
+        };
         row.add_css_class("gos-device-capability-tile");
         row.set_hexpand(true);
         grid.attach(&row, 0, index as i32, 1, 1);
     }
 
     panel.append(&grid);
+}
+
+/// A `system_row` variant that mirrors the grouped-card head layout (title left,
+/// trailing status pill right) so a coverage row whose setting has a genuine
+/// current state reads like the rest of the value-driven status system. The pill
+/// tone is derived centrally from `state`, so an honest descriptive word stays
+/// calm gray and an affirmative one ("protected") reads green — consistent with
+/// every other pill in the app.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn system_row_with_status(title: &str, detail: &str, state: &str) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-system-row");
+    let display_detail = settings_detail_display_copy(detail);
+    let display_state = settings_status_display_label(state);
+    set_accessible_label_description(&row, &format!("{title}: {display_state}"), &display_detail);
+
+    let head = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let title_label = label(title, &["gos-row-title"]);
+    title_label.set_hexpand(true);
+    title_label.set_xalign(0.0);
+    head.append(&title_label);
+    // The coverage card never claims a readiness verdict here, so pass ok=true and
+    // let the central tone classifier decide the color from the word itself.
+    let pill = settings_status_pill(state, true);
+    pill.set_halign(gtk4::Align::End);
+    head.append(&pill);
+    row.append(&head);
+
+    let copy = label(&display_detail, &["gos-row-copy"]);
+    copy.set_wrap(true);
+    copy.set_xalign(0.0);
+    row.append(&copy);
+    row
+}
+
+/// Honest current-state word for a coverage row, or `None` for panels whose rows
+/// are pure where-it-lives descriptions. Only Lock Screen and Power & Battery rows
+/// have a real, non-fabricated state to surface; every other panel keeps the bare
+/// label list. The words route through the same tone/display pipeline as all pills.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn device_settings_capability_status(
+    settings_panel: SettingsPanel,
+    title: &str,
+) -> Option<&'static str> {
+    match settings_panel {
+        SettingsPanel::LockScreen => match title {
+            // Screen locking is tied to desktop privacy and power settings.
+            "Screen lock" => Some("follows power"),
+            // Lock-screen notification visibility follows notification privacy.
+            "Lock-screen notifications" => Some("follows notifications"),
+            // Sensitive previews stay hidden unless the protected setting allows them.
+            "Privacy" => Some("protected"),
+            // Locked-session recovery uses OS-owned session state.
+            "Recovery" => Some("os-owned"),
+            _ => None,
+        },
+        SettingsPanel::PowerBattery => match title {
+            // Modes come from the real hardware power stack.
+            "Power mode" => Some("from hardware"),
+            // Health, charge, and estimates are system-reported facts.
+            "Battery" => Some("reported"),
+            // Suspend, blanking, and lid behavior follow power settings.
+            "Suspend" => Some("follows power"),
+            // Only the controls the device actually supports are exposed.
+            "Hardware limits" => Some("device-bound"),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn device_settings_capabilities(
@@ -16977,7 +17063,7 @@ window.gos-settings-window {
 
 .gos-settings-root .gos-device-context-tile {
   min-height: 54px;
-  padding: 9px 14px;
+  padding: 8px 14px;
   border-color: alpha(@gos_hairline, 0.78);
   background: alpha(@gos_surface, 0.82);
 }
@@ -16991,7 +17077,7 @@ window.gos-settings-window {
 }
 
 .gos-settings-root .gos-device-capability-tile {
-  min-height: 52px;
+  min-height: 54px;
   padding: 8px 14px;
   background: alpha(@gos_surface, 0.80);
 }
@@ -17408,6 +17494,20 @@ window.gos-settings-window {
   letter-spacing: 0;
   font-feature-settings: "tnum" 1;
   font-variant-numeric: tabular-nums;
+}
+
+/* In a grouped status/summary card the trailing pill is right-aligned against the
+   card's inner edge. The pill carries 9px of its own right padding, 5px shy of the
+   14px left gutter the row title rests on. Closing that 5px gives the trailing
+   status text the SAME inset as the title, so "Ready"/"Not installed"/"OS-owned"
+   never sit hard against the card edge and the right rail reads as a deliberate
+   gutter rather than a clipped flush edge. Scoped to the grouped tiles so trailing
+   plain-text statuses elsewhere keep their own alignment. */
+.gos-settings-root .gos-summary-tile .gos-status-pill,
+.gos-settings-root .gos-device-context-tile .gos-status-pill,
+.gos-settings-root .gos-device-capability-tile .gos-status-pill,
+.gos-settings-root .gos-health-row .gos-status-pill {
+  margin-right: 5px;
 }
 
 .gos-settings-root .gos-ready {
@@ -18744,6 +18844,69 @@ mod tests {
         // Measurement units keep their canonical lowercase casing.
         assert_eq!(super::settings_status_display_label("500 ms"), "500 ms");
         assert_eq!(super::settings_status_display_label("30 ms"), "30 ms");
+        // "OS" stays uppercased instead of the sentence-case path's "Os owned".
+        assert_eq!(super::settings_status_display_label("os-owned"), "OS-owned");
+    }
+
+    // The "Settings covered" coverage cards on Lock Screen and Power & Battery carry a
+    // trailing descriptive/affirmative status pill per row so the card reads as a real
+    // settings surface, not a bare label list. Every other panel keeps the plain label
+    // list (no fabricated state). This pins which rows get a state, that the state is
+    // honest (calm gray, or green only for a genuine "protected" verdict), and that it
+    // renders cleanly through the shared display pipeline.
+    #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+    #[test]
+    fn coverage_rows_carry_honest_status_only_on_stateful_panels() {
+        use super::{
+            device_settings_capability_status, settings_status_display_label,
+            settings_status_state_is_quiet, SettingsPanel,
+        };
+
+        // Lock Screen rows: where-it-lives facts (gray) plus one affirmative privacy
+        // verdict. None of these imply a control the pane does not actually own.
+        let lock = [
+            ("Screen lock", "Follows power", true),
+            ("Lock-screen notifications", "Follows notifications", true),
+            ("Privacy", "Protected", false),
+            ("Recovery", "OS-owned", true),
+        ];
+        for (title, display, quiet) in lock {
+            let state = device_settings_capability_status(SettingsPanel::LockScreen, title)
+                .unwrap_or_else(|| panic!("Lock Screen row {title} should carry a status"));
+            assert_eq!(settings_status_display_label(state), display);
+            assert!(!display.contains('-') || display == "OS-owned");
+            assert_eq!(
+                settings_status_state_is_quiet(state),
+                quiet,
+                "{title} status tone mismatch"
+            );
+        }
+
+        // Power & Battery rows: all are descriptive "where the truth comes from" facts,
+        // so each rests in the calm neutral pill (never green/amber).
+        let power = [
+            ("Power mode", "From hardware"),
+            ("Battery", "Reported"),
+            ("Suspend", "Follows power"),
+            ("Hardware limits", "Device-bound"),
+        ];
+        for (title, display) in power {
+            let state = device_settings_capability_status(SettingsPanel::PowerBattery, title)
+                .unwrap_or_else(|| panic!("Power & Battery row {title} should carry a status"));
+            assert_eq!(settings_status_display_label(state), display);
+            assert!(
+                settings_status_state_is_quiet(state),
+                "{title} should rest in the calm neutral pill"
+            );
+        }
+
+        // Other coverage panels keep the bare label list — no fabricated state.
+        assert!(device_settings_capability_status(SettingsPanel::Network, "Wi-Fi").is_none());
+        assert!(device_settings_capability_status(SettingsPanel::Displays, "Resolution").is_none());
+        // An unrecognized row title on a stateful panel also stays bare.
+        assert!(
+            device_settings_capability_status(SettingsPanel::LockScreen, "Nonexistent").is_none()
+        );
     }
 
     // settings_status_state_is_quiet is gated to the native-desktop Linux build, so

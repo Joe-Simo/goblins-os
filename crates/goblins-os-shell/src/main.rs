@@ -2906,6 +2906,52 @@ const GOBLINS_OS_CSS: &str = r#"
   color: @gos_studio_text_muted;
   background: @gos_studio_hover;
 }
+
+/* ── Titlebar hairline: full-bleed to the window chrome ───────────────────────
+   The shared .gos-root carries 24px padding for the home body, which also insets
+   the topbar — so its bottom hairline floated short of the window's rounded edges
+   (visible gaps left + right). Pull the topbar out to the window's inner chrome
+   with negative margins (only when windowed/unlocked; the full-screen lock gate
+   keeps the padded canvas), so the divider runs edge to edge like the Studio's
+   column/row hairlines already do. App CSS is emitted before the shared rules, so
+   the extra ancestor class lifts specificity enough to win the override. */
+window.gos-windowed .gos-top-bar {
+  margin: -24px -24px 0 -24px;
+}
+
+/* ── Home build pill: balanced inside the field ───────────────────────────────
+   The entry's text sits 18px from the field's left edge (6px field pad + 12px
+   entry pad), but the Build pill hugged the right with only the 6px field pad —
+   an uneven lead-in. Add a 12px right margin (→ 18px right gap, matching the left
+   text lead-in token) and trim the pill's horizontal inset to the same 18px
+   lateral rhythm, so its breathing reads even against the ~9px vertical gap. The
+   `> button` lifts specificity over the shared `.gos-home-field .gos-home-build`. */
+.gos-home-field > button.gos-home-build {
+  margin-right: 12px;
+  padding: 0 18px;
+}
+
+/* ── Home hero field: scheme-equivalent resting + focus elevation ─────────────
+   Light lifts the field with a soft drop shadow (@gos_shadow_raise), but that ink
+   is fully transparent in dark — so dark rendered flat. Add a 1px accent-tinted
+   ring (@gos_focus carries baked alpha and is defined in both schemes) UNDER the
+   existing drop shadow: in light the shadow leads and the ring is a faint seat; in
+   dark the shadow vanishes and the ring carries the lift — equivalent elevation in
+   both. Focus tightens to the same 3px @gos_focus ring every other OS input uses,
+   so resting→focus ladders identically per scheme. Ancestor class wins specificity
+   over the shared single-class .gos-home-field. */
+.gos-root .gos-home-field {
+  box-shadow: 0 0 0 1px alpha(@gos_focus, 0.45),
+              0 1px 0 @gos_panel_sheen inset,
+              0 8px 24px @gos_shadow_raise;
+}
+
+.gos-root .gos-home-field:focus-within {
+  border: 1px solid @gos_focus;
+  box-shadow: 0 0 0 3px @gos_focus,
+              0 1px 0 @gos_panel_sheen inset,
+              0 12px 32px @gos_shadow_raise;
+}
 "#;
 
 #[cfg(test)]

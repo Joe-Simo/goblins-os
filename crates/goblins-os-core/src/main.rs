@@ -80,7 +80,7 @@ use crate::{
     studio::{studio_file, studio_session, studio_sessions, studio_turn},
     system::{health, system_services},
     system_image::system_image_status,
-    voice::{voice_converse, voice_status},
+    voice::{voice_converse, voice_dictate, voice_status},
 };
 
 #[tokio::main]
@@ -183,6 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/privacy/desktop", post(set_desktop_privacy))
         .route("/v1/voice/status", get(voice_status))
         .route("/v1/voice/converse", post(voice_converse))
+        .route("/v1/voice/dictate", post(voice_dictate))
         .route("/v1/studio/turn", post(studio_turn))
         .route("/v1/studio/sessions", get(studio_sessions))
         .route("/v1/studio/session", get(studio_session))

@@ -53,6 +53,15 @@ pub struct ConverseOutcome {
     text: String,
 }
 
+/// The result of a dictation pass — the recognized text to type into the focused
+/// field, or an honest reason it could not run.
+#[derive(Serialize)]
+pub struct DictateOutcome {
+    ok: bool,
+    transcript: String,
+    text: String,
+}
+
 pub async fn voice_status() -> Json<VoiceStatus> {
     Json(build_status())
 }
@@ -78,6 +87,51 @@ pub async fn voice_converse() -> (StatusCode, Json<ConverseOutcome>) {
             }),
         ),
     }
+}
+
+/// Dictation: capture the mic and transcribe to text — the STT half of the loop,
+/// for "speak into any text field." It needs only Whisper + capture (no model
+/// answer, no speech-out), and the desktop helper types the returned transcript
+/// into the focused field via the Wayland synthetic-input path (wtype).
+pub async fn voice_dictate() -> (StatusCode, Json<DictateOutcome>) {
+    match run_dictate() {
+        Ok(transcript) => (
+            StatusCode::OK,
+            Json(DictateOutcome {
+                ok: true,
+                text: "Transcribed.".to_string(),
+                transcript,
+            }),
+        ),
+        Err(detail) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(DictateOutcome {
+                ok: false,
+                transcript: String::new(),
+                text: detail,
+            }),
+        ),
+    }
+}
+
+fn run_dictate() -> Result<String, String> {
+    let stt = stt_capability();
+    if !stt.ready {
+        return Err(stt.detail);
+    }
+    if !binary_present(&capture_bin()) {
+        return Err("Microphone capture is not ready on this device.".to_string());
+    }
+    let work = work_dir();
+    fs::create_dir_all(&work)
+        .map_err(|_| "Could not open the voice work directory.".to_string())?;
+    let input = work.join("dictate.wav");
+    record_audio(&input)?;
+    let transcript = transcribe(&input)?;
+    if transcript.is_empty() {
+        return Err("Goblins OS didn’t catch that — try again.".to_string());
+    }
+    Ok(transcript)
 }
 
 fn build_status() -> VoiceStatus {

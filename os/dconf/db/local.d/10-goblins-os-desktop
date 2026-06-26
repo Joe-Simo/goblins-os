@@ -99,6 +99,14 @@ name='Goblins AI Screenshot Context'
 command='/usr/libexec/goblins-os/goblins-os-screenshot-context'
 binding='<Super><Alt>v'
 
+# Dictation — speak into the focused text field. Captures + transcribes on-device
+# (Whisper) via the local core, then types the result with wtype. Honest-gates
+# (types nothing) when no microphone / Whisper model is present.
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-dictate]
+name='Goblins Dictation'
+command='/usr/libexec/goblins-os/goblins-os-dictate'
+binding='<Super><Alt>d'
+
 [org/gnome/shell/keybindings]
 # The interactive capture overlay (area/window/screen toggle + record button +
 # selection handles + clipboard copy) is GNOME's native Cmd+Shift+5 equivalent.
@@ -111,7 +119,7 @@ show-screen-recording-ui=['<Shift><Super>5']
 # Desktop surfaces: the GoblinsOS theme (menu bar / control center) + our
 # own overview-independent dock (dash-to-dock needs the overview, which this mode
 # strips out). Version validation off as belt-and-suspenders for bundled extensions.
-enabled-extensions=['user-theme@gnome-shell-extensions.gcampax.github.com', 'goblins-dock@goblins.os', 'goblins-menubar@goblins.os', 'goblins-wm@goblins.os']
+enabled-extensions=['user-theme@gnome-shell-extensions.gcampax.github.com', 'gsconnect@andyholmes.github.io', 'goblins-dock@goblins.os', 'goblins-menubar@goblins.os', 'goblins-wm@goblins.os']
 disable-extension-version-validation=true
 # The dock's pinned surfaces (Build Studio + Settings). The Home IS the shell, so
 # it is not pinned; built apps and utilities join the dock when running.

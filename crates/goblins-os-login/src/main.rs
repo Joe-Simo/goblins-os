@@ -287,13 +287,9 @@ fn build_login(
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gos-login-root");
 
-    let top = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-    top.add_css_class("gos-login-top");
-    top.append(&goblins_os_ui::themed_brand_mark(22));
-    top.append(&label("Goblins OS", &["gos-brand"]));
-    top.append(&label("Login", &["gos-muted"]));
-    top.append(&spacer());
-    root.append(&top);
+    // No top chrome bar: the macOS lock screen is edge-to-edge — just the centered
+    // identity card over the blurred wallpaper. Brand identity lives in the card
+    // (the OpenAI mark + "OPENAI ACCOUNT" kicker), not a redundant titlebar.
 
     // macOS login idiom: a single centered identity column over the canvas,
     // not a two-column dashboard. The night-gradient identity card is the hero;
@@ -593,16 +589,6 @@ fn button(text: &str, classes: &[&str]) -> gtk4::Button {
     }
 
     button
-}
-
-#[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn spacer() -> gtk4::Box {
-    use gtk::prelude::*;
-    use gtk4 as gtk;
-
-    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    spacer.set_hexpand(true);
-    spacer
 }
 
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]

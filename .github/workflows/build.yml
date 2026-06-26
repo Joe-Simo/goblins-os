@@ -15,9 +15,17 @@ on:
       - '**.md'
       - 'os/signoff-proofs/**'
       - 'os/screenshots/**'
-      - 'LICENSE.md'
+      - 'LICENSE'
   pull_request:
   workflow_dispatch:
+  # Weekly upstream-drift gate. We never fork the platform — we ride Fedora for the
+  # kernel, drivers, and security. This rebuilds on the CURRENT Fedora base every
+  # Monday and runs the full image gate (verify blocked=0 + install/services
+  # self-test + light/dark desktop renders). If a Fedora update broke the build or a
+  # surface, it's caught HERE, in CI, before it can ever reach a user. Nothing is
+  # published; this is an early-warning, not an auto-ship. Tune the cadence freely.
+  schedule:
+    - cron: '0 6 * * 1'
 
 # Cost control: a newer push to the same ref cancels the in-flight run instead of
 # paying for both. The expensive image/installer-iso jobs are gated to manual
@@ -75,9 +83,9 @@ jobs:
   # 2. Build the bootc OS image, enforce the packaging contract, and render the
   #    design-proof screenshots (uploaded as an artifact for review).
   image:
-    # Expensive (full image build + render). Manual-only to control CI spend;
-    # the per-push fast gate is the `rust` job above.
-    if: github.event_name == 'workflow_dispatch'
+    # Expensive (full image build + render). Runs on manual dispatch AND the weekly
+    # schedule (the upstream-drift gate) — the per-push fast gate is the `rust` job.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     strategy:
       fail-fast: false
       matrix:

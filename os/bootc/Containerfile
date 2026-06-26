@@ -107,7 +107,22 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       xdg-utils \
       switcheroo-control \
       tuned-ppd \
+      orca \
+      speech-dispatcher \
+      espeak-ng \
+      wtype \
+      gnome-shell-extension-gsconnect \
+      snapper \
+      deja-dup \
+      localsearch \
     && rpm -q \
+      orca \
+      speech-dispatcher \
+      espeak-ng \
+      wtype \
+      gnome-shell-extension-gsconnect \
+      snapper \
+      deja-dup \
       mesa-vulkan-drivers \
       vulkan-tools \
       gamescope \
@@ -140,6 +155,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v evtest \
     && command -v lsusb \
     && command -v gnome-software \
+    && command -v orca \
+    && command -v snapper \
     && command -v xdg-open \
     && command -v fc-match \
     && command -v fc-list \
@@ -204,6 +221,7 @@ COPY os/session/goblins-os-session /usr/libexec/goblins-os/goblins-os-session
 COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.desktop
 COPY os/gnome-session/goblins-os.session /usr/share/gnome-session/sessions/goblins-os.session
 COPY os/gnome-shell-modes/goblins-os.json /usr/share/gnome-shell/modes/goblins-os.json
+COPY --chmod=0755 os/voice/goblins-os-dictate /usr/libexec/goblins-os/goblins-os-dictate
 COPY os/systemd-user/ /usr/lib/systemd/user/
 COPY os/applications/ /usr/share/applications/
 RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \

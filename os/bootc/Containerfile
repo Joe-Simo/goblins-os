@@ -117,6 +117,9 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       localsearch \
       gnome-sushi \
       gnome-font-viewer \
+      tesseract \
+      tesseract-langpack-eng \
+      leptonica \
     && rpm -q \
       orca \
       speech-dispatcher \
@@ -127,6 +130,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       deja-dup \
       gnome-sushi \
       gnome-font-viewer \
+      tesseract \
+      tesseract-langpack-eng \
       mesa-vulkan-drivers \
       vulkan-tools \
       gamescope \

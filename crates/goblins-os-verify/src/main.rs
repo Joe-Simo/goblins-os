@@ -7531,6 +7531,23 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "bootc-packages-screenshot-context-helper",
             "goblins-os-screenshot-context /usr/libexec/goblins-os/goblins-os-screenshot-context",
         ),
+        // Live Text / OCR — the on-device Tesseract runtime + the local core route,
+        // honest-gated when the runtime is absent (never claims success without text).
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-packages-ocr-tesseract",
+            "tesseract-langpack-eng",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-ocr-recognize-route",
+            "/v1/ocr/recognize",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/ocr.rs"),
+            "ocr-honest-gating-when-runtime-absent",
+            "Text recognition is not available on this device.",
+        ),
         contains_check(
             root.join("os/bootc/Containerfile"),
             "bootc-ai-state-directory",

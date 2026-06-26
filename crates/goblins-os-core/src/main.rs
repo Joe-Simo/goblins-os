@@ -17,6 +17,7 @@ mod installer;
 mod model_manager;
 mod network;
 mod notifications;
+mod ocr;
 mod openai_key;
 mod policy;
 mod privacy;
@@ -184,6 +185,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/voice/status", get(voice_status))
         .route("/v1/voice/converse", post(voice_converse))
         .route("/v1/voice/dictate", post(voice_dictate))
+        .route("/v1/ocr/status", get(ocr::ocr_status))
+        .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
         .route("/v1/studio/turn", post(studio_turn))
         .route("/v1/studio/sessions", get(studio_sessions))
         .route("/v1/studio/session", get(studio_session))

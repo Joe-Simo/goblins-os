@@ -7,6 +7,7 @@
   "isPrimary": true,
   "enabledExtensions": [
     "user-theme@gnome-shell-extensions.gcampax.github.com",
+    "gsconnect@andyholmes.github.io",
     "goblins-dock@goblins.os",
     "goblins-menubar@goblins.os",
     "goblins-wm@goblins.os"

@@ -61,7 +61,7 @@ switch-applications-backward=@as []
 # Super+Alt+V opens screenshot/visual context. The MediaKeys settings-daemon
 # plugin is a RequiredComponent of the goblins-os session, so these bindings
 # are live in the session.
-custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-launcher/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-assistant/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-selected-text/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-writing-tools/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-screen-context/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-visual-context/']
+custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-launcher/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-assistant/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-selected-text/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-writing-tools/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-screen-context/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-visual-context/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-dictate/']
 # macOS screenshot muscle-memory on GNOME's own (Wayland-correct) capture stack.
 # Cmd+Shift+3 → whole screen saved to ~/Pictures/Screenshots; +Ctrl → clipboard
 # (macOS uses Control to divert to the clipboard). Cmd+Shift+4/5 live below in the

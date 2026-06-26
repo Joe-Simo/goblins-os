@@ -91,6 +91,18 @@ status = "first-party wallpaper"
 ship_scope = "desktop wallpaper"
 
 [[assets]]
+path = "os/brand/wallpaper/goblins-os-light.png"
+owner = "Goblins OS"
+status = "first-party wallpaper, rasterized from goblins-os-light.svg (fedora-bootc has no SVG pixbuf loader, so the PNG is the displayed desktop asset)"
+ship_scope = "desktop wallpaper"
+
+[[assets]]
+path = "os/brand/wallpaper/goblins-os-dark.png"
+owner = "Goblins OS"
+status = "first-party wallpaper, rasterized from goblins-os-dark.svg (fedora-bootc has no SVG pixbuf loader, so the PNG is the displayed desktop asset)"
+ship_scope = "desktop wallpaper"
+
+[[assets]]
 path = "os/brand/icons/"
 owner = "Goblins OS"
 status = "first-party brand and shell icon set"

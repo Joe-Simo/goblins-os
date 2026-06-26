@@ -3,14 +3,14 @@
 # user via os/dconf/profile/user. These are defaults; the person can change them.
 
 [org/gnome/desktop/background]
-picture-uri='file:///usr/share/goblins-os/brand/wallpaper/goblins-os-light.svg'
-picture-uri-dark='file:///usr/share/goblins-os/brand/wallpaper/goblins-os-dark.svg'
+picture-uri='file:///usr/share/goblins-os/brand/wallpaper/goblins-os-light.png'
+picture-uri-dark='file:///usr/share/goblins-os/brand/wallpaper/goblins-os-dark.png'
 picture-options='zoom'
 primary-color='#0b0b11'
 secondary-color='#0b0b11'
 
 [org/gnome/desktop/screensaver]
-picture-uri='file:///usr/share/goblins-os/brand/wallpaper/goblins-os-dark.svg'
+picture-uri='file:///usr/share/goblins-os/brand/wallpaper/goblins-os-dark.png'
 picture-options='zoom'
 
 [org/gnome/desktop/interface]

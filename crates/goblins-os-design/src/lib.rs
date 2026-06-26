@@ -63,14 +63,44 @@ pub const MOTION_SLOW_MS: u32 = 320;
 /// The standard ease — a snappy, decisive ease-out (macOS "standard" curve).
 /// Most transitions in the OS use this.
 pub const MOTION_EASE_STANDARD: &str = "cubic-bezier(0.32, 0.72, 0, 1)";
-/// The emphasized/spring ease — a gentle overshoot for surfaces that *arrive*
-/// (the launcher, control center, panels). Restrained: one soft settle, no bounce.
-pub const MOTION_EASE_SPRING: &str = "cubic-bezier(0.34, 1.4, 0.64, 1)";
 
-/// The launcher / control-center overlay fade-scale duration (Rust animator).
+/// The launcher / control-center overlay fade duration (opacity-only Rust animator;
+/// GTK4 cannot scale a top-level, so the OS ships an honest fade with no scale-pop).
 pub const MOTION_OVERLAY_MS: u64 = 180;
-/// The scale the overlay grows FROM on open (and TO on close): a subtle 4% pop.
-pub const MOTION_OVERLAY_SCALE_FROM: f64 = 0.96;
+
+// ── Window geometry tokens (one corner radius + margin for every window root) ─
+// GTK CSS has no length variables, so these Rust consts are the single source of
+// truth: every top-level window root (.gos-root, .gos-settings-root) uses these
+// exact values, and tests pin the CSS to them so two windows on one desktop can
+// never show different corners again.
+/// Canonical window corner radius, in px. macOS-window scale; shared by all roots.
+pub const GOS_WINDOW_RADIUS_PX: u32 = 16;
+/// Canonical window margin gutter, in px (holds the window drop shadow).
+pub const GOS_WINDOW_MARGIN_PX: u32 = 16;
+
+// ── Radius ramp (one corner-radius ladder for the whole OS) ──────────────────
+// GTK CSS has no length variables; these document the canonical ladder and tests
+// keep the CSS on it. Intentional exception: a few inputs use a derived radius for
+// true concentric nesting (the home Build field is 14px with an 8px inset pill —
+// 14 − 6px padding = 8), which is craft, not drift, and stays off the ladder.
+/// Small controls: buttons, fields, chips.
+pub const GOS_RADIUS_CONTROL_PX: u32 = 8;
+/// Cards, panels, list containers, thumbnails.
+pub const GOS_RADIUS_CARD_PX: u32 = 12;
+/// Windows and hero overlays (launcher, control center, lock card).
+pub const GOS_RADIUS_WINDOW_PX: u32 = 16;
+/// Large chrome-overlay surfaces (Mission Control panel, HUD, dock glass).
+pub const GOS_RADIUS_OVERLAY_PX: u32 = 22;
+/// Fully-round pills, dots, and capsules.
+pub const GOS_RADIUS_PILL_PX: u32 = 999;
+
+// ── Chrome accent (single source for the gnome-shell St chrome) ──────────────
+// St CSS can't read GTK @define-color, so the dock/WM extensions inline the accent.
+// This prefix is the ONE canonical value (the dark-scheme @gos_accent); a test pins
+// every extension stylesheet to it so chrome blue can never drift from the OS accent.
+// (Full build-time generation of the chrome stylesheets is the next step; until then
+// the value is enforced here rather than merely commented as "kept in sync".)
+pub const GOS_CHROME_ACCENT_RGBA_PREFIX: &str = "rgba(0, 145, 255";
 
 /// Compose an app's structural CSS with the shared native design system for the
 /// chosen color scheme. The theme tokens are emitted first (light or dark), then
@@ -155,9 +185,11 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_material_hover      rgba(0, 0, 0, 0.05);
 @define-color gos_material_active     rgba(0, 0, 0, 0.09);
 
-@define-color gos_primary_top         rgba(0, 122, 255, 1);
-@define-color gos_primary_bottom      rgba(0, 122, 255, 1);
-@define-color gos_primary_border      rgba(0, 92, 190, 0.36);
+/* Prominent CTA derives from the ONE accent blue (gos_accent) — no second hue.
+   A selected item and a primary button now read as the same system blue. */
+@define-color gos_primary_top         @gos_accent;
+@define-color gos_primary_bottom      @gos_accent;
+@define-color gos_primary_border      alpha(@gos_accent, 0.5);
 @define-color gos_on_primary          #ffffff;
 
 @define-color gos_studio_bg           #ffffff;
@@ -302,9 +334,10 @@ const DARK_TOKENS: &str = r#"
 
 /* Dark primary CTAs use the kit's dark blue, matching the same system action
    role as light mode. */
-@define-color gos_primary_top         rgba(10, 132, 255, 1);
-@define-color gos_primary_bottom      rgba(10, 132, 255, 1);
-@define-color gos_primary_border      rgba(92, 184, 255, 0.34);
+/* Prominent CTA derives from the ONE accent blue (gos_accent) — no second hue. */
+@define-color gos_primary_top         @gos_accent;
+@define-color gos_primary_bottom      @gos_accent;
+@define-color gos_primary_border      alpha(@gos_accent, 0.55);
 @define-color gos_on_primary          #ffffff;
 
 @define-color gos_studio_bg           #1e1e1e;
@@ -405,12 +438,13 @@ window.gos-windowed {
 }
 
 window.gos-windowed .gos-root {
-  margin: 28px;
-  /* ~12px window radius reads as a Mac window; 16px drifted toward iOS/GTK. */
-  border-radius: 12px;
+  /* Canonical window geometry — ONE radius + margin + shadow, identical to
+     .gos-settings-root (GOS_WINDOW_RADIUS_PX / GOS_WINDOW_MARGIN_PX = 16/16). */
+  margin: 16px;
+  border-radius: 16px;
   border: 1px solid @gos_hairline;
-  box-shadow: 0 1px 0 @gos_panel_sheen inset,
-              0 24px 62px @gos_shadow_window;
+  box-shadow: 0 1px 0 alpha(@gos_panel_sheen, 0.64) inset,
+              0 26px 72px @gos_shadow_window;
 }
 
 /* ── Top bars ────────────────────────────────────────────────────────── */
@@ -546,10 +580,11 @@ window.gos-windowed .gos-root {
 .gos-home-ledger-kicker,
 .gos-panel-source,
 .gos-resident-title {
+  /* Caps section-eyebrow — ONE curve: 11px → 0.8px, weight 700 (10px → 1.2px). */
   color: @gos_label_secondary;
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
   text-transform: uppercase;
 }
 
@@ -614,7 +649,7 @@ window.gos-windowed .gos-root {
   border: 1px solid @gos_hairline;
   border-radius: 10px;
   background: @gos_fill_tertiary;
-  transition: box-shadow 160ms ease-out, background 160ms ease-out, border 160ms ease-out;
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1), background 140ms cubic-bezier(0.32, 0.72, 0, 1), border 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-row:hover,
@@ -638,7 +673,7 @@ window.gos-windowed .gos-root {
   border-radius: 14px;
   background: linear-gradient(180deg, @gos_surface, @gos_surface_muted);
   box-shadow: 0 8px 24px @gos_shadow_raise;
-  transition: box-shadow 160ms ease-out, border 160ms ease-out;
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1), border 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-app-tile:hover {
@@ -652,6 +687,12 @@ window.gos-windowed .gos-root {
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
+}
+
+/* ONE canonical list-row title weight (500) across the whole OS — apps must NOT
+   re-declare it. App/window titles keep 600 for prominence. */
+.gos-row-title {
+  font-weight: 500;
 }
 
 .gos-app-title {
@@ -672,8 +713,8 @@ window.gos-windowed .gos-root {
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
-  transition: box-shadow 160ms ease-out, background 160ms ease-out,
-              border 160ms ease-out, opacity 160ms ease-out;
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1), background 140ms cubic-bezier(0.32, 0.72, 0, 1),
+              border 140ms cubic-bezier(0.32, 0.72, 0, 1), opacity 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-primary-action {
@@ -975,7 +1016,7 @@ button:active {
   min-height: 50px;
   margin-bottom: 6px;
   padding: 0 30px;
-  border-radius: 13px;
+  border-radius: 12px;
   font-size: 15px;
   /* One weight lighter than the 700 primary so the primary clearly out-ranks it,
      and a defined sunken fill (not a near-page-white wash) so it reads as a real
@@ -1068,7 +1109,7 @@ button:active {
   background: @gos_surface;
   box-shadow: 0 1px 0 @gos_panel_sheen inset,
               0 8px 24px @gos_shadow_raise;
-  transition: box-shadow 180ms ease-out, border 180ms ease-out;
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1), border 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-home-field:focus-within {
@@ -1111,7 +1152,7 @@ button:active {
   font-weight: 700;
   letter-spacing: 0;
   box-shadow: 0 6px 16px rgba(13, 13, 12, 0.16);
-  transition: box-shadow 160ms ease-out, opacity 160ms ease-out;
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1), opacity 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-home-build:hover {
@@ -1175,7 +1216,7 @@ button:active {
   border: 1px solid transparent;
   border-radius: 12px;
   background: transparent;
-  transition: background 160ms ease-out, border 160ms ease-out, box-shadow 160ms ease-out;
+  transition: background 140ms cubic-bezier(0.32, 0.72, 0, 1), border 140ms cubic-bezier(0.32, 0.72, 0, 1), box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-home-app-row:hover {
@@ -1284,7 +1325,7 @@ button:active {
   border: 1px solid @gos_hairline_strong;
   font-size: 14px;
   font-weight: 600;
-  transition: box-shadow 160ms ease-out, background 160ms ease-out;
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1), background 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-home-voice:hover {
@@ -1518,7 +1559,7 @@ button:active {
   color: @gos_studio_text_faint;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.8px;
   text-transform: uppercase;
 }
 
@@ -1557,7 +1598,7 @@ button:active {
   color: @gos_studio_text_muted;
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 1px;
+  letter-spacing: 1.2px;
   text-transform: uppercase;
 }
 
@@ -1658,7 +1699,8 @@ button:active {
 }
 
 .gos-studio-send:disabled {
-  opacity: 0.4;
+  /* One inert-disabled opacity across the OS (matches .gos-disabled-action). */
+  opacity: 0.7;
 }
 
 .gos-studio-footer {
@@ -1757,7 +1799,7 @@ button:active {
   border: 1px solid @gos_hairline;
   border-radius: 12px;
   background: alpha(@gos_surface, 0.7);
-  transition: box-shadow 160ms ease-out, background 160ms ease-out, border 160ms ease-out;
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1), background 140ms cubic-bezier(0.32, 0.72, 0, 1), border 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-net-ssid:hover {
@@ -1837,9 +1879,9 @@ button:active {
   border: 1px solid @gos_hairline;
   border-radius: 14px;
   background: alpha(@gos_surface, 0.76);
-  transition: box-shadow 160ms cubic-bezier(0.32, 0.72, 0, 1),
-              background 160ms cubic-bezier(0.32, 0.72, 0, 1),
-              border 160ms cubic-bezier(0.32, 0.72, 0, 1);
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1),
+              background 140ms cubic-bezier(0.32, 0.72, 0, 1),
+              border 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-setup-choice:hover {
@@ -1900,7 +1942,7 @@ button:active {
   border: 1px solid @gos_hairline;
   border-radius: 12px;
   background: alpha(@gos_surface, 0.7);
-  transition: box-shadow 160ms ease-out, background 160ms ease-out, border 160ms ease-out;
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1), background 140ms cubic-bezier(0.32, 0.72, 0, 1), border 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-install-disk.is-eligible:hover {
@@ -1972,7 +2014,7 @@ button:active {
   border: 1px solid @gos_hairline;
   border-radius: 12px;
   background: alpha(@gos_surface, 0.78);
-  transition: box-shadow 160ms ease-out, background 160ms ease-out, border 160ms ease-out;
+  transition: box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1), background 140ms cubic-bezier(0.32, 0.72, 0, 1), border 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .gos-dual-boot-choice:hover {
@@ -2003,7 +2045,7 @@ button:active {
   color: @gos_ink_muted;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 1.4px;
+  letter-spacing: 0.8px;
   text-transform: uppercase;
 }
 
@@ -2199,7 +2241,7 @@ button:active {
   color: @gos_ink_faint;
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 1.6px;
+  letter-spacing: 1.2px;
   text-transform: uppercase;
 }
 
@@ -2439,7 +2481,7 @@ button:active {
   color: @gos_ink;
   background-color: @gos_surface_muted;
   border: 1px solid @gos_material_border;
-  border-radius: 11px;
+  border-radius: 12px;
   box-shadow: 0 1px 2px rgba(13, 13, 12, 0.05);
   font-size: 12px;
   font-weight: 600;
@@ -2457,10 +2499,7 @@ button:active {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        native_css, GOBLINS_NATIVE_CSS, MOTION_EASE_STANDARD, MOTION_OVERLAY_MS,
-        MOTION_OVERLAY_SCALE_FROM,
-    };
+    use super::{native_css, GOBLINS_NATIVE_CSS, MOTION_EASE_STANDARD, MOTION_OVERLAY_MS};
 
     #[test]
     fn motion_curve_and_materials_are_wired_into_the_css() {
@@ -2484,10 +2523,9 @@ mod tests {
         assert!(GOBLINS_NATIVE_CSS.contains("@gos_material_ultra_thick"));
         assert!(GOBLINS_NATIVE_CSS.contains("@gos_material_ultra_thin"));
         assert!(GOBLINS_NATIVE_CSS.contains("@gos_material_regular"));
-        // The overlay animator's numbers are sane (a brief fade, a subtle pop).
+        // The overlay animator's fade duration is sane (a brief, decisive settle).
         const {
             assert!(MOTION_OVERLAY_MS >= 100 && MOTION_OVERLAY_MS <= 400);
-            assert!(MOTION_OVERLAY_SCALE_FROM > 0.85 && MOTION_OVERLAY_SCALE_FROM < 1.0);
         }
     }
 
@@ -2710,5 +2748,101 @@ mod tests {
                 "shared native CSS must not reference {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn prominent_cta_derives_from_the_one_accent_blue() {
+        // The OS ships ONE blue: the prominent CTA derives from @gos_accent, so a
+        // selected item and a primary button can never read as two different blues.
+        let light = native_css("", false);
+        let dark = native_css("", true);
+        for css in [&light, &dark] {
+            assert!(css.contains("gos_primary_top         @gos_accent;"));
+            assert!(css.contains("gos_primary_bottom      @gos_accent;"));
+            assert!(css.contains("gos_primary_border      alpha(@gos_accent,"));
+        }
+        // The old second-hue CTA literals must not return as primary tokens.
+        assert!(!light.contains("gos_primary_top         rgba(0, 122, 255, 1)"));
+        assert!(!dark.contains("gos_primary_top         rgba(10, 132, 255, 1)"));
+    }
+
+    #[test]
+    fn motion_uses_the_one_standard_curve_and_token_durations() {
+        // One easing vocabulary: every transition decelerates on MOTION_EASE_STANDARD.
+        assert!(
+            !GOBLINS_NATIVE_CSS.contains("ease-out"),
+            "no bare ease-out: every transition uses the standard cubic-bezier"
+        );
+        assert!(GOBLINS_NATIVE_CSS.contains("cubic-bezier(0.32, 0.72, 0, 1)"));
+        // Durations snap to the four MOTION_* tokens; 160/180ms are not tokens.
+        assert!(!GOBLINS_NATIVE_CSS.contains("160ms"));
+        assert!(!GOBLINS_NATIVE_CSS.contains("180ms"));
+    }
+
+    #[test]
+    fn window_geometry_is_one_radius_and_margin() {
+        // Both window roots share one corner + margin so two windows on one desktop
+        // can never show different corners. The shell root must match Settings (16/16).
+        assert_eq!(super::GOS_WINDOW_RADIUS_PX, 16);
+        assert_eq!(super::GOS_WINDOW_MARGIN_PX, 16);
+        let root = GOBLINS_NATIVE_CSS
+            .split("window.gos-windowed .gos-root {")
+            .nth(1)
+            .and_then(|b| b.split('}').next())
+            .expect("windowed root block present");
+        assert!(root.contains("margin: 16px;"));
+        assert!(root.contains("border-radius: 16px;"));
+        assert!(!root.contains("border-radius: 12px;"));
+        assert!(!root.contains("margin: 28px;"));
+        // The inverted "16px drifted toward iOS" defense is gone for good.
+        assert!(!GOBLINS_NATIVE_CSS.contains("drifted toward iOS"));
+    }
+
+    #[test]
+    fn chrome_stylesheets_pin_to_the_one_canonical_accent() {
+        // The gnome-shell chrome (dock/WM) inlines the accent because St CSS can't
+        // read GTK tokens; this enforces that the ONLY blue it uses is the canonical
+        // @gos_accent dark value — so chrome accent can never drift from the OS.
+        let base = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../os/gnome-shell-extensions"
+        );
+        // A minimal build context (e.g. gate.Dockerfile copies only Cargo+crates) has
+        // no os/ tree; the full-checkout CI rust job is where this actually enforces.
+        if !std::path::Path::new(base).is_dir() {
+            return;
+        }
+        let forbidden = ["rgba(0, 122, 255", "rgba(10, 132, 255", "rgba(0, 136, 255"];
+        for ext in ["goblins-dock", "goblins-wm", "goblins-menubar"] {
+            let path = format!("{base}/{ext}@goblins.os/stylesheet.css");
+            let css = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {path}"));
+            for bad in forbidden {
+                assert!(
+                    !css.contains(bad),
+                    "{ext} chrome must not use an off-accent blue ({bad})"
+                );
+            }
+        }
+        // The accent-bearing chrome surfaces must use the canonical value.
+        for ext in ["goblins-dock", "goblins-wm"] {
+            let css =
+                std::fs::read_to_string(format!("{base}/{ext}@goblins.os/stylesheet.css")).unwrap();
+            assert!(
+                css.contains(super::GOS_CHROME_ACCENT_RGBA_PREFIX),
+                "{ext} must use the canonical chrome accent"
+            );
+        }
+    }
+
+    #[test]
+    fn list_row_title_is_the_one_canonical_weight() {
+        // .gos-row-title is the one calm list weight (500) everywhere — no surface
+        // re-declares it, and list titles never shout at 700.
+        let block = GOBLINS_NATIVE_CSS
+            .split(".gos-row-title {")
+            .nth(1)
+            .and_then(|b| b.split('}').next())
+            .expect("row-title rule present");
+        assert!(block.contains("font-weight: 500;"));
     }
 }

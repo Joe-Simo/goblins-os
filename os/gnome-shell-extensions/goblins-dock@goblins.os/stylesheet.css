@@ -2,14 +2,14 @@
 .goblins-dock {
   background-color: rgba(18, 18, 23, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 24px;
+  border-radius: 22px;
   padding: 8px 10px;
   spacing: 8px;
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
 }
 
 .goblins-dock-item {
-  border-radius: 15px;
+  border-radius: 16px;
   padding: 6px;
   transition-duration: 150ms;
 }
@@ -25,4 +25,14 @@
 
 .goblins-dock-item:active {
   background-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Running indicator — a single accent dot under the icon (mirrors @gos_accent =
+   rgba(0,145,255)). Icons stay plate-less; only this dot marks a running app. */
+.goblins-dock-running-dot {
+  width: 5px;
+  height: 5px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background-color: rgba(0, 145, 255, 0.95);
 }

@@ -182,9 +182,9 @@ render_scheme() {
   # Force the scheme-appropriate wallpaper on picture-uri too (headless GNOME does
   # not always honour the color-scheme -> picture-uri-dark switch).
   gsettings set org.gnome.desktop.background picture-uri \
-    "file://$WALLPAPER_DIR/goblins-os-$app_theme.svg" 2>/dev/null || true
+    "file://$WALLPAPER_DIR/goblins-os-$app_theme.png" 2>/dev/null || true
   gsettings set org.gnome.desktop.background picture-uri-dark \
-    "file://$WALLPAPER_DIR/goblins-os-dark.svg" 2>/dev/null || true
+    "file://$WALLPAPER_DIR/goblins-os-dark.png" 2>/dev/null || true
   gsettings set org.gnome.desktop.background picture-options 'zoom' 2>/dev/null || true
 
   GNOME_SHELL_SESSION_MODE=goblins-os \
@@ -214,12 +214,14 @@ render_scheme() {
   # background once at startup from the system dconf db (light) and does not pick up
   # the user-db wallpaper set before launch; setting it again now delivers a
   # GSettings::changed signal to the running background actor so it reloads the
-  # scheme-correct wallpaper. The settle lets the SVG decode before we capture.
+  # scheme-correct wallpaper. fedora-bootc has no gdk-pixbuf SVG loader, so the
+  # shipped wallpaper is the rasterized PNG (matches the dconf default); the settle
+  # lets it decode before we capture.
   gsettings set org.gnome.desktop.interface color-scheme "$color_scheme" 2>/dev/null || true
   gsettings set org.gnome.desktop.background picture-uri \
-    "file://$WALLPAPER_DIR/goblins-os-$app_theme.svg" 2>/dev/null || true
+    "file://$WALLPAPER_DIR/goblins-os-$app_theme.png" 2>/dev/null || true
   gsettings set org.gnome.desktop.background picture-uri-dark \
-    "file://$WALLPAPER_DIR/goblins-os-dark.svg" 2>/dev/null || true
+    "file://$WALLPAPER_DIR/goblins-os-dark.png" 2>/dev/null || true
   sleep 3.0
 
   # Bare desktop: wallpaper + menu bar + dock, no window.

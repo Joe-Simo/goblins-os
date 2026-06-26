@@ -4096,6 +4096,38 @@ fn populate_panel(
         SettingsPanel::Developer => build_developer(main, state, config),
     }
     append_settings_ai_help(main, panel, state);
+    fade_in_panel(main);
+}
+
+/// Fade freshly-built panel content in over one base tempo (220ms =
+/// goblins_os_design::MOTION_BASE_MS), respecting the desktop's Reduce Motion
+/// setting — replaces the old hard cut when switching settings panes.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn fade_in_panel(main: &gtk4::Box) {
+    use gtk4::prelude::*;
+    let animate = gtk4::Settings::default()
+        .map(|s| s.is_gtk_enable_animations())
+        .unwrap_or(true);
+    if !animate {
+        main.set_opacity(1.0);
+        return;
+    }
+    main.set_opacity(0.0);
+    let start = std::time::Instant::now();
+    let weak = main.downgrade();
+    gtk4::glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+        let Some(main) = weak.upgrade() else {
+            return gtk4::glib::ControlFlow::Break;
+        };
+        // 220ms base tempo on the standard deceleration; clean cut under Reduce Motion.
+        let t = (start.elapsed().as_millis() as f64 / 220.0).clamp(0.0, 1.0);
+        main.set_opacity(1.0 - (1.0 - t).powi(3));
+        if t >= 1.0 {
+            gtk4::glib::ControlFlow::Break
+        } else {
+            gtk4::glib::ControlFlow::Continue
+        }
+    });
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -16720,12 +16752,7 @@ window.gos-settings-window {
 }
 
 /* Item titles read a clear step below section headers (weight, not just size). */
-.gos-row-title {
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-
+/* Row-title weight/size are the design crate's ONE canonical role — not redeclared here. */
 .gos-muted,
 .gos-row-copy,
 .gos-panel-intro {
@@ -17242,7 +17269,7 @@ window.gos-settings-window {
   margin-bottom: 0;
   padding: 3px;
   border: 1px solid @gos_hairline;
-  border-radius: 11px;
+  border-radius: 12px;
   background: @gos_surface_muted;
 }
 
@@ -17296,7 +17323,7 @@ window.gos-settings-window {
   min-height: 32px;
   min-width: 188px;
   padding: 4px 14px;
-  border-radius: 9px;
+  border-radius: 8px;
   font-weight: 600;
   color: @gos_ink;
   border: 1px solid transparent;
@@ -17368,7 +17395,7 @@ window.gos-settings-window {
 
 .gos-key-entry {
   min-height: 38px;
-  border-radius: 9px;
+  border-radius: 8px;
   border: 1px solid @gos_hairline_strong;
   background: @gos_surface;
   color: @gos_ink;

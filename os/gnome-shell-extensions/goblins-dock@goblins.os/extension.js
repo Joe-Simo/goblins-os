@@ -6,6 +6,7 @@
 // apps, styled by stylesheet.css to match the Goblins-native design language. No overview,
 // no struts — it floats over the wallpaper like the macOS dock.
 
+import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import Shell from 'gi://Shell';
 import Gio from 'gi://Gio';
@@ -59,14 +60,31 @@ export default class GoblinsDock extends Extension {
             if (!app)
                 continue;
             const appName = app.get_name() || id.replace(/\.desktop$/, '');
+            const isRunning = app.get_state() === Shell.AppState.RUNNING;
             const item = new St.Button({
                 style_class: 'goblins-dock-item',
                 can_focus: true,
                 accessible_name: `Open ${appName}`,
             });
-            item.set_child(app.create_icon_texture(ICON_SIZE));
+            // Icon + a running-indicator dot, stacked. The dot's space is reserved on
+            // every item (transparent when not running) so the dock keeps a uniform
+            // height; only running apps light it with the accent.
+            const stack = new St.BoxLayout({
+                vertical: true,
+                x_align: Clutter.ActorAlign.CENTER,
+            });
+            const icon = app.create_icon_texture(ICON_SIZE);
+            icon.set_x_align(Clutter.ActorAlign.CENTER);
+            stack.add_child(icon);
+            const dot = new St.Widget({
+                style_class: 'goblins-dock-running-dot',
+                x_align: Clutter.ActorAlign.CENTER,
+                opacity: isRunning ? 255 : 0,
+            });
+            stack.add_child(dot);
+            item.set_child(stack);
             item.connect('clicked', () => app.activate());
-            if (app.get_state() === Shell.AppState.RUNNING)
+            if (isRunning)
                 item.add_style_class_name('running');
             this._dock.add_child(item);
         }

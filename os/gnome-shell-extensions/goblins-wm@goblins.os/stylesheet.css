@@ -94,25 +94,40 @@
 
 .goblins-wm-window-card,
 .goblins-wm-switch-card {
-  border-radius: 18px;
+  border-radius: 16px;
   padding: 10px;
   background-color: rgba(30, 30, 36, 0.80);
   border: 1px solid rgba(255, 255, 255, 0.10);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
 }
 
+/* Three DISTINCT states, one selection language (mirrors the GTK @gos_accent =
+   rgba(0,145,255) used by the launcher/settings). St CSS can't read the GTK token,
+   so the value is inlined here and must be hand-synced with @gos_accent until the
+   chrome-token codegen ships (design item #8). */
+/* Hover — neutral "the pointer is here" cue. */
 .goblins-wm-window-card:hover,
-.goblins-wm-switch-card:hover,
+.goblins-wm-switch-card:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.30);
+}
+
+/* Keyboard focus — a distinct accent ring, separate from hover and selection. */
 .goblins-wm-window-card:focus,
-.goblins-wm-switch-card:focus,
+.goblins-wm-switch-card:focus {
+  background-color: rgba(255, 255, 255, 0.10);
+  border-color: rgba(0, 145, 255, 0.70);
+}
+
+/* Selection — the chosen window: accent fill + solid accent border. */
 .goblins-wm-window-card.selected,
 .goblins-wm-switch-card.selected {
-  background-color: rgba(255, 255, 255, 0.15);
-  border-color: rgba(255, 255, 255, 0.42);
+  background-color: rgba(0, 145, 255, 0.20);
+  border-color: rgba(0, 145, 255, 0.95);
 }
 
 .goblins-wm-thumbnail {
-  border-radius: 13px;
+  border-radius: 12px;
   background-color: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.11);
 }
@@ -147,7 +162,7 @@
   spacing: 8px;
   margin-top: 4px;
   padding: 11px;
-  border-radius: 20px;
+  border-radius: 16px;
   background-color: rgba(20, 20, 24, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.10);
   box-shadow: 0 22px 58px rgba(0, 0, 0, 0.40);
@@ -179,7 +194,7 @@
 .goblins-wm-switcher {
   spacing: 14px;
   padding: 16px;
-  border-radius: 24px;
+  border-radius: 22px;
   background-color: rgba(23, 23, 28, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 34px 76px rgba(0, 0, 0, 0.54);
@@ -197,7 +212,7 @@
   min-width: 510px;
   spacing: 12px;
   padding: 18px;
-  border-radius: 24px;
+  border-radius: 22px;
   background-color: rgba(24, 24, 30, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 34px 76px rgba(0, 0, 0, 0.52);
@@ -335,7 +350,7 @@
    (the capture itself) is set inline by the extension. */
 .goblins-screenshot-thumb {
   border: 3px solid rgba(255, 255, 255, 0.92);
-  border-radius: 14px;
+  border-radius: 12px;
   background-size: cover;
   background-position: center;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);

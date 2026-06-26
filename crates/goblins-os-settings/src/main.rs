@@ -16730,13 +16730,13 @@ window.gos-settings-window {
 
 .gos-settings-root .gos-side-nav.is-current {
   border-color: transparent;
-  background: @gos_fill_primary;
+  background: alpha(@gos_accent, 0.16);
   color: @gos_ink;
   font-weight: 600;
 }
 
 .gos-settings-root .gos-side-nav.is-current:hover {
-  background: @gos_fill_primary;
+  background: alpha(@gos_accent, 0.20);
 }
 
 .gos-settings-root .gos-side-nav.is-current .gos-side-icon-well {

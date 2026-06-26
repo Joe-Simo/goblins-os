@@ -53,6 +53,10 @@ switch-input-source-backward=@as []
 # GNOME's switch-applications defaults to <Super>Tab and would collide otherwise.
 switch-applications=@as []
 switch-applications-backward=@as []
+# Show Desktop — push all windows aside to reveal the desktop, the macOS
+# spread-thumbs / F11 reflex. Bound on the WM's stable, built-in action (no custom
+# code), so it tracks GNOME with zero maintenance.
+show-desktop=['<Super>d']
 
 [org/gnome/settings-daemon/plugins/media-keys]
 # Super+Space opens the bespoke Goblins launcher (Spotlight); Super+Shift+Space

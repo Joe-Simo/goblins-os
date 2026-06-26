@@ -255,7 +255,13 @@ fn run_native_login(config: LoginConfig, state: LoginState) -> LoginResult<()> {
             .default_height(820)
             .build();
 
-        window.set_child(Some(&build_login(app, &window, &config, &state)));
+        // The identity gate sits over a real GSK blur-of-wallpaper material (the
+        // macOS login idiom: a centered card over blurred wallpaper), not a flat
+        // opaque canvas. The blur renders under cairo too, so it shows headlessly.
+        window.set_child(Some(&goblins_os_ui::VibrancyBackdrop::new(
+            goblins_os_ui::resolve_dark(),
+            &build_login(app, &window, &config, &state),
+        )));
         window.fullscreen();
         window.present();
     });
@@ -462,11 +468,9 @@ fn build_login(
             let feedback = feedback.clone();
             gtk::glib::timeout_add_local(Duration::from_millis(90), move || match rx.try_recv() {
                 Ok(next_state) => {
-                    window_handle.set_child(Some(&build_login(
-                        &app_handle,
-                        &window_handle,
-                        &config,
-                        &next_state,
+                    window_handle.set_child(Some(&goblins_os_ui::VibrancyBackdrop::new(
+                        goblins_os_ui::resolve_dark(),
+                        &build_login(&app_handle, &window_handle, &config, &next_state),
                     )));
                     gtk::glib::ControlFlow::Break
                 }

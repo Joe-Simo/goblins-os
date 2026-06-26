@@ -329,3 +329,20 @@
   border-color: rgba(0, 0, 0, 0.26);
   box-shadow: 0 22px 54px rgba(13, 13, 12, 0.18);
 }
+
+/* The floating screenshot thumbnail — a framed, shadowed capture in the corner,
+   the macOS "shot landed, click to mark it up" affordance. Its background-image
+   (the capture itself) is set inline by the extension. */
+.goblins-screenshot-thumb {
+  border: 3px solid rgba(255, 255, 255, 0.92);
+  border-radius: 14px;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.goblins-screenshot-thumb:hover,
+.goblins-screenshot-thumb:focus {
+  border-color: #ffffff;
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.62);
+}

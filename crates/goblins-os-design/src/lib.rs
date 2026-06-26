@@ -388,6 +388,14 @@ window {
     @gos_canvas;
 }
 
+/* The login/identity gate sits inside a VibrancyBackdrop (real GSK blur of the
+   wallpaper), so its canvas is transparent and the blurred wallpaper reads behind
+   the centered identity card — the macOS login idiom. Overrides only the login
+   canvas; settings/installer keep their opaque grouped surface above. */
+.gos-login-root {
+  background: transparent;
+}
+
 /* Unlocked, the shell is a WINDOW on the desktop, not a full-screen takeover: a
    rounded, shadowed surface floating over the wallpaper. The window itself is
    transparent, so the corners and the drop shadow reveal the live desktop behind.

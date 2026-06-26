@@ -44,6 +44,7 @@ paths = [
   "CLA.md",
   "CONTRIBUTING.md",
   "README.md",
+  "GO-LIVE.md",
   "GOAL.md",
 ]
 

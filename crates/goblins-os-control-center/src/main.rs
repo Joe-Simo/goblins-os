@@ -66,6 +66,62 @@ mod native {
 
     const APP_ID: &str = "org.goblins.OS.ControlCenter";
     const MAX_BODY_BYTES: u64 = 256 * 1024;
+
+    // Panel-local refinements layered over the shared design tokens. These don't
+    // invent new color — they reach for the SAME `@gos_*` tokens the design crate
+    // exports and only re-rank weight, so the panel reads as one calm system in
+    // both schemes:
+    //  · a status tile (Wi-Fi) drops the raised/hover affordance of a selectable
+    //    tile and sinks into a flat inset, so what's tappable (Appearance) is legible;
+    //  · the selected-tile ring comes down to the panel's muted accent weight
+    //    (matching the segmented control) instead of the full-strength border —
+    //    in dark `@gos_primary_border` is a bright sky-blue, so the heavy ring was
+    //    the loudest accent on the surface;
+    //  · the AI action chips lift onto a raised fill with a clearer border so they
+    //    don't sink into the graphite in dark, and the `AI Settings…` destination
+    //    is demoted to a quiet full-width row, distinct from the action verbs.
+    const PANEL_CSS: &str = r#"
+/* Selected tile (Appearance · Dark) — calm it to the segmented control's accent
+   weight: one muted inset ring, no full-strength border that shouts in dark. */
+.gos-cc-root .gos-cc-tile.is-on {
+  border-color: alpha(@gos_primary_border, 0.42);
+  box-shadow: 0 1px 0 alpha(@gos_material_sheen, 0.46) inset,
+              inset 0 0 0 1px alpha(@gos_primary_border, 0.34);
+}
+
+/* Status tile (Wi-Fi) — a read-out, not a selectable card. Sink it into a flat
+   inset with no shadow lift and no hover affordance, so the eye reads it as
+   information rather than a control to tap. */
+.gos-cc-root .gos-cc-tile.gos-cc-tile-status {
+  background: @gos_surface_sunken;
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px alpha(@gos_material_sheen, 0.18);
+}
+.gos-cc-root .gos-cc-tile-status:hover { background: @gos_surface_sunken; }
+
+/* AI action chips — lift onto the raised control fill with a clearer border so
+   the six-up grid reads with real figure/ground in dark instead of melting into
+   the panel graphite. */
+.gos-cc-root .gos-cc-action {
+  background-color: @gos_control_raised;
+  border-color: @gos_hairline_strong;
+}
+.gos-cc-root .gos-cc-action:hover { background-color: @gos_material_hover; }
+
+/* `AI Settings…` is a destination, not an action verb — demote it from the chip
+   grid to a quiet full-width row so it never reads as a sixth launcher. */
+.gos-cc-root .gos-cc-action.gos-cc-action-settings {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: @gos_ink_muted;
+  font-weight: 600;
+}
+.gos-cc-root .gos-cc-action-settings:hover {
+  background-color: @gos_surface_sunken;
+  color: @gos_ink;
+}
+"#;
     const SINK: &str = "@DEFAULT_AUDIO_SINK@";
     const LAUNCHER_BIN: &str = "/usr/libexec/goblins-os/goblins-os-launcher";
     const SCREENSHOT_CONTEXT_BIN: &str = "/usr/libexec/goblins-os/goblins-os-screenshot-context";
@@ -90,7 +146,7 @@ mod native {
     pub fn run_control_center(config: ControlConfig) -> ControlResult<()> {
         let app = gtk::Application::builder().application_id(APP_ID).build();
         app.connect_activate(move |app| {
-            goblins_os_ui::init_theming("");
+            goblins_os_ui::init_theming(PANEL_CSS);
             build_window(app, &config);
         });
         app.run_with_args(&["goblins-os-control-center"]);
@@ -169,27 +225,31 @@ mod native {
             &screen_context_availability,
             &window,
         ));
-        let ai_visual = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        ai_visual.set_homogeneous(true);
-        ai_visual.append(&ai_tool_button(
+        // The fifth action verb sits full-width on its own row (the grid above is
+        // two-up; this completes the action set without a half-empty slot).
+        let screenshot_btn = ai_tool_button(
             "Screenshot…",
             SCREENSHOT_CONTEXT_BIN,
             &[],
             &screen_context_availability,
             &window,
-        ));
+        );
+        screenshot_btn.set_hexpand(true);
+        // `AI Settings…` is a destination, not an action verb. Demote it to a quiet
+        // full-width row below the verbs so it never reads as a sixth launcher.
         let ai_settings_btn = tool_button(
             "AI Settings…",
             "/usr/libexec/goblins-os/goblins-os-settings",
             &["--panel=models"],
             &window,
         );
-        ai_settings_btn.remove_css_class("gos-cc-link");
-        ai_settings_btn.add_css_class("gos-cc-action");
-        ai_visual.append(&ai_settings_btn);
+        style_ai_action(&ai_settings_btn);
+        ai_settings_btn.add_css_class("gos-cc-action-settings");
+        ai_settings_btn.set_hexpand(true);
         ai_actions.append(&ai_primary);
         ai_actions.append(&ai_context);
-        ai_actions.append(&ai_visual);
+        ai_actions.append(&screenshot_btn);
+        ai_actions.append(&ai_settings_btn);
         card.append(&ai_actions);
         if let Some(reason) = first_unavailable_ai_reason(&[
             &ask_availability,
@@ -383,6 +443,11 @@ mod native {
             (None, _) => "Unavailable in this session".to_string(),
         };
         let (tile, state) = make_tile("network-wireless-symbolic", "Wi-Fi", &state_text, on);
+        // Wi-Fi is a status read-out sitting beside the selectable Appearance tile.
+        // Mark it as a status surface so it sinks into a flat inset and sheds the
+        // raised/hover affordance — the eye should read it as information, and reach
+        // for Appearance as the tappable control.
+        tile.add_css_class("gos-cc-tile-status");
         if enabled.is_none() {
             update_tile_accessibility(&tile, "Wi-Fi", "Unavailable in this session");
             tile.set_sensitive(false);
@@ -629,15 +694,27 @@ mod native {
         window: &gtk::ApplicationWindow,
     ) -> gtk::Button {
         let button = tool_button(label, program, args, window);
-        // The primary AI actions read as real chips, not the bare text link used
-        // for the trailing "Open Settings…" affordance.
-        button.remove_css_class("gos-cc-link");
-        button.add_css_class("gos-cc-action");
+        style_ai_action(&button);
         if !availability.enabled {
             button.set_sensitive(false);
             button.set_tooltip_text(Some(&availability.reason));
         }
         button
+    }
+
+    /// Restyle a `tool_button` into a Goblins AI action chip. The label sits
+    /// left-aligned, matching the Wi-Fi/Appearance tiles and the rest of the
+    /// OS's card language, so both tile families in the panel share one
+    /// alignment grammar instead of mixing left- and center-aligned content.
+    fn style_ai_action(button: &gtk::Button) {
+        // The AI actions read as real chips, not the bare text link used for
+        // the trailing "Open Settings…" affordance.
+        button.remove_css_class("gos-cc-link");
+        button.add_css_class("gos-cc-action");
+        if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+            label.set_xalign(0.0);
+            label.set_halign(gtk::Align::Start);
+        }
     }
 
     fn first_unavailable_ai_reason<'a>(actions: &[&'a AiActionAvailability]) -> Option<&'a str> {

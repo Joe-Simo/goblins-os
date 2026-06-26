@@ -4441,9 +4441,6 @@ fn append_overview_native_settings(panel: &gtk4::Box, state: &SettingsState) {
     }
     controls.append(&action);
     row.append(&controls);
-    if ready {
-        row.append(&nav_chevron());
-    }
     panel.append(&row);
 }
 
@@ -6858,7 +6855,7 @@ fn storage_volume_row(volume: &StorageVolume) -> gtk4::Box {
         &storage_capacity_percent_text(volume.total_gb, volume.available_gb),
         &["gos-row-value"],
     ));
-    status.append(&status_pill(
+    status.append(&settings_status_pill(
         storage_pressure_label(volume.total_gb, volume.available_gb),
         storage_pressure_ready(volume.total_gb, volume.available_gb),
     ));
@@ -7275,9 +7272,6 @@ fn append_native_app_handoff(
 
     controls.append(&action);
     row.append(&controls);
-    if available {
-        row.append(&nav_chevron());
-    }
     panel.append(&row);
 }
 
@@ -7699,7 +7693,7 @@ fn local_model_row(core_url: &str, model: &LocalModelOption) -> gtk4::Box {
     copy.append(&label(&model.role, &["gos-row-copy"]));
     copy.append(&label(&detail, &["gos-row-copy"]));
     head.append(&copy);
-    head.append(&status_pill(
+    head.append(&settings_status_pill(
         local_model_state_label(model),
         local_model_ready(model),
     ));
@@ -8375,19 +8369,23 @@ fn append_voice_settings(panel: &gtk4::Box, state: &SettingsState) {
 fn append_appearance_settings(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
 
-    panel.append(&label("Appearance", &["gos-subsection-title"]));
+    // The "Appearance summary" card above carries the at-a-glance "Color scheme" status
+    // row; this section owns only the control + its explanation. The label is no longer
+    // restated as a prose row, and the heading is distinct from both the summary group
+    // and the status row, so the two tiers read as authored rather than repeated.
+    panel.append(&label("Set the appearance", &["gos-subsection-title"]));
 
     let Some(appearance) = &state.appearance else {
         panel.append(&system_row(
-            "Color scheme",
+            "Appearance control",
             "Waiting for appearance status.",
         ));
         return;
     };
 
-    panel.append(&system_row(
-        "Color scheme",
-        "Light, Dark, or Auto. Goblins OS saves this as the system appearance setting so native apps can follow the same choice.",
+    panel.append(&label(
+        "Choose Light, Dark, or Auto. Goblins OS saves this as the system appearance setting so native apps can follow the same choice.",
+        &["gos-panel-intro"],
     ));
 
     if !appearance.color_scheme_available {
@@ -9093,9 +9091,7 @@ fn network_failure_summary(detail: &str) -> Option<String> {
     }
 
     if detail.contains("No such file or directory") {
-        return Some(
-            "Networking could not connect. Detail: service socket was not found.".to_string(),
-        );
+        return Some("Networking isn’t responding yet.".to_string());
     }
 
     Some("Networking could not connect.".to_string())
@@ -9125,7 +9121,7 @@ fn readable_runtime_value(value: &str) -> &str {
     match value.trim() {
         "" => "unknown",
         "not-configured" | "unconfigured" => "not configured",
-        "os-managed-runtime" => "OS-managed runtime",
+        "os-managed-runtime" => "managed by Goblins OS",
         // AiPermission control ids
         "resident-assistant" => "the resident assistant",
         "screen-context" => "screen context",
@@ -9211,6 +9207,19 @@ fn overview_privacy_policy_ready(
     !matches!(overview_privacy_policy_label(privacy, policy), "waiting")
 }
 
+/// Readable, authored name for a raw policy-profile slug so overview copy never
+/// inlines an engineer-ish lowercase token mid-sentence ("Policy profile consumer is
+/// active."). Available in every build, unlike the native-desktop `policy_profile_display_name`.
+fn policy_profile_name_words(profile: &str) -> &'static str {
+    match profile.trim() {
+        "consumer" => "consumer",
+        "business" => "business",
+        "enterprise" => "enterprise",
+        "local-only" => "local-only",
+        _ => "custom",
+    }
+}
+
 fn overview_privacy_policy_detail(
     privacy: Option<&PrivacyStatus>,
     policy: Option<&PolicyStatus>,
@@ -9227,10 +9236,11 @@ fn overview_privacy_policy_detail(
     );
     let policy_detail = policy
         .map(|policy| {
+            let name = policy_profile_name_words(&policy.profile);
             if policy.locked {
-                format!("Policy profile {} is locked.", policy.profile)
+                format!("The {name} policy profile is locked.")
             } else {
-                format!("Policy profile {} is active.", policy.profile)
+                format!("The {name} policy profile is in effect.")
             }
         })
         .unwrap_or_else(|| "Policy status is waiting for Goblins OS.".to_string());
@@ -10157,11 +10167,142 @@ fn health_row(title: &str, state: &str, ok: bool, detail: &str) -> gtk4::Box {
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn settings_status_pill(state: &str, ok: bool) -> gtk4::Label {
     let display_state = settings_status_display_label(state);
-    let pill = status_pill(&display_state, ok);
-    if ok && settings_status_state_is_quiet(state) {
-        pill.add_css_class("gos-status-quiet");
+    // The pill TONE is a pure function of the canonical state word, never of the
+    // per-call-site `ok` flag. That flag is honest about readiness for behavior,
+    // but it must not flip a neutral word ("none") amber on one row and gray on
+    // another, nor paint an "unknown" value green just because the caller built it
+    // with ready=true. We classify the state once, centrally, so the same word
+    // always carries the same color across every panel.
+    let tone = settings_status_tone(state);
+    // `status_pill` seeds the base class from a boolean: .gos-ready (green) when true,
+    // .gos-waiting (amber) when false. The settings stylesheet then layers tone classes
+    // that win by source order (.gos-status-quiet overrides .gos-ready → gray;
+    // .gos-status-problem is last so it overrides either → red). We therefore seed the
+    // base to match the tone's own color so the cascade lands correctly:
+    //   Affirmative → ready base (green, no override)
+    //   Descriptive → ready base + .gos-status-quiet (gray; quiet must override green,
+    //                 not amber, since .gos-waiting is declared after .gos-status-quiet)
+    //   Caution     → waiting base (amber, no override)
+    //   Problem     → waiting base + .gos-status-problem (red)
+    let base_ready = matches!(
+        tone,
+        SettingsStatusTone::Affirmative | SettingsStatusTone::Descriptive
+    );
+    let pill = status_pill(&display_state, base_ready);
+    match tone {
+        SettingsStatusTone::Affirmative => {}
+        SettingsStatusTone::Descriptive => pill.add_css_class("gos-status-quiet"),
+        SettingsStatusTone::Caution => {}
+        SettingsStatusTone::Problem => pill.add_css_class("gos-status-problem"),
     }
+    // `ok` is retained in the signature for call-site honesty and accessibility, but
+    // intentionally does not steer tone for any classified state. Silence the unused
+    // warning without letting it leak back into the visual decision.
+    let _ = ok;
     pill
+}
+
+/// The four semantic tones a status pill can carry. Tone is derived purely from the
+/// canonical state value so identical words read identically everywhere:
+/// - `Affirmative` — green: the thing is good/ready/on/connected/protected/granted.
+/// - `Descriptive` — calm gray: a neutral fact (a chosen mode, a count, a measurement,
+///   a configured-but-idle default like "none", "standard", "off", "team").
+/// - `Caution` — amber: not-yet/unknown/incomplete (unknown, waiting, offline,
+///   not configured, not included, needs attention).
+/// - `Problem` — red: an actual failure (blocked, failed, denied, critical, low space).
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsStatusTone {
+    Affirmative,
+    Descriptive,
+    Caution,
+    Problem,
+}
+
+/// Classify a canonical state word into its semantic tone. This is the single source
+/// of truth for status-pill color; every call site routes through it so the same value
+/// can never read two different colors across sibling panels.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn settings_status_tone(state: &str) -> SettingsStatusTone {
+    let normalized = state.trim().to_ascii_lowercase();
+
+    // Descriptive readings first: a percentage (text size, scale, volume) or a
+    // "<number> <unit>" measurement (e.g. "500 ms", "2.4 ghz") is a value, not a
+    // health verdict, so it rests in the calm neutral pill.
+    if normalized.ends_with('%') {
+        return SettingsStatusTone::Descriptive;
+    }
+    {
+        let mut parts = normalized.split(' ');
+        if let (Some(first), Some(second), None) = (parts.next(), parts.next(), parts.next()) {
+            let numeric_lead =
+                !first.is_empty() && first.chars().all(|c| c.is_ascii_digit() || c == '.');
+            if numeric_lead {
+                // "500 ms" / "2.4 ghz" — a configured measurement.
+                if matches!(
+                    second,
+                    "ms" | "s" | "min" | "hz" | "khz" | "mhz" | "ghz" | "k" | "kb" | "mb" | "gb"
+                ) {
+                    return SettingsStatusTone::Descriptive;
+                }
+                // "2 blocked" / "3 hidden" — a factual count of how the session is
+                // configured (device access, visibility). It is descriptive, not a
+                // failure, so it must not borrow the red of a bare "blocked" verdict.
+                return SettingsStatusTone::Descriptive;
+            }
+        }
+    }
+
+    match normalized.as_str() {
+        // ── Problem (red): an actual failure or critically degraded state. ──
+        "blocked" | "failed" | "denied" | "critical" | "low space" => SettingsStatusTone::Problem,
+
+        // ── Caution (amber): not-yet / unknown / incomplete / needs action. ──
+        ""
+        | "unknown"
+        | "waiting"
+        | "waiting-for-engine"
+        | "waiting-for-manifest"
+        | "unavailable"
+        | "inactive-or-unavailable"
+        | "not available"
+        | "offline"
+        | "not configured"
+        | "not-configured"
+        | "unconfigured"
+        | "not set up"
+        | "not included"
+        | "missing"
+        | "partial"
+        | "needs attention"
+        | "needs permission"
+        | "permission-gated"
+        | "permission"
+        | "needs confirmation"
+        | "confirmation-required"
+        | "confirm"
+        | "adapter-waiting"
+        | "device-waiting"
+        | "service-waiting"
+        | "sign in"
+        | "queued" => SettingsStatusTone::Caution,
+
+        // ── Affirmative (green): a genuine health / protection / connectivity / ──
+        // identity verdict — the thing is good and working. Reserved deliberately so
+        // green keeps its meaning; toggle words ("on"/"off") and configured states
+        // stay neutral below rather than borrowing this affirmative weight.
+        "ready" | "adapter-ready" | "provider-ready" | "online" | "online-capable"
+        | "connected" | "protected" | "private" | "granted" | "signed in" | "signed-in" => {
+            SettingsStatusTone::Affirmative
+        }
+
+        // ── Descriptive (calm gray): everything else is a neutral fact — a chosen ──
+        // mode, font, layout, scope, toggle, or configured-but-idle default
+        // (none, off, on, standard, team, available, active, …). This is the
+        // intentional fallback so a newly-introduced descriptive value reads calm by
+        // default rather than accidentally loud.
+        _ => SettingsStatusTone::Descriptive,
+    }
 }
 
 fn settings_status_display_label(state: &str) -> String {
@@ -10294,72 +10435,15 @@ fn settings_detail_display_copy(detail: &str) -> String {
     text
 }
 
-#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+/// A state reads as the calm neutral pill exactly when its tone is `Descriptive`.
+/// This is now derived from the single [`settings_status_tone`] classifier rather than
+/// a hand-maintained allow-list, so "quiet" can never drift out of sync with the color
+/// the pill actually paints. The pill rendering path uses the tone classifier directly;
+/// this thin predicate now exists only to keep the tone tests readable, so it is gated
+/// to test builds to avoid an unused-function warning in the shipping binary.
+#[cfg(all(test, target_os = "linux", feature = "native-desktop"))]
 fn settings_status_state_is_quiet(state: &str) -> bool {
-    let normalized = state.trim().to_ascii_lowercase();
-    // A trailing-% reading (text size, scale, volume) is a descriptive value, not a
-    // health state, so it rests in the calm neutral pill instead of reading as "good".
-    if normalized.ends_with('%') {
-        return true;
-    }
-    // A "<number> <unit>" measurement (e.g. "500 ms", "30 ms", "2.4 ghz") is a
-    // configured value, not a health state, so it rests in the same neutral pill as
-    // the percentage readings above — green stays reserved for affirmative status.
-    // Mirrors the unit set the display label keeps lowercase.
-    {
-        let mut parts = normalized.split(' ');
-        if let (Some(num), Some(unit), None) = (parts.next(), parts.next(), parts.next()) {
-            if !num.is_empty()
-                && num.chars().all(|c| c.is_ascii_digit() || c == '.')
-                && matches!(
-                    unit,
-                    "ms" | "s" | "min" | "hz" | "khz" | "mhz" | "ghz" | "k" | "kb" | "mb" | "gb"
-                )
-            {
-                return true;
-            }
-        }
-    }
-    // One status -> pill-variant map for the whole app: descriptive/neutral facts
-    // (a chosen mode, a font, a layout, a configured-but-idle state) read as a calm
-    // gray pill; only genuinely affirmative health (on, connected, granted, …) stays
-    // green; problems (waiting/unknown/unavailable/blocked) stay explicit. Matching is
-    // case-insensitive so "Inter" and "inter" never disagree.
-    matches!(
-        normalized.as_str(),
-        "active"
-            | "admin managed"
-            | "auto"
-            | "available"
-            | "checking"
-            | "configured"
-            | "custom"
-            | "full motion"
-            | "goblins theme"
-            | "inter"
-            | "installed"
-            | "left-aligned"
-            | "local only"
-            | "local-only"
-            | "menu bar"
-            | "night light off"
-            | "none"
-            | "off"
-            | "not installed"
-            | "not-requested"
-            | "online"
-            | "personal"
-            | "privacy ready"
-            | "ready"
-            | "adapter-ready"
-            | "ready to download"
-            | "server-side"
-            | "signed in"
-            | "signed-in"
-            | "team"
-            | "provider-ready"
-            | "unlocked"
-    )
+    settings_status_tone(state) == SettingsStatusTone::Descriptive
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -15146,7 +15230,7 @@ fn device_settings_action_label(readiness: DeviceSettingsReadiness) -> &'static 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn device_settings_integrated_detail(settings_panel: SettingsPanel) -> String {
     format!(
-        "Open the full {} controls. Goblins OS opens these in the system control center.",
+        "Opens the full {} controls in the system control center.",
         settings_panel.display_name()
     )
 }
@@ -15262,9 +15346,6 @@ fn append_device_settings_handoff(
     }
     controls.append(&action);
     row.append(&controls);
-    if ready {
-        row.append(&nav_chevron());
-    }
     panel.append(&row);
 }
 
@@ -15449,21 +15530,6 @@ fn button(text: &str, classes: &[&str]) -> gtk4::Button {
     }
 
     button
-}
-
-/// Trailing disclosure chevron for rows that genuinely navigate to (or open)
-/// another surface. A quiet @gos_ink_muted glyph — the macOS "this row goes
-/// somewhere" affordance. Decorative only: never wire it to its own action, so
-/// it stays honest about the row's single real target.
-#[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn nav_chevron() -> gtk4::Label {
-    use gtk4::prelude::*;
-
-    let chevron = gtk4::Label::new(Some("\u{203a}"));
-    chevron.set_xalign(0.5);
-    chevron.add_css_class("gos-row-chevron");
-    chevron.set_valign(gtk4::Align::Center);
-    chevron
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -16529,6 +16595,11 @@ window.gos-settings-window {
 .gos-settings-root .gos-main-panel {
   min-width: 584px;
   padding: 24px 32px 28px;
+  /* The 28px padding above sets the first-screen density; this extra trailing margin
+     gives the final card/control comfortable breathing room so it always clears the
+     window edge instead of rendering flush (or half-clipped) against the bottom frame.
+     Kept as a separate margin so the density padding contract stays intact. */
+  margin-bottom: 12px;
   border: none;
   border-radius: 0 0 16px 0;
   background: @gos_surface_muted;
@@ -16847,7 +16918,12 @@ window.gos-settings-window {
   border-width: 0;
   border-bottom: 1px solid @gos_separator;
   background: transparent;
-  box-shadow: none;
+  /* A second hairline rides the same bottom edge using the theme-swapped
+     @gos_hairline_strong (a dark line in light mode, a light line in dark). On a
+     dark surface the @gos_separator gray nearly vanished; this light hairline gives
+     the row separation the same crispness it has in light mode, without weakening
+     the light divider. */
+  box-shadow: 0 1px 0 @gos_hairline_strong;
 }
 
 .gos-settings-root .gos-preference-group .gos-row:first-child {
@@ -16857,6 +16933,8 @@ window.gos-settings-window {
 .gos-settings-root .gos-preference-group .gos-row:last-child {
   border-bottom-width: 0;
   border-radius: 0 0 12px 12px;
+  /* The card edge already closes the group; no trailing divider on the last row. */
+  box-shadow: none;
 }
 
 .gos-settings-root .gos-preference-group .gos-row:first-child:last-child {
@@ -16954,21 +17032,6 @@ window.gos-settings-window {
   color: @gos_label_secondary;
   border-color: alpha(@gos_hairline_strong, 0.84);
   background: alpha(@gos_fill_secondary, 0.72);
-}
-
-/* Trailing disclosure chevron — a quiet "this row goes somewhere" glyph that
-   sits after the controls on handoff rows that actually open another surface. */
-.gos-settings-root .gos-row-chevron {
-  margin-left: 2px;
-  padding: 0 2px;
-  min-width: 12px;
-  font-size: 15px;
-  font-weight: 500;
-  color: @gos_ink_muted;
-}
-
-.gos-settings-root .gos-row:hover .gos-row-chevron {
-  color: @gos_ink;
 }
 
 .gos-settings-root .gos-overview-summary-grid {
@@ -17103,7 +17166,10 @@ window.gos-settings-window {
   border: 1px solid transparent;
   background: transparent;
   box-shadow: none;
-  color: @gos_label_secondary;
+  /* Unselected labels read as legible affordances, not faint hints: use the muted
+     ink (a true mid-gray) rather than the very-low-contrast secondary label color, so
+     all three options share comparable legibility. */
+  color: @gos_ink_muted;
   font-size: 13px;
   font-weight: 500;
 }
@@ -17122,17 +17188,20 @@ window.gos-settings-window {
 
 .gos-segmented-option.is-selected {
   color: @gos_ink;
-  border-color: transparent;
+  /* Match the soft card elevation above this control instead of a harder, darker
+     raised chip: a faint hairline + the same low-contrast panel shadow the grouped
+     cards use, so the selected pill belongs to the same surface language. */
+  border-color: alpha(@gos_hairline, 0.6);
   background: @gos_control_raised;
-  box-shadow: 0 1px 0 alpha(@gos_panel_sheen, 0.56) inset,
-              0 1px 3px @gos_shadow_panel;
+  box-shadow: 0 1px 0 alpha(@gos_panel_sheen, 0.32) inset,
+              0 1px 3px alpha(@gos_shadow_panel, 0.7);
 }
 
 .gos-segmented-option.is-selected:focus {
   border-color: @gos_primary_border;
   box-shadow: 0 0 0 3px @gos_focus,
               0 0 0 1px @gos_primary_border inset,
-              0 1px 0 alpha(@gos_panel_sheen, 0.56) inset;
+              0 1px 0 alpha(@gos_panel_sheen, 0.32) inset;
 }
 
 .gos-engine-option {
@@ -17355,6 +17424,13 @@ window.gos-settings-window {
 
 .gos-settings-root .gos-waiting {
   color: @gos_waiting;
+  background: transparent;
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.gos-settings-root .gos-status-problem {
+  color: @gos_tint_red;
   background: transparent;
   border-color: transparent;
   font-weight: 600;
@@ -18325,8 +18401,12 @@ mod tests {
         assert!(!ready.contains('`'));
 
         let integrated = super::device_settings_integrated_detail(SettingsPanel::Network);
-        assert!(integrated.contains("Open the full Network controls"));
-        assert!(integrated.contains("system control center"));
+        // One non-redundant sentence — no "Open…opens" duplication, no orphaned line.
+        assert!(
+            integrated.contains("Opens the full Network controls in the system control center.")
+        );
+        assert!(!integrated.contains("Open the full"));
+        assert!(!integrated.contains("Goblins OS opens these"));
         assert!(!integrated.contains("Status shown here comes from Goblins OS"));
 
         let session_unavailable = super::device_settings_handoff_detail(
@@ -18444,6 +18524,9 @@ mod tests {
         assert!(css.contains(
             ".gos-settings-root .gos-main-panel {\n  min-width: 584px;\n  padding: 24px 32px 28px;"
         ));
+        // A trailing margin gives the final panel row breathing room past the density
+        // padding, so the last card/control always clears the window edge.
+        assert!(css.contains("margin-bottom: 12px;"));
         assert!(css.contains(".gos-settings-root .gos-side-panel {\n  min-width: 244px;"));
         assert!(css.contains(".gos-settings-root .gos-side-scroll scrollbar.vertical slider"));
         assert!(css.contains(".gos-settings-root .gos-side-panel .gos-search-empty"));
@@ -18466,6 +18549,11 @@ mod tests {
         ));
         assert!(css.contains(
             ".gos-settings-root .gos-waiting {\n  color: @gos_waiting;\n  background: transparent;"
+        ));
+        // Problem-tone states (blocked/failed/denied/critical) carry the red tint so a
+        // genuine failure never shares the amber of a merely-waiting row.
+        assert!(css.contains(
+            ".gos-settings-root .gos-status-problem {\n  color: @gos_tint_red;\n  background: transparent;"
         ));
         assert!(!css.contains(".gos-status-pill {\n  padding: 6px 10px;"));
         let status_pill_block = css
@@ -18491,9 +18579,18 @@ mod tests {
         }
     }
 
+    // Pill tone is a pure function of the canonical state word, classified by
+    // settings_status_tone. The same word must therefore read the same color on every
+    // panel — this guards the four tone buckets so the "None reads two colors" /
+    // "Unknown reads green here, amber there" class of bug cannot return.
     #[cfg(all(target_os = "linux", feature = "native-desktop"))]
     #[test]
-    fn ordinary_settings_statuses_are_visually_quiet() {
+    fn status_pill_tone_is_consistent_per_value() {
+        use super::SettingsStatusTone;
+
+        // Descriptive / neutral facts rest in the calm gray pill — a chosen mode,
+        // scope, toggle, count, or configured-but-idle default. Most notably "none"
+        // and "standard" are neutral *everywhere* now, not amber on one row.
         for state in [
             "active",
             "admin managed",
@@ -18505,24 +18602,86 @@ mod tests {
             "Inter",
             "left-aligned",
             "local only",
+            "menu bar",
             "none",
             "off",
+            "on",
+            "standard",
             "not installed",
-            "online",
-            "personal",
-            "ready",
             "ready to download",
-            "signed in",
+            "personal",
             "team",
             "125%",
+            "500 ms",
+            "2 blocked",
         ] {
+            assert_eq!(
+                super::settings_status_tone(state),
+                SettingsStatusTone::Descriptive,
+                "{state} should rest in the calm neutral pill"
+            );
             assert!(
                 super::settings_status_state_is_quiet(state),
                 "{state} should not read like an alert badge"
             );
         }
 
-        for state in ["blocked", "offline", "unavailable", "unknown", "waiting"] {
+        // Affirmative health/protection/connectivity/identity verdicts ladder to one
+        // green — "ready" matches "online"/"protected"/"signed in" everywhere.
+        for state in [
+            "ready",
+            "adapter-ready",
+            "provider-ready",
+            "online",
+            "online-capable",
+            "connected",
+            "protected",
+            "private",
+            "granted",
+            "signed in",
+            "signed-in",
+        ] {
+            assert_eq!(
+                super::settings_status_tone(state),
+                SettingsStatusTone::Affirmative,
+                "{state} is an affirmative state and should read green"
+            );
+            assert!(
+                !super::settings_status_state_is_quiet(state),
+                "{state} is affirmative, not neutral"
+            );
+        }
+
+        // Caution: not-yet / unknown / incomplete. "unknown" is amber everywhere now,
+        // never green — even on rows whose call site built it with ready=true.
+        for state in [
+            "unknown",
+            "waiting",
+            "offline",
+            "unavailable",
+            "not configured",
+            "not included",
+            "needs attention",
+            "permission-gated",
+        ] {
+            assert_eq!(
+                super::settings_status_tone(state),
+                SettingsStatusTone::Caution,
+                "{state} should read amber"
+            );
+            assert!(
+                !super::settings_status_state_is_quiet(state),
+                "{state} should remain visually explicit"
+            );
+        }
+
+        // Problem: a real failure carries the red tint, distinct from amber caution.
+        for state in ["blocked", "failed", "denied", "critical", "low space"] {
+            assert_eq!(
+                super::settings_status_tone(state),
+                SettingsStatusTone::Problem,
+                "{state} is a failure and should read red"
+            );
             assert!(
                 !super::settings_status_state_is_quiet(state),
                 "{state} should remain visually explicit"
@@ -18586,8 +18745,9 @@ mod tests {
     }
 
     // settings_status_state_is_quiet is gated to the native-desktop Linux build, so
-    // this guard runs in the canonical Linux gate (gate.Dockerfile / CI).
-    #[cfg(target_os = "linux")]
+    // this guard runs in the canonical Linux gate (gate.Dockerfile / CI) and matches the
+    // helper's own cfg so it never references a function absent from the build.
+    #[cfg(all(target_os = "linux", feature = "native-desktop"))]
     #[test]
     fn descriptive_values_rest_in_the_neutral_pill_not_green() {
         // A configured measurement or percentage is a descriptive value, not an
@@ -18603,6 +18763,10 @@ mod tests {
             "team",
             "admin managed",
             "custom",
+            // "standard" describes the default configuration (e.g. cleanup left at its
+            // defaults), not a protected/good-health state, so it must read neutral and
+            // not dilute the green reserved for "Protected"/"Online Capable".
+            "standard",
         ] {
             assert!(
                 super::settings_status_state_is_quiet(quiet),
@@ -19650,8 +19814,11 @@ mod tests {
         assert!(internet
             .detail
             .contains("Connectivity has not been confirmed by networking."));
-        assert!(internet.detail.contains("Networking could not connect"));
-        assert!(internet.detail.contains("service socket was not found"));
+        // The socket-missing case now reads as plain product voice — no "Detail:"
+        // prefix and no "service socket" implementation term.
+        assert!(internet.detail.contains("Networking isn’t responding yet."));
+        assert!(!internet.detail.contains("service socket"));
+        assert!(!internet.detail.contains("Detail:"));
         assert!(!internet.detail.contains("Could not create NMClient object"));
         assert!(!internet.detail.contains("Error:"));
 

@@ -1738,7 +1738,10 @@ fn build_first_app_page(
         true,
     ));
 
-    let panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    // Same 10px inner rhythm as the Appearance and Accessibility step cards, so the
+    // three onboarding cards share one container grammar rather than each using a
+    // slightly different internal spacing.
+    let panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
     panel.add_css_class("gos-net-panel");
     panel.set_size_request(620, -1);
 
@@ -1753,22 +1756,24 @@ fn build_first_app_page(
     );
     feedback.set_xalign(0.0);
     panel.append(&feedback);
+    column.append(&panel);
 
-    // Stack the actions vertically, centered, matching the Welcome page's
-    // primary-over-secondary rhythm (and the single centered Continue on the
-    // Appearance/Accessibility steps). Vertical stacking also gives each pill
-    // its full 340px min-width inside the 620px panel instead of force-shrinking
-    // two side-by-side pills. The skip is demoted to quiet so the primary out-ranks it.
+    // Same CTA grammar as Steps 1 and 2: the advancing action lives OUTSIDE and
+    // below the card, with the same 24px top margin the Continue button uses, so the
+    // three steps read as one machine advancing — never a card with its buttons
+    // nested on one step and floating beneath on the next. The primary "Build first
+    // app" leads; the "Enter Goblins OS" skip is the quiet secondary directly below
+    // it, so the primary always out-ranks the skip.
     let actions = gtk::Box::new(gtk::Orientation::Vertical, 10);
     actions.set_halign(gtk::Align::Center);
+    actions.set_margin_top(24);
     let build = button("Build first app", &["gos-onboarding-primary"]);
     build.set_halign(gtk::Align::Center);
     let skip = button("Enter Goblins OS", &["gos-onboarding-quiet"]);
     skip.set_halign(gtk::Align::Center);
     actions.append(&build);
     actions.append(&skip);
-    panel.append(&actions);
-    column.append(&panel);
+    column.append(&actions);
 
     {
         let app_handle = app.clone();
@@ -2454,9 +2459,19 @@ fn build_details_page(
     page_name.set_wrap(false);
     top.append(&page_name);
     top.append(&spacer());
-    top.append(&status_pill("OS", state.boot.core_ready));
-    top.append(&status_pill("OpenAI", auth_authenticated));
-    top.append(&status_pill("Local", state.local_models.is_some()));
+    // The three readiness chips are descriptive labels, not a tri-color health
+    // signal — there is no user-legible reason two would be green and one amber. Per
+    // the project's centralized "descriptive status rests in a neutral pill" rule,
+    // they all render in one calm neutral chip (.gos-readiness-chip overrides the
+    // ready/waiting hue), so the top bar stays as monochrome as the mark beside it.
+    for chip in [
+        status_pill("OS", state.boot.core_ready),
+        status_pill("OpenAI", auth_authenticated),
+        status_pill("Local", state.local_models.is_some()),
+    ] {
+        chip.add_css_class("gos-readiness-chip");
+        top.append(&chip);
+    }
     root.append(&top);
 
     // One calm, centered single column — the same shell every other onboarding
@@ -2516,10 +2531,17 @@ fn build_details_page(
         ));
     }
 
+    // Exactly one filled lead action on the hero, so the next step is unmistakable.
+    // When the OpenAI account is ready, entering the desktop with it is the headline
+    // path, so it takes the filled lead and local setup recedes to the secondary
+    // ghost. Until then the cloud button is a true disabled silhouette (the
+    // hero-scoped .gos-disabled-action: dimmed label, transparent fill, half-strength
+    // hairline — clearly inert, never an empty input) and the live local path takes
+    // the filled lead instead. No two near-identical fills competing for the eye.
     let enter_cloud = button(
         "Enter Goblins OS desktop",
         if auth_authenticated {
-            &["gos-secondary-action"]
+            &["gos-primary-action"]
         } else {
             &["gos-disabled-action"]
         },
@@ -2536,7 +2558,14 @@ fn build_details_page(
     }
     hero.append(&enter_cloud);
 
-    let enter_local = button("Continue local setup", &["gos-secondary-action"]);
+    let enter_local = button(
+        "Continue local setup",
+        if auth_authenticated {
+            &["gos-secondary-action"]
+        } else {
+            &["gos-primary-action"]
+        },
+    );
     {
         let app_handle = app.clone();
         let core_url = config.core_url.clone();
@@ -3083,6 +3112,103 @@ fn install_blocked_detail(target: &InstallTarget) -> String {
         details.push(guidance);
     }
     details.join("\n")
+}
+
+/// The severity tone a disk-card status line reads in. The whole installer voice is
+/// calm, honest status, so the color ladder is deliberately three steps — never an
+/// undifferentiated red wash on advisory copy. Each tone maps to one CSS class so the
+/// hue is token-driven and themes Light/Dark with the rest of the OS.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone, Copy)]
+enum DiskStatusTone {
+    /// Affirmative — the disk is ready to replace as-is (green).
+    Ready,
+    /// Advisory but actionable — not an error; the row still does something useful
+    /// (e.g. opens advanced storage to preserve another OS). Reads neutral/muted.
+    Advisory,
+    /// Caution — selecting this row is destructive (a whole-disk replace). Amber.
+    Caution,
+    /// Hard block — the disk genuinely can't be used for installation. Red, reserved.
+    Blocked,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+impl DiskStatusTone {
+    /// The optional state class layered onto `.gos-install-disk-state`. The default
+    /// (no extra class) is the affirmative green, so `Ready` adds nothing.
+    fn state_class(self) -> Option<&'static str> {
+        match self {
+            DiskStatusTone::Ready => None,
+            DiskStatusTone::Advisory => Some("is-advisory"),
+            DiskStatusTone::Caution => Some("is-caution"),
+            DiskStatusTone::Blocked => Some("is-blocked"),
+        }
+    }
+}
+
+/// The single status sentence a disk card shows beneath its identity line, plus the
+/// severity tone it reads in. One line — not the old seven-fact stack — so the card
+/// scans at a glance; the full per-disk detail is still reachable through
+/// [`disk_card_detail_tooltip`] and the page-level "Storage & boot details"
+/// disclosure. Returns `(text, tone)`.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn disk_card_status_line(target: &InstallTarget) -> (String, DiskStatusTone) {
+    if target.eligible {
+        if target.partitions.is_empty() {
+            // A truly blank disk needs no caution — the calm one-liner is the story.
+            (
+                "Blank disk · ready to replace".to_string(),
+                DiskStatusTone::Ready,
+            )
+        } else {
+            // A disk with partitions is selectable but selecting it erases the whole
+            // disk — a genuine caution, not a hard block. The verbose preservation
+            // prose lives in the page-level disclosure.
+            (
+                "Has partitions · whole-disk replace only — keep another OS through advanced storage".to_string(),
+                DiskStatusTone::Caution,
+            )
+        }
+    } else if target_uses_preservation_handoff(target) {
+        // A detected existing system is an action, not a dead end: the card states
+        // the one thing the user must do, and the row click opens advanced storage.
+        // This is advisory-but-actionable — it must not share the alarm-red of a
+        // hard block, so it rests in the neutral/muted tone.
+        (
+            "Existing systems detected · opens advanced storage to preserve them".to_string(),
+            DiskStatusTone::Advisory,
+        )
+    } else if target.reasons.is_empty() {
+        (
+            "This disk can't be used for installation.".to_string(),
+            DiskStatusTone::Blocked,
+        )
+    } else {
+        // A genuinely blocked disk (under-min size, removable USB, unreadable scan)
+        // keeps its full disqualifying reason — that is the decisive fact, not
+        // advisory prose, so it stays on the card in the reserved alarm-red tone.
+        (install_blocked_detail(target), DiskStatusTone::Blocked)
+    }
+}
+
+/// The full per-disk detail, demoted one hover away from the now-single-line card:
+/// partition scan, detected systems, recommended path, dual-boot plan, and (when
+/// present) the preservation checklist. Nothing the old fact stack carried is lost.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn disk_card_detail_tooltip(target: &InstallTarget) -> String {
+    let mut lines = vec![
+        partition_summary(target),
+        existing_system_summary(target),
+        format!(
+            "Recommended path: {}",
+            install_recommendation_summary(target)
+        ),
+        format!("Dual-boot plan: {}", dual_boot_plan_summary(target)),
+    ];
+    if let Some(checklist) = detected_system_preservation_checklist(target) {
+        lines.push(format!("Preservation checklist: {checklist}"));
+    }
+    lines.join("\n\n")
 }
 
 /// A calm key/value row for the Review and Done summaries (an uppercase label over
@@ -3747,11 +3873,19 @@ fn append_install_environment(panel: &gtk4::Box, environment: &InstallEnvironmen
     panel.append(&review_row("Firmware and bootloader", &boot_detail));
 }
 
+/// Whether the boot-entry status has anything to render — so a caller can decide
+/// whether to draw a surrounding "Boot details" group heading at all, rather than
+/// leaving a dangling eyebrow when `append_boot_entries` early-returns on empty.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn boot_entries_have_content(status: &BootEntryStatus) -> bool {
+    !(status.detail.is_empty() && status.guidance.is_empty() && status.entries.is_empty())
+}
+
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_boot_entries(panel: &gtk4::Box, status: &BootEntryStatus) {
     use gtk4::prelude::*;
 
-    if status.detail.is_empty() && status.guidance.is_empty() && status.entries.is_empty() {
+    if !boot_entries_have_content(status) {
         return;
     }
 
@@ -3909,26 +4043,32 @@ fn populate_install_disk(
     let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
     panel.append(&list);
 
-    if let Some(status) = targets {
-        // One canonical preservation callout: keeping another OS routes to
-        // advanced storage. The safe-route panel keeps its working launcher.
-        panel.append(&review_row(
+    // The card carries ONLY the scan header and the selectable disk list, so the
+    // one action this page is named for leads the first viewport. Every advisory
+    // sentence — the dual-boot rule, the safe route, environment, boot entries,
+    // formatting, and the pre/post checklists — is collected into one collapsed
+    // "Storage & boot details" disclosure that renders below the Continue action.
+    let disclosure = if let Some(status) = targets {
+        let details = gtk::Box::new(gtk::Orientation::Vertical, 10);
+
+        // State the keep-another-OS rule exactly once, at the top of the details,
+        // then keep the interactive safe-route launcher right beneath it. The
+        // verbose review rows below never repeat the OS list again.
+        details.append(&review_row(
             "Keeping another OS or data?",
             "If you are keeping Windows, macOS, Linux, another OS, recovery, EFI, vendor partitions, or shared data, start with advanced storage. Disk rows replace one blank disk only after typed confirmation.",
         ));
-        append_dual_boot_safe_route(&panel, &status.policy, true);
+        append_dual_boot_safe_route(&details, &status.policy, true);
 
-        // Everything else — environment, boot entries, formatting, and the
-        // pre/post checklists — folds into one collapsed disclosure so the
-        // selection and action lead the first viewport.
-        let details = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        details.set_margin_top(8);
         if !status.policy.simple_install_scope.is_empty() {
             details.append(&review_row(
                 "Replace one blank disk",
                 &status.policy.simple_install_scope,
             ));
         }
+        // The canonical preservation rule, with the full OS list stated here once —
+        // this is the single place the verbatim clause lives, instead of the five-plus
+        // repetitions the old wall carried.
         details.append(&review_row(
             "Keep an existing OS",
             "Windows, macOS, Linux, another OS, recovery, and EFI partitions stay untouched only when you use advanced storage.",
@@ -3939,7 +4079,7 @@ fn populate_install_disk(
         ));
         details.append(&review_row(
             "Detected systems are actions",
-            "Rows that show Windows, macOS, Linux, another OS, recovery, EFI, or data open advanced storage instead of erase confirmation.",
+            "Rows that show an existing OS, recovery, EFI, or data open advanced storage instead of erase confirmation.",
         ));
         details.append(&review_row(
             "Unsure? Keep your current OS",
@@ -3999,10 +4139,11 @@ fn populate_install_disk(
 
         let disclosure = gtk::Expander::new(Some("Storage & boot details"));
         disclosure.set_expanded(false);
-        disclosure.set_margin_top(8);
         disclosure.set_child(Some(&details));
-        panel.append(&disclosure);
-    }
+        Some(disclosure)
+    } else {
+        None
+    };
 
     column.append(&panel);
 
@@ -4044,99 +4185,37 @@ fn populate_install_disk(
             identity.append(&label(&target.path, &["gos-install-disk-path"]));
             inner.append(&identity);
 
-            // One consistent gap between every fact, so partitions ↔ detected
-            // systems ↔ recommendation ↔ dual-boot plan ↔ status read as a list,
-            // not a paragraph.
+            // The card shows ONE status line, not a seven-line fact stack: a calm
+            // identity-plus-status reading the eye can scan in a glance. The verbose
+            // per-disk facts (partition scan, detected systems, recommended path,
+            // dual-boot plan) are real and preserved — they move into the row's
+            // tooltip and the page-level "Storage & boot details" disclosure — but
+            // the card itself carries only the single sentence that decides the row.
             let facts = gtk::Box::new(gtk::Orientation::Vertical, 7);
-            let partitions = label(&partition_summary(target), &["gos-install-disk-state"]);
-            partitions.set_wrap(true);
-            partitions.set_xalign(0.0);
-            facts.append(&partitions);
-            let detected = label(
-                &existing_system_summary(target),
-                &["gos-install-disk-state"],
-            );
-            detected.set_wrap(true);
-            detected.set_xalign(0.0);
-            if !target.existing_systems.is_empty() {
-                detected.add_css_class("is-blocked");
+            let (status_text, status_tone) = disk_card_status_line(target);
+            let status_line = label(&status_text, &["gos-install-disk-state"]);
+            // Wrap to a second line inside the card instead of clipping the load-
+            // bearing tail of the sentence at the right inset. The label is given
+            // horizontal expansion and a word-char wrap bound so it fills the card
+            // width and breaks cleanly rather than measuring its full single-line
+            // natural width (which a GtkButton child otherwise does, hard-clipping
+            // the verb phrase "preserve them" against the right edge).
+            status_line.set_wrap(true);
+            status_line.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            status_line.set_hexpand(true);
+            status_line.set_max_width_chars(40);
+            status_line.set_xalign(0.0);
+            if let Some(tone_class) = status_tone.state_class() {
+                status_line.add_css_class(tone_class);
             }
-            facts.append(&detected);
-            if let Some(checklist) = detected_system_preservation_checklist(target) {
-                let checklist = label(
-                    &format!("Preservation checklist: {checklist}"),
-                    &["gos-install-disk-state", "is-blocked"],
-                );
-                checklist.set_wrap(true);
-                checklist.set_xalign(0.0);
-                facts.append(&checklist);
-            }
-            let recommendation = label(
-                &format!(
-                    "Recommended path: {}",
-                    install_recommendation_summary(target)
-                ),
-                &["gos-install-disk-state"],
-            );
-            recommendation.set_wrap(true);
-            recommendation.set_xalign(0.0);
-            if !target.eligible {
-                recommendation.add_css_class("is-blocked");
-            }
-            facts.append(&recommendation);
-            let dual_boot_plan = label(
-                &format!("Dual-boot plan: {}", dual_boot_plan_summary(target)),
-                &["gos-install-disk-state"],
-            );
-            dual_boot_plan.set_wrap(true);
-            dual_boot_plan.set_xalign(0.0);
-            if !target.eligible || target.dual_boot_plan.status == "manual-preserve-required" {
-                dual_boot_plan.add_css_class("is-blocked");
-            }
-            facts.append(&dual_boot_plan);
-            if target.eligible {
-                if target.partitions.is_empty() {
-                    // A truly blank disk needs no caution — the one-line status
-                    // is the whole story.
-                    let ready = label(
-                        "Ready to replace this whole disk",
-                        &["gos-install-disk-state"],
-                    );
-                    ready.set_wrap(true);
-                    ready.set_xalign(0.0);
-                    facts.append(&ready);
-                } else {
-                    // A disk with partitions carries the whole-disk caution as
-                    // its status fact. It stays inline (the row is a Button, so a
-                    // nested disclosure would fight select-on-click), but now sits
-                    // in the evenly-spaced facts list rather than jammed against
-                    // its neighbours. The verbose, repeatable preservation prose
-                    // already lives in the page-level "Storage & boot details"
-                    // disclosure above, so this single sentence is all the card
-                    // needs to carry.
-                    let caution = label(
-                        "Whole-disk replace only. Do not choose this row to keep Windows, macOS, Linux, another OS, recovery, or EFI partitions.",
-                        &["gos-install-disk-state"],
-                    );
-                    caution.set_wrap(true);
-                    caution.set_xalign(0.0);
-                    facts.append(&caution);
-                }
-            } else {
-                let detail = if target.reasons.is_empty() {
-                    "This disk can't be used for installation.".to_string()
-                } else {
-                    install_blocked_detail(target)
-                };
-                let blocked = label(&detail, &["gos-install-disk-state", "is-blocked"]);
-                blocked.set_wrap(true);
-                blocked.set_xalign(0.0);
-                facts.append(&blocked);
-            }
+            facts.append(&status_line);
             inner.append(&facts);
             let preservation_feedback = if preservation_handoff {
                 let prompt = preservation_handoff_prompt(target);
-                let prompt = label(&prompt, &["gos-install-disk-state", "is-blocked"]);
+                // The handoff prompt rides the same advisory (neutral) tone as the
+                // status line above it — preserving another OS is an action, not an
+                // error, so it never wears the reserved alarm-red.
+                let prompt = label(&prompt, &["gos-install-disk-state", "is-advisory"]);
                 prompt.set_wrap(true);
                 prompt.set_xalign(0.0);
                 inner.append(&prompt);
@@ -4144,13 +4223,11 @@ fn populate_install_disk(
             } else {
                 None
             };
-            if let Some(checklist) = detected_system_preservation_checklist(target) {
-                row.set_tooltip_text(Some(&format!(
-                    "{} {}",
-                    preservation_handoff_prompt(target),
-                    checklist
-                )));
-            }
+            // The full per-disk detail still lives one hover away — partition scan,
+            // detected systems, recommended path, dual-boot plan, and (when present)
+            // the preservation checklist — so nothing the old fact stack carried is
+            // lost; it is demoted, not deleted.
+            row.set_tooltip_text(Some(&disk_card_detail_tooltip(target)));
             row.set_child(Some(&inner));
 
             if target.eligible {
@@ -4209,11 +4286,22 @@ fn populate_install_disk(
     }
     column.append(&cont);
 
+    // Keeping another OS? One short pointer (not a sixth restatement of the rule)
+    // directs to the safe route, which now lives in full inside the disclosure.
     column.append(&centered_label(
-        "For dual boot, stop here and open advanced storage. Choose Installation Destination with Custom/manual storage or Reclaim Space, then install into free space or a separate disk.",
+        "Keeping another OS? Open Storage & boot details below for the advanced-storage route.",
         "gos-onboarding-footnote",
         true,
     ));
+
+    // The advisory disclosure renders last — below Continue — so the disk list and
+    // the action it advances always lead the first viewport.
+    if let Some(disclosure) = disclosure {
+        disclosure.set_margin_top(18);
+        disclosure.set_halign(gtk::Align::Center);
+        disclosure.set_size_request(580, -1);
+        column.append(&disclosure);
+    }
 }
 
 /// Screen 2 — review exactly what will happen, with the chosen device as the
@@ -4427,9 +4515,13 @@ fn populate_install_confirm(
     }
     column.append(&back);
 
-    let mark = goblins_os_ui::themed_brand_mark(60);
-    mark.set_margin_top(6);
-    mark.set_margin_bottom(18);
+    // Confirm is the tallest single-screen step (hero + phrase card + entry + helper
+    // + CTA + closing line), so its vertical rhythm is tightened a touch versus the
+    // other steps to keep the whole erase confirmation — including the closing
+    // reassurance line — within the default viewport rather than clipped at the fold.
+    let mark = goblins_os_ui::themed_brand_mark(56);
+    mark.set_margin_top(2);
+    mark.set_margin_bottom(12);
     column.append(&mark);
 
     let selected = flow.selected.borrow().clone();
@@ -4532,7 +4624,7 @@ fn populate_install_confirm(
         &["gos-onboarding-primary", "gos-onboarding-destructive"],
     );
     install.set_halign(gtk::Align::Center);
-    install.set_margin_top(22);
+    install.set_margin_top(16);
     install.set_sensitive(false);
 
     let feedback = label("", &["gos-net-row", "gos-blocked-soft"]);
@@ -4609,11 +4701,15 @@ fn populate_install_confirm(
     }
     column.append(&install);
     column.append(&feedback);
-    column.append(&centered_label(
+    // The closing reassurance line carries its own bottom gutter so it always clears
+    // the window chrome instead of bleeding against the fold on the confirm step.
+    let closing = centered_label(
         "Once you confirm, the install runs to completion.",
         "gos-onboarding-footnote",
         true,
-    ));
+    );
+    closing.set_margin_bottom(12);
+    column.append(&closing);
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -5017,11 +5113,14 @@ fn populate_install_done(
     // The erase already committed: do not re-show the pre-write dual-boot plan or
     // the "verify the disk / review the erase scope" verification cards here. A
     // post-install screen tells the user what to do next (restart), not re-litigate
-    // a decision they already made. Boot-entry info is post-install factual state,
-    // so it stays; the genuine next-steps always render.
-    if let Some(status) = flow.state.install_targets.as_ref() {
-        append_boot_entries(&panel, &status.boot_entries);
-    }
+    // a decision they already made.
+    //
+    // The 1-2-3 ladder leads as a clean, uninterrupted action sequence under its own
+    // "Next steps" eyebrow, with "Finish first-boot setup" as its un-numbered closer.
+    // The post-install boot-entry facts are context, not steps — so they live below in
+    // a separately-labeled "Boot details" group instead of being interleaved with the
+    // ladder in identically-styled cards.
+    panel.append(&label("Next steps", &["gos-onboarding-kicker"]));
     panel.append(&review_row(
         "1  Remove the installer medium",
         "Eject the USB drive or installer image you booted from.",
@@ -5038,6 +5137,19 @@ fn populate_install_done(
         "Finish first-boot setup",
         "Sign in or continue with on-device GPT-OSS — ready the moment you are.",
     ));
+
+    // Boot-entry info is post-install factual state, not a numbered step — grouped
+    // apart so the ladder above reads as a clean 1-2-3 sequence. The eyebrow + top
+    // margin set it visibly aside as context.
+    if let Some(status) = flow.state.install_targets.as_ref() {
+        if boot_entries_have_content(&status.boot_entries) {
+            let boot_context = gtk::Box::new(gtk::Orientation::Vertical, 10);
+            boot_context.set_margin_top(8);
+            boot_context.append(&label("Boot details", &["gos-onboarding-kicker"]));
+            append_boot_entries(&boot_context, &status.boot_entries);
+            panel.append(&boot_context);
+        }
+    }
     column.append(&panel);
 
     let restart = button("Restart now", &["gos-onboarding-primary"]);
@@ -5547,13 +5659,86 @@ fn runtime_label(runtime: &RuntimeReport) -> String {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-/// Every surface in the installer is styled by the shared Goblins OS design
+/// Almost every surface in the installer is styled by the shared Goblins OS design
 /// system: each class it uses is defined in `goblins_os_design::GOBLINS_NATIVE_CSS`,
 /// which `native_css` appends *after* this string, so the shared, token-driven,
-/// theme-aware rules always win. There are no installer-specific overrides, so
-/// this is intentionally empty (a non-empty pre-design-system stylesheet used to
-/// live here and was pure dead weight — every rule was overridden).
-const GOBLINS_OS_INSTALLER_CSS: &str = "";
+/// theme-aware rules win at equal specificity. The only rules that live here are a
+/// few installer-only overrides that deliberately out-specify a shared rule (each
+/// uses a two-class or descendant selector so it beats the single-class base): the
+/// neutral readiness chips on the advanced-setup top bar, and the dark-mode legible
+/// selected-fill on the onboarding choice cards. Every value is still a shared design
+/// token, so these stay theme-aware in Light and Dark.
+const GOBLINS_OS_INSTALLER_CSS: &str = r#"
+/* The advanced-setup top-bar readiness chips (OS / OpenAI / Local) are descriptive
+   labels, not a tri-color health signal, so they all rest in one calm neutral chip
+   instead of two-green/one-amber by happenstance. Two-class selectors out-specify
+   the single-class .gos-ready / .gos-waiting hue, and use the same neutral
+   secondary-label ink the rest of the system gives a descriptive pill, theme-aware
+   in both Light and Dark. */
+.gos-status-pill.gos-readiness-chip {
+  color: @gos_label_secondary;
+  background: @gos_fill_secondary;
+  border-color: transparent;
+  font-weight: 600;
+}
+
+/* The selected Appearance/Accessibility setup card must read from its FILL, not the
+   1px accent border alone — in Dark the shared 10% accent tint sat too close to the
+   unselected surface. Scoping under .gos-onboarding-root out-specifies the shared
+   single-class .gos-setup-choice-selected rule so the chosen card lifts to a clearly
+   legible fill in both schemes. The check's optical centering is handled in code
+   (valign: Center on the row), so there is no per-layout placement to override. */
+.gos-onboarding-root .gos-setup-choice-selected {
+  background: alpha(@gos_accent, 0.18);
+}
+
+.gos-onboarding-root .gos-setup-choice-selected:hover {
+  background: alpha(@gos_accent, 0.22);
+}
+
+/* Disk-card status tone ladder — three honest steps, not one undifferentiated red.
+   The base .gos-install-disk-state (design crate) is the affirmative green "ready";
+   .is-blocked (design crate) is the reserved alarm-red for a genuine hard block.
+   Two tones live here so the installer never has to touch the design crate:
+
+     · .is-advisory — advisory-but-actionable copy (e.g. "opens advanced storage to
+       preserve them"). It is not an error, so it rests in the calm neutral/muted
+       secondary ink the rest of the system gives descriptive status, theme-aware in
+       both Light and Dark. Two-class selector out-specifies the base green.
+     · .is-caution  — selecting the row is destructive (a whole-disk replace). The
+       amber waiting/caution token sits one step below the reserved red. */
+.gos-install-disk-state.is-advisory {
+  color: @gos_label_secondary;
+  font-weight: 600;
+}
+
+.gos-install-disk-state.is-caution {
+  color: @gos_waiting;
+  font-weight: 600;
+}
+
+/* Unify the row-container language across the wizard. Review (step 2) and Done
+   (step 4) seat their rows on the tinted-grey inset of .gos-row (gos_fill_tertiary)
+   inside the white card; the step-1 disk rows previously sat white-on-white, set off
+   only by a hairline, so the three consecutive steps used two different materials.
+   Lift the resting disk row to the same tinted inset so every step shares one nested-
+   card surface and inset radius. The interactive hover/selected/blocked treatments
+   from the design crate still layer on top unchanged. */
+.gos-install-disk {
+  background: @gos_fill_tertiary;
+  border-radius: 10px;
+}
+
+/* One shared badge style for every disk-type chip (SSD / HDD / Removable). The chips
+   share a class already, but mixed casing ("SSD" vs "Removable") under the eyebrow's
+   wide tracking made the short all-caps strings read as "S S D". Normalizing every
+   badge to uppercase with one tracking value gives the column a single tokenized
+   eyebrow treatment, so all chips track identically regardless of source string. */
+.gos-install-disk-kind {
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+}
+"#;
 
 #[cfg(test)]
 mod tests {

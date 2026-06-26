@@ -1708,7 +1708,10 @@ mod native {
         } else {
             LauncherItem {
                 icon,
-                title: format!("Set up {label}: {query}"),
+                // The title names the intent exactly as the ready row does
+                // ("Ask Goblin: <q>", "Build a new app: <q>") — the "set up"
+                // verb lives only in the subtitle, so the row never doubles it.
+                title: format!("{label}: {query}"),
                 // A concise, per-action setup hint — the standing AI rows no
                 // longer stack the same ~80-char provider sentence twice. The
                 // full GPT-OSS / Codex / OpenAI-key guidance lives in the
@@ -1723,17 +1726,18 @@ mod native {
     }
 
     /// A short, action-specific call to action for a not-yet-configured Goblins
-    /// AI row. The row title already names the intent, so the subtitle only
-    /// needs to point at engine setup without repeating the full provider list.
+    /// AI row. The row title already names the intent, so the subtitle carries
+    /// the single "set up Goblins AI" invitation — in plain product voice, never
+    /// the bare implementation word "engine" — without repeating the provider list.
     fn setup_hint_for_action(label: &str) -> String {
         match label {
-            "Build a new app" => "Set up an engine to build a new app",
-            "Ask about selected text" => "Set up an engine to ask about selected text",
-            "Write with Goblin" => "Set up an engine to write with Goblin",
-            "Summarize screen context" => "Set up an engine to summarize screen context",
-            "Ask about a screenshot" => "Set up an engine to ask about a screenshot",
+            "Build a new app" => "Set up Goblins AI to build this app",
+            "Ask about selected text" => "Set up Goblins AI to ask about selected text",
+            "Write with Goblin" => "Set up Goblins AI to write for you",
+            "Summarize screen context" => "Set up Goblins AI to summarize the screen",
+            "Ask about a screenshot" => "Set up Goblins AI to read a screenshot",
             // "Ask Goblin" and any future action.
-            _ => "Set up an engine to ask the on-device assistant",
+            _ => "Set up Goblins AI to answer on-device",
         }
         .to_string()
     }

@@ -332,7 +332,7 @@ fn build_login(
         &["gos-feedback"],
     );
 
-    // A state ("OpenAI sign-in is not set up yet" / "OpenAI account ready") is a status line,
+    // A state ("OpenAI sign-in isn't set up yet" / "OpenAI account ready") is a status line,
     // never button chrome — only a real action gets a button.
     let sign_in_built = auth_configured && !auth_authenticated;
     if sign_in_built {
@@ -361,7 +361,7 @@ fn build_login(
             if auth_authenticated {
                 "OpenAI account ready."
             } else {
-                "OpenAI sign-in is not set up yet. You can continue locally and set it up later in Settings."
+                "OpenAI sign-in isn't set up yet — continue locally, or finish setup in Settings."
             },
             &["gos-identity-note"],
         ));
@@ -371,13 +371,15 @@ fn build_login(
     // to match action priority. When the OpenAI account is authenticated the
     // OpenAI unlock is the live primary and leads; otherwise the live local-only
     // unlock leads and the (inert until authenticated) OpenAI unlock is demoted
-    // below it as a quiet secondary rather than a full-width ghost on top.
+    // below it. While inert it must READ inert: it wears the night-panel ghost
+    // (40%-opacity label, transparent fill, half-strength hairline) so it never
+    // looks tappable next to the live local primary, matching its set_sensitive.
     let unlock_openai = button(
         "Unlock Goblins OS desktop",
         if auth_authenticated {
             &["gos-primary-action"]
         } else {
-            &["gos-secondary-action"]
+            &["gos-disabled-action"]
         },
     );
     unlock_openai.set_sensitive(auth_authenticated);
@@ -426,8 +428,8 @@ fn build_login(
         identity.append(&unlock_local);
     } else {
         // No OpenAI account yet: the live local-only unlock is the primary and
-        // leads. The OpenAI unlock stays inert, so it is demoted below as a quiet
-        // secondary for discoverability rather than a full-width ghost on top.
+        // leads. The OpenAI unlock stays inert, so it is demoted below it as a
+        // dimmed ghost — present for discoverability, unmistakably not yet usable.
         identity.append(&unlock_local);
         identity.append(&unlock_openai);
     }
@@ -487,13 +489,20 @@ fn build_login(
     // BELOW the primary action — supporting context, not a co-equal 380px rail.
     // It reads as muted night-foreground facts under a hairline, never a second
     // bright panel competing with the hero. The honest gate states are kept.
+    //
+    // The list is LEFT-aligned within a constrained content column (not centered):
+    // a label-over-description list scans against a left edge, matching the
+    // left-aligned status rhythm used throughout Settings. The column itself is
+    // centered under the hero, so the block stays balanced while its rows align.
     let readiness = gtk::Box::new(gtk::Orientation::Vertical, 8);
     readiness.add_css_class("gos-login-readiness");
     readiness.set_margin_top(8);
+    readiness.set_size_request(320, -1);
+    readiness.set_halign(gtk::Align::Center);
     // The hero feedback line above already states desktop-access status
     // (session_gate_summary), so the readiness block stays tight and
     // non-duplicative: just first-run and account sign-in facts.
-    readiness.append(&centered_label("Session checks", &["gos-kicker"]));
+    readiness.append(&label("Session checks", &["gos-kicker"]));
     if let Some(gate) = &state.gate {
         readiness.append(&readiness_fact(
             "First run",
@@ -506,12 +515,15 @@ fn build_login(
     }
     match &state.auth {
         Some(auth) => {
+            // Each row states one fact once. The "continue locally" message lives
+            // solely in the explanatory line beneath the title, so the not-configured
+            // row here owns only its own honest fact: how tokens are handled at sign-in.
             let secure_account_copy = if auth.configured && auth.authenticated {
                 "Signed in. Account tokens are stored securely by Goblins OS and never shown here."
             } else if auth.configured {
                 "Ready to sign in. Account tokens will be stored securely by Goblins OS."
             } else {
-                "Sign-in setup is incomplete; local-only desktop access remains available."
+                "Not configured. Account tokens are stored securely by Goblins OS at sign-in."
             };
             readiness.append(&readiness_fact("OpenAI sign-in", secure_account_copy));
         }
@@ -534,9 +546,11 @@ fn build_login(
 }
 
 // A single readiness fact, styled for the night identity card: a white title line
-// (default night foreground) over muted supporting copy, centered and stacked. It
-// reads as a quiet supporting fact in the centered column, never a bright light row
-// competing with the hero — so no light `.gos-row` fill on the night gradient.
+// (default night foreground) over muted supporting copy, stacked as a tight two-line
+// row. It reads as a quiet supporting fact in the centered column, never a bright
+// light row competing with the hero — so no light `.gos-row` fill on the night
+// gradient. The lines LEFT-align (and fill the constrained readiness column) so the
+// list scans against one left edge, matching the Settings status-row rhythm.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn readiness_fact(title: &str, detail: &str) -> gtk4::Box {
     use gtk::prelude::*;
@@ -544,8 +558,9 @@ fn readiness_fact(title: &str, detail: &str) -> gtk4::Box {
 
     let fact = gtk::Box::new(gtk::Orientation::Vertical, 1);
     fact.add_css_class("gos-login-fact");
-    fact.append(&centered_label(title, &["gos-identity-note"]));
-    fact.append(&centered_label(detail, &["gos-feedback"]));
+    fact.set_halign(gtk::Align::Fill);
+    fact.append(&label(title, &["gos-identity-note"]));
+    fact.append(&label(detail, &["gos-feedback"]));
     fact
 }
 

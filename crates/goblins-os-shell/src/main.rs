@@ -876,8 +876,8 @@ fn build_home(
     column.set_size_request(620, -1);
     column.set_halign(gtk::Align::Center);
 
-    let kicker = centered("BUILD", &["gos-home-kicker"], false);
-    column.append(&kicker);
+    // The headline + subhead already establish the build context, so no eyebrow
+    // sits above them — a calmer top-of-page with one less competing element.
     column.append(&centered(
         "What do you want to make?",
         &["gos-home-headline"],
@@ -918,16 +918,34 @@ fn build_home(
     status_slot.append(&status);
     column.append(&status_slot);
 
+    // The home's secondary actions ride one affordance ladder, ranked by weight.
+    // The route into the Build Studio is the prominent secondary — the gateway to
+    // the whole agent surface — so it takes the calm outlined pill. Voice and
+    // Settings are quieter, clearly-affordanced quiet buttons beneath it, so visual
+    // weight tracks importance instead of letting a novelty action shout.
+
+    // The prominent secondary: the way into the full Build Studio — the multi-turn
+    // agent surface where you switch engines (GPT-OSS · Codex · your key).
+    let open_studio = button("Open Build Studio", &["gos-home-voice"]);
+    open_studio.set_halign(gtk::Align::Center);
+    open_studio.set_margin_top(14);
+    {
+        let stack = stack.clone();
+        open_studio.connect_clicked(move |_| stack.set_visible_child_name("studio"));
+    }
+    column.append(&open_studio);
+
     // Voice: ask Goblin and hear it answer, all on-device. Offered when the local
-    // Whisper/Piper models are present; greyed (with a reason) until then.
+    // Whisper/Piper models are present; the quiet button dims (with a reason) until
+    // then. A tier below the Studio pill — it's a delight, not the main route.
     let voice_available = shell_state
         .voice
         .as_ref()
         .is_some_and(|voice| voice.available);
     let voice_word = voice_wake_word(shell_state.voice.as_ref());
-    let voice = button(&format!("Say {voice_word}"), &["gos-home-voice"]);
+    let voice = button(&format!("Say {voice_word}"), &["gos-home-settings"]);
     voice.set_halign(gtk::Align::Center);
-    voice.set_margin_top(14);
+    voice.set_margin_top(8);
     voice.set_sensitive(voice_available);
     let voice_tooltip = shell_state
         .voice
@@ -940,23 +958,12 @@ fn build_home(
     voice.set_tooltip_text(Some(&voice_tooltip));
     column.append(&voice);
 
-    // A quiet route into the full Build Studio — the multi-turn agent surface
-    // where you switch engines (GPT-OSS · Codex · your key) and build across turns.
-    let open_studio = button("Open Build Studio", &["gos-home-studio-link"]);
-    open_studio.set_halign(gtk::Align::Center);
-    open_studio.set_margin_top(10);
-    {
-        let stack = stack.clone();
-        open_studio.connect_clicked(move |_| stack.set_visible_child_name("studio"));
-    }
-    column.append(&open_studio);
-
-    // A quiet route to Settings (engine, OpenAI account, network, privacy). The
-    // dock also opens it; the home keeps a calm text link so the window is
-    // self-sufficient without reaching for the dock.
-    let open_settings = button("Settings", &["gos-home-studio-link"]);
+    // The quietest tertiary: a route to Settings (engine, OpenAI account, network,
+    // privacy). The dock also opens it; the home keeps a calm, affordanced link so
+    // the window is self-sufficient without reaching for the dock.
+    let open_settings = button("Settings", &["gos-home-settings"]);
     open_settings.set_halign(gtk::Align::Center);
-    open_settings.set_margin_top(6);
+    open_settings.set_margin_top(2);
     open_settings.connect_clicked(move |_| {
         let _ = launch_local_action("settings");
     });
@@ -1531,17 +1538,11 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     head.append(&goblins_os_ui::themed_brand_mark(18));
     head.append(&label("Build Studio", &["gos-studio-wordmark"]));
     head.append(&spacer());
-    // The header badge names the engine the next build will run on — the same
-    // source resolved for the composer's model picker — so it stays consistent
-    // with the app-detail badge and tells the user something actionable, rather
-    // than tagging the surface with its implementation language.
-    let header_engine = shell_state
-        .engine
-        .as_ref()
-        .map(|engine| engine.engine.as_str())
-        .unwrap_or("local-gpt-oss");
-    let engine_badge = label(&engine_label(header_engine), &["gos-studio-badge"]);
-    head.append(&engine_badge);
+    // The active engine is named exactly once on this surface — by the composer's
+    // interactive "GPT-OSS ▾" picker, which is the single source of truth for which
+    // brain the next build runs on. A second static engine pill up here would only
+    // restate that label and make the reader wonder whether the two mean different
+    // things, so the header stays a clean wordmark row.
     sidebar.append(&head);
 
     let search = gtk::Entry::new();
@@ -1633,10 +1634,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     if let Some(view) = &session {
         rebuild_conversation(&conv, view);
     } else {
-        conv.append(&label(
-            "Describe what you want to build. The agent answers, runs its tools, and the changed files appear here — one thread per build.",
-            &["gos-studio-empty"],
-        ));
+        conv.append(&studio_empty_state());
     }
     let conv_scroll = gtk::ScrolledWindow::new();
     conv_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -1660,7 +1658,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
         .unwrap_or_else(|| "local-gpt-oss".to_string());
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     controls.add_css_class("gos-studio-controls");
-    controls.append(&engine_pill(config, &active_engine, &engine_badge));
+    controls.append(&engine_pill(config, &active_engine));
     controls.append(&spacer());
     let thinking = thinking_dots();
     thinking.set_visible(false);
@@ -1673,9 +1671,20 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
 
     let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     footer.add_css_class("gos-studio-footer");
+    // Seat the footer on exactly the composer card's outer box so the composer and
+    // the "Local checkout / main" footer read as one content column, not two offset
+    // boxes. The composer card's outer margin is 22px (its CSS `margin`), so the
+    // footer takes the same 22px on both sides; its own CSS padding then insets the
+    // crumbs within that shared column. Symmetric L/R keeps the column optically
+    // centered in the panel regardless of the conversation scrollbar above it.
+    footer.set_margin_start(22);
+    footer.set_margin_end(22);
     footer.append(&label("Local checkout", &["gos-studio-crumb"]));
     footer.append(&spacer());
     footer.append(&label("main", &["gos-studio-crumb"]));
+    // A bottom gutter so the footer is a seated status bar, not content hugging the
+    // window chrome — matching the airy top of the panel (Fix: bottom padding).
+    footer.set_margin_bottom(14);
     main.append(&footer);
 
     root.append(&main);
@@ -1851,7 +1860,7 @@ fn sidebar_thread(thread: &StudioThreadItem) -> gtk4::Button {
 /// Codex → your key; the core validates (Codex needs sign-in, the key engine
 /// needs a key, both need the internet), and the pill relabels on success.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn engine_pill(config: &ShellConfig, active: &str, badge: &gtk4::Label) -> gtk4::Button {
+fn engine_pill(config: &ShellConfig, active: &str) -> gtk4::Button {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
@@ -1860,16 +1869,13 @@ fn engine_pill(config: &ShellConfig, active: &str, badge: &gtk4::Label) -> gtk4:
         &["gos-studio-control", "gos-studio-engine"],
     );
     let core_url = config.core_url.clone();
-    let badge = badge.clone();
     pill.connect_clicked(move |pill| {
         let current = engine_from_display(pill.label().map(|g| g.to_string()).unwrap_or_default());
         let next = next_engine(current);
         if set_engine_shell(&core_url, next).is_ok() {
+            // The pill is the single source of truth for the active engine, so its
+            // own label is the only thing that relabels on a successful switch.
             pill.set_label(&format!("{} ▾", engine_display(next)));
-            // Keep the Studio header badge consistent with the composer pill —
-            // both now name the engine the next build runs on. The badge uses
-            // engine_label (matching how it was built above), not engine_display.
-            badge.set_text(&engine_label(next));
         }
     });
     pill
@@ -1902,6 +1908,52 @@ fn next_engine(current: &str) -> &'static str {
         "codex" => "openai-api",
         _ => "local-gpt-oss",
     }
+}
+
+/// The Studio's first-run / new-build empty state for the conversation pane. The
+/// center is the dominant area of the surface, so a top-aligned paragraph leaves a
+/// large unconsidered void below it. Instead this returns a vertically- and
+/// horizontally-centered column — a quiet brand mark over the centered prompt — so
+/// the empty surface reads as calm, deliberate breathing room rather than missing
+/// content. It vexpands to claim the pane so the lockup settles at true center.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn studio_empty_state() -> gtk4::Box {
+    use gtk::prelude::*;
+    use gtk4 as gtk;
+
+    // Outer wrapper claims the full conversation pane and centers the lockup —
+    // the same vexpand + valign(Center) idiom the home hero uses, so the inner
+    // group (which does not expand) settles at the optical center of the void.
+    let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    center.add_css_class("gos-studio-empty-state");
+    center.set_vexpand(true);
+    center.set_hexpand(true);
+    center.set_valign(gtk::Align::Center);
+    center.set_halign(gtk::Align::Center);
+
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    column.set_halign(gtk::Align::Center);
+
+    // A quiet, scheme-following mark anchors the void without shouting — the same
+    // monoblossom the sidebar head uses, dimmed so it reads as a watermark.
+    let mark = goblins_os_ui::themed_brand_mark(30);
+    mark.set_opacity(0.3);
+    mark.set_halign(gtk::Align::Center);
+    column.append(&mark);
+
+    let prompt = label(
+        "Describe what you want to build. The agent answers, runs its tools, and the changed files appear here — one thread per build.",
+        &["gos-studio-empty"],
+    );
+    prompt.set_halign(gtk::Align::Center);
+    prompt.set_justify(gtk::Justification::Center);
+    prompt.set_xalign(0.5);
+    prompt.set_wrap(true);
+    prompt.set_max_width_chars(46);
+    column.append(&prompt);
+
+    center.append(&column);
+    center
 }
 
 /// Append the agent conversation (messages, then a changed-files block) to `conv`.
@@ -2103,10 +2155,7 @@ fn reset_studio_to_new_build(
     while let Some(child) = conv.first_child() {
         conv.remove(&child);
     }
-    conv.append(&label(
-        "Describe what you want to build. The agent answers, runs its tools, and the changed files appear here — one thread per build.",
-        &["gos-studio-empty"],
-    ));
+    conv.append(&studio_empty_state());
     input.set_text("");
     title.set_text("New build");
     // Next turn has no app_id, so the core mints a fresh session.
@@ -2820,8 +2869,44 @@ fn runtime_label(runtime: &RuntimeReport) -> String {
     }
 }
 
+// Shell-scoped CSS layered over the shared design theme (native_css injects this
+// after the scheme tokens, so every rule resolves @gos_* from the active scheme,
+// and before the structural rules, so these compound selectors win on specificity).
+//
+// The two stacked left-rail buttons play different roles and must not look alike:
+// "+ New build" is the create action Studio exists for, so it carries the accent
+// as a tinted primary; "← Home" is a navigation escape hatch, so it sits back as a
+// quiet ghost link — chrome, not a peer of the create action. Both treatments use
+// the studio + accent tokens, so light and dark hold automatically.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-const GOBLINS_OS_CSS: &str = "";
+const GOBLINS_OS_CSS: &str = r#"
+.gos-studio-sidebar .gos-studio-add {
+  color: @gos_accent;
+  background: alpha(@gos_accent, 0.12);
+  border: 1px solid alpha(@gos_accent, 0.55);
+  font-weight: 700;
+}
+
+.gos-studio-sidebar .gos-studio-add:hover {
+  color: @gos_accent;
+  background: alpha(@gos_accent, 0.18);
+  border-color: @gos_accent;
+}
+
+.gos-studio-sidebar .gos-studio-home {
+  margin-top: 4px;
+  min-height: 28px;
+  color: @gos_studio_text_faint;
+  background: transparent;
+  border: none;
+  font-weight: 500;
+}
+
+.gos-studio-sidebar .gos-studio-home:hover {
+  color: @gos_studio_text_muted;
+  background: @gos_studio_hover;
+}
+"#;
 
 #[cfg(test)]
 mod tests {

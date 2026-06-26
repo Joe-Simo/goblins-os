@@ -1,8 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <g fill="none" stroke="#2e3436" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="2.5" y="3" width="11" height="10" rx="2"/>
-    <path d="M5.2 6.2 H10.8"/>
-    <path d="M5.2 9.8 H8.5"/>
-  </g>
-  <path d="M11.4 7.1 C11.7 8.1 12.1 8.5 13.1 8.8 C12.1 9.1 11.7 9.5 11.4 10.5 C11.1 9.5 10.7 9.1 9.7 8.8 C10.7 8.5 11.1 8.1 11.4 7.1 Z" fill="#2e3436"/>
+  <!-- Filled symbolic glyph (Adwaita #2e3436 convention) so GTK's symbolic
+       recolor — which sets fill, not stroke — yields a crisp solid icon in both
+       light and dark. A single bold four-point spark, sized and weighted to
+       match the sibling list-add "+" glyph (fuller arms, tips near the box
+       edge, optically centred). -->
+  <path fill="#2e3436"
+        d="M8 1 Q9.7 6.3 15 8 Q9.7 9.7 8 15 Q6.3 9.7 1 8 Q6.3 6.3 8 1 Z"/>
 </svg>

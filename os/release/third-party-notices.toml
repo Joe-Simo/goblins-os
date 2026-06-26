@@ -6,7 +6,7 @@ lockfile = "Cargo.lock"
 generator = "goblins-os-verify --source-root <source> --release-evidence os/signoff-proofs/sbom/<arch>/ --arch <arch>"
 packages_tsv = "os/signoff-proofs/sbom/<arch>/cargo-lock-packages.tsv"
 manifest = "os/signoff-proofs/sbom/<arch>/release-evidence-manifest.json"
-license_policy = "Workspace source is UNLICENSED/proprietary; dependency licenses remain third-party."
+license_policy = "Workspace source is AGPL-3.0-or-later (see LICENSE); dependency and bundled-component licenses remain third-party under their own terms. The 'Goblins OS' name and marks are reserved trademarks (see TRADEMARKS.md)."
 
 [rpm]
 source = "Fedora 44 bootc image package set"

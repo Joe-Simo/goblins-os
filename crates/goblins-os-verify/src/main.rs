@@ -487,7 +487,7 @@ fn source_checks(root: &Path) -> Vec<Check> {
     let mut checks = vec![
         file_check(root, "Cargo.toml"),
         file_check(root, "Cargo.lock"),
-        file_check(root, "LICENSE.md"),
+        file_check(root, "LICENSE"),
         file_check(root, "crates/goblins-os-ai/src/lib.rs"),
         file_check(root, "crates/goblins-os-design/src/lib.rs"),
         file_check(root, "os/bootc/Containerfile"),
@@ -3967,13 +3967,13 @@ fn acquisition_readiness_checks(root: &Path) -> Vec<Check> {
         file_check(root, "os/release/acquisition-readiness-delta.toml"),
         contains_check(
             root.join("Cargo.toml"),
-            "workspace-proprietary-license",
-            "license = \"UNLICENSED\"",
+            "workspace-agpl-license",
+            "license = \"AGPL-3.0-or-later\"",
         ),
         contains_check(
-            root.join("LICENSE.md"),
-            "proprietary-license-all-rights-reserved",
-            "All rights reserved.",
+            root.join("LICENSE"),
+            "license-is-agpl-3",
+            "GNU AFFERO GENERAL PUBLIC LICENSE",
         ),
         contains_check(
             root.join("os/release/source-tree-manifest.toml"),

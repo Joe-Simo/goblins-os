@@ -21,6 +21,9 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-license = "UNLICENSED"
+# Goblins OS's own source is AGPL-3.0-or-later (see LICENSE). Bundled OS
+# components (Fedora base, GNOME, kernel, …) keep their own upstream licenses;
+# the "Goblins OS" name and marks are reserved trademarks (see TRADEMARKS).
+license = "AGPL-3.0-or-later"
 publish = false
 rust-version = "1.83"

@@ -39,7 +39,11 @@ paths = [
   "os/themes/",
   "os/tmpfiles/",
   "SHIP.md",
-  "LICENSE.md",
+  "LICENSE",
+  "TRADEMARKS.md",
+  "CLA.md",
+  "CONTRIBUTING.md",
+  "README.md",
   "GOAL.md",
 ]
 

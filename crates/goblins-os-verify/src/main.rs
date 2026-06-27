@@ -8400,6 +8400,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-runs-textshortcuts-ibus-adapter-capability-check",
+            "goblins-textshortcuts-ibus --capability-check",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-contract-ready",
+            "grep -q '\"adapter_contract_ready\": true'",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-runtime-ready-claim-false",
+            "grep -q '\"runtime_ready_claim\": false'",
+        ),
+        container_contains_check(
+            root,
             "bootc-runs-textshortcuts-component-check",
             "goblins-textshortcuts-engine --component-check /usr/share/ibus/component/goblins-textshortcuts.xml",
         ),
@@ -8446,7 +8461,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-uses-stdio",
-            "return [runtime, \"--stdio\"]",
+            "return [_runtime_binary(), \"--stdio\"]",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
@@ -8487,6 +8502,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-self-test",
             "goblins_textshortcuts_ibus_adapter_selftest ok",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-capability-check",
+            "--capability-check",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-capability-json",
+            "def capability_payload",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-stdio-contract-self-test",
+            "--stdio-self-test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-contract-ready-key",
+            "\"adapter_contract_ready\": adapter_contract_ready",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-keeps-runtime-ready-claim-false",
+            "\"runtime_ready_claim\": False",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-does-not-claim-live-ready",
+            "\"ready\": False",
         ),
         contains_check(
             root.join("os/release/source-tree-manifest.toml"),

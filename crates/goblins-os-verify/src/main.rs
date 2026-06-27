@@ -1193,6 +1193,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "image-workflow-cacheonly-output",
         "--output type=cacheonly",
     ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-renders-settings-interactions-scope",
+        "--build-arg GOBLINS_OS_RENDER_SCOPE=settings-interactions",
+    ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-uploads-settings-interactions-artifact",
+        "goblins-os-settings-interactions-${{ matrix.arch }}",
+    ));
     checks.push(absent_check(
         root.join(".github/workflows/build.yml"),
         "image-workflow-no-daemon-export-tag",

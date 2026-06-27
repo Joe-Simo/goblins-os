@@ -140,6 +140,17 @@ jobs:
         with:
           name: goblins-os-screenshots-${{ matrix.arch }}
           path: screenshots/*.png
+      - name: Render Settings interaction screenshots
+        run: |
+          cat os/bootc/Containerfile os/bootc/render.suffix.Dockerfile > /tmp/render-settings-interactions.Dockerfile
+          mkdir -p settings-interactions
+          DOCKER_BUILDKIT=1 docker build -f /tmp/render-settings-interactions.Dockerfile \
+            --build-arg GOBLINS_OS_RENDER_SCOPE=settings-interactions \
+            --target screenshots --output type=local,dest=settings-interactions .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goblins-os-settings-interactions-${{ matrix.arch }}
+          path: settings-interactions/*.png
       # Composited DESKTOP proof: headless GNOME exports the whole desktop (wallpaper
       # + translucent menu bar + glass dock + WM) in light AND dark — the coherence
       # proof the local aarch64 podman VM can't capture (surfaceless, no GPU).

@@ -86,7 +86,7 @@ implemented and locally gated, but the feature remains `in-progress` until the
 CI/qemu image pass proves the GTK render, polkit oneshot path, and live toggle.
 Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, `goblins-os-verify --source-root .` →
-**blocked=0 (1521)**, `git diff --check`, helper `bash -n`, polkit rule
+**blocked=0 (1523)**, `git diff --check`, helper `bash -n`, polkit rule
 `node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 The installed-image self-test now exercises `/v1/firewall/status` and the
@@ -105,6 +105,11 @@ verifier, then exposed a BuildKit overlay-depth failure before the installed
 self-test script could run; the CI-only self-test/render suffixes now collapse
 their chmod/script execution into fewer layers. The collapsed local aarch64
 Docker `selftest` target passes; a fresh CI image proof is still required.
+Follow-up artifact inspection on green run `28290207130` found the standard
+`goblins-os-screenshots-*` artifacts were complete/nonblank and file-set matched,
+but did **not** include the firewall interaction captures; the workflow now
+uploads a separate `goblins-os-settings-interactions-*` artifact and needs a
+fresh proof before the firewall write pass can advance.
 `systemd-analyze verify` is not available on this macOS host.
 
 **NEXT — pick up exactly here:**

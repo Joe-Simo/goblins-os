@@ -487,6 +487,7 @@ check "rust job checks release" "rg -q 'cargo build --release --workspace' \"$WO
 check "image job has verify" "rg -q 'goblins-os-verify' \"$WORKFLOW\""
 check "image job checks blocked=0" "rg -q 'blocked=0' \"$WORKFLOW\""
 check "image job has selftest" "rg -q 'goblins-os:selftest' \"$WORKFLOW\""
+check "image job renders settings interaction proof" "rg -Fq -- '--build-arg GOBLINS_OS_RENDER_SCOPE=settings-interactions' \"$WORKFLOW\" && rg -Fq 'goblins-os-settings-interactions-' \"$WORKFLOW\""
 check "image job has explicit push marker trigger" "rg -Fq \"contains(github.event.head_commit.message, '[image]')\" \"$WORKFLOW\" && rg -Fq \"github.event_name == 'push' && contains(github.event.head_commit.message, '[image]')\" \"$WORKFLOW\""
 check "CI suffixes avoid extra chmod run layers" "rg -Fq 'COPY --chmod=0755 os/bootc/run-selftest.sh' os/bootc/selftest.suffix.Dockerfile && ! rg -Fq 'RUN chmod +x /usr/local/bin/run-selftest.sh' os/bootc/selftest.suffix.Dockerfile && rg -Fq 'COPY --chmod=0755 os/bootc/render-screens.sh' os/bootc/render.suffix.Dockerfile && ! rg -Fq 'RUN chmod +x /usr/local/bin/render-screens.sh' os/bootc/render.suffix.Dockerfile && rg -Fq 'COPY --chmod=0755 os/bootc/render-desktop.sh' os/bootc/render-desktop.suffix.Dockerfile && ! rg -Fq 'RUN chmod +x /usr/local/bin/render-desktop.sh' os/bootc/render-desktop.suffix.Dockerfile"
 check "installer-iso job exists" "rg -q '^  installer-iso:' \"$WORKFLOW\""

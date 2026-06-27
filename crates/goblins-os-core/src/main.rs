@@ -208,6 +208,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(live_captions::live_captions_status),
         )
         .route(
+            "/v1/captions/status",
+            get(live_captions::live_captions_status),
+        )
+        .route(
+            "/v1/captions/stream",
+            get(live_captions::live_captions_stream),
+        )
+        .route(
             "/v1/voice/control/vocabulary",
             get(voice_control::voice_control_vocabulary),
         )

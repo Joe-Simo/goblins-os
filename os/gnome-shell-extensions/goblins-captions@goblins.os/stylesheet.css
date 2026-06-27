@@ -1,0 +1,40 @@
+/* Goblins OS Live Captions — glass caption capsule, Inter, one accent. */
+
+.goblins-captions-overlay {
+  max-width: 780px;
+  min-width: 280px;
+  background-color: rgba(26, 26, 31, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 22px;
+  padding: 12px 16px;
+  spacing: 10px;
+  color: rgba(255, 255, 255, 0.94);
+  font-family: "Inter";
+  font-size: 17px;
+  font-weight: 500;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.44);
+}
+
+.goblins-captions-overlay.size-small {
+  font-size: 14px;
+}
+
+.goblins-captions-overlay.size-large {
+  font-size: 22px;
+}
+
+.goblins-captions-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-top: 7px;
+  background-color: rgba(142, 142, 147, 0.9);
+}
+
+.goblins-captions-dot.live {
+  background-color: rgba(52, 199, 89, 0.95);
+}
+
+.goblins-captions-text {
+  color: rgba(255, 255, 255, 0.94);
+}

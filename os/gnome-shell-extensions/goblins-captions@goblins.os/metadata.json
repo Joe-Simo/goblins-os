@@ -1,0 +1,7 @@
+{
+  "uuid": "goblins-captions@goblins.os",
+  "name": "Goblins Live Captions",
+  "description": "Local Live Captions overlay for the Goblins OS desktop.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "session-modes": ["user", "goblins-os"]
+}

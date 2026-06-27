@@ -13,7 +13,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use axum::Json;
+use axum::{
+    http::{header, StatusCode},
+    response::IntoResponse,
+    Json,
+};
 use serde::Serialize;
 
 const SCHEMA: &str = "org.goblins.shell.extensions.captions";
@@ -67,6 +71,31 @@ struct SegmentConfig {
 
 pub async fn live_captions_status() -> Json<LiveCaptionsStatus> {
     Json(build_status())
+}
+
+pub async fn live_captions_stream() -> impl IntoResponse {
+    let status = build_status();
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/event-stream; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        caption_stream_event(&status),
+    )
+}
+
+fn caption_stream_event(status: &LiveCaptionsStatus) -> String {
+    let event = if status.active {
+        "caption-ready"
+    } else {
+        "caption-status"
+    };
+    let data = serde_json::to_string(status).unwrap_or_else(|_| {
+        "{\"active\":false,\"detail\":\"Live Captions status could not be serialized.\"}"
+            .to_string()
+    });
+    format!("event: {event}\ndata: {data}\n\n")
 }
 
 fn build_status() -> LiveCaptionsStatus {
@@ -351,10 +380,10 @@ fn gsettings(args: &[&str]) -> Result<String, ()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_silence, normalize_audio_source, normalize_position, normalize_text_size, rms_i16,
-        segment_should_flush, whisper_caption_args, Capability, LiveCaptionsStatus, SegmentConfig,
-        DEFAULT_MAX_SEGMENT_MS, DEFAULT_MIN_SEGMENT_MS, DEFAULT_SILENCE_RMS,
-        DEFAULT_TRAILING_SILENCE_MS,
+        caption_stream_event, is_silence, normalize_audio_source, normalize_position,
+        normalize_text_size, rms_i16, segment_should_flush, whisper_caption_args, Capability,
+        LiveCaptionsStatus, SegmentConfig, DEFAULT_MAX_SEGMENT_MS, DEFAULT_MIN_SEGMENT_MS,
+        DEFAULT_SILENCE_RMS, DEFAULT_TRAILING_SILENCE_MS,
     };
     use std::path::Path;
 
@@ -468,5 +497,53 @@ mod tests {
         assert!(json.contains("\"audio_source\":\"system\""));
         assert!(json.contains("\"stt_model\""));
         assert!(json.contains("\"position\":\"bottom\""));
+    }
+
+    #[test]
+    fn stream_event_reports_status_without_fake_captions() {
+        let status = LiveCaptionsStatus {
+            source: "goblins-os-core",
+            schema_available: true,
+            enabled: false,
+            available: false,
+            active: false,
+            offline_safe: true,
+            audio_source: "system",
+            text_size: "medium",
+            position: "bottom",
+            auto_hide: true,
+            keep_onscreen: true,
+            stt_runtime: Capability {
+                ready: false,
+                component: "whisper-cli".to_string(),
+                detail: "missing".to_string(),
+            },
+            stt_model: Capability {
+                ready: false,
+                component: "/var/lib/goblins-os/voice/stt".to_string(),
+                detail: "missing".to_string(),
+            },
+            pipewire: Capability {
+                ready: false,
+                component: "PipeWire monitor source".to_string(),
+                detail: "missing".to_string(),
+            },
+            capture: Capability {
+                ready: false,
+                component: "pw-record".to_string(),
+                detail: "missing".to_string(),
+            },
+            segment: SegmentConfig {
+                silence_rms: DEFAULT_SILENCE_RMS,
+                min_segment_ms: DEFAULT_MIN_SEGMENT_MS,
+                max_segment_ms: DEFAULT_MAX_SEGMENT_MS,
+                trailing_silence_ms: DEFAULT_TRAILING_SILENCE_MS,
+            },
+            detail: "Live Captions is off.".to_string(),
+        };
+        let event = caption_stream_event(&status);
+        assert!(event.starts_with("event: caption-status\n"));
+        assert!(event.contains("\"active\":false"));
+        assert!(!event.contains("captioned speech"));
     }
 }

@@ -8206,6 +8206,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/live-captions/status",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-captions-status-alias",
+            "/v1/captions/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-captions-stream-route",
+            "/v1/captions/stream",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/live_captions.rs"),
+            "live-captions-stream-is-sse",
+            "text/event-stream",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/live_captions.rs"),
             "live-captions-model-gate",
             "Add a speech model to turn on Live Captions",
@@ -8224,6 +8239,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/dconf/db/local.d/30-captions"),
             "live-captions-defaults-off",
             "enabled=false",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/metadata.json"),
+            "live-captions-extension-metadata",
+            "goblins-captions@goblins.os",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-honest-waiting-copy",
+            "waiting for the local caption stream",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-adds-chrome",
+            "Main.layoutManager.addChrome",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/stylesheet.css"),
+            "live-captions-extension-inter",
+            "font-family: \"Inter\"",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-modes/goblins-os.json"),
+            "live-captions-extension-enabled-in-mode",
+            "goblins-captions@goblins.os",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),

@@ -18,12 +18,14 @@ fn main() -> MarkupResult<()> {
 
 /// JSON body for the local core's OCR request (`POST /v1/ocr/recognize`). Pure so the
 /// "Copy Text" handoff is unit-tested on the host without a running core.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
 fn ocr_request_body(image_path: &str) -> String {
     serde_json::json!({ "image_path": image_path }).to_string()
 }
 
 /// Recognized clipboard text from the core OCR response, or `None` when recognition
 /// failed or found nothing — so "Copy Text" never puts empty/garbage on the clipboard.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
 fn parse_ocr_response_text(response_body: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct OcrResponse {

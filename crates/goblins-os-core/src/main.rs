@@ -76,7 +76,7 @@ use crate::{
     bluetooth::{bluetooth_status, set_bluetooth_power},
     boot_lock::boot_lock_status,
     codex::{codex_login_start, codex_login_url, codex_status},
-    displays::displays_status,
+    displays::{apply_displays, displays_status},
     firewall::{firewall_status, set_firewall_enabled},
     hardware::hardware_status,
     input::{input_status, set_input_preference, set_input_sources},
@@ -143,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/system/hardware", get(hardware_status))
         .route("/v1/system/image", get(system_image_status))
         .route("/v1/displays/status", get(displays_status))
+        .route("/v1/displays/apply", post(apply_displays))
         .route("/v1/system/services", get(system_services))
         .route("/v1/installer/install-targets", get(install_target_status))
         .route(

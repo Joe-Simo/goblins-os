@@ -7260,6 +7260,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "No displays have been detected for this session yet.",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-displays-apply-route",
+            "/v1/displays/apply",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/displays.rs"),
+            "core-displays-uses-apply-monitors-config",
+            "ApplyMonitorsConfig",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/displays.rs"),
+            "core-displays-validate-apply-payload",
+            "validate_logical_monitors",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-displays-reports-apply-gate",
+            "Protected display apply is available",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-native-handoff-image-owned-label",
             "Not Included",

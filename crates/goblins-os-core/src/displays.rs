@@ -1,14 +1,24 @@
-//! Read-only display and compositor status for Settings.
+//! Display and compositor status for Settings.
 //!
-//! Mutable resolution, scale, mirroring, and arrangement changes need a
-//! policy-aware desktop display route. Until that exists, the core reports the
-//! actual session and query capability instead of letting the GUI fake display
-//! controls.
+//! Mutable resolution, scale, mirroring, and arrangement changes go through
+//! Mutter's stable DisplayConfig D-Bus API. The core owns the allowlist and live
+//! serial checks so Settings never writes arbitrary display state or reports a
+//! successful apply when the compositor gate is absent.
 
-use std::{env, fs, process::Command};
+use std::{
+    env, fs,
+    process::{Command, Stdio},
+};
 
-use axum::Json;
-use serde::Serialize;
+use axum::{http::StatusCode, Json};
+use serde::{Deserialize, Serialize};
+
+const MUTTER_DISPLAY_CONFIG_DEST: &str = "org.gnome.Mutter.DisplayConfig";
+const MUTTER_DISPLAY_CONFIG_PATH: &str = "/org/gnome/Mutter/DisplayConfig";
+const MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE: &str =
+    "org.gnome.Mutter.DisplayConfig.GetCurrentState";
+const MUTTER_DISPLAY_CONFIG_APPLY_MONITORS: &str =
+    "org.gnome.Mutter.DisplayConfig.ApplyMonitorsConfig";
 
 #[derive(Serialize)]
 pub struct DisplaysStatus {
@@ -20,6 +30,8 @@ pub struct DisplaysStatus {
     x11_display: Option<String>,
     gdbus_available: bool,
     mutter_display_config_available: bool,
+    mutter_display_apply_allowed: bool,
+    display_config_serial: Option<u32>,
     xrandr_available: bool,
     outputs: Vec<DisplayOutputStatus>,
     detail: String,
@@ -35,8 +47,61 @@ pub struct DisplayOutputStatus {
     detail: String,
 }
 
+#[derive(Deserialize)]
+pub struct ApplyDisplaysRequest {
+    serial: u32,
+    method: String,
+    #[serde(default)]
+    confirm_persistent: bool,
+    logical_monitors: Vec<LogicalMonitorRequest>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct LogicalMonitorRequest {
+    x: i32,
+    y: i32,
+    scale: f64,
+    transform: u32,
+    primary: bool,
+    monitors: Vec<MonitorConfigRequest>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct MonitorConfigRequest {
+    connector: String,
+    mode_id: String,
+}
+
+#[derive(Serialize)]
+pub struct ApplyDisplaysOutcome {
+    ok: bool,
+    text: String,
+    method: String,
+    serial: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DisplayApplyMethod {
+    Verify,
+    Temporary,
+    Persistent,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DisplayConfigError {
+    Missing,
+    Failed(String),
+}
+
 pub async fn displays_status() -> Json<DisplaysStatus> {
     Json(build_displays_status())
+}
+
+pub async fn apply_displays(
+    Json(request): Json<ApplyDisplaysRequest>,
+) -> (StatusCode, Json<ApplyDisplaysOutcome>) {
+    let (status, outcome) = apply_displays_outcome(request);
+    (status, Json(outcome))
 }
 
 fn build_displays_status() -> DisplaysStatus {
@@ -46,8 +111,17 @@ fn build_displays_status() -> DisplaysStatus {
     let wayland_display = env_optional("WAYLAND_DISPLAY");
     let x11_display = env_optional("DISPLAY");
     let gdbus_available = executable_exists("gdbus");
-    let mutter_display_config_available =
-        gdbus_available && mutter_display_config_reachable().unwrap_or(false);
+    let current_state = if gdbus_available {
+        mutter_current_state().ok()
+    } else {
+        None
+    };
+    let mutter_display_config_available = current_state.is_some();
+    let display_config_serial = current_state
+        .as_deref()
+        .and_then(parse_current_state_serial);
+    let mutter_display_apply_allowed =
+        gdbus_available && mutter_display_config_apply_allowed().unwrap_or(false);
     let xrandr_available = executable_exists("xrandr");
     let outputs = if xrandr_available {
         xrandr_outputs().unwrap_or_default()
@@ -71,27 +145,173 @@ fn build_displays_status() -> DisplaysStatus {
         x11_display,
         gdbus_available,
         mutter_display_config_available,
+        mutter_display_apply_allowed,
+        display_config_serial,
         xrandr_available,
         outputs,
         detail,
     }
 }
 
-fn mutter_display_config_reachable() -> Option<bool> {
-    let output = Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--dest",
-            "org.gnome.Mutter.DisplayConfig",
-            "--object-path",
-            "/org/gnome/Mutter/DisplayConfig",
-            "--method",
-            "org.gnome.Mutter.DisplayConfig.GetCurrentState",
-        ])
-        .output()
-        .ok()?;
-    Some(output.status.success())
+fn mutter_current_state() -> Result<String, DisplayConfigError> {
+    gdbus_call(&[MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE])
+}
+
+fn mutter_display_config_apply_allowed() -> Result<bool, DisplayConfigError> {
+    let reply = gdbus_call(&[
+        "org.freedesktop.DBus.Properties.Get",
+        MUTTER_DISPLAY_CONFIG_DEST,
+        "ApplyMonitorsConfigAllowed",
+    ])?;
+    Ok(parse_gdbus_bool(&reply).unwrap_or(false))
+}
+
+fn apply_displays_outcome(request: ApplyDisplaysRequest) -> (StatusCode, ApplyDisplaysOutcome) {
+    let method = match parse_apply_method(&request.method) {
+        Ok(method) => method,
+        Err(message) => {
+            return apply_displays_response(
+                StatusCode::BAD_REQUEST,
+                false,
+                message,
+                request.method,
+                request.serial,
+            )
+        }
+    };
+    if method == DisplayApplyMethod::Persistent && !request.confirm_persistent {
+        return apply_displays_response(
+            StatusCode::BAD_REQUEST,
+            false,
+            "Persistent display changes require an explicit keep confirmation.",
+            request.method,
+            request.serial,
+        );
+    }
+    if request.serial == 0 {
+        return apply_displays_response(
+            StatusCode::BAD_REQUEST,
+            false,
+            "Display changes require the current compositor serial.",
+            request.method,
+            request.serial,
+        );
+    }
+    if let Err(message) = validate_logical_monitors(&request.logical_monitors) {
+        return apply_displays_response(
+            StatusCode::BAD_REQUEST,
+            false,
+            &message,
+            request.method,
+            request.serial,
+        );
+    }
+    if !executable_exists("gdbus") {
+        return apply_displays_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            "Display configuration is read-only because the desktop bridge is missing.",
+            request.method,
+            request.serial,
+        );
+    }
+    match mutter_display_config_apply_allowed() {
+        Ok(true) => {}
+        Ok(false) => {
+            return apply_displays_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                false,
+                "Display configuration changes are blocked by the current desktop session.",
+                request.method,
+                request.serial,
+            )
+        }
+        Err(DisplayConfigError::Missing) => {
+            return apply_displays_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                false,
+                "Display configuration is read-only because the compositor DisplayConfig service is missing.",
+                request.method,
+                request.serial,
+            )
+        }
+        Err(DisplayConfigError::Failed(detail)) => {
+            return apply_displays_response(
+                StatusCode::BAD_GATEWAY,
+                false,
+                &format!("Display configuration cannot be changed right now: {detail}"),
+                request.method,
+                request.serial,
+            )
+        }
+    }
+    match mutter_current_state().and_then(|state| {
+        parse_current_state_serial(&state).ok_or_else(|| {
+            DisplayConfigError::Failed("compositor did not report a display serial".to_string())
+        })
+    }) {
+        Ok(current_serial) if current_serial == request.serial => {}
+        Ok(_) => {
+            return apply_displays_response(
+                StatusCode::CONFLICT,
+                false,
+                "Display layout changed before apply; reload the display panel and try again.",
+                request.method,
+                request.serial,
+            )
+        }
+        Err(DisplayConfigError::Missing) => {
+            return apply_displays_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                false,
+                "Display configuration is read-only because the compositor DisplayConfig service is missing.",
+                request.method,
+                request.serial,
+            )
+        }
+        Err(DisplayConfigError::Failed(detail)) => {
+            return apply_displays_response(
+                StatusCode::BAD_GATEWAY,
+                false,
+                &format!("Display configuration cannot be read before apply: {detail}"),
+                request.method,
+                request.serial,
+            )
+        }
+    }
+
+    let logical_monitors = encode_logical_monitors(&request.logical_monitors);
+    let method_value = apply_method_value(method).to_string();
+    let serial = request.serial.to_string();
+    match gdbus_call(&[
+        MUTTER_DISPLAY_CONFIG_APPLY_MONITORS,
+        &serial,
+        &method_value,
+        &logical_monitors,
+        "{}",
+    ]) {
+        Ok(_) => apply_displays_response(
+            StatusCode::OK,
+            true,
+            apply_success_text(method),
+            request.method,
+            request.serial,
+        ),
+        Err(DisplayConfigError::Missing) => apply_displays_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            "Display configuration is read-only because the desktop bridge is missing.",
+            request.method,
+            request.serial,
+        ),
+        Err(DisplayConfigError::Failed(detail)) => apply_displays_response(
+            StatusCode::BAD_GATEWAY,
+            false,
+            &format!("The compositor rejected the display configuration: {detail}"),
+            request.method,
+            request.serial,
+        ),
+    }
 }
 
 fn xrandr_outputs() -> Option<Vec<DisplayOutputStatus>> {
@@ -101,6 +321,227 @@ fn xrandr_outputs() -> Option<Vec<DisplayOutputStatus>> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     Some(parse_xrandr_outputs(&stdout))
+}
+
+fn gdbus_call(args: &[&str]) -> Result<String, DisplayConfigError> {
+    let output = Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            MUTTER_DISPLAY_CONFIG_DEST,
+            "--object-path",
+            MUTTER_DISPLAY_CONFIG_PATH,
+            "--method",
+        ])
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                DisplayConfigError::Missing
+            } else {
+                DisplayConfigError::Failed("desktop bridge could not be started".to_string())
+            }
+        })?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Err(DisplayConfigError::Failed(if detail.is_empty() {
+        "desktop bridge returned a failure without details".to_string()
+    } else {
+        detail
+    }))
+}
+
+fn parse_apply_method(value: &str) -> Result<DisplayApplyMethod, &'static str> {
+    match value.trim() {
+        "verify" => Ok(DisplayApplyMethod::Verify),
+        "temporary" => Ok(DisplayApplyMethod::Temporary),
+        "persistent" => Ok(DisplayApplyMethod::Persistent),
+        _ => Err("Display apply method must be verify, temporary, or persistent."),
+    }
+}
+
+fn apply_method_value(method: DisplayApplyMethod) -> u32 {
+    match method {
+        DisplayApplyMethod::Verify => 0,
+        DisplayApplyMethod::Temporary => 1,
+        DisplayApplyMethod::Persistent => 2,
+    }
+}
+
+fn apply_success_text(method: DisplayApplyMethod) -> &'static str {
+    match method {
+        DisplayApplyMethod::Verify => "Display configuration was verified by the compositor.",
+        DisplayApplyMethod::Temporary => {
+            "Display configuration was applied temporarily. Confirm it to keep the layout."
+        }
+        DisplayApplyMethod::Persistent => "Display configuration was saved.",
+    }
+}
+
+fn validate_logical_monitors(monitors: &[LogicalMonitorRequest]) -> Result<(), String> {
+    if monitors.is_empty() {
+        return Err("At least one logical monitor is required.".to_string());
+    }
+    if monitors.len() > 8 {
+        return Err("Display layout changes are limited to eight logical monitors.".to_string());
+    }
+    let primary_count = monitors.iter().filter(|monitor| monitor.primary).count();
+    if primary_count != 1 {
+        return Err("Exactly one logical monitor must be primary.".to_string());
+    }
+    let mut seen_connectors = std::collections::HashSet::new();
+    for monitor in monitors {
+        if !(-65535..=65535).contains(&monitor.x) || !(-65535..=65535).contains(&monitor.y) {
+            return Err("Display positions must stay within compositor layout bounds.".to_string());
+        }
+        if !monitor.scale.is_finite() || monitor.scale < 1.0 || monitor.scale > 4.0 {
+            return Err("Display scale must be between 1.0 and 4.0.".to_string());
+        }
+        if monitor.transform > 7 {
+            return Err(
+                "Display transform must be a Wayland transform value from 0 through 7.".to_string(),
+            );
+        }
+        if monitor.monitors.is_empty() {
+            return Err("Each logical monitor needs at least one physical monitor.".to_string());
+        }
+        if monitor.monitors.len() > 4 {
+            return Err("Each logical monitor is limited to four mirrored outputs.".to_string());
+        }
+        for physical in &monitor.monitors {
+            if !display_connector_is_safe(&physical.connector) {
+                return Err("Display connector names must be safe desktop IDs.".to_string());
+            }
+            if !display_mode_id_is_safe(&physical.mode_id) {
+                return Err("Display mode IDs must be safe compositor mode IDs.".to_string());
+            }
+            if !seen_connectors.insert(physical.connector.clone()) {
+                return Err(
+                    "A physical display can appear in only one logical monitor.".to_string()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn encode_logical_monitors(monitors: &[LogicalMonitorRequest]) -> String {
+    let encoded = monitors
+        .iter()
+        .map(|monitor| {
+            let physical = monitor
+                .monitors
+                .iter()
+                .map(|physical| {
+                    format!(
+                        "('{}', '{}', {{}})",
+                        escape_gvariant_string(&physical.connector),
+                        escape_gvariant_string(&physical.mode_id)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "({}, {}, {}, uint32 {}, {}, [{}])",
+                monitor.x,
+                monitor.y,
+                encode_display_scale(monitor.scale),
+                monitor.transform,
+                if monitor.primary { "true" } else { "false" },
+                physical
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{encoded}]")
+}
+
+fn encode_display_scale(scale: f64) -> String {
+    let mut text = format!("{scale:.3}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.push('0');
+    }
+    text
+}
+
+fn parse_current_state_serial(reply: &str) -> Option<u32> {
+    let trimmed = reply.trim().trim_start_matches('(').trim_start();
+    let trimmed = trimmed
+        .strip_prefix("uint32")
+        .unwrap_or(trimmed)
+        .trim_start();
+    let mut digits = String::new();
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            continue;
+        }
+        if !digits.is_empty() {
+            break;
+        }
+        if !ch.is_whitespace() {
+            return None;
+        }
+    }
+    digits.parse().ok()
+}
+
+fn parse_gdbus_bool(reply: &str) -> Option<bool> {
+    if reply.contains("true") {
+        Some(true)
+    } else if reply.contains("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn display_connector_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 80
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn display_mode_id_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 120
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
+}
+
+fn escape_gvariant_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+fn apply_displays_response(
+    status: StatusCode,
+    ok: bool,
+    text: &str,
+    method: String,
+    serial: u32,
+) -> (StatusCode, ApplyDisplaysOutcome) {
+    (
+        status,
+        ApplyDisplaysOutcome {
+            ok,
+            text: text.to_string(),
+            method,
+            serial,
+        },
+    )
 }
 
 fn parse_xrandr_outputs(stdout: &str) -> Vec<DisplayOutputStatus> {
@@ -237,8 +678,11 @@ fn executable_exists(binary: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        display_output_detail, displays_detail, parse_xrandr_output_line, parse_xrandr_outputs,
-        split_display_geometry,
+        apply_method_value, display_connector_is_safe, display_mode_id_is_safe,
+        display_output_detail, displays_detail, encode_logical_monitors, parse_apply_method,
+        parse_current_state_serial, parse_gdbus_bool, parse_xrandr_output_line,
+        parse_xrandr_outputs, split_display_geometry, validate_logical_monitors,
+        DisplayApplyMethod, LogicalMonitorRequest, MonitorConfigRequest,
     };
 
     #[test]
@@ -282,5 +726,79 @@ mod tests {
         assert!(displays_detail(Some("wayland-0"), None, true, false, 0)
             .contains("Display configuration is reachable"));
         assert!(displays_detail(None, Some(":0"), false, true, 2).contains("2 display output"));
+    }
+
+    #[test]
+    fn display_apply_request_encodes_mutter_payload() {
+        let monitors = vec![LogicalMonitorRequest {
+            x: 0,
+            y: 0,
+            scale: 1.25,
+            transform: 0,
+            primary: true,
+            monitors: vec![MonitorConfigRequest {
+                connector: "eDP-1".to_string(),
+                mode_id: "2560x1440@60.000".to_string(),
+            }],
+        }];
+
+        assert_eq!(
+            parse_apply_method("temporary"),
+            Ok(DisplayApplyMethod::Temporary)
+        );
+        assert_eq!(apply_method_value(DisplayApplyMethod::Temporary), 1);
+        assert_eq!(
+            encode_logical_monitors(&monitors),
+            "[(0, 0, 1.25, uint32 0, true, [('eDP-1', '2560x1440@60.000', {})])]"
+        );
+        assert_eq!(
+            parse_current_state_serial("(uint32 42, [], [], {})"),
+            Some(42)
+        );
+        assert_eq!(parse_current_state_serial("(42, [], [], {})"), Some(42));
+        assert_eq!(parse_gdbus_bool("(<true>,)"), Some(true));
+        assert_eq!(parse_gdbus_bool("(<false>,)"), Some(false));
+    }
+
+    #[test]
+    fn display_apply_request_rejects_unsafe_layouts() {
+        let valid = vec![LogicalMonitorRequest {
+            x: 0,
+            y: 0,
+            scale: 1.0,
+            transform: 0,
+            primary: true,
+            monitors: vec![MonitorConfigRequest {
+                connector: "HDMI-A-1".to_string(),
+                mode_id: "1920x1080@60.000".to_string(),
+            }],
+        }];
+        assert!(validate_logical_monitors(&valid).is_ok());
+        assert!(display_connector_is_safe("DP-1"));
+        assert!(!display_connector_is_safe("DP/1"));
+        assert!(display_mode_id_is_safe("1920x1080@60.000"));
+        assert!(!display_mode_id_is_safe("1920x1080;rm"));
+
+        let mut no_primary = valid.clone();
+        no_primary[0].primary = false;
+        assert!(validate_logical_monitors(&no_primary).is_err());
+
+        let mut bad_scale = valid.clone();
+        bad_scale[0].scale = 0.5;
+        assert!(validate_logical_monitors(&bad_scale).is_err());
+
+        let mut duplicate = valid.clone();
+        duplicate.push(LogicalMonitorRequest {
+            x: 1920,
+            y: 0,
+            scale: 1.0,
+            transform: 0,
+            primary: false,
+            monitors: vec![MonitorConfigRequest {
+                connector: "HDMI-A-1".to_string(),
+                mode_id: "1920x1080@60.000".to_string(),
+            }],
+        });
+        assert!(validate_logical_monitors(&duplicate).is_err());
     }
 }

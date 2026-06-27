@@ -210,6 +210,20 @@ scoped `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`,
 and `goblins-os-verify --source-root .` → **blocked=0 (1575)**. CI/qemu render
 and a live portal revoke/reload proof remain pending.
 
+Current Multi-display continuation: the guarded apply substrate is now
+source-gated but not shipped. Core exposes `/v1/displays/apply`, reads
+`ApplyMonitorsConfigAllowed`, requires the caller's compositor serial to match a
+fresh `GetCurrentState`, validates a typed logical-monitor payload, encodes the
+Mutter `a(iiduba(ssa{sv}))` tuple, and rejects stale serials before calling
+`ApplyMonitorsConfig`. Settings ▸ Displays now reports whether protected display
+apply is available, but the layout editor remains disabled. Local source gates:
+`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, the Rust 1.88 GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`,
+`git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
+`goblins-os-verify --source-root .` → **blocked=0 (1579)**. CI/qemu still must
+prove the apply/keep/revert flow before the feature can ship.
+
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: firewall CI image/render proof is green and the
    hardware-gate image/ISO path is past the export blocker; next push/dispatch
@@ -218,8 +232,8 @@ and a live portal revoke/reload proof remain pending.
    reaches the in-guest firewall toggle. That proof must show the live
    systemd/polkit oneshot success path for the firewall toggle.
    Only flip it to `shipped` if the render, live POST, and polkit oneshot path are green. Then
-   prove the IME set, Focus, and per-app permission revoke interactions in CI/qemu,
-   then continue one feature at a time — multi-display apply and keyboard rebinding. Do not flip any of these
+   prove the IME set, Focus, per-app permission revoke, and multi-display apply interactions in CI/qemu,
+   then continue to keyboard rebinding. Do not flip any of these
    from `in-progress` until the write path and qemu interaction proof are green.
 2. **Batch 4 engine UI pass**: build the deferred engine UIs/overlays one feature
    at a time (Voice Control, Live Captions, Switch Control, Sound Recognition,
@@ -375,7 +389,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - **Verifiable:** host — limited (gschema `xmllint`/`--dry-run`, `node --check`, CSS self-consistency). CI/qemu — the render proof (`showAppExposeDemo()` → light+dark screenshots).
 - **Effort:** M · **Risk:** LOW (boot none; only one `addKeybinding`). Verify `F10` isn't grabbed by a focused app; gate the dock-click change strictly.
 
-### `TODO` Multi-display arrangement / resolution / scale / refresh / mirror
+### `in-progress` Multi-display arrangement / resolution / scale / refresh / mirror
+- [x] **Apply substrate source-gated (CI/qemu-pending):** `/v1/displays/apply` exposes a serial-gated Mutter `ApplyMonitorsConfig` bridge. It checks `ApplyMonitorsConfigAllowed`, re-reads `GetCurrentState` before apply, rejects stale serials, validates connector/mode IDs and logical-monitor payloads, requires explicit confirmation for persistent `method=2`, and encodes the `a(iiduba(ssa{sv}))` request tuple. Settings reports the protected apply gate but keeps the editor disabled until live proof exists.
 - [ ] A **writable** Goblins Displays panel driving `org.gnome.Mutter.DisplayConfig` through the allowlisted bridge, replacing today's read-only placeholders. Drag-to-arrange canvas, named scaled modes, scale, refresh, rotation, mirror — with a live-preview + Keep/Revert timer so a bad mode can't lock the user out.
 - **Packages:** `mutter` (already present via gnome-shell — only confirm via `rpm -q`).
 - **gsettings/dconf:** seed `org.gnome.mutter experimental-features = ['scale-monitor-framebuffer']` (additive) so fractional 125/150/175% steps exist at first boot. Mode/scale/rotation/position/primary/mirror are **not** gsettings — applied via `ApplyMonitorsConfig`; Mutter persists `method=2` to `~/.config/monitors.xml`.

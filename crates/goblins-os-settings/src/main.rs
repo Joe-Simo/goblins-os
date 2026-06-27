@@ -361,9 +361,8 @@ struct WifiNetwork {
     in_use: bool,
 }
 
-/// Read-only display status from Goblins OS. Resolution,
-/// scaling, mirroring, and arrangement stay read-only until core owns a
-/// policy-aware desktop display configuration route.
+/// Display status from Goblins OS. Resolution, scaling, mirroring, and
+/// arrangement controls stay qemu-pending until the apply/keep flow is proven.
 #[cfg_attr(
     not(all(target_os = "linux", feature = "native-desktop")),
     allow(dead_code)
@@ -374,6 +373,10 @@ struct DisplaysStatus {
     wayland_display: Option<String>,
     x11_display: Option<String>,
     mutter_display_config_available: bool,
+    #[serde(default)]
+    mutter_display_apply_allowed: bool,
+    #[serde(default)]
+    display_config_serial: Option<u32>,
     outputs: Vec<DisplayOutputStatus>,
     detail: String,
 }
@@ -5711,11 +5714,11 @@ fn build_displays(panel: &gtk4::Box, state: &SettingsState) {
     }
     panel.append(&system_row(
         "Resolution and scaling",
-        "Read-only until protected display controls are available. Resolution and scale changes stay disabled for now.",
+        &display_apply_detail(state.displays.as_ref()),
     ));
     panel.append(&system_row(
         "Display arrangement",
-        "Read-only until protected display controls are available. Monitor placement, mirroring, and primary-display changes stay disabled for now.",
+        "Monitor placement, mirroring, and primary-display changes stay disabled until the qemu apply/keep proof is green.",
     ));
     panel.append(&label("Advanced controls", &["gos-subsection-title"]));
     append_device_settings_handoff(
@@ -5725,6 +5728,29 @@ fn build_displays(panel: &gtk4::Box, state: &SettingsState) {
         "Open the desktop system tool for resolution, scale, refresh rate, mirroring, and arrangement.",
         state.system.as_ref(),
     );
+}
+
+fn display_apply_detail(displays: Option<&DisplaysStatus>) -> String {
+    match displays {
+        Some(displays) if displays.mutter_display_apply_allowed => {
+            let serial = displays
+                .display_config_serial
+                .map(|serial| format!(" serial {serial}"))
+                .unwrap_or_else(|| " without a reported serial".to_string());
+            format!(
+                "Protected display apply is available for this session ({serial}); the layout editor stays disabled until live qemu proof covers apply and keep."
+            )
+        }
+        Some(displays) if displays.mutter_display_config_available => {
+            "Display state is readable, but the compositor is not allowing layout writes in this session."
+                .to_string()
+        }
+        Some(_) => {
+            "Read-only because the compositor DisplayConfig service is not reachable in this session."
+                .to_string()
+        }
+        None => "Waiting for display configuration status.".to_string(),
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -21360,6 +21386,8 @@ mod tests {
             wayland_display: Some("wayland-0".to_string()),
             x11_display: None,
             mutter_display_config_available: true,
+            mutter_display_apply_allowed: true,
+            display_config_serial: Some(42),
             outputs: Vec::new(),
             detail: "Display configuration is reachable.".to_string(),
         };
@@ -21414,6 +21442,10 @@ mod tests {
         assert!(outputs.detail.contains("1 disconnected"));
         assert!(outputs.detail.contains("Primary eDP-1"));
         assert!(outputs.detail.contains("2560x1440"));
+
+        let apply = super::display_apply_detail(Some(&displays));
+        assert!(apply.contains("Protected display apply is available"));
+        assert!(apply.contains("serial 42"));
     }
 
     #[test]
@@ -21428,6 +21460,8 @@ mod tests {
             wayland_display: None,
             x11_display: Some(":0".to_string()),
             mutter_display_config_available: false,
+            mutter_display_apply_allowed: false,
+            display_config_serial: None,
             outputs: Vec::new(),
             detail: "A desktop display handle is visible, but monitor configuration could not be queried from this session.".to_string(),
         };

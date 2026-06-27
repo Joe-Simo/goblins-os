@@ -488,6 +488,9 @@ struct AccessibilityStatus {
     gsettings_available: bool,
     interface: InterfaceAccessibilityStatus,
     assistive: AssistiveTechnologyStatus,
+    visual: VisualAccessibilityStatus,
+    typing: TypingAccessibilityStatus,
+    pointing: PointingAccessibilityStatus,
     display_comfort: DisplayComfortStatus,
     detail: String,
 }
@@ -506,6 +509,30 @@ struct AssistiveTechnologyStatus {
     screen_reader: Option<bool>,
     screen_keyboard: Option<bool>,
     magnifier: Option<bool>,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct VisualAccessibilityStatus {
+    schema_available: bool,
+    high_contrast: Option<bool>,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct TypingAccessibilityStatus {
+    schema_available: bool,
+    sticky_keys: Option<bool>,
+    slow_keys: Option<bool>,
+    bounce_keys: Option<bool>,
+    mouse_keys: Option<bool>,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct PointingAccessibilityStatus {
+    schema_available: bool,
+    dwell_click: Option<bool>,
     detail: String,
 }
 
@@ -10725,6 +10752,75 @@ fn append_assistive_technology_settings(panel: &gtk4::Box, state: &SettingsState
         assistive.magnifier,
         magnifier_detail,
     );
+
+    let visual = &accessibility.visual;
+    panel.append(&label("Contrast", &["gos-subsection-title"]));
+    if visual.schema_available {
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "high-contrast",
+            "High contrast",
+            visual.high_contrast,
+            high_contrast_detail,
+        );
+    } else {
+        panel.append(&system_row("High contrast", &visual.detail));
+    }
+
+    let typing = &accessibility.typing;
+    panel.append(&label("Typing assistance", &["gos-subsection-title"]));
+    if typing.schema_available {
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "sticky-keys",
+            "Sticky Keys",
+            typing.sticky_keys,
+            sticky_keys_detail,
+        );
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "slow-keys",
+            "Slow Keys",
+            typing.slow_keys,
+            slow_keys_detail,
+        );
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "bounce-keys",
+            "Bounce Keys",
+            typing.bounce_keys,
+            bounce_keys_detail,
+        );
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "mouse-keys",
+            "Mouse Keys",
+            typing.mouse_keys,
+            mouse_keys_detail,
+        );
+    } else {
+        panel.append(&system_row("Typing assistance", &typing.detail));
+    }
+
+    let pointing = &accessibility.pointing;
+    panel.append(&label("Pointer assistance", &["gos-subsection-title"]));
+    if pointing.schema_available {
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "dwell-click",
+            "Dwell click",
+            pointing.dwell_click,
+            dwell_click_detail,
+        );
+    } else {
+        panel.append(&system_row("Dwell click", &pointing.detail));
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -11494,6 +11590,54 @@ fn magnifier_detail(enabled: bool) -> &'static str {
         "Screen magnification is enabled for the desktop session."
     } else {
         "Screen magnification is off. Text size still follows the setting below."
+    }
+}
+
+fn high_contrast_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "High contrast is on. Interface colors use stronger contrast for legibility."
+    } else {
+        "High contrast is off. The desktop uses its standard color contrast."
+    }
+}
+
+fn sticky_keys_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Sticky Keys is on. Modifier keys latch so shortcuts can be pressed one key at a time."
+    } else {
+        "Sticky Keys is off. Modifier shortcuts are pressed together as usual."
+    }
+}
+
+fn slow_keys_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Slow Keys is on. A key must be held briefly before it registers, filtering accidental taps."
+    } else {
+        "Slow Keys is off. Keys register as soon as they are pressed."
+    }
+}
+
+fn bounce_keys_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Bounce Keys is on. Rapid repeated presses of the same key are ignored."
+    } else {
+        "Bounce Keys is off. Every key press registers, including quick repeats."
+    }
+}
+
+fn mouse_keys_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Mouse Keys is on. The numeric keypad can move the pointer and click."
+    } else {
+        "Mouse Keys is off. The pointer is controlled by the mouse or trackpad."
+    }
+}
+
+fn dwell_click_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Dwell click is on. Resting the pointer briefly performs a click without pressing a button."
+    } else {
+        "Dwell click is off. Clicks are made by pressing the mouse or trackpad."
     }
 }
 
@@ -17853,6 +17997,24 @@ fn test_accessibility_status(
                 unavailable_detail.to_string()
             },
         },
+        visual: VisualAccessibilityStatus {
+            schema_available: assistive_schema_available,
+            high_contrast: Some(false),
+            detail: String::new(),
+        },
+        typing: TypingAccessibilityStatus {
+            schema_available: assistive_schema_available,
+            sticky_keys: Some(false),
+            slow_keys: Some(false),
+            bounce_keys: Some(false),
+            mouse_keys: Some(false),
+            detail: String::new(),
+        },
+        pointing: PointingAccessibilityStatus {
+            schema_available: assistive_schema_available,
+            dwell_click: Some(false),
+            detail: String::new(),
+        },
         display_comfort: DisplayComfortStatus {
             schema_available: display_comfort_schema_available,
             night_light_enabled: Some(true),
@@ -20174,6 +20336,24 @@ mod tests {
                 magnifier: Some(false),
                 detail: "Assistive technology settings are available.".to_string(),
             },
+            visual: super::VisualAccessibilityStatus {
+                schema_available: true,
+                high_contrast: Some(false),
+                detail: String::new(),
+            },
+            typing: super::TypingAccessibilityStatus {
+                schema_available: true,
+                sticky_keys: Some(false),
+                slow_keys: Some(false),
+                bounce_keys: Some(false),
+                mouse_keys: Some(false),
+                detail: String::new(),
+            },
+            pointing: super::PointingAccessibilityStatus {
+                schema_available: true,
+                dwell_click: Some(false),
+                detail: String::new(),
+            },
             display_comfort: super::DisplayComfortStatus {
                 schema_available: true,
                 night_light_enabled: Some(false),
@@ -20247,6 +20427,24 @@ mod tests {
                 screen_keyboard: None,
                 magnifier: None,
                 detail: "Assistive technology settings are unavailable.".to_string(),
+            },
+            visual: super::VisualAccessibilityStatus {
+                schema_available: false,
+                high_contrast: None,
+                detail: String::new(),
+            },
+            typing: super::TypingAccessibilityStatus {
+                schema_available: false,
+                sticky_keys: None,
+                slow_keys: None,
+                bounce_keys: None,
+                mouse_keys: None,
+                detail: String::new(),
+            },
+            pointing: super::PointingAccessibilityStatus {
+                schema_available: false,
+                dwell_click: None,
+                detail: String::new(),
             },
             display_comfort: super::DisplayComfortStatus {
                 schema_available: false,
@@ -20479,6 +20677,24 @@ mod tests {
                 screen_keyboard: Some(false),
                 magnifier: Some(false),
                 detail: "Assistive technology settings are available.".to_string(),
+            },
+            visual: super::VisualAccessibilityStatus {
+                schema_available: true,
+                high_contrast: Some(false),
+                detail: String::new(),
+            },
+            typing: super::TypingAccessibilityStatus {
+                schema_available: true,
+                sticky_keys: Some(false),
+                slow_keys: Some(false),
+                bounce_keys: Some(false),
+                mouse_keys: Some(false),
+                detail: String::new(),
+            },
+            pointing: super::PointingAccessibilityStatus {
+                schema_available: true,
+                dwell_click: Some(false),
+                detail: String::new(),
             },
             display_comfort: super::DisplayComfortStatus {
                 schema_available: true,

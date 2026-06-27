@@ -7558,6 +7558,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "core-exposes-firewall-status-route",
             "/v1/firewall/status",
         ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-accessibility-accommodation-rows",
+            "Typing assistance",
+        ),
         // Color picker — portal eyedropper helper, packaged + keybound, copying via
         // wl-clipboard with an honest no-clipboard fallback.
         contains_check(

@@ -293,6 +293,10 @@ export default class GoblinsWindowManagement extends Extension {
         this._showMissionControl({appExpose: entry.appId, title: entry.appName || 'App Exposé'});
     }
 
+    showHotCornerDemo() {
+        this._triggerCornerAction('app-expose');
+    }
+
     showSpacesDemo() {
         this._showMissionControl({spacesFocus: true});
     }
@@ -378,6 +382,16 @@ export default class GoblinsWindowManagement extends Extension {
 
     showSnapPreviewDemo() {
         this._showSnapPreviewForFocused('right');
+    }
+
+    showSnapAssistDemo() {
+        const entries = this._windowEntries();
+        if (entries.length < 2) {
+            this._showSnapPreviewForFocused('right');
+            return;
+        }
+        const [snapped, ...candidates] = entries;
+        this._showSnapAssist(candidates.map(entry => entry.window), 'right', snapped.window);
     }
 
     showHudDemo() {

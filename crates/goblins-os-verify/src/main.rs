@@ -1175,6 +1175,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
+        "render-wm-hot-corner",
+        "52c-wm-hot-corner-$suffix.png",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
         "render-wm-spaces",
         "53-wm-spaces-$suffix.png",
     ));
@@ -1187,6 +1192,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root.join("os/bootc/render-desktop.sh"),
         "render-wm-snap-assist",
         "55-wm-snap-assist-$suffix.png",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-wm-snap-assist-hook",
+        "showSnapAssistDemo",
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
@@ -7777,6 +7787,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "showAppExposeDemo",
         ),
         contains_check(
+            root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
+            "goblins-wm-hot-corner-render-hook",
+            "showHotCornerDemo",
+        ),
+        contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/schemas/org.goblins.shell.extensions.wm.gschema.xml"),
             "goblins-wm-hot-corner-keys",
             "hot-corner-top-left",
@@ -7795,6 +7810,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
             "goblins-wm-snap-assist-handler",
             "_showSnapAssist",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
+            "goblins-wm-snap-assist-render-hook",
+            "showSnapAssistDemo",
         ),
         // Color picker — portal eyedropper helper, packaged + keybound, copying via
         // wl-clipboard with an honest no-clipboard fallback.

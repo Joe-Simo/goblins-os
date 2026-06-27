@@ -251,6 +251,14 @@ render_scheme() {
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
+  gsettings set org.goblins.shell.extensions.wm hot-corner-top-left 'app-expose' 2>/dev/null || true
+  shell_eval "globalThis.goblinsWindowManager.showHotCornerDemo(); 'hot-corner';" || return 1
+  sleep 0.9
+  shoot "52c-wm-hot-corner-$suffix.png"
+  shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
+  gsettings set org.goblins.shell.extensions.wm hot-corner-top-left 'none' 2>/dev/null || true
+  sleep 0.3
+
   shell_eval "globalThis.goblinsWindowManager.showSpacesDemo(); 'spaces';" || return 1
   sleep 0.9
   shoot "53-wm-spaces-$suffix.png"
@@ -263,9 +271,10 @@ render_scheme() {
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
-  shell_eval "globalThis.goblinsWindowManager.showSnapPreviewDemo(); 'snap';" || return 1
-  sleep 0.12
+  shell_eval "globalThis.goblinsWindowManager.showSnapAssistDemo(); 'snap-assist';" || return 1
+  sleep 0.9
   shoot "55-wm-snap-assist-$suffix.png"
+  shell_eval "globalThis.goblinsWindowManager._clearSnapAssist(); 'snap-assist-hidden';" || true
   sleep 0.5
 
   shell_eval "globalThis.goblinsWindowManager.showHudDemo(); 'hud';" || return 1

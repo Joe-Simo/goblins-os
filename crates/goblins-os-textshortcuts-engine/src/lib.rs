@@ -8,6 +8,30 @@
 use serde::{Deserialize, Serialize};
 
 const MAX_SHORTCUTS: usize = 500;
+pub const IBUS_ENGINE_NAME: &str = "goblins-textshortcuts";
+pub const IBUS_COMPONENT_EXEC: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus";
+pub const IBUS_COMPONENT_LONGNAME: &str = "Goblins Text Shortcuts";
+pub const IBUS_COMPONENT_LAYOUT: &str = "default";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ComponentContractError {
+    MissingTagValue {
+        tag: &'static str,
+        expected: &'static str,
+    },
+}
+
+impl std::fmt::Display for ComponentContractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingTagValue { tag, expected } => {
+                write!(f, "missing <{tag}>{expected}</{tag}>")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ComponentContractError {}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TextShortcut {
@@ -84,6 +108,42 @@ pub fn sanitize_shortcuts(shortcuts: Vec<TextShortcut>) -> Vec<TextShortcut> {
             replace,
         })
         .collect()
+}
+
+pub fn validate_ibus_component_xml(raw: &str) -> Result<(), ComponentContractError> {
+    require_tag_value(raw, "exec", IBUS_COMPONENT_EXEC)?;
+    require_tag_value(raw, "name", IBUS_ENGINE_NAME)?;
+    require_tag_value(raw, "longname", IBUS_COMPONENT_LONGNAME)?;
+    require_tag_value(raw, "layout", IBUS_COMPONENT_LAYOUT)?;
+    Ok(())
+}
+
+fn require_tag_value(
+    raw: &str,
+    tag: &'static str,
+    expected: &'static str,
+) -> Result<(), ComponentContractError> {
+    if tag_values(raw, tag).iter().any(|value| value == expected) {
+        Ok(())
+    } else {
+        Err(ComponentContractError::MissingTagValue { tag, expected })
+    }
+}
+
+fn tag_values(raw: &str, tag: &str) -> Vec<String> {
+    let open_tag = format!("<{tag}>");
+    let close_tag = format!("</{tag}>");
+    let mut values = Vec::new();
+    let mut rest = raw;
+    while let Some(open) = rest.find(&open_tag) {
+        let after_open = &rest[open + open_tag.len()..];
+        let Some(close) = after_open.find(&close_tag) else {
+            break;
+        };
+        values.push(after_open[..close].trim().to_string());
+        rest = &after_open[close + close_tag.len()..];
+    }
+    values
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,6 +324,48 @@ mod tests {
             TextShortcut::new("omw", "on my way now"),
         ]);
         assert_eq!(shortcuts, vec![TextShortcut::new("omw", "on my way now")]);
+    }
+
+    #[test]
+    fn valid_component_xml_matches_the_registration_contract() {
+        let xml = r#"
+<component>
+  <exec>/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus</exec>
+  <engines>
+    <engine>
+      <name>goblins-textshortcuts</name>
+      <longname>Goblins Text Shortcuts</longname>
+      <layout>default</layout>
+    </engine>
+  </engines>
+</component>
+"#;
+
+        assert_eq!(super::validate_ibus_component_xml(xml), Ok(()));
+    }
+
+    #[test]
+    fn component_xml_rejects_wrong_exec_target() {
+        let xml = r#"
+<component>
+  <exec>/usr/bin/ibus-engine-simple</exec>
+  <engines>
+    <engine>
+      <name>goblins-textshortcuts</name>
+      <longname>Goblins Text Shortcuts</longname>
+      <layout>default</layout>
+    </engine>
+  </engines>
+</component>
+"#;
+
+        assert_eq!(
+            super::validate_ibus_component_xml(xml),
+            Err(super::ComponentContractError::MissingTagValue {
+                tag: "exec",
+                expected: super::IBUS_COMPONENT_EXEC
+            })
+        );
     }
 
     #[test]

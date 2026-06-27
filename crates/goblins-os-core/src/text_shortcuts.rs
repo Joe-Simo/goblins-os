@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use axum::extract::Query;
 use axum::http::StatusCode;
@@ -19,6 +20,9 @@ use serde::{Deserialize, Serialize};
 
 const ENGINE_BINARY_PATH: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine";
 const ENGINE_COMPONENT_PATH: &str = "/usr/share/ibus/component/goblins-textshortcuts.xml";
+const INPUT_SOURCES_SCHEMA: &str = "org.gnome.desktop.input-sources";
+const TEXTSHORTCUTS_INPUT_KIND: &str = "ibus";
+const TEXTSHORTCUTS_INPUT_ID: &str = "goblins-textshortcuts";
 
 #[derive(Serialize)]
 pub struct TextShortcutsStatus {
@@ -51,6 +55,8 @@ pub struct TextShortcutsEngineStatus {
     ibus_available: bool,
     component_registered: bool,
     engine_binary_available: bool,
+    input_source_configured: bool,
+    runtime_loop_available: bool,
     ready: bool,
     detail: String,
 }
@@ -107,6 +113,8 @@ fn probe_engine_status() -> TextShortcutsEngineStatus {
         command_on_path("ibus"),
         PathBuf::from(ENGINE_COMPONENT_PATH).is_file(),
         PathBuf::from(ENGINE_BINARY_PATH).is_file(),
+        text_shortcuts_input_source_configured(),
+        false,
     )
 }
 
@@ -114,8 +122,14 @@ fn text_shortcuts_engine_status(
     ibus_available: bool,
     component_registered: bool,
     engine_binary_available: bool,
+    input_source_configured: bool,
+    runtime_loop_available: bool,
 ) -> TextShortcutsEngineStatus {
-    let ready = ibus_available && component_registered && engine_binary_available;
+    let ready = ibus_available
+        && component_registered
+        && engine_binary_available
+        && input_source_configured
+        && runtime_loop_available;
     let detail = if ready {
         "Text Shortcuts expand as you type across the desktop.".to_string()
     } else {
@@ -129,8 +143,14 @@ fn text_shortcuts_engine_status(
         if !engine_binary_available {
             missing.push("the Goblins Text Shortcuts engine binary is not installed");
         }
+        if !input_source_configured {
+            missing.push("the Goblins Text Shortcuts IBus input source is not enabled");
+        }
+        if !runtime_loop_available {
+            missing.push("the live IBus runtime loop is still pending CI/qemu proof");
+        }
         format!(
-            "Text Shortcuts are saved, but the replacement engine isn't running on this session yet: {}.",
+            "Text Shortcuts are saved, but the replacement engine is not active on this session yet: {}.",
             missing.join("; ")
         )
     };
@@ -138,9 +158,66 @@ fn text_shortcuts_engine_status(
         ibus_available,
         component_registered,
         engine_binary_available,
+        input_source_configured,
+        runtime_loop_available,
         ready,
         detail,
     }
+}
+
+fn text_shortcuts_input_source_configured() -> bool {
+    gsettings_get(INPUT_SOURCES_SCHEMA, "sources").is_some_and(|raw| {
+        input_sources_contains(&raw, TEXTSHORTCUTS_INPUT_KIND, TEXTSHORTCUTS_INPUT_ID)
+    })
+}
+
+fn input_sources_contains(gvariant: &str, kind: &str, id: &str) -> bool {
+    let mut rest = gvariant;
+    while let Some(open) = rest.find('(') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(')') else { break };
+        let values = single_quoted_strings(&after[..close]);
+        if values.len() == 2 && values[0] == kind && values[1] == id {
+            return true;
+        }
+        rest = &after[close + 1..];
+    }
+    false
+}
+
+fn single_quoted_strings(fragment: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = fragment.chars();
+    while let Some(value) = chars.next() {
+        if value != '\'' {
+            continue;
+        }
+        let mut field = String::new();
+        loop {
+            match chars.next() {
+                None | Some('\'') => break,
+                Some('\\') => {
+                    if let Some(escaped) = chars.next() {
+                        field.push(escaped);
+                    }
+                }
+                Some(character) => field.push(character),
+            }
+        }
+        out.push(field);
+    }
+    out
+}
+
+fn gsettings_get(schema: &str, key: &str) -> Option<String> {
+    let output = Command::new("gsettings")
+        .args(["get", schema, key])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// The replacement for an exactly-typed trigger, if the table has one. This is the
@@ -188,7 +265,9 @@ fn command_on_path(binary: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_replacement, text_shortcuts_engine_status, TextShortcut};
+    use super::{
+        find_replacement, input_sources_contains, text_shortcuts_engine_status, TextShortcut,
+    };
 
     fn s(replace: &str, with: &str) -> TextShortcut {
         TextShortcut::new(replace, with)
@@ -218,28 +297,60 @@ mod tests {
 
     #[test]
     fn engine_status_requires_ibus_component_and_binary() {
-        let missing_all = text_shortcuts_engine_status(false, false, false);
+        let missing_all = text_shortcuts_engine_status(false, false, false, false, false);
         assert!(!missing_all.ready);
         assert!(!missing_all.ibus_available);
         assert!(!missing_all.component_registered);
         assert!(!missing_all.engine_binary_available);
+        assert!(!missing_all.input_source_configured);
+        assert!(!missing_all.runtime_loop_available);
         assert!(missing_all.detail.contains("IBus is not installed"));
         assert!(missing_all.detail.contains("component is not registered"));
         assert!(missing_all
             .detail
             .contains("engine binary is not installed"));
+        assert!(missing_all.detail.contains("input source is not enabled"));
+        assert!(missing_all.detail.contains("runtime loop is still pending"));
 
-        let ibus_only = text_shortcuts_engine_status(true, false, false);
+        let ibus_only = text_shortcuts_engine_status(true, false, false, false, false);
         assert!(!ibus_only.ready);
         assert!(ibus_only.ibus_available);
         assert!(ibus_only.detail.contains("component is not registered"));
         assert!(ibus_only.detail.contains("engine binary is not installed"));
 
-        let ready = text_shortcuts_engine_status(true, true, true);
+        let installed_but_not_enabled =
+            text_shortcuts_engine_status(true, true, true, false, false);
+        assert!(!installed_but_not_enabled.ready);
+        assert!(!installed_but_not_enabled.input_source_configured);
+        assert!(!installed_but_not_enabled.runtime_loop_available);
+        assert!(installed_but_not_enabled
+            .detail
+            .contains("input source is not enabled"));
+
+        let ready = text_shortcuts_engine_status(true, true, true, true, true);
         assert!(ready.ready);
         assert_eq!(
             ready.detail,
             "Text Shortcuts expand as you type across the desktop."
         );
+    }
+
+    #[test]
+    fn input_source_detection_requires_the_goblins_ibus_engine() {
+        assert!(input_sources_contains(
+            "[('xkb', 'us'), ('ibus', 'goblins-textshortcuts')]",
+            "ibus",
+            "goblins-textshortcuts"
+        ));
+        assert!(!input_sources_contains(
+            "[('xkb', 'us'), ('ibus', 'libpinyin')]",
+            "ibus",
+            "goblins-textshortcuts"
+        ));
+        assert!(!input_sources_contains(
+            "@a(ss) []",
+            "ibus",
+            "goblins-textshortcuts"
+        ));
     }
 }

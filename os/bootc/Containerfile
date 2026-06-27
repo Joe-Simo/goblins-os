@@ -71,6 +71,11 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       anaconda-install-img-deps \
       desktop-file-utils \
       gtk4 \
+      ibus \
+      ibus-gtk4 \
+      ibus-gtk3 \
+      ibus-libs \
+      python3-ibus \
       flatpak \
       librsvg2 \
       plymouth \
@@ -138,6 +143,11 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       tesseract-langpack-eng \
       firewalld \
       wl-clipboard \
+      ibus \
+      ibus-gtk4 \
+      ibus-gtk3 \
+      ibus-libs \
+      python3-ibus \
       mesa-vulkan-drivers \
       vulkan-tools \
       gamescope \
@@ -172,6 +182,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v gnome-software \
     && command -v orca \
     && command -v firewall-cmd \
+    && command -v ibus \
+    && command -v ibus-daemon \
     && command -v snapper \
     && command -v xdg-open \
     && command -v fc-match \
@@ -198,7 +210,7 @@ RUN useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/s
     && install -d -m 0700 -o goblins-os -g goblins-os /var/lib/goblins-os/secrets/openai \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.local/bin \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.config \
-    && install -d /etc/dconf/db/local.d /etc/goblins-os/model-manifests /etc/polkit-1/rules.d /etc/xdg/autostart /usr/lib/bootc/install /usr/lib/systemd/system /usr/lib/systemd/user /usr/libexec/goblins-os /usr/share/applications /usr/share/goblins-os/brand /usr/share/gnome-session/sessions /usr/share/wayland-sessions /usr/share/gnome-shell/modes
+    && install -d /etc/dconf/db/local.d /etc/goblins-os/model-manifests /etc/polkit-1/rules.d /etc/xdg/autostart /usr/lib/bootc/install /usr/lib/systemd/system /usr/lib/systemd/user /usr/libexec/goblins-os /usr/share/applications /usr/share/goblins-os/brand /usr/share/gnome-session/sessions /usr/share/wayland-sessions /usr/share/gnome-shell/modes /usr/share/ibus/component
 
 # Human desktop login user. Goblins OS authenticates people through the in-session
 # OpenAI identity gate, so the machine auto-enters the OS session as this user;
@@ -231,6 +243,7 @@ COPY --from=rust-build /src/target/release/goblins-os-shell /usr/libexec/goblins
 COPY --from=rust-build /src/target/release/goblins-os-today /usr/libexec/goblins-os/goblins-os-today
 COPY --from=rust-build /src/target/release/goblins-os-verify /usr/libexec/goblins-os/goblins-os-verify
 COPY --from=rust-build /src/target/release/goblins-os-visual-lookup /usr/libexec/goblins-os/goblins-os-visual-lookup
+COPY --from=rust-build /src/target/release/goblins-textshortcuts-engine /usr/libexec/goblins-os/goblins-textshortcuts-engine
 
 COPY os/systemd/goblins-os-core.service /usr/lib/systemd/system/goblins-os-core.service
 COPY os/systemd/goblins-os-resident.service /usr/lib/systemd/system/goblins-os-resident.service
@@ -242,6 +255,7 @@ COPY os/session/goblins-os-session /usr/libexec/goblins-os/goblins-os-session
 COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.desktop
 COPY os/gnome-session/goblins-os.session /usr/share/gnome-session/sessions/goblins-os.session
 COPY os/gnome-shell-modes/goblins-os.json /usr/share/gnome-shell/modes/goblins-os.json
+COPY os/goblins-os-textshortcuts/goblins-textshortcuts.xml /usr/share/ibus/component/goblins-textshortcuts.xml
 COPY --chmod=0755 os/voice/goblins-os-dictate /usr/libexec/goblins-os/goblins-os-dictate
 COPY --chmod=0755 os/voice/goblins-os-voice-control /usr/libexec/goblins-os/goblins-os-voice-control
 COPY os/systemd-user/ /usr/lib/systemd/user/
@@ -317,6 +331,12 @@ RUN glib-compile-schemas /usr/share/glib-2.0/schemas
 RUN sed -i 's/#51a2da/#0b0b0f/g' /usr/share/anaconda/pixmaps/fedora.css 2>/dev/null || true
 
 RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
+    && test -x /usr/libexec/goblins-os/goblins-textshortcuts-engine \
+    && test -f /usr/share/ibus/component/goblins-textshortcuts.xml \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-engine --component-check /usr/share/ibus/component/goblins-textshortcuts.xml \
+    && grep -Fq '<name>goblins-textshortcuts</name>' /usr/share/ibus/component/goblins-textshortcuts.xml \
+    && grep -Fq '/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus' /usr/share/ibus/component/goblins-textshortcuts.xml \
     && test -x /usr/libexec/goblins-os/goblins-os-firewall \
     && test -f /usr/lib/systemd/system/goblins-os-firewall@.service \
     && test -f /etc/polkit-1/rules.d/60-goblins-os-firewall.rules \

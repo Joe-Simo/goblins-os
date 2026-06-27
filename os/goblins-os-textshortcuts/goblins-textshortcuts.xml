@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component>
+  <name>org.goblins.OS.TextShortcuts</name>
+  <description>Goblins OS Text Shortcuts input engine</description>
+  <exec>/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus</exec>
+  <version>0.1.0</version>
+  <author>Goblins OS</author>
+  <license>MIT</license>
+  <homepage>https://github.com/Joe-Simo/goblins-os</homepage>
+  <engines>
+    <engine>
+      <name>goblins-textshortcuts</name>
+      <language>en</language>
+      <license>MIT</license>
+      <author>Goblins OS</author>
+      <layout>default</layout>
+      <longname>Goblins Text Shortcuts</longname>
+      <description>Expands Goblins OS Text Shortcuts from the local table</description>
+      <rank>1</rank>
+      <symbol>G</symbol>
+    </engine>
+  </engines>
+</component>

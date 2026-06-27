@@ -3,7 +3,8 @@ use std::fs;
 use std::process::ExitCode;
 
 use goblins_os_textshortcuts_engine::{
-    ContentPurpose, EngineAction, EngineState, InputEvent, ShortcutTable, TextShortcut,
+    validate_ibus_component_xml, ContentPurpose, EngineAction, EngineState, InputEvent,
+    ShortcutTable, TextShortcut,
 };
 use serde::Serialize;
 
@@ -30,6 +31,18 @@ fn run(args: Vec<String>) -> Result<(), String> {
             println!("goblins_textshortcuts_engine_selftest ok");
             Ok(())
         }
+        [flag] if flag == "--ibus" => Err(
+            "IBus runtime loop is not enabled in this source-gated build yet; install and component registration are present, but live expansion remains CI/qemu-pending."
+                .to_string(),
+        ),
+        [flag, component_path] if flag == "--component-check" => {
+            let raw = fs::read_to_string(component_path)
+                .map_err(|error| format!("could not read component XML: {error}"))?;
+            validate_ibus_component_xml(&raw)
+                .map_err(|error| format!("invalid component XML contract: {error}"))?;
+            println!("goblins_textshortcuts_component_contract ok");
+            Ok(())
+        }
         [flag, trigger] if flag == "--preview" => {
             let table = load_default_table()?;
             print_preview(trigger, &table)
@@ -39,7 +52,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             print_preview(trigger, &table)
         }
         _ => Err(
-            "usage: goblins-textshortcuts-engine --self-test | --preview <trigger> [table.json]"
+            "usage: goblins-textshortcuts-engine --self-test | --component-check <component.xml> | --preview <trigger> [table.json]"
                 .to_string(),
         ),
     }

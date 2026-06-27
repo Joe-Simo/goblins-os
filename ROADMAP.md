@@ -433,6 +433,28 @@ and targeted `cargo test -p goblins-os-textshortcuts-engine`. CI/qemu must still
 prove the real IBus process, installed component, GTK render, and keystroke
 selftest before Text Shortcuts can ship.
 
+Current Text Shortcuts IBus registration continuation: the Fedora 44 IBus
+packages are now web-verified and source-gated in both the Containerfile install
+list and `rpm -q` assertion block (`ibus`, `ibus-gtk4`, `ibus-gtk3`,
+`ibus-libs`, `python3-ibus`). The image now installs the
+`goblins-textshortcuts-engine` binary and the
+`/usr/share/ibus/component/goblins-textshortcuts.xml` component, and runs the
+engine self-test plus component-contract check during image build. Core readiness
+was tightened so those installed files are not enough to claim live expansion:
+`engine_available` now also requires the Goblins IBus input source and the live
+runtime loop. This pass intentionally does **not** seed
+`goblins-textshortcuts` into dconf, start `ibus-daemon`, change
+`GTK_IM_MODULE=gtk-im-context-simple`, or claim keystroke expansion. Local source
+gates: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `goblins-os-verify --source-root .` -> **blocked=0
+(1675)**, `git diff --check`, `python3` XML parse, targeted
+`cargo test -p goblins-os-core text_shortcuts`, targeted
+`cargo test -p goblins-os-textshortcuts-engine`, and
+`cargo run -p goblins-os-textshortcuts-engine -- --component-check
+os/goblins-os-textshortcuts/goblins-textshortcuts.xml`. CI/qemu must still prove
+the live IBus runtime loop, dconf input-source seed, GTK render, and keystroke
+selftest before Text Shortcuts can ship.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -749,11 +771,12 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 ### `in-progress` Autocorrect / Text Replacement (system-wide, own IBus engine)
 - [x] **Curated-table substrate shipped** (`crates/goblins-os-core/src/text_shortcuts.rs` + `/v1/text-shortcuts` GET/POST + `/v1/text-shortcuts/preview`): the Replace→With table stored as JSON at `~/.config/goblins-os/text-shortcuts.json`, edited through the allowlisted bridge with the shared engine `sanitize_shortcuts` contract (trim, drop empties/identity, de-dupe last-wins, cap 500) and `find_replacement` (the exact word-boundary match the engine will perform) — both pure + unit-tested (185 core tests). `engine_available` honest-gating (the table is always editable; replacements apply only when the engine runs). The table needs no model — ships ready. clippy/fmt clean; route verify gate.
 - [x] **Settings table editor source-gated (CI/qemu-pending):** Settings ▸ Keyboard fetches `/v1/text-shortcuts`, shows engine readiness honestly, lists saved Replace→With entries, removes entries, and adds/replaces entries through the existing core bridge. The UI sanitizes empty/identity entries and preserves the core last-wins de-dupe contract before POSTing. No IBus engine, packages, component XML, input-source seed, candidate bubble, password-field handling, or live text expansion is claimed yet.
-- [x] **Engine-readiness gate source-gated (CI/qemu-pending):** core reports `engine_available=true` only when `ibus` is on PATH, the Goblins IBus component XML is installed, and the Goblins engine binary is installed. This keeps future CJK/IBus package installation from falsely marking Text Shortcuts expansion active before the Goblins engine is actually registered.
+- [x] **Engine-readiness gate source-gated (CI/qemu-pending):** core reports `engine_available=true` only when `ibus` is on PATH, the Goblins IBus component XML is installed, the Goblins engine binary is installed, the Goblins IBus input source is configured, and the live runtime loop is available. This keeps package/component installation from falsely marking Text Shortcuts expansion active before the session path is actually enabled and qemu-proven.
 - [x] **Engine decision substrate source-gated (CI/qemu-pending):** `crates/goblins-os-textshortcuts-engine` provides pure trigger tracking, candidate, boundary commit, and password/hidden/sensitive-field refusal logic plus a `goblins-textshortcuts-engine --self-test` CLI. It is not installed in the image and does not claim live IBus expansion yet.
 - [x] **Shared core/engine table contract source-gated (CI/qemu-pending):** core reuses the engine crate's `TextShortcut` JSON shape and `sanitize_shortcuts` helper for `/v1/text-shortcuts`, removing duplicate table behavior before live IBus integration.
-- [ ] **IBus engine + packages (deferred, XL/highest-risk):** the `goblins-textshortcuts` IBus engine (preedit/commit over `text-input-v3`, pass-through by default, never in password fields), the `ibus*` packages + component XML, the dconf seed, accept bubble, and the optional model-gated autocorrect tier.
-- **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (confirm exact NVRs with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
+- [x] **IBus package/component registration source-gated (CI/qemu-pending):** Fedora 44 package names are web-verified and lockstep-gated in the Containerfile install list and `rpm -q`; the image installs `/usr/libexec/goblins-os/goblins-textshortcuts-engine` plus `/usr/share/ibus/component/goblins-textshortcuts.xml` and runs the engine self-test/component-contract check. Core still reports `engine_available=false` until the input source and live runtime loop are present; no dconf seed or live expansion is claimed.
+- [ ] **Live IBus engine + session enablement (deferred, XL/highest-risk):** the `goblins-textshortcuts` IBus engine loop (preedit/commit over `text-input-v3`, pass-through by default, never in password fields), the dconf input-source seed, accept bubble, and the optional model-gated autocorrect tier.
+- **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (web-verified for Fedora 44 and asserted with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
 - **gsettings/dconf:** `org.freedesktop.ibus.general preload-engines` (+`goblins-textshortcuts`); `org.gnome.desktop.input-sources sources=[('ibus','goblins-textshortcuts')]`, `per-window=false`; dconf seed in `10-goblins-os-desktop`. The replacement table itself is **JSON** under `~/.config/goblins-os/text-shortcuts.json`, written only through the core bridge — not a gsetting.
 - **Files:** `os/bootc/Containerfile` (ibus packages + register the engine component XML; **reconcile** the existing `GTK_IM_MODULE=gtk-im-context-simple` block; enable ibus via the GNOME session, **not** a global env flip), `crates/goblins-os-core/src/text_shortcuts.rs` (NEW — allowlisted table CRUD, same Command/honest-gating shape), `crates/goblins-os-core/src/main.rs` (`/v1/text-shortcuts`), `crates/goblins-os-core/src/ai.rs` (allowlist the add-a-shortcut safe-setting target), `os/goblins-os-textshortcuts/` + `crates/goblins-os-textshortcuts-engine/` (NEW — the IBus engine: component XML + a native binary reading the JSON table and driving preedit/commit), `crates/goblins-os-settings/src/main.rs` (Text Shortcuts table editor + Autocorrect toggle), `os/systemd-user/` (ibus-daemon for the goblins-os session), `crates/goblins-os-verify/src/main.rs` (**REWRITE** the blunt `ibus-disabled-for-native-session` gate → a precise one: legacy GTK IM popover stays off, the goblins engine is registered + the input source seeded).
 - **APIs:** IBus engine via GI (`IBus.Engine` subclass — `process_key_event`, `update_preedit_text`, `commit_text`, `hide_preedit_text`); component XML under `/usr/share/ibus/component/`; **`text-input-unstable-v3`** — mutter bridges IBus to GTK3/GTK4/Electron over this protocol **regardless of `GTK_IM_MODULE`** (this is why the feature is genuinely system-wide **and** why the current env flip does NOT actually block it); the core HTTP bridge for the table.

@@ -939,8 +939,8 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(session_contains_check(
         root,
-        "ibus-disabled-for-native-session",
-        "GTK_IM_MODULE",
+        "legacy-gtk-im-popover-stays-disabled",
+        "GTK_IM_MODULE=\"${GTK_IM_MODULE:-gtk-im-context-simple}\"",
     ));
     checks.push(contains_check(
         root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
@@ -2246,6 +2246,56 @@ fn container_package_not_installed_check(root: &Path, id: &str, package: &str) -
             &format!("{} does not install package {}", path.display(), package),
         )
     }
+}
+
+fn container_package_lockstep_check(root: &Path, id: &str, package: &str) -> Check {
+    let path = root.join("os/bootc/Containerfile");
+    let text = read_to_string(&path);
+    let install_segment = text.split("&& rpm -q").next().unwrap_or_default();
+    let rpm_segment = text
+        .split_once("&& rpm -q")
+        .map(|(_, rest)| rest.split("&& command -v").next().unwrap_or_default())
+        .unwrap_or_default();
+    let installed = segment_has_package(install_segment, package);
+    let rpm_asserted = segment_has_package(rpm_segment, package);
+
+    match (installed, rpm_asserted) {
+        (true, true) => ready(
+            id,
+            &format!(
+                "{} installs and rpm-asserts package {}",
+                path.display(),
+                package
+            ),
+        ),
+        (false, true) => blocked(
+            id,
+            &format!(
+                "{} rpm-asserts but does not install {}",
+                path.display(),
+                package
+            ),
+        ),
+        (true, false) => blocked(
+            id,
+            &format!(
+                "{} installs but does not rpm-assert {}",
+                path.display(),
+                package
+            ),
+        ),
+        (false, false) => blocked(
+            id,
+            &format!("{} is missing package {}", path.display(), package),
+        ),
+    }
+}
+
+fn segment_has_package(segment: &str, package: &str) -> bool {
+    segment
+        .split_whitespace()
+        .map(|token| token.trim_end_matches('\\'))
+        .any(|token| token == package)
 }
 
 fn session_contains_check(root: &Path, id: &str, needle: &str) -> Check {
@@ -8110,6 +8160,51 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "core-exposes-text-shortcuts-route",
             "/v1/text-shortcuts",
         ),
+        container_package_lockstep_check(root, "bootc-package-lockstep-ibus", "ibus"),
+        container_package_lockstep_check(root, "bootc-package-lockstep-ibus-gtk4", "ibus-gtk4"),
+        container_package_lockstep_check(root, "bootc-package-lockstep-ibus-gtk3", "ibus-gtk3"),
+        container_package_lockstep_check(root, "bootc-package-lockstep-ibus-libs", "ibus-libs"),
+        container_package_lockstep_check(
+            root,
+            "bootc-package-lockstep-python3-ibus",
+            "python3-ibus",
+        ),
+        container_contains_check(root, "bootc-command-asserts-ibus", "command -v ibus"),
+        container_contains_check(
+            root,
+            "bootc-command-asserts-ibus-daemon",
+            "command -v ibus-daemon",
+        ),
+        container_contains_check(
+            root,
+            "bootc-installs-textshortcuts-engine",
+            "COPY --from=rust-build /src/target/release/goblins-textshortcuts-engine /usr/libexec/goblins-os/goblins-textshortcuts-engine",
+        ),
+        container_contains_check(
+            root,
+            "bootc-installs-textshortcuts-component",
+            "COPY os/goblins-os-textshortcuts/goblins-textshortcuts.xml /usr/share/ibus/component/goblins-textshortcuts.xml",
+        ),
+        container_contains_check(
+            root,
+            "bootc-runs-textshortcuts-component-check",
+            "goblins-textshortcuts-engine --component-check /usr/share/ibus/component/goblins-textshortcuts.xml",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts.xml"),
+            "textshortcuts-component-engine-name",
+            "<name>goblins-textshortcuts</name>",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts.xml"),
+            "textshortcuts-component-engine-exec",
+            "/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus",
+        ),
+        absent_check(
+            root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
+            "textshortcuts-dconf-not-seeded-before-runtime",
+            "goblins-textshortcuts",
+        ),
         contains_check(
             root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
             "core-text-shortcuts-requires-ibus-component",
@@ -8123,7 +8218,17 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
             "core-text-shortcuts-engine-honest-ibus-only",
-            "ibus_available && component_registered && engine_binary_available",
+            "ibus_available\n        && component_registered\n        && engine_binary_available\n        && input_source_configured\n        && runtime_loop_available",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-requires-configured-input-source",
+            "text_shortcuts_input_source_configured",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-runtime-pending-honesty",
+            "runtime loop is still pending CI/qemu proof",
         ),
         contains_check(
             root.join("crates/goblins-os-core/Cargo.toml"),
@@ -8164,6 +8269,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
             "textshortcuts-engine-self-test-cli",
             "--self-test",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
+            "textshortcuts-engine-component-check-cli",
+            "--component-check",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
+            "textshortcuts-engine-ibus-runtime-pending",
+            "live expansion remains CI/qemu-pending",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),

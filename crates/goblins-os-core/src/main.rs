@@ -34,6 +34,7 @@ mod session_gate;
 mod settings;
 mod shortcuts;
 mod studio;
+mod switch_control;
 mod system;
 mod system_image;
 mod text_shortcuts;
@@ -205,6 +206,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/v1/vision/status", get(vision::vision_status))
         .route("/v1/ai/visual-lookup", post(vision::visual_lookup))
+        .route(
+            "/v1/accessibility/switch-control/status",
+            get(switch_control::switch_control_status),
+        )
         .route("/v1/ocr/status", get(ocr::ocr_status))
         .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
         .route("/v1/firewall/status", get(firewall::firewall_status))

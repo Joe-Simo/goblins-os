@@ -7629,6 +7629,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/ai/visual-lookup",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-switch-control-route",
+            "/v1/accessibility/switch-control/status",
+        ),
+        contains_check(
+            root.join("os/glib-schemas/org.goblins.os.a11y.switch-control.gschema.xml"),
+            "switch-control-gschema-present",
+            "org.goblins.os.a11y.switch-control",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-privacy-app-permissions",
             "App permissions",

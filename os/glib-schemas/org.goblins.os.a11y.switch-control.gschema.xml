@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.goblins.os.a11y.switch-control" path="/org/goblins/os/a11y/switch-control/">
+    <key name="enabled" type="b">
+      <default>false</default>
+      <summary>Switch Control enabled</summary>
+      <description>Whether scanning input for adaptive switches is active. Off by default.</description>
+    </key>
+    <key name="mode" type="s">
+      <choices>
+        <choice value="item"/>
+        <choice value="point"/>
+      </choices>
+      <default>'item'</default>
+      <summary>Scanning mode</summary>
+      <description>Item scan steps through on-screen controls; point scan moves a crosshair.</description>
+    </key>
+    <key name="scanning" type="s">
+      <choices>
+        <choice value="auto"/>
+        <choice value="step"/>
+      </choices>
+      <default>'auto'</default>
+      <summary>Scanning style</summary>
+      <description>Auto advances on a timer; step advances on each switch press.</description>
+    </key>
+    <key name="auto-interval-ms" type="i">
+      <range min="300" max="5000"/>
+      <default>1200</default>
+      <summary>Auto-scan interval (ms)</summary>
+      <description>How long each item is highlighted before auto-scan advances.</description>
+    </key>
+    <key name="dwell-ms" type="i">
+      <range min="0" max="5000"/>
+      <default>800</default>
+      <summary>Dwell time (ms)</summary>
+      <description>How long to rest before a dwell selection fires.</description>
+    </key>
+    <key name="debounce-ms" type="i">
+      <range min="0" max="2000"/>
+      <default>60</default>
+      <summary>Switch debounce (ms)</summary>
+      <description>Ignore repeated switch presses within this window.</description>
+    </key>
+  </schema>
+</schemalist>

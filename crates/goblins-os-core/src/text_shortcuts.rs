@@ -14,17 +14,11 @@ use std::path::PathBuf;
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::Json;
+use goblins_os_textshortcuts_engine::{sanitize_shortcuts, TextShortcut};
 use serde::{Deserialize, Serialize};
 
-const MAX_SHORTCUTS: usize = 500;
 const ENGINE_BINARY_PATH: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine";
 const ENGINE_COMPONENT_PATH: &str = "/usr/share/ibus/component/goblins-textshortcuts.xml";
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct TextShortcut {
-    replace: String,
-    with: String,
-}
 
 #[derive(Serialize)]
 pub struct TextShortcutsStatus {
@@ -68,7 +62,7 @@ pub async fn text_shortcuts_status() -> Json<TextShortcutsStatus> {
 pub async fn set_text_shortcuts(
     Json(request): Json<SetTextShortcutsRequest>,
 ) -> (StatusCode, Json<TextShortcutsStatus>) {
-    let table = sanitize_table(request.shortcuts);
+    let table = sanitize_shortcuts(request.shortcuts);
     match write_table(&table) {
         Ok(()) => (StatusCode::OK, Json(build_status(table))),
         Err(_) => {
@@ -154,35 +148,8 @@ fn text_shortcuts_engine_status(
 fn find_replacement<'a>(trigger: &str, table: &'a [TextShortcut]) -> Option<&'a str> {
     table
         .iter()
-        .find(|entry| entry.replace == trigger)
-        .map(|entry| entry.with.as_str())
-}
-
-/// Trim, drop empties, drop a trigger that equals its replacement, de-duplicate by
-/// trigger (last write wins), and cap the table. Pure + unit-tested so a malformed
-/// edit can never persist a table the engine would choke on.
-fn sanitize_table(shortcuts: Vec<TextShortcut>) -> Vec<TextShortcut> {
-    let mut seen = std::collections::HashMap::new();
-    let mut order = Vec::new();
-    for entry in shortcuts {
-        let replace = entry.replace.trim().to_string();
-        let with = entry.with.trim().to_string();
-        if replace.is_empty() || with.is_empty() || replace == with {
-            continue;
-        }
-        if !seen.contains_key(&replace) {
-            order.push(replace.clone());
-        }
-        seen.insert(replace, with);
-    }
-    order
-        .into_iter()
-        .take(MAX_SHORTCUTS)
-        .map(|replace| {
-            let with = seen.remove(&replace).unwrap_or_default();
-            TextShortcut { replace, with }
-        })
-        .collect()
+        .find(|entry| entry.replace() == trigger)
+        .map(TextShortcut::with_text)
 }
 
 fn read_table() -> Vec<TextShortcut> {
@@ -192,7 +159,7 @@ fn read_table() -> Vec<TextShortcut> {
     let Ok(raw) = fs::read_to_string(path) else {
         return Vec::new();
     };
-    sanitize_table(serde_json::from_str(&raw).unwrap_or_default())
+    sanitize_shortcuts(serde_json::from_str(&raw).unwrap_or_default())
 }
 
 fn write_table(table: &[TextShortcut]) -> std::io::Result<()> {
@@ -221,13 +188,10 @@ fn command_on_path(binary: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_replacement, sanitize_table, text_shortcuts_engine_status, TextShortcut};
+    use super::{find_replacement, text_shortcuts_engine_status, TextShortcut};
 
     fn s(replace: &str, with: &str) -> TextShortcut {
-        TextShortcut {
-            replace: replace.to_string(),
-            with: with.to_string(),
-        }
+        TextShortcut::new(replace, with)
     }
 
     #[test]
@@ -240,7 +204,7 @@ mod tests {
 
     #[test]
     fn sanitize_trims_dedupes_and_drops_noise() {
-        let table = sanitize_table(vec![
+        let table = super::sanitize_shortcuts(vec![
             s("  omw ", " on my way "), // trimmed
             s("x", "x"),                // trigger == replacement → dropped
             s("", "y"),                 // empty trigger → dropped
@@ -248,8 +212,8 @@ mod tests {
             s("omw", "omw — updated"),  // duplicate trigger → last wins
         ]);
         assert_eq!(table.len(), 1);
-        assert_eq!(table[0].replace, "omw");
-        assert_eq!(table[0].with, "omw — updated");
+        assert_eq!(table[0].replace(), "omw");
+        assert_eq!(table[0].with_text(), "omw — updated");
     }
 
     #[test]

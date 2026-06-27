@@ -10,6 +10,7 @@ rust-version.workspace = true
 axum = "0.8"
 base64 = "0.22"
 goblins-os-ai = { path = "../goblins-os-ai" }
+goblins-os-textshortcuts-engine = { path = "../goblins-os-textshortcuts-engine" }
 percent-encoding = "2.3"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }

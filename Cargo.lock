@@ -668,6 +668,7 @@ dependencies = [
  "axum",
  "base64",
  "goblins-os-ai",
+ "goblins-os-textshortcuts-engine",
  "percent-encoding",
  "rand",
  "serde",

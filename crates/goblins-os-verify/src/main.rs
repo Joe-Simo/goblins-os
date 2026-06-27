@@ -8126,6 +8126,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "ibus_available && component_registered && engine_binary_available",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/Cargo.toml"),
+            "core-text-shortcuts-depends-on-engine-substrate",
+            "goblins-os-textshortcuts-engine",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-reuses-engine-sanitizer",
+            "sanitize_shortcuts",
+        ),
+        contains_check(
             root.join("Cargo.toml"),
             "workspace-textshortcuts-engine-crate",
             "crates/goblins-os-textshortcuts-engine",

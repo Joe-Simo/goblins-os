@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use goblins_os_textshortcuts_engine::{
     validate_ibus_component_xml, IbusKeyEvent, IbusOperation, IbusRuntimeDecision,
-    IbusTextShortcutsRuntime, ShortcutTable, TextShortcut,
+    IbusTextShortcutsRuntime, ShortcutTable, TextShortcut, TextShortcutTableStore,
 };
 use serde::Serialize;
 
@@ -59,16 +59,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
 }
 
 fn load_default_table() -> Result<ShortcutTable, String> {
-    let path = env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config")))
-        .ok_or_else(|| {
-            "no HOME or XDG_CONFIG_HOME is available for the Text Shortcuts table".to_string()
-        })?
-        .join("goblins-os")
-        .join("text-shortcuts.json");
-    load_table(path)
+    let store = TextShortcutTableStore::from_environment().map_err(|error| error.to_string())?;
+    Ok(store.load().into_table())
 }
 
 fn load_table(path: impl AsRef<std::path::Path>) -> Result<ShortcutTable, String> {

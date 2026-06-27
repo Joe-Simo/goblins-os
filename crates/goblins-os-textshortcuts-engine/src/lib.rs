@@ -5,9 +5,13 @@
 //! tracking, replacement commit decisions, and hard refusal in sensitive text
 //! fields.
 
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 const MAX_SHORTCUTS: usize = 500;
+pub const TEXT_SHORTCUTS_CONFIG_DIR: &str = "goblins-os";
+pub const TEXT_SHORTCUTS_CONFIG_FILE: &str = "text-shortcuts.json";
 pub const IBUS_ENGINE_NAME: &str = "goblins-textshortcuts";
 pub const IBUS_COMPONENT_EXEC: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus";
 pub const IBUS_COMPONENT_LONGNAME: &str = "Goblins Text Shortcuts";
@@ -78,6 +82,14 @@ impl ShortcutTable {
         &self.shortcuts
     }
 
+    pub fn len(&self) -> usize {
+        self.shortcuts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.shortcuts.is_empty()
+    }
+
     pub fn replacement_for(&self, trigger: &str) -> Option<&str> {
         self.shortcuts
             .iter()
@@ -108,6 +120,129 @@ pub fn sanitize_shortcuts(shortcuts: Vec<TextShortcut>) -> Vec<TextShortcut> {
             replace,
         })
         .collect()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TableStoreError {
+    NoConfigHome,
+}
+
+impl std::fmt::Display for TableStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoConfigHome => {
+                write!(
+                    f,
+                    "no HOME or XDG_CONFIG_HOME is available for the Text Shortcuts table"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for TableStoreError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TableLoadStatus {
+    Loaded { shortcuts: usize },
+    Missing,
+    InvalidJson,
+    Unreadable,
+}
+
+impl TableLoadStatus {
+    pub fn detail(&self) -> &'static str {
+        match self {
+            Self::Loaded { .. } => "Text Shortcuts table loaded.",
+            Self::Missing => "No Text Shortcuts table is configured yet.",
+            Self::InvalidJson => {
+                "Text Shortcuts table could not be parsed; expansion is disabled until it is fixed."
+            }
+            Self::Unreadable => {
+                "Text Shortcuts table could not be read; expansion is disabled until it is accessible."
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TableLoadOutcome {
+    table: ShortcutTable,
+    status: TableLoadStatus,
+}
+
+impl TableLoadOutcome {
+    pub fn table(&self) -> &ShortcutTable {
+        &self.table
+    }
+
+    pub fn status(&self) -> &TableLoadStatus {
+        &self.status
+    }
+
+    pub fn into_table(self) -> ShortcutTable {
+        self.table
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextShortcutTableStore {
+    path: PathBuf,
+}
+
+impl TextShortcutTableStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn from_config_home(config_home: impl AsRef<Path>) -> Self {
+        Self::new(default_text_shortcuts_table_path(config_home))
+    }
+
+    pub fn from_environment() -> Result<Self, TableStoreError> {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+            .ok_or(TableStoreError::NoConfigHome)?;
+        Ok(Self::from_config_home(base))
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load(&self) -> TableLoadOutcome {
+        match std::fs::read_to_string(&self.path) {
+            Ok(raw) => match ShortcutTable::from_json(&raw) {
+                Ok(table) => TableLoadOutcome {
+                    status: TableLoadStatus::Loaded {
+                        shortcuts: table.len(),
+                    },
+                    table,
+                },
+                Err(_) => TableLoadOutcome {
+                    table: ShortcutTable::default(),
+                    status: TableLoadStatus::InvalidJson,
+                },
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => TableLoadOutcome {
+                table: ShortcutTable::default(),
+                status: TableLoadStatus::Missing,
+            },
+            Err(_) => TableLoadOutcome {
+                table: ShortcutTable::default(),
+                status: TableLoadStatus::Unreadable,
+            },
+        }
+    }
+}
+
+pub fn default_text_shortcuts_table_path(config_home: impl AsRef<Path>) -> PathBuf {
+    config_home
+        .as_ref()
+        .join(TEXT_SHORTCUTS_CONFIG_DIR)
+        .join(TEXT_SHORTCUTS_CONFIG_FILE)
 }
 
 pub fn validate_ibus_component_xml(raw: &str) -> Result<(), ComponentContractError> {
@@ -340,6 +475,22 @@ pub struct IbusTextShortcutsRuntime {
     content_purpose: ContentPurpose,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeTableRefresh {
+    status: TableLoadStatus,
+    decision: IbusRuntimeDecision,
+}
+
+impl RuntimeTableRefresh {
+    pub fn status(&self) -> &TableLoadStatus {
+        &self.status
+    }
+
+    pub fn decision(&self) -> &IbusRuntimeDecision {
+        &self.decision
+    }
+}
+
 impl IbusTextShortcutsRuntime {
     pub fn new(table: ShortcutTable) -> Self {
         Self {
@@ -352,6 +503,13 @@ impl IbusTextShortcutsRuntime {
     pub fn set_table(&mut self, table: ShortcutTable) -> IbusRuntimeDecision {
         self.table = table;
         self.clear_state()
+    }
+
+    pub fn refresh_table(&mut self, store: &TextShortcutTableStore) -> RuntimeTableRefresh {
+        let outcome = store.load();
+        let status = outcome.status().clone();
+        let decision = self.set_table(outcome.into_table());
+        RuntimeTableRefresh { status, decision }
     }
 
     pub fn set_content_purpose(&mut self, purpose: ContentPurpose) -> IbusRuntimeDecision {
@@ -490,12 +648,14 @@ pub fn is_boundary_char(value: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{
-        ibus_runtime_decision, input_event_from_ibus_key, sanitize_shortcuts, ContentPurpose,
-        EngineAction, EngineState, IbusKeyEvent, IbusOperation, IbusRuntimeDecision,
-        IbusTextShortcutsRuntime, InputEvent, ShortcutTable, TextShortcut, IBUS_KEY_BACKSPACE,
-        IBUS_KEY_DELETE, IBUS_KEY_DOWN, IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN,
-        IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
+        default_text_shortcuts_table_path, ibus_runtime_decision, input_event_from_ibus_key,
+        sanitize_shortcuts, ContentPurpose, EngineAction, EngineState, IbusKeyEvent, IbusOperation,
+        IbusRuntimeDecision, IbusTextShortcutsRuntime, InputEvent, ShortcutTable, TableLoadStatus,
+        TextShortcut, TextShortcutTableStore, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE, IBUS_KEY_DOWN,
+        IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
     };
 
     fn table() -> ShortcutTable {
@@ -521,6 +681,15 @@ mod tests {
         IbusKeyEvent::new(value as u32, Some(value), true, false)
     }
 
+    fn temp_table_path(slug: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "goblins-os-textshortcuts-engine-{}-{slug}.json",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        path
+    }
+
     fn type_ibus_chars(runtime: &mut IbusTextShortcutsRuntime, value: &str) -> IbusRuntimeDecision {
         let mut decision = IbusRuntimeDecision::pass_through();
         for character in value.chars() {
@@ -539,6 +708,57 @@ mod tests {
             TextShortcut::new("omw", "on my way now"),
         ]);
         assert_eq!(shortcuts, vec![TextShortcut::new("omw", "on my way now")]);
+    }
+
+    #[test]
+    fn table_store_path_uses_the_goblins_config_contract() {
+        assert_eq!(
+            default_text_shortcuts_table_path("/tmp/config"),
+            std::path::PathBuf::from("/tmp/config/goblins-os/text-shortcuts.json")
+        );
+        assert_eq!(
+            TextShortcutTableStore::from_config_home("/tmp/config").path(),
+            std::path::Path::new("/tmp/config/goblins-os/text-shortcuts.json")
+        );
+    }
+
+    #[test]
+    fn table_store_loads_and_sanitizes_shortcuts() {
+        let path = temp_table_path("load");
+        fs::write(
+            &path,
+            r#"
+[
+  {"replace":" omw ","with":" on my way "},
+  {"replace":"same","with":"same"},
+  {"replace":"omw","with":"on my way now"}
+]
+"#,
+        )
+        .unwrap();
+
+        let outcome = TextShortcutTableStore::new(&path).load();
+        assert_eq!(outcome.status(), &TableLoadStatus::Loaded { shortcuts: 1 });
+        assert_eq!(
+            outcome.table().replacement_for("omw"),
+            Some("on my way now")
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn table_store_missing_or_invalid_tables_degrade_to_empty() {
+        let missing_path = temp_table_path("missing");
+        let missing = TextShortcutTableStore::new(&missing_path).load();
+        assert_eq!(missing.status(), &TableLoadStatus::Missing);
+        assert!(missing.table().is_empty());
+
+        let invalid_path = temp_table_path("invalid");
+        fs::write(&invalid_path, "not-json").unwrap();
+        let invalid = TextShortcutTableStore::new(&invalid_path).load();
+        assert_eq!(invalid.status(), &TableLoadStatus::InvalidJson);
+        assert!(invalid.table().is_empty());
+        fs::remove_file(invalid_path).unwrap();
     }
 
     #[test]
@@ -897,5 +1117,29 @@ mod tests {
             runtime.handle_key(ibus_char(' ')),
             IbusRuntimeDecision::pass_through()
         );
+    }
+
+    #[test]
+    fn runtime_refresh_reloads_table_and_hides_stale_candidate() {
+        let path = temp_table_path("refresh");
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert!(matches!(
+            type_ibus_chars(&mut runtime, "omw").operations(),
+            [IbusOperation::UpdatePreeditText { .. }]
+        ));
+
+        fs::write(&path, r#"[{"replace":"brb","with":"be right back"}]"#).unwrap();
+        let refresh = runtime.refresh_table(&TextShortcutTableStore::new(&path));
+        assert_eq!(refresh.status(), &TableLoadStatus::Loaded { shortcuts: 1 });
+        assert_eq!(
+            refresh.decision(),
+            &IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+        );
+        assert_eq!(runtime.current_word(), "");
+        assert_eq!(
+            runtime.handle_key(ibus_char(' ')),
+            IbusRuntimeDecision::pass_through()
+        );
+        fs::remove_file(path).unwrap();
     }
 }

@@ -8307,6 +8307,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store",
+            "pub struct TextShortcutTableStore",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-default-file",
+            "TEXT_SHORTCUTS_CONFIG_FILE: &str = \"text-shortcuts.json\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-missing-degrades",
+            "TableLoadStatus::Missing",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-invalid-degrades",
+            "TableLoadStatus::InvalidJson",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-refreshes-table",
+            "pub fn refresh_table",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
+            "textshortcuts-engine-cli-reuses-table-store",
+            "TextShortcutTableStore::from_environment()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-runtime-uses-delete-surrounding-text",
             "IbusOperation::DeleteSurroundingText",
         ),

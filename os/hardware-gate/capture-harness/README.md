@@ -35,14 +35,18 @@ hardware run").
    HTTP (`/ready/<shot>`) — no in-guest screenshot tool required.
 5. `qmp-capture.py watch` tails the HTTP log and QMP-screendumps each surface to
    `shots/<shot>.png` as it is signalled.
-6. The orchestrator also posts a live firewall proof signal over the same HTTP
-   channel after the installed core disables and re-enables firewalld through
+6. The orchestrator also posts live proof signals over the same HTTP channel.
+   The firewall proof disables and re-enables firewalld through
    `/v1/firewall/enabled`; the host writes it to
    `firewall-live-toggle-proof.json` and refuses to continue unless the disable
    path returns HTTP 200/inactive and the enable path returns HTTP 200/active.
+   The Text Shortcuts session proof writes
+   `text-shortcuts-session-enable-proof.json` and only passes when the installed
+   GNOME session has the Goblins IBus service, source seed, preload, active
+   engine, adapter self-test, and core runtime-honesty signal in place.
 7. The host writes `proof-manifest.json` (architecture, iso path, iso_sha256,
-   captured_at, screenshot_run_dir, firewall proof filename) and runs
-   `close-signoff.sh`.
+   captured_at, screenshot_run_dir, firewall proof filename, Text Shortcuts
+   session proof filename) and runs `close-signoff.sh`.
 
 ## Status
 

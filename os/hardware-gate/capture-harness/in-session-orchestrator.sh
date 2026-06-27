@@ -18,6 +18,7 @@ export GDK_BACKEND=wayland XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
 export GOBLINS_OS_RENDER_FULLSCREEN=1
 sig(){ curl -s "http://$H/ready/$1" >/dev/null 2>&1; sleep 5; }
 proof_firewall(){ curl -s "http://$H/proof/firewall-live-toggle?$1" >/dev/null 2>&1 || true; }
+proof_text_shortcuts(){ curl -s "http://$H/proof/text-shortcuts-session-enable?$1" >/dev/null 2>&1 || true; }
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -84,6 +85,74 @@ firewall_live_toggle_proof(){
   proof_firewall "status=fail&stage=toggle&disable_http=${disable_code:-000}&disable_ok=${disable_ok:-missing}&disable_enabled=${disable_enabled:-missing}&disable_active=${disable_active:-missing}&enable_http=${enable_code:-000}&enable_ok=${enable_ok:-missing}&enable_enabled=${enable_enabled:-missing}&enable_active=${enable_active:-missing}"
   return 1
 }
+text_shortcuts_session_enable_proof(){
+  local core_file=/tmp/gate-text-shortcuts-core.json
+  local service_state input_sources preload_engines core_code core_engine_available core_runtime_loop
+  local input_source_configured preload_configured engine_listed adapter_self_test active_engine engine_set
+
+  for _ in $(seq 1 60); do
+    service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
+    [ "$service_state" = "active" ] && break
+    sleep 0.5
+  done
+
+  if [ "$service_state" != "active" ]; then
+    proof_text_shortcuts "status=fail&stage=user-service&service=${service_state:-missing}&service_unit=org.goblins.OS.IBus.service"
+    return 1
+  fi
+
+  input_sources="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
+  preload_engines="$(gsettings get org.freedesktop.ibus.general preload-engines 2>/dev/null || true)"
+  case "$input_sources" in *"('ibus', 'goblins-textshortcuts')"*) input_source_configured=true;; *) input_source_configured=false;; esac
+  case "$preload_engines" in *"'goblins-textshortcuts'"*) preload_configured=true;; *) preload_configured=false;; esac
+  if [ "$input_source_configured" != "true" ] || [ "$preload_configured" != "true" ]; then
+    proof_text_shortcuts "status=fail&stage=dconf&service=active&input_source_configured=$input_source_configured&preload_configured=$preload_configured"
+    return 1
+  fi
+
+  ibus read-cache >/dev/null 2>&1 || true
+  if ibus list-engine 2>/dev/null | grep -Fq 'goblins-textshortcuts'; then
+    engine_listed=true
+  else
+    engine_listed=false
+  fi
+  if [ "$engine_listed" != "true" ]; then
+    proof_text_shortcuts "status=fail&stage=engine-list&service=active&input_source_configured=true&preload_configured=true&engine_listed=false"
+    return 1
+  fi
+
+  if /usr/libexec/goblins-os/goblins-textshortcuts-ibus --self-test >/dev/null 2>&1; then
+    adapter_self_test=pass
+  else
+    adapter_self_test=fail
+  fi
+  if [ "$adapter_self_test" != "pass" ]; then
+    proof_text_shortcuts "status=fail&stage=adapter-self-test&service=active&engine_listed=true&adapter_self_test=fail"
+    return 1
+  fi
+
+  if ibus engine goblins-textshortcuts >/dev/null 2>&1; then
+    engine_set=pass
+  else
+    engine_set=fail
+  fi
+  active_engine="$(ibus engine 2>/dev/null | tr -d '\n' || true)"
+  if [ "$engine_set" != "pass" ] || [ "$active_engine" != "goblins-textshortcuts" ]; then
+    proof_text_shortcuts "status=fail&stage=active-engine&service=active&engine_set=$engine_set&active_engine=${active_engine:-missing}"
+    return 1
+  fi
+
+  core_code=$(curl -s -o "$core_file" -w '%{http_code}' "$LIVE_URL/v1/text-shortcuts" || true)
+  core_engine_available=$(json_field "$core_file" engine_available)
+  core_runtime_loop=$(json_field "$core_file" engine.runtime_loop_available)
+  if [ "$core_code" != "200" ] || [ "$core_engine_available" != "false" ] || [ "$core_runtime_loop" != "false" ]; then
+    proof_text_shortcuts "status=fail&stage=core-honesty&core_http=${core_code:-000}&core_engine_available=${core_engine_available:-missing}&core_runtime_loop_available=${core_runtime_loop:-missing}"
+    return 1
+  fi
+
+  proof_text_shortcuts "status=pass&route=/v1/text-shortcuts&service=active&service_unit=org.goblins.OS.IBus.service&input_source_configured=true&preload_configured=true&engine_listed=true&adapter_self_test=pass&engine_set=pass&active_engine=goblins-textshortcuts&core_http=200&core_engine_available=false&core_runtime_loop_available=false&runtime_ready_claim=false"
+  return 0
+}
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication
 # is single-instance, so relaunching the same binary (e.g. the installer with a new
@@ -98,6 +167,7 @@ sleep 3
 curl -s "http://$H/ready/ORCH_START" >/dev/null 2>&1
 pkill -f goblins-os-login 2>/dev/null; pkill -f goblins-os-installer 2>/dev/null; sleep 2
 firewall_live_toggle_proof || true
+text_shortcuts_session_enable_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
 FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device

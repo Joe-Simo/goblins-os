@@ -131,12 +131,28 @@ export GOS_QMP="$WORK/qmp.sock" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_D
 python3 "$HERE/drive-capture.py"
 
 FIREWALL_PROOF="$RUN_DIR/firewall-live-toggle-proof.json"
+TEXT_SHORTCUTS_PROOF="$RUN_DIR/text-shortcuts-session-enable-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"enable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"enable_active": "true"' "$FIREWALL_PROOF"; then
   echo "HONESTY GUARD: missing or failing live firewall toggle proof at $FIREWALL_PROOF"
+  exit 4
+fi
+if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"service": "active"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"service_unit": "org.goblins.OS.IBus.service"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"input_source_configured": "true"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"preload_configured": "true"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"engine_listed": "true"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"active_engine": "goblins-textshortcuts"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"adapter_self_test": "pass"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"core_http": "200"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"core_engine_available": "false"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"core_runtime_loop_available": "false"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_PROOF"; then
+  echo "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof at $TEXT_SHORTCUTS_PROOF"
   exit 4
 fi
 
@@ -167,6 +183,7 @@ run_dir,arch,iso,sha,date=sys.argv[1:6]
 json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "captured_at":date+"T00:00:00Z","screenshot_run_dir":run_dir,
           "firewall_live_toggle_proof":"firewall-live-toggle-proof.json",
+          "text_shortcuts_session_enable_proof":"text-shortcuts-session-enable-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY

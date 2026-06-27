@@ -45,6 +45,7 @@ REQ_SCREENSHOTS=(
   "28-bootloader-efi-summary.png"
 )
 FIREWALL_LIVE_TOGGLE_PROOF="firewall-live-toggle-proof.json"
+TEXT_SHORTCUTS_SESSION_ENABLE_PROOF="text-shortcuts-session-enable-proof.json"
 
 check() {
   local label="$1"
@@ -204,6 +205,7 @@ screenshot_run_is_complete() {
   done
   screenshot_manifest_matches_iso "$run_dir" "$arch" || return 1
   firewall_live_toggle_proof_passes "$run_dir/$FIREWALL_LIVE_TOGGLE_PROOF" || return 1
+  text_shortcuts_session_enable_proof_passes "$run_dir/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF" || return 1
   return 0
 }
 
@@ -248,7 +250,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"iso_sha256"[[:space:]]*:[[:space:]]*"'"$iso_sha"'"' "$manifest" \
     && rg -q '"captured_at"[[:space:]]*:[[:space:]]*"[^"]+"' "$manifest" \
     && rg -q '"screenshot_run_dir"[[:space:]]*:[[:space:]]*"'"$run_dir"'"' "$manifest" \
-    && rg -q '"firewall_live_toggle_proof"[[:space:]]*:[[:space:]]*"'"$FIREWALL_LIVE_TOGGLE_PROOF"'"' "$manifest"
+    && rg -q '"firewall_live_toggle_proof"[[:space:]]*:[[:space:]]*"'"$FIREWALL_LIVE_TOGGLE_PROOF"'"' "$manifest" \
+    && rg -q '"text_shortcuts_session_enable_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -270,6 +273,25 @@ firewall_live_toggle_proof_passes() {
     && rg -q '"polkit_rule"[[:space:]]*:[[:space:]]*"60-goblins-os-firewall.rules"' "$proof"
 }
 
+text_shortcuts_session_enable_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"service"[[:space:]]*:[[:space:]]*"active"' "$proof" \
+    && rg -q '"service_unit"[[:space:]]*:[[:space:]]*"org.goblins.OS.IBus.service"' "$proof" \
+    && rg -q '"input_source_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"preload_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"engine_listed"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
+    && rg -q '"adapter_self_test"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"core_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+}
+
 print_missing_screenshot_paths() {
   local run_dir="$1"
   local missing=0
@@ -286,6 +308,10 @@ print_missing_screenshot_paths() {
   fi
   if ! firewall_live_toggle_proof_passes "$run_dir/$FIREWALL_LIVE_TOGGLE_PROOF"; then
     echo "  $run_dir/$FIREWALL_LIVE_TOGGLE_PROOF"
+    missing=1
+  fi
+  if ! text_shortcuts_session_enable_proof_passes "$run_dir/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"; then
+    echo "  $run_dir/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"
     missing=1
   fi
   return "$missing"
@@ -374,6 +400,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $FIREWALL_LIVE_TOGGLE_PROOF (missing or live firewall toggle proof failed)"
     missing=1
   fi
+  if text_shortcuts_session_enable_proof_passes "$run_dir/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"; then
+    echo "[PASS] $TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"
+  else
+    echo "[FAIL] $TEXT_SHORTCUTS_SESSION_ENABLE_PROOF (missing or Text Shortcuts session-enable proof failed)"
+    missing=1
+  fi
   return "$missing"
 }
 
@@ -416,6 +448,8 @@ Expected $arch proof files:
   os/signoff-proofs/sbom/$arch/rpm-packages.tsv
   os/screenshots/hardware-gate/$arch/<date>/${REQ_SCREENSHOTS[0]} ... ${REQ_SCREENSHOTS[$((${#REQ_SCREENSHOTS[@]} - 1))]}
   os/screenshots/hardware-gate/$arch/<date>/proof-manifest.json
+  os/screenshots/hardware-gate/$arch/<date>/$FIREWALL_LIVE_TOGGLE_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF
 EOF
 }
 
@@ -465,6 +499,8 @@ signoff_block_required_proof_is_complete() {
   signoff_block_has_real_field "$block" "^  - engine source: .+" || return 1
   signoff_block_has_real_field "$block" "^  - built artifact path/URL: .+" || return 1
   signoff_block_contains "$block" "^- Motion/interactions checked: yes" || return 1
+  signoff_block_contains "$block" "^- Firewall live toggle checked: yes" || return 1
+  signoff_block_contains "$block" "^- Text Shortcuts session enablement checked: yes" || return 1
   signoff_block_contains "$block" "^- Gaming readiness checked: yes" || return 1
   signoff_block_contains "$block" "^- Install storage/bootloader/dual-boot checked: yes" || return 1
   return 0
@@ -683,8 +719,11 @@ check "installed self-test checks firewall status and honest toggle route" "rg -
 check "settings interaction render captures firewall toggle failure" "rg -q 'capture_settings_firewall_toggle_interaction' os/bootc/render-screens.sh && rg -q '118-settings-firewall-before.png' os/bootc/render-screens.sh && rg -q '119-settings-firewall-toggle-failed.png' os/bootc/render-screens.sh"
 check "capture harness proves live firewall polkit toggle path" "rg -q '/proof/firewall-live-toggle' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/firewall/enabled' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'disable_active=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'enable_active=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists live firewall proof" "rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'require_proofs' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing live firewall toggle proof' os/hardware-gate/capture-harness/run-capture.sh"
+check "capture harness proves Text Shortcuts session plumbing without runtime claim" "rg -q '/proof/text-shortcuts-session-enable' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'org.goblins.OS.IBus.service' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ibus engine goblins-textshortcuts' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'core_runtime_loop_available=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "capture driver persists Text Shortcuts session proof" "rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-session-enable' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts session-enable proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness prints qemu diagnostics on startup failure" "rg -q 'QEMU startup diagnostics' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'qemu.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'serial.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'last connection error' os/hardware-gate/capture-harness/drive-capture.py"
 check "hardware gate requires live firewall proof in signoff" "rg -q 'firewall_live_toggle_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Firewall live toggle checked' os/hardware-gate/close-signoff.sh && rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/runbook.md"
+check "hardware gate requires Text Shortcuts session proof in signoff" "rg -q 'text_shortcuts_session_enable_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts session enablement checked' os/hardware-gate/close-signoff.sh && rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/runbook.md"
 check "core AI safe setting route requires policy and confirmation" "rg -Fq 'policy_state_for_control(\"settings-control\")' crates/goblins-os-core/src/ai.rs && rg -q 'StatusCode::PRECONDITION_REQUIRED' crates/goblins-os-core/src/ai.rs && rg -Fq 'audit_ai_action(\"change-safe-setting\"' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route has narrow allowlist" "rg -q 'appearance.color-scheme, accessibility.reduce-motion, or notifications.show-banners' crates/goblins-os-core/src/ai.rs && rg -q 'safe_setting_change_rejects_arbitrary_settings_and_wrong_values' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route reuses settings wrappers" "rg -q 'apply_ai_color_scheme' crates/goblins-os-core/src/appearance.rs && rg -q 'apply_ai_reduce_motion' crates/goblins-os-core/src/accessibility.rs && rg -q 'apply_ai_notification_banners' crates/goblins-os-core/src/notifications.rs"

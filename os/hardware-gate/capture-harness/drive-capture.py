@@ -19,8 +19,11 @@ from urllib.parse import parse_qs, urlparse
 
 QMP = os.environ["GOS_QMP"]; HTTPLOG = os.environ["GOS_HTTPLOG"]
 OUTDIR = os.environ["GOS_OUTDIR"]; PORT = os.environ.get("GOS_PORT", "8099")
-REQUIRED_PROOFS = ("firewall-live-toggle",)
-PROOF_FILENAMES = {"firewall-live-toggle": "firewall-live-toggle-proof.json"}
+REQUIRED_PROOFS = ("firewall-live-toggle", "text-shortcuts-session-enable")
+PROOF_FILENAMES = {
+    "firewall-live-toggle": "firewall-live-toggle-proof.json",
+    "text-shortcuts-session-enable": "text-shortcuts-session-enable-proof.json",
+}
 
 CMAP = {c: (c, False) for c in "abcdefghijklmnopqrstuvwxyz0123456789"}
 CMAP.update({" ": ("spc", False), "-": ("minus", False), ".": ("dot", False),

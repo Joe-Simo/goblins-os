@@ -4,7 +4,8 @@ use std::process::ExitCode;
 
 use goblins_os_textshortcuts_engine::{
     validate_ibus_component_xml, IbusKeyEvent, IbusOperation, IbusRuntimeDecision,
-    IbusTextShortcutsRuntime, ShortcutTable, TextShortcut, TextShortcutTableStore,
+    IbusRuntimeEvent, IbusTextShortcutsRuntime, ShortcutTable, TextShortcut,
+    TextShortcutTableStore,
 };
 use serde::Serialize;
 
@@ -86,12 +87,12 @@ fn self_test() -> Result<(), String> {
     let mut runtime = IbusTextShortcutsRuntime::new(table);
     let mut candidate = IbusRuntimeDecision::pass_through();
     for character in "omw".chars() {
-        candidate = runtime.handle_key(IbusKeyEvent::new(
+        candidate = runtime.handle_event(IbusRuntimeEvent::Key(IbusKeyEvent::new(
             character as u32,
             Some(character),
             true,
             false,
-        ));
+        )));
     }
     if candidate.key_handled()
         || candidate.operations()
@@ -106,7 +107,12 @@ fn self_test() -> Result<(), String> {
         ));
     }
 
-    let decision = runtime.handle_key(IbusKeyEvent::new(' ' as u32, Some(' '), true, false));
+    let decision = runtime.handle_event(IbusRuntimeEvent::Key(IbusKeyEvent::new(
+        ' ' as u32,
+        Some(' '),
+        true,
+        false,
+    )));
     if decision.key_handled()
         && decision.operations()
             == [

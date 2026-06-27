@@ -476,6 +476,16 @@ pub struct IbusTextShortcutsRuntime {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum IbusRuntimeEvent {
+    Key(IbusKeyEvent),
+    FocusIn(ContentPurpose),
+    FocusOut,
+    Reset,
+    ContentPurposeChanged(ContentPurpose),
+    TableChanged(ShortcutTable),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeTableRefresh {
     status: TableLoadStatus,
     decision: IbusRuntimeDecision,
@@ -527,6 +537,16 @@ impl IbusTextShortcutsRuntime {
 
     pub fn current_word(&self) -> &str {
         self.state.current_word()
+    }
+
+    pub fn handle_event(&mut self, event: IbusRuntimeEvent) -> IbusRuntimeDecision {
+        match event {
+            IbusRuntimeEvent::Key(event) => self.handle_key(event),
+            IbusRuntimeEvent::FocusIn(purpose)
+            | IbusRuntimeEvent::ContentPurposeChanged(purpose) => self.set_content_purpose(purpose),
+            IbusRuntimeEvent::FocusOut | IbusRuntimeEvent::Reset => self.clear_state(),
+            IbusRuntimeEvent::TableChanged(table) => self.set_table(table),
+        }
     }
 
     pub fn handle_key(&mut self, event: IbusKeyEvent) -> IbusRuntimeDecision {
@@ -653,9 +673,10 @@ mod tests {
     use super::{
         default_text_shortcuts_table_path, ibus_runtime_decision, input_event_from_ibus_key,
         sanitize_shortcuts, ContentPurpose, EngineAction, EngineState, IbusKeyEvent, IbusOperation,
-        IbusRuntimeDecision, IbusTextShortcutsRuntime, InputEvent, ShortcutTable, TableLoadStatus,
-        TextShortcut, TextShortcutTableStore, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE, IBUS_KEY_DOWN,
-        IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
+        IbusRuntimeDecision, IbusRuntimeEvent, IbusTextShortcutsRuntime, InputEvent, ShortcutTable,
+        TableLoadStatus, TextShortcut, TextShortcutTableStore, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE,
+        IBUS_KEY_DOWN, IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT,
+        IBUS_KEY_TAB, IBUS_KEY_UP,
     };
 
     fn table() -> ShortcutTable {
@@ -1116,6 +1137,104 @@ mod tests {
         assert_eq!(
             runtime.handle_key(ibus_char(' ')),
             IbusRuntimeDecision::pass_through()
+        );
+    }
+
+    #[test]
+    fn ibus_runtime_event_router_commits_key_events() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        for character in "omw".chars() {
+            runtime.handle_event(IbusRuntimeEvent::Key(ibus_char(character)));
+        }
+        assert_eq!(
+            runtime.handle_event(IbusRuntimeEvent::Key(ibus_char(' '))),
+            IbusRuntimeDecision::handled(vec![
+                IbusOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                },
+                IbusOperation::CommitText("on my way ".to_string()),
+                IbusOperation::HidePreeditText,
+            ])
+        );
+    }
+
+    #[test]
+    fn ibus_runtime_event_router_focus_out_and_reset_clear_candidates() {
+        for event in [IbusRuntimeEvent::FocusOut, IbusRuntimeEvent::Reset] {
+            let mut runtime = IbusTextShortcutsRuntime::new(table());
+            assert!(matches!(
+                type_ibus_chars(&mut runtime, "omw").operations(),
+                [IbusOperation::UpdatePreeditText { .. }]
+            ));
+            assert_eq!(
+                runtime.handle_event(event.clone()),
+                IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+            );
+            assert_eq!(runtime.current_word(), "");
+            assert_eq!(
+                runtime.handle_event(IbusRuntimeEvent::Key(ibus_char(' '))),
+                IbusRuntimeDecision::pass_through()
+            );
+        }
+    }
+
+    #[test]
+    fn ibus_runtime_event_router_refuses_sensitive_focus() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert_eq!(
+            runtime.handle_event(IbusRuntimeEvent::FocusIn(ContentPurpose::Password)),
+            IbusRuntimeDecision::pass_through()
+        );
+        assert_eq!(runtime.content_purpose(), ContentPurpose::Password);
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::pass_through()
+        );
+        assert_eq!(
+            runtime.handle_event(IbusRuntimeEvent::Key(ibus_char(' '))),
+            IbusRuntimeDecision::pass_through()
+        );
+    }
+
+    #[test]
+    fn ibus_runtime_event_router_content_purpose_change_hides_candidate() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert!(matches!(
+            type_ibus_chars(&mut runtime, "omw").operations(),
+            [IbusOperation::UpdatePreeditText { .. }]
+        ));
+        assert_eq!(
+            runtime.handle_event(IbusRuntimeEvent::ContentPurposeChanged(
+                ContentPurpose::Sensitive
+            )),
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+        );
+        assert_eq!(runtime.current_word(), "");
+        assert_eq!(runtime.content_purpose(), ContentPurpose::Sensitive);
+    }
+
+    #[test]
+    fn ibus_runtime_event_router_table_change_hides_stale_candidate() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert!(matches!(
+            type_ibus_chars(&mut runtime, "omw").operations(),
+            [IbusOperation::UpdatePreeditText { .. }]
+        ));
+        assert_eq!(
+            runtime.handle_event(IbusRuntimeEvent::TableChanged(
+                ShortcutTable::from_shortcuts(vec![TextShortcut::new("brb", "be right back")])
+            )),
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+        );
+        assert_eq!(runtime.current_word(), "");
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "brb"),
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+                text: "be right back".to_string(),
+                cursor_pos: 13,
+                visible: true,
+            }])
         );
     }
 

@@ -8331,9 +8331,39 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "pub fn refresh_table",
         ),
         contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-event-router",
+            "pub enum IbusRuntimeEvent",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-event-focus-out",
+            "IbusRuntimeEvent::FocusOut",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-event-reset",
+            "IbusRuntimeEvent::Reset",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-event-content-purpose",
+            "IbusRuntimeEvent::ContentPurposeChanged",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-event-table-change",
+            "IbusRuntimeEvent::TableChanged",
+        ),
+        contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
             "textshortcuts-engine-cli-reuses-table-store",
             "TextShortcutTableStore::from_environment()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
+            "textshortcuts-engine-self-test-uses-event-router",
+            "IbusRuntimeEvent::Key",
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),

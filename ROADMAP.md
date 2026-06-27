@@ -781,10 +781,11 @@ absent and "available" but still disabled when resources are present; no package
 model, toggle write, or live autocorrect behavior is claimed. Local source
 gates: `cargo test -p goblins-os-core text_shortcuts`, `cargo test -p
 goblins-os-settings text_shortcuts_editor_helpers_sanitize_and_preserve_engine_truth`,
-`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`, `cargo
-test --workspace`, `git diff --check`, and `goblins-os-verify --source-root .`
--> **blocked=0 (1831)**. This is still CI/qemu-pending and does **not** mark Text
-Shortcuts shipped.
+Rust 1.88 GTK container `cargo clippy -p goblins-os-settings --features
+goblins-os-settings/native-desktop -- -D warnings`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, `git diff
+--check`, and `goblins-os-verify --source-root .` -> **blocked=0 (1831)**. This
+is still CI/qemu-pending and does **not** mark Text Shortcuts shipped.
 
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**

@@ -59,8 +59,9 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 - **Verifiable:** host — `a(ss)` encode/decode, allowlist, reorder/remove validation, last-source rule, >1 gating predicate. CI/qemu — package install, Settings render, menu-bar indicator, real switching, candidate window.
 - **Effort:** L · **Risk:** HIGHEST in bucket (reverses an intentional boot/login + `Super+Space` decision). Gate IBus IM modules to engage cleanly at `sources>1`; keep `gtk-im-context-simple` the single-source default.
 
-### `TODO` System color picker / eyedropper
-- [ ] Pick any pixel on screen, get an exact color in a macOS-grade Goblins panel, with hex/RGB on the clipboard and one-click HEX/RGB/HSL cycling.
+### `shipped` System color picker / eyedropper
+- [x] **Shipped (`crates/goblins-os-color-picker`, headless, fully host-verified):** `<Super><Alt>c` runs the portal eyedropper (GNOME's magnified loupe); the sampled sRGB is formatted HEX / rgb() / hsl(), HEX copied via `wl-copy`, with a calm toast showing all three. Pure color-math (incl. sRGB→HSL) unit-tested on the host (3 tests); the whole flow compiles + tests on macOS (ashpd, no gtk). `wl-clipboard` packaged, binary COPY'd, keybinding seeded, 3 verify gates. Honest-gated: portal declined/absent → nothing copied, clear stderr; no `wl-copy` → value still printed.
+- [ ] Optional enhancement (CI-gated): a branded Goblins swatch panel with one-click HEX/RGB/HSL cycling (today the toast shows all three).
 - **Packages:** `wl-clipboard`.
 - **dconf:** append `goblins-color-picker` to the media-keys `custom-keybindings` array; stanza `command=/usr/libexec/goblins-os/goblins-os-color-picker`, `binding=<Super><Alt>c` (free; `<Alt>` avoids the screenshot-clip `<Control>` conflict).
 - **Files:** `crates/goblins-os-color-picker/{Cargo.toml,src/main.rs}` (NEW — headless launcher: ashpd `Color::pick()`, sRGB f64 → `#RRGGBB`/`rgb()`/`hsl()`, pipe to `wl-copy`, spawn swatch panel), workspace `Cargo.toml`, `os/bootc/Containerfile` (`wl-clipboard` + COPY binary to `/usr/libexec/goblins-os/`), `os/dconf/db/local.d/10-goblins-os-desktop`, `crates/goblins-os-verify/src/main.rs`, `crates/goblins-os-settings/src/main.rs` (OPTIONAL shortcut row).

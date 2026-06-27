@@ -643,6 +643,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "goblins-os-color-picker"
+version = "0.1.0"
+dependencies = [
+ "ashpd",
+ "tokio",
+]
+
+[[package]]
 name = "goblins-os-control-center"
 version = "0.1.0"
 dependencies = [

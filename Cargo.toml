@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/goblins-os-ai",
+  "crates/goblins-os-color-picker",
   "crates/goblins-os-control-center",
   "crates/goblins-os-core",
   "crates/goblins-os-design",

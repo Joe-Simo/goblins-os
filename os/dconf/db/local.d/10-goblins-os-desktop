@@ -65,7 +65,7 @@ show-desktop=['<Super>d']
 # Super+Alt+V opens screenshot/visual context. The MediaKeys settings-daemon
 # plugin is a RequiredComponent of the goblins-os session, so these bindings
 # are live in the session.
-custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-launcher/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-assistant/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-selected-text/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-writing-tools/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-screen-context/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-visual-context/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-dictate/']
+custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-launcher/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-assistant/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-selected-text/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-writing-tools/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-screen-context/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-visual-context/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-dictate/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-color-picker/']
 # macOS screenshot muscle-memory on GNOME's own (Wayland-correct) capture stack.
 # Cmd+Shift+3 → whole screen saved to ~/Pictures/Screenshots; +Ctrl → clipboard
 # (macOS uses Control to divert to the clipboard). Cmd+Shift+4/5 live below in the
@@ -110,6 +110,14 @@ binding='<Super><Alt>v'
 name='Goblins Dictation'
 command='/usr/libexec/goblins-os/goblins-os-dictate'
 binding='<Super><Alt>d'
+
+# Color picker — pick any pixel via the desktop portal's magnified loupe; the
+# exact color lands on the clipboard (HEX) with a calm toast. <Alt> avoids the
+# screenshot-clip <Control> chord.
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-color-picker]
+name='Goblins Color Picker'
+command='/usr/libexec/goblins-os/goblins-os-color-picker'
+binding='<Super><Alt>c'
 
 [org/gnome/shell/keybindings]
 # The interactive capture overlay (area/window/screen toggle + record button +

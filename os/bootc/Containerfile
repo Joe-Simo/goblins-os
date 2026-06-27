@@ -120,6 +120,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       tesseract \
       tesseract-langpack-eng \
       leptonica \
+      wl-clipboard \
     && rpm -q \
       orca \
       speech-dispatcher \
@@ -132,6 +133,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       gnome-font-viewer \
       tesseract \
       tesseract-langpack-eng \
+      wl-clipboard \
       mesa-vulkan-drivers \
       vulkan-tools \
       gamescope \
@@ -206,6 +208,7 @@ RUN install -d /var/home \
     && touch /var/home/goblin/.config/gnome-initial-setup-done \
     && chown -R goblin:goblin /var/home/goblin
 
+COPY --from=rust-build /src/target/release/goblins-os-color-picker /usr/libexec/goblins-os/goblins-os-color-picker
 COPY --from=rust-build /src/target/release/goblins-os-control-center /usr/libexec/goblins-os/goblins-os-control-center
 COPY --from=rust-build /src/target/release/goblins-os-core /usr/libexec/goblins-os/goblins-os-core
 COPY --from=rust-build /src/target/release/goblins-os-file-builder /usr/libexec/goblins-os/goblins-os-file-builder

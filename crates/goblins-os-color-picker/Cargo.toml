@@ -1,0 +1,22 @@
+[package]
+name = "goblins-os-color-picker"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The freedesktop Screenshot portal's PickColor is the sanctioned, consent-gated
+# eyedropper on Wayland (GNOME draws its own magnified loupe). ashpd is the
+# maintained Rust portal binding; only the screenshot portal (which hosts
+# PickColor) is enabled, on the Tokio runtime the other helpers already vendor.
+ashpd = { version = "0.13", default-features = false, features = [
+  "screenshot",
+  "tokio",
+] }
+tokio = { version = "1", default-features = false, features = [
+  "rt",
+  "net",
+  "time",
+] }

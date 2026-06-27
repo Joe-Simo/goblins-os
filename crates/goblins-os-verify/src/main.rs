@@ -7548,6 +7548,23 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "ocr-honest-gating-when-runtime-absent",
             "Text recognition is not available on this device.",
         ),
+        // Color picker — portal eyedropper helper, packaged + keybound, copying via
+        // wl-clipboard with an honest no-clipboard fallback.
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-color-picker-helper",
+            "goblins-os-color-picker /usr/libexec/goblins-os/goblins-os-color-picker",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-packages-wl-clipboard",
+            "wl-clipboard",
+        ),
+        contains_check(
+            root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
+            "desktop-color-picker-keybinding",
+            "goblins-os-color-picker",
+        ),
         contains_check(
             root.join("os/bootc/Containerfile"),
             "bootc-ai-state-directory",

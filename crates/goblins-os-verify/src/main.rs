@@ -7604,6 +7604,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/focus/status",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-keychain-status-route",
+            "/v1/keychain/status",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "keychain-seahorse-package",
+            "seahorse",
+        ),
+        contains_check(
             root.join("os/glib-schemas/org.goblins.os.focus.gschema.xml"),
             "focus-gschema-present",
             "org.goblins.os.focus",

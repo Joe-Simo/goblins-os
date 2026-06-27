@@ -119,6 +119,19 @@ struct SettingsState {
     firewall: Option<FirewallStatus>,
     hotspot: Option<HotspotStatus>,
     shortcuts: Option<ShortcutsStatus>,
+    keychain: Option<KeychainStatus>,
+}
+
+/// Read-only "Passwords & Keys" (Secret Service) status from `GET /v1/keychain/status`.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct KeychainStatus {
+    secret_service_available: bool,
+    manager_app_available: bool,
+    detail: String,
 }
 
 /// Read-only Goblins keyboard shortcuts from `GET /v1/shortcuts/status`. The Settings
@@ -2545,6 +2558,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             firewall: None,
             hotspot: None,
             shortcuts: None,
+            keychain: None,
         };
     }
 
@@ -2576,6 +2590,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         firewall: get_core_json(&config.core_url, "/v1/firewall/status").ok(),
         hotspot: get_core_json(&config.core_url, "/v1/hotspot/status").ok(),
         shortcuts: get_core_json(&config.core_url, "/v1/shortcuts/status").ok(),
+        keychain: get_core_json(&config.core_url, "/v1/keychain/status").ok(),
     }
 }
 
@@ -4837,6 +4852,21 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
             firewall_label,
             firewall_ready,
             firewall.detail.clone(),
+        ));
+    }
+    if let Some(keychain) = &state.keychain {
+        let (keychain_label, keychain_ready) = if !keychain.secret_service_available {
+            ("unavailable".to_string(), false)
+        } else if keychain.manager_app_available {
+            ("ready".to_string(), true)
+        } else {
+            ("keyring only".to_string(), true)
+        };
+        rows.push((
+            "Passwords & Keys",
+            keychain_label,
+            keychain_ready,
+            keychain.detail.clone(),
         ));
     }
     panel.append(&health_summary_group(rows));

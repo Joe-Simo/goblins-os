@@ -219,8 +219,9 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - **Verifiable:** host — xkb-options token parse/merge/remove, `<Mod>key` grammar validation, action allowlist + spec, conflict detection, unavailable/type-check paths. CI/qemu — rows, live recording, gsettings round-trip.
 - **Effort:** L · **Risk:** LOW (user-session gsettings, no image/privileged change). Edit only the `ctrl:*`/`caps:*` token; validate chords before set + read-back; allowlist + conflict-refusal + always-available reset prevent stranding.
 
-### `TODO` Keychain / Passwords UI
-- [ ] A Goblins "Passwords" surface to browse, search, view, edit, and delete stored credentials + secure notes (macOS Passwords/Keychain altitude). The OS already uses `gnome-keyring`/libsecret as the credential store (no UI today).
+### `in-progress` Keychain / Passwords UI
+- [x] **Status + manager handoff shipped** (`crates/goblins-os-core/src/keychain.rs` + `/v1/keychain/status`, Settings ▸ Security "Passwords & Keys" row): reports whether the Secret Service (gnome-keyring) and the Passwords & Keys manager are present, honest-gated, with **`seahorse` web-verified for Fedora 44** ([Fedora Packages](https://packages.fedoraproject.org/pkgs/libsecret/libsecret/)) and added to the Containerfile install + `rpm -q`. Pure `keychain_detail` unit-tested (182 core tests); container clippy `-D warnings` clean; route + package verify gates.
+- [ ] **Full browse/edit surface (deferred):** a Goblins-branded passwords panel on the `org.freedesktop.Secret` D-Bus (browse/search/view/edit/delete + secure notes), with seahorse as the interim manager launch.
 - **Approach:** custom_surface (a Goblins-branded passwords panel on the `org.freedesktop.Secret` D-Bus / libsecret) preferred; `seahorse` packaged as the interim fallback (verify fc44 name).
 - **Packages:** `gnome-keyring` (already shipped) + optionally `seahorse` (interim).
 - **Files:** `crates/goblins-os-settings/src/main.rs` or a small new crate (a Goblins Passwords surface on the Secret Service D-Bus), `os/bootc/Containerfile` (only if `seahorse` interim), `crates/goblins-os-verify/src/main.rs` (gate).

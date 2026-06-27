@@ -117,6 +117,7 @@ struct SettingsState {
     input: Option<InputStatus>,
     accessibility: Option<AccessibilityStatus>,
     firewall: Option<FirewallStatus>,
+    hotspot: Option<HotspotStatus>,
 }
 
 /// Read-only firewall posture from `GET /v1/firewall/status` (firewalld). The Settings
@@ -127,6 +128,20 @@ struct SettingsState {
 )]
 #[derive(Clone, Deserialize)]
 struct FirewallStatus {
+    available: bool,
+    active: bool,
+    detail: String,
+}
+
+/// Read-only Personal Hotspot posture from `GET /v1/hotspot/status` (NetworkManager).
+/// The Settings UI mirrors it honestly; starting a hotspot stays a deliberate future
+/// capability (it writes a new AP connection).
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct HotspotStatus {
     available: bool,
     active: bool,
     detail: String,
@@ -2504,6 +2519,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             input: None,
             accessibility: None,
             firewall: None,
+            hotspot: None,
         };
     }
 
@@ -2533,6 +2549,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         input: get_core_json(&config.core_url, "/v1/input/status").ok(),
         accessibility: get_core_json(&config.core_url, "/v1/accessibility/status").ok(),
         firewall: get_core_json(&config.core_url, "/v1/firewall/status").ok(),
+        hotspot: get_core_json(&config.core_url, "/v1/hotspot/status").ok(),
     }
 }
 
@@ -4978,6 +4995,7 @@ fn build_network(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_network_summary(panel, state);
     append_wifi_management(panel, state);
+    append_hotspot_status(panel, state);
     append_proxy_settings(panel, state);
     append_facility_status(
         panel,
@@ -4994,6 +5012,31 @@ fn build_network(panel: &gtk4::Box, state: &SettingsState) {
         "Open the desktop system tool for wired, VPN, saved-network, and advanced network controls. Goblins OS status stays visible here.",
         state.system.as_ref(),
     );
+}
+
+/// Read-only Personal Hotspot row (macOS "Personal Hotspot" altitude). Starting a
+/// hotspot stays a deliberate future capability; this shows honest live status.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_hotspot_status(panel: &gtk4::Box, state: &SettingsState) {
+    use gtk4::prelude::*;
+
+    let Some(hotspot) = &state.hotspot else {
+        return;
+    };
+    panel.append(&label("Personal Hotspot", &["gos-subsection-title"]));
+    let value = if !hotspot.available {
+        "unavailable"
+    } else if hotspot.active {
+        "on"
+    } else {
+        "off"
+    };
+    panel.append(&health_summary_group(vec![(
+        "Personal Hotspot",
+        value.to_string(),
+        hotspot.active,
+        hotspot.detail.clone(),
+    )]));
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]

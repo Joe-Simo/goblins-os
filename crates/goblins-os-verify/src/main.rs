@@ -7578,6 +7578,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "markup-copy-text-ocr-handoff",
             "/v1/ocr/recognize",
         ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-hotspot-status-route",
+            "/v1/hotspot/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-network-hotspot-row",
+            "Personal Hotspot",
+        ),
         // Color picker — portal eyedropper helper, packaged + keybound, copying via
         // wl-clipboard with an honest no-clipboard fallback.
         contains_check(

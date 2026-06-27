@@ -11,6 +11,7 @@ mod codex;
 mod displays;
 mod firewall;
 mod hardware;
+mod hotspot;
 mod http_error;
 mod input;
 mod install_targets;
@@ -189,6 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/ocr/status", get(ocr::ocr_status))
         .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
         .route("/v1/firewall/status", get(firewall::firewall_status))
+        .route("/v1/hotspot/status", get(hotspot::hotspot_status))
         .route("/v1/studio/turn", post(studio_turn))
         .route("/v1/studio/sessions", get(studio_sessions))
         .route("/v1/studio/session", get(studio_session))

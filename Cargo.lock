@@ -758,6 +758,8 @@ version = "0.1.0"
 dependencies = [
  "ashpd",
  "percent-encoding",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

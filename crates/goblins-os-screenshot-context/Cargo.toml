@@ -25,3 +25,7 @@ tokio = { version = "1", default-features = false, features = [
 # (percent-encoding is dependency-free; the full `url` crate would drag in the
 # idna/icu stack this tiny helper has no use for.)
 percent-encoding = "2"
+# Parse the local core's OCR response (Live Text handoff). serde is the workspace's
+# JSON tool; the request goes over loopback HTTP via std::net (no HTTP-client dep).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

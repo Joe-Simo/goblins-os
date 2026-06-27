@@ -1,11 +1,20 @@
 use std::{
-    env, fs, io,
+    env, fs,
+    io::{self, Read, Write},
+    net::TcpStream,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use ashpd::desktop::screenshot::Screenshot;
+
+/// The on-device core's loopback address (also where voice/AI handoffs talk).
+const CORE_HOST: &str = "127.0.0.1:8787";
+/// Cap on the OCR response we read back (recognized text can be large, but not
+/// unbounded) and on how long capture will wait on the core before moving on.
+const OCR_MAX_BODY: u64 = 1_048_576;
+const OCR_TIMEOUT: Duration = Duration::from_secs(30);
 
 const LAUNCHER_BIN: &str = "/usr/libexec/goblins-os/goblins-os-launcher";
 const SOURCE_ENV: &str = "GOBLINS_OS_SCREEN_CONTEXT_SOURCE";
@@ -24,9 +33,16 @@ fn main() {
 
     match capture_screenshot() {
         Ok(path) => {
+            // Live Text: recognize text on-device so the model receives the real
+            // words instead of asking the user to retype them. Best-effort — a
+            // missing/declined OCR runtime just falls back to the plain summary.
+            let recognized = recognized_text(&path);
             launcher.env(SOURCE_ENV, source_value());
             launcher.env(SCREENSHOT_PATH_ENV, path.as_os_str());
-            launcher.env(SUMMARY_ENV, screenshot_summary(&path));
+            launcher.env(
+                SUMMARY_ENV,
+                screenshot_summary(&path, recognized.as_deref()),
+            );
         }
         Err(detail) => {
             launcher.env(SOURCE_ENV, source_value());
@@ -191,8 +207,60 @@ fn source_value() -> String {
         .unwrap_or_else(|| "screenshot-capture".to_string())
 }
 
-fn screenshot_summary(_path: &Path) -> String {
-    "Goblins OS captured a screenshot locally for this request. The image pixels stay local; this text-only handoff has not sent the screenshot to the model. Describe what matters or paste recognized text, then press Return.".to_string()
+/// Recognize text in the captured image via the local core's on-device OCR. Pure
+/// best-effort: any failure (core down, no Tesseract, declined) returns None and
+/// the caller keeps the plain summary — OCR never blocks the handoff.
+fn recognized_text(image_path: &Path) -> Option<String> {
+    let body = serde_json::json!({ "image_path": image_path.to_string_lossy() }).to_string();
+    let response = http_post_local("/v1/ocr/recognize", &body)?;
+
+    #[derive(serde::Deserialize)]
+    struct OcrResponse {
+        ok: bool,
+        text: String,
+    }
+    let parsed: OcrResponse = serde_json::from_str(&response).ok()?;
+    let text = parsed.text.trim();
+    (parsed.ok && !text.is_empty()).then(|| text.to_string())
+}
+
+/// Minimal loopback HTTP POST to the core (no HTTP-client dep). `Connection:
+/// close` lets us read the whole body to EOF; the read is capped and time-bounded.
+fn http_post_local(path: &str, body: &str) -> Option<String> {
+    let mut stream = TcpStream::connect(CORE_HOST).ok()?;
+    stream.set_read_timeout(Some(OCR_TIMEOUT)).ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(10)))
+        .ok()?;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut raw = Vec::new();
+    stream.take(OCR_MAX_BODY).read_to_end(&mut raw).ok()?;
+    let text = String::from_utf8_lossy(&raw);
+    let body_start = text.find("\r\n\r\n")? + 4;
+    Some(text[body_start..].to_string())
+}
+
+/// The text-only handoff summary the launcher passes to the model. When on-device
+/// OCR found text, it is included directly (so the model reads the real words);
+/// otherwise the calm "describe or paste" copy is kept.
+fn screenshot_summary(_path: &Path, recognized: Option<&str>) -> String {
+    let base = "Goblins OS captured a screenshot locally for this request. The image pixels stay local; this text-only handoff has not sent the screenshot to the model.";
+    match recognized
+        .map(|text| sanitize_context_value(text, 2000))
+        .filter(|text| !text.is_empty())
+    {
+        Some(text) => format!(
+            "{base} Text recognized on-device in the screenshot: {text} Describe what matters, then press Return."
+        ),
+        None => format!(
+            "{base} Describe what matters or paste recognized text, then press Return."
+        ),
+    }
 }
 
 fn capture_failure_summary(detail: &str) -> String {
@@ -235,13 +303,25 @@ mod tests {
 
     #[test]
     fn summary_is_explicitly_local_and_text_only() {
-        let summary = screenshot_summary(Path::new(
-            "/run/user/1000/goblins-os/screenshot-context/a.png",
-        ));
+        let path = Path::new("/run/user/1000/goblins-os/screenshot-context/a.png");
+        let summary = screenshot_summary(path, None);
         assert!(summary.contains("captured a screenshot locally"));
         assert!(summary.contains("pixels stay local"));
         assert!(summary.contains("text-only handoff"));
         assert!(summary.contains("not sent the screenshot to the model"));
+        // With no recognized text, the calm "describe or paste" copy is kept.
+        assert!(summary.contains("paste recognized text"));
+    }
+
+    #[test]
+    fn summary_includes_recognized_text_when_present() {
+        let path = Path::new("/run/user/1000/goblins-os/screenshot-context/a.png");
+        // Recognized text is sanitized to one line and folded into the handoff so
+        // the model reads the real words, not a "paste it yourself" instruction.
+        let summary = screenshot_summary(path, Some("Invoice\nTotal: $42"));
+        assert!(summary.contains("recognized on-device"));
+        assert!(summary.contains("Invoice Total: $42"));
+        assert!(!summary.contains("paste recognized text"));
     }
 
     #[test]

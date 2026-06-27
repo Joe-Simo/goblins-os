@@ -7548,6 +7548,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "ocr-honest-gating-when-runtime-absent",
             "Text recognition is not available on this device.",
         ),
+        contains_check(
+            root.join("crates/goblins-os-screenshot-context/src/main.rs"),
+            "screenshot-context-ocr-handoff",
+            "/v1/ocr/recognize",
+        ),
         // Color picker — portal eyedropper helper, packaged + keybound, copying via
         // wl-clipboard with an honest no-clipboard fallback.
         contains_check(

@@ -1,0 +1,10 @@
+[Unit]
+Description=Goblins OS Sound Recognition listener
+CollectMode=inactive-or-failed
+PartOf=gnome-session-initialized.target
+After=gnome-session-initialized.target pipewire.service wireplumber.service
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/goblins-os/goblins-os-sound-listener
+Restart=no

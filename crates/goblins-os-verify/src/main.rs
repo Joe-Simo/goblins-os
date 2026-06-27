@@ -9144,6 +9144,51 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "sound-recognition-defaults-all-off",
             "enabled=false",
         ),
+        file_check(root, "os/sound-recognition/goblins-os-sound-listener"),
+        file_check(
+            root,
+            "os/systemd-user/org.goblins.OS.SoundRecognition.service",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "sound-recognition-listener-copied-to-libexec",
+            "COPY --chmod=0755 os/sound-recognition/goblins-os-sound-listener /usr/libexec/goblins-os/goblins-os-sound-listener",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "sound-recognition-listener-image-self-test",
+            "goblins-os-sound-listener --self-test",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "sound-recognition-listener-image-capability-stays-not-ready",
+            "goblins-os-sound-listener --capability-check | grep -q '\"ready\": false'",
+        ),
+        contains_check(
+            root.join("os/sound-recognition/goblins-os-sound-listener"),
+            "sound-recognition-listener-no-mic-fake-success",
+            "No microphone audio is captured by this listener yet.",
+        ),
+        contains_check(
+            root.join("os/sound-recognition/goblins-os-sound-listener"),
+            "sound-recognition-listener-runtime-claim-false",
+            "\"runtime_ready_claim\": False",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.SoundRecognition.service"),
+            "sound-recognition-user-service-exec",
+            "ExecStart=/usr/libexec/goblins-os/goblins-os-sound-listener",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-uses-listener-capability-check",
+            "--capability-check",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-keeps-listener-not-ready-state",
+            "Sound Recognition listener is installed but not ready.",
+        ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-live-captions-route",

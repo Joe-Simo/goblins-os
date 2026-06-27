@@ -335,17 +335,26 @@ sound ids, clamps confidence, and never reports listening just because a
 preference saved. Settings ▸ Accessibility now shows model/listener/capture
 readiness, the reliability caveat, the master toggle, per-sound toggles,
 sensitivity, confidence, and alert options through those core routes. No RPM,
-listener daemon, model weights, capture loop, notification integration, or live
-mic behavior is claimed in this pass. Local source gates: `cargo fmt --all --check`,
+model weights, classifier loop, notification integration, or live mic behavior
+is claimed in this pass. The current listener-boundary continuation installs
+`os/sound-recognition/goblins-os-sound-listener` as
+`/usr/libexec/goblins-os/goblins-os-sound-listener` plus a session-user systemd
+unit, but the listener only exposes `--capability-check`/`--self-test`, reports
+`ready=false` and `runtime_ready_claim=false`, and exits without capturing
+microphone audio. Core now consumes that capability report instead of treating
+binary presence as listener readiness. Local source gates: `cargo fmt --all --check`,
+`python3 -m py_compile os/sound-recognition/goblins-os-sound-listener`,
+`python3 os/sound-recognition/goblins-os-sound-listener --self-test`,
+`python3 os/sound-recognition/goblins-os-sound-listener --capability-check`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
-`goblins-os-verify --source-root .` → **blocked=0 (1638)**,
+`goblins-os-verify --source-root .` → **blocked=0 (1805)**,
 `git diff --check`, targeted `cargo test -p goblins-os-core sound_recognition`,
 targeted `cargo test -p goblins-os-settings sound_recognition`, and the Rust 1.88
 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 CI/qemu must still prove the GTK render, installed schema/write behavior,
-session-user listener, PipeWire capture, notification/flash path, and reliability
-copy before Sound Recognition can ship.
+installed user-service behavior, PipeWire capture, notification/flash path, and
+reliability copy before Sound Recognition can ship.
 
 Current Switch Control continuation: the GNOME Shell scanner scaffold is now
 source-gated but not shipped. The `goblins-switch@goblins.os` extension is
@@ -1020,6 +1029,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 ### `in-progress` Sound Recognition (alerting for safety/attention sounds)
 - [x] **Category registry + status substrate shipped** (`crates/goblins-os-core/src/sound_recognition.rs` + `/v1/sound-recognition/status`, NEW `org.goblins.SoundRecognition` gschema via `os/glib-schemas/`, dconf-seeded all-off): the fixed sound catalog, per-sound allowlist/normalizer, classifier-model/listener/capture capability gates, reliability caveat, and honest JSON status are host-testable. No listener or Settings UI is claimed yet; if the model/listener/capture/schema is absent the route reports exactly that.
 - [x] **Settings controls + write bridge source-gated (CI/qemu-pending):** core exposes `/v1/sound-recognition/preference` and `/v1/sound-recognition/sound-toggle`, writes only the allowlisted `org.goblins.SoundRecognition` keys, rejects unknown sound ids, clamps confidence, and returns honest saved-but-not-listening copy until model/listener/capture/categories are ready. Settings ▸ Accessibility renders readiness, reliability caveat, master toggle, per-sound switches, sensitivity, confidence, and alert toggles through those routes. No listener, model weights, capture loop, notification firing, or live mic behavior is claimed yet.
+- [x] **Session listener boundary source-gated (CI/qemu-pending):** `os/sound-recognition/goblins-os-sound-listener` is installed as `/usr/libexec/goblins-os/goblins-os-sound-listener`, exposes `--capability-check`/`--self-test`, reports `ready=false`/`runtime_ready_claim=false`, and exits without microphone capture until model provisioning, inference dependencies, capture integration, notifications, and qemu proof land together. Core consumes the listener capability report instead of treating binary presence as listener readiness; the user service is installed but not session-wanted. No model weights, listener loop, notifications, or mic capture are claimed.
 - [ ] Always-listening on-device recognition of a fixed catalog (smoke/fire alarm, siren, doorbell, knock, baby crying, dog bark, car horn, appliance beep, running water, shouting) firing a Goblins notification + optional sound/flash, for deaf/HoH users. **Reliability honesty is first-class** (not a footnote).
 - **Packages:** `python3-onnxruntime` (`1.22.2`), `python3-numpy`, `libnotify` (`0.8.7-1.fc44`), `alsa-utils`, `pipewire`, `pipewire-alsa`, `wireplumber`, `sox` (audio stack already present; `sox` already used in the brand-sound layer).
 - **gsettings/dconf:** NEW relocatable `org.goblins.SoundRecognition` (enabled, sounds `as`, sensitivity, alert-sound, alert-flash → drives `…a11y.keyboard visual-bell`, min-confidence, notify-in-lock-screen) seeded **all-off**. Reuse existing notifications + per-app registry so alerts respect DND/lock-screen.

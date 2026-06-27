@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Goblins OS Sound Recognition listener boundary.
+
+This is the session-user process boundary for future on-device sound
+classification. The classifier loop is intentionally not active in this source
+slice: until model provisioning, inference dependencies, capture integration,
+and qemu proof land together, the listener reports a clear not-ready capability
+and exits without capturing microphone audio.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import shutil
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_MODEL_DIR = "/var/lib/goblins-os/sound-recognition"
+MODEL_DIR_ENV = "GOBLINS_OS_SOUND_RECOGNITION_MODEL_DIR"
+CAPTURE_BIN_ENV = "GOBLINS_OS_SOUND_RECOGNITION_CAPTURE_BIN"
+DEFAULT_CAPTURE_BIN = "arecord"
+DETAIL = (
+    "Sound Recognition listener is installed, but the live classifier loop is "
+    "still pending model provisioning and CI/qemu proof. "
+    "No microphone audio is captured by this listener yet."
+)
+
+
+def _model_dir() -> Path:
+    return Path(os.environ.get(MODEL_DIR_ENV, DEFAULT_MODEL_DIR))
+
+
+def _capture_bin() -> str:
+    return os.environ.get(CAPTURE_BIN_ENV, DEFAULT_CAPTURE_BIN)
+
+
+def _module_present(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+
+def _first_model(path: Path) -> str | None:
+    try:
+        models = sorted(
+            candidate
+            for candidate in path.iterdir()
+            if candidate.is_file() and candidate.suffix == ".onnx"
+        )
+    except OSError:
+        return None
+    return str(models[0]) if models else None
+
+
+def capability_payload() -> dict[str, Any]:
+    capture = _capture_bin()
+    return {
+        "ready": False,
+        "component": "/usr/libexec/goblins-os/goblins-os-sound-listener",
+        "detail": DETAIL,
+        "inference_dependency": {
+            "onnxruntime": _module_present("onnxruntime"),
+            "numpy": _module_present("numpy"),
+        },
+        "model": _first_model(_model_dir()),
+        "capture_driver": shutil.which(capture),
+        "capture_driver_name": capture,
+        "runtime_ready_claim": False,
+    }
+
+
+def run_self_test() -> None:
+    payload = capability_payload()
+    assert payload["ready"] is False
+    assert payload["runtime_ready_claim"] is False
+    assert "No microphone audio is captured" in payload["detail"]
+    assert payload["capture_driver_name"]
+    assert payload["component"].endswith("goblins-os-sound-listener")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Goblins OS Sound Recognition listener boundary"
+    )
+    parser.add_argument("--capability-check", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+
+    if args.self_test:
+        run_self_test()
+        print("goblins_sound_listener_selftest ok")
+        return 0
+
+    payload = capability_payload()
+    if args.capability_check:
+        print(json.dumps(payload, sort_keys=True))
+        return 0
+
+    print(payload["detail"])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

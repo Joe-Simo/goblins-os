@@ -199,6 +199,13 @@ struct SoundRecognitionTargetSpec {
     kind: SoundRecognitionValueKind,
 }
 
+#[derive(Deserialize)]
+struct ListenerCapabilityPayload {
+    ready: bool,
+    component: Option<String>,
+    detail: Option<String>,
+}
+
 enum SoundRecognitionPreferenceValue {
     Bool(bool),
     Sensitivity(&'static str),
@@ -639,16 +646,54 @@ fn classifier_model_capability() -> Capability {
 
 fn listener_capability() -> Capability {
     let listener = listener_bin();
-    let ready = binary_present(&listener);
-    Capability {
-        ready,
-        component: listener.clone(),
-        detail: if ready {
-            "Sound Recognition listener is installed.".to_string()
-        } else {
-            "Sound Recognition listener is not installed in this session.".to_string()
+    if !binary_present(&listener) {
+        return Capability {
+            ready: false,
+            component: listener,
+            detail: "Sound Recognition listener is not installed in this session.".to_string(),
+        };
+    }
+
+    match std::process::Command::new(&listener)
+        .arg("--capability-check")
+        .stdin(std::process::Stdio::null())
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            parse_listener_capability(&output.stdout, &listener).unwrap_or(Capability {
+                ready: false,
+                component: listener,
+                detail: "Sound Recognition listener did not return a valid capability report."
+                    .to_string(),
+            })
+        }
+        _ => Capability {
+            ready: false,
+            component: listener,
+            detail: "Sound Recognition listener could not run its capability check.".to_string(),
         },
     }
+}
+
+fn parse_listener_capability(raw: &[u8], fallback_component: &str) -> Option<Capability> {
+    let payload: ListenerCapabilityPayload = serde_json::from_slice(raw).ok()?;
+    Some(Capability {
+        ready: payload.ready,
+        component: payload
+            .component
+            .filter(|component| !component.trim().is_empty())
+            .unwrap_or_else(|| fallback_component.to_string()),
+        detail: payload
+            .detail
+            .filter(|detail| !detail.trim().is_empty())
+            .unwrap_or_else(|| {
+                if payload.ready {
+                    "Sound Recognition listener is ready.".to_string()
+                } else {
+                    "Sound Recognition listener is installed but not ready.".to_string()
+                }
+            }),
+    })
 }
 
 fn capture_capability() -> Capability {
@@ -786,9 +831,10 @@ fn gsettings(args: &[&str]) -> Result<String, ()> {
 mod tests {
     use super::{
         clamp_min_confidence, encode_sound_ids, normalize_enabled_sounds, normalize_sensitivity,
-        parse_gsettings_strv, parse_sound_recognition_value, sound_recognition_target_spec,
-        toggled_sound_ids, SoundCategoryStatus, SoundRecognitionPreferenceTarget,
-        SoundRecognitionPreferenceValue, SoundRecognitionStatus, SOUND_CATEGORIES,
+        parse_gsettings_strv, parse_listener_capability, parse_sound_recognition_value,
+        sound_recognition_target_spec, toggled_sound_ids, SoundCategoryStatus,
+        SoundRecognitionPreferenceTarget, SoundRecognitionPreferenceValue, SoundRecognitionStatus,
+        SOUND_CATEGORIES,
     };
 
     #[test]
@@ -901,6 +947,29 @@ mod tests {
             parse_sound_recognition_value(confidence, &serde_json::json!(0.99)).unwrap(),
             SoundRecognitionPreferenceValue::MinConfidence(value) if value == 0.95
         ));
+    }
+
+    #[test]
+    fn listener_capability_check_preserves_not_ready_state() {
+        let capability = parse_listener_capability(
+            br#"{"ready":false,"component":"/usr/libexec/goblins-os/goblins-os-sound-listener","detail":"installed, model pending","runtime_ready_claim":false}"#,
+            "/fallback",
+        )
+        .unwrap();
+
+        assert!(!capability.ready);
+        assert_eq!(
+            capability.component,
+            "/usr/libexec/goblins-os/goblins-os-sound-listener"
+        );
+        assert_eq!(capability.detail, "installed, model pending");
+
+        let fallback = parse_listener_capability(br#"{"ready":false}"#, "/fallback").unwrap();
+        assert_eq!(fallback.component, "/fallback");
+        assert_eq!(
+            fallback.detail,
+            "Sound Recognition listener is installed but not ready."
+        );
     }
 
     #[test]

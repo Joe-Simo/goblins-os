@@ -34,6 +34,7 @@ paths = [
   "os/release/",
   "os/runtime-gate/",
   "os/session/",
+  "os/sound-recognition/",
   "os/sounds/",
   "os/systemd/",
   "os/systemd-system/",

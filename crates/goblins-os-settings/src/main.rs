@@ -118,6 +118,30 @@ struct SettingsState {
     accessibility: Option<AccessibilityStatus>,
     firewall: Option<FirewallStatus>,
     hotspot: Option<HotspotStatus>,
+    shortcuts: Option<ShortcutsStatus>,
+}
+
+/// Read-only Goblins keyboard shortcuts from `GET /v1/shortcuts/status`. The Settings
+/// UI presents them as a reference; rebinding stays a deliberate future capability.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct ShortcutsStatus {
+    available: bool,
+    shortcuts: Vec<ShortcutEntry>,
+    detail: String,
+}
+
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct ShortcutEntry {
+    action: String,
+    bindings: Vec<String>,
 }
 
 /// Read-only firewall posture from `GET /v1/firewall/status` (firewalld). The Settings
@@ -2520,6 +2544,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             accessibility: None,
             firewall: None,
             hotspot: None,
+            shortcuts: None,
         };
     }
 
@@ -2550,6 +2575,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         accessibility: get_core_json(&config.core_url, "/v1/accessibility/status").ok(),
         firewall: get_core_json(&config.core_url, "/v1/firewall/status").ok(),
         hotspot: get_core_json(&config.core_url, "/v1/hotspot/status").ok(),
+        shortcuts: get_core_json(&config.core_url, "/v1/shortcuts/status").ok(),
     }
 }
 
@@ -11090,6 +11116,30 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
                 &format!("{} · {}", source.kind, source.id),
             ));
         }
+    }
+
+    append_keyboard_shortcuts(panel, state);
+}
+
+/// Read-only reference of the Goblins window-management shortcuts (macOS "Keyboard ▸
+/// Shortcuts" altitude). Rebinding stays a deliberate future capability.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_keyboard_shortcuts(panel: &gtk4::Box, state: &SettingsState) {
+    let Some(shortcuts) = &state.shortcuts else {
+        return;
+    };
+    panel.append(&label("Shortcuts", &["gos-subsection-title"]));
+    if !shortcuts.available || shortcuts.shortcuts.is_empty() {
+        panel.append(&system_row("Keyboard shortcuts", &shortcuts.detail));
+        return;
+    }
+    for shortcut in &shortcuts.shortcuts {
+        let binding = if shortcut.bindings.is_empty() {
+            "Not set".to_string()
+        } else {
+            shortcut.bindings.join(", ")
+        };
+        panel.append(&system_row(&shortcut.action, &binding));
     }
 }
 

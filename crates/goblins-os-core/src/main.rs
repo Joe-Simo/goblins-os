@@ -28,6 +28,7 @@ mod resident;
 mod service_catalog;
 mod session_gate;
 mod settings;
+mod shortcuts;
 mod studio;
 mod system;
 mod system_image;
@@ -191,6 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
         .route("/v1/firewall/status", get(firewall::firewall_status))
         .route("/v1/hotspot/status", get(hotspot::hotspot_status))
+        .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
         .route("/v1/studio/turn", post(studio_turn))
         .route("/v1/studio/sessions", get(studio_sessions))
         .route("/v1/studio/session", get(studio_session))

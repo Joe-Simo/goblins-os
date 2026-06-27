@@ -7589,6 +7589,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "Personal Hotspot",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-shortcuts-status-route",
+            "/v1/shortcuts/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-shortcuts-list",
+            "append_keyboard_shortcuts",
+        ),
+        contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/schemas/org.goblins.shell.extensions.wm.gschema.xml"),
             "goblins-wm-app-expose-keybinding",
             "app-expose",

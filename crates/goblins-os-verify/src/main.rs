@@ -937,10 +937,25 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "login-gate-not-autostarted-before-firstboot",
         "COPY os/autostart/org.goblins.OS.Login.desktop /etc/xdg/autostart/org.goblins.OS.Login.desktop",
     ));
+    checks.push(absent_check(
+        root.join("os/session/goblins-os-session"),
+        "session-does-not-force-gtk-simple-input-method",
+        "GTK_IM_MODULE",
+    ));
+    checks.push(absent_check(
+        root.join("os/session/goblins-os-session"),
+        "session-does-not-force-qt-simple-input-method",
+        "QT_IM_MODULE",
+    ));
+    checks.push(absent_check(
+        root.join("os/session/goblins-os-session"),
+        "session-does-not-force-xim-disabled",
+        "XMODIFIERS",
+    ));
     checks.push(session_contains_check(
         root,
-        "legacy-gtk-im-popover-stays-disabled",
-        "GTK_IM_MODULE=\"${GTK_IM_MODULE:-gtk-im-context-simple}\"",
+        "session-keeps-ibus-sync-mode-conservative",
+        "IBUS_ENABLE_SYNC_MODE",
     ));
     checks.push(contains_check(
         root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
@@ -8295,10 +8310,51 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "source-manifest-includes-textshortcuts-assets",
             "os/goblins-os-textshortcuts/",
         ),
-        absent_check(
+        contains_check(
             root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
-            "textshortcuts-dconf-not-seeded-before-runtime",
-            "goblins-textshortcuts",
+            "textshortcuts-dconf-seeds-goblins-ibus-source",
+            "sources=[('ibus', 'goblins-textshortcuts')]",
+        ),
+        contains_check(
+            root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
+            "textshortcuts-dconf-preloads-goblins-engine",
+            "preload-engines=['goblins-textshortcuts']",
+        ),
+        contains_check(
+            root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
+            "textshortcuts-dconf-disables-per-window-source-switching",
+            "per-window=false",
+        ),
+        file_check(root, "os/systemd-user/org.goblins.OS.IBus.service"),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "textshortcuts-ibus-user-service-exec",
+            "ExecStart=/usr/bin/ibus-daemon --replace --xim --panel disable",
+        ),
+        contains_check(
+            root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
+            "textshortcuts-ibus-user-service-wanted-by-session",
+            "Wants=org.goblins.OS.IBus.service",
+        ),
+        container_absent_check(
+            root,
+            "bootc-does-not-force-gtk-simple-input-method",
+            "GTK_IM_MODULE=gtk-im-context-simple",
+        ),
+        container_absent_check(
+            root,
+            "bootc-does-not-force-qt-simple-input-method",
+            "QT_IM_MODULE=simple",
+        ),
+        container_absent_check(
+            root,
+            "bootc-does-not-force-xim-disabled",
+            "XMODIFIERS=@im=none",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-ibus-sync-mode-conservative",
+            "IBUS_ENABLE_SYNC_MODE=0",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/text_shortcuts.rs"),

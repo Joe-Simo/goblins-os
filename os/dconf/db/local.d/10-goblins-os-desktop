@@ -45,8 +45,8 @@ edge-tiling=true
 workspaces-only-on-primary=true
 
 [org/gnome/desktop/wm/keybindings]
-# Free ⌘/Super+Space for the launcher — it defaults to the input-source switcher,
-# which the native session disables anyway (one keyboard layout, IBus off).
+# Free Cmd/Super+Space for the launcher. Goblins seeds a single IBus engine as
+# the default source, so there is no stock source switcher to expose by default.
 switch-input-source=@as []
 switch-input-source-backward=@as []
 # Free <Super>Tab so the Goblins window-switcher (goblins-wm) owns it cleanly —
@@ -139,3 +139,12 @@ favorite-apps=['org.goblins.OS.OpenAI.Codex.desktop', 'org.gnome.Nautilus.deskto
 
 [org/gnome/shell/extensions/user-theme]
 name='GoblinsOS'
+
+[org/freedesktop/ibus/general]
+preload-engines=['goblins-textshortcuts']
+
+[org/gnome/desktop/input-sources]
+sources=[('ibus', 'goblins-textshortcuts')]
+mru-sources=[('ibus', 'goblins-textshortcuts')]
+per-window=false
+show-all-sources=false

@@ -652,6 +652,26 @@ os/goblins-os-textshortcuts/goblins-textshortcuts.xml`, and
 must still prove the live IBus runtime loop, input-source seed, GTK render, and
 keystroke selftest before Text Shortcuts can ship.
 
+Current Text Shortcuts session-enable continuation: the Goblins session now
+seeds `org.gnome.desktop.input-sources sources=[('ibus',
+'goblins-textshortcuts')]`, preloads the Goblins IBus engine through
+`org.freedesktop.ibus.general preload-engines`, starts
+`org.goblins.OS.IBus.service` from the user GNOME session target, and removes
+the old `GTK_IM_MODULE=gtk-im-context-simple` / `QT_IM_MODULE=simple` /
+`XMODIFIERS=@im=none` overrides from both the session wrapper and installed
+environment.d file. It does not set `GTK_IM_MODULE=ibus` globally; GNOME Wayland
+is expected to broker IBus through Mutter/text-input-v3. Core still keeps
+`runtime_loop_available=false`, so Settings cannot claim expansion is active
+until qemu proves the real keystroke path. Local source gates:
+`cargo fmt -p goblins-os-verify`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` -> **blocked=0 (1750)**,
+`git diff --check`, and `bash -n os/session/goblins-os-session`.
+`systemd-analyze verify` is not available on this macOS host. CI/qemu must still
+prove the user-session IBus service starts, the input source is active, the
+adapter receives key events, and replacement commits are pass-through-safe before
+Text Shortcuts can ship.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -982,6 +1002,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **IBus content-purpose decoder source-gated (CI/qemu-pending):** the engine crate decodes IBus numeric/symbolic content purposes and refuses replacements in PASSWORD/PIN fields through an installed `--content-purpose-self-test`; unknown purposes stay free-form. This is still a source/image contract; no live GI callback or text-input proof is claimed.
 - [x] **IBus stdio runtime protocol source-gated (CI/qemu-pending):** `--stdio` provides a long-lived JSON protocol for key/focus/table events and returns explicit IBus operation JSON so the future GI shim can drive the Rust runtime without reimplementing replacement logic. The installed `--stdio-self-test` image gate covers candidate preedit, boundary commit, and PIN-field pass-through. This is still not a live IBus loop.
 - [x] **IBus GI adapter source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus` registers the IBus engine, translates GI key/focus/content-purpose callbacks into the Rust `--stdio` runtime protocol, applies only returned preedit/delete/commit/hide operations, and fails open to pass-through on missing or unhealthy runtime state. The component XML points to this adapter, and the image runs pycompile + adapter self-test + component-contract gates. This is still not a seeded session input source or live expansion proof.
+- [x] **IBus session seed source-gated (CI/qemu-pending):** the Goblins session starts a user `ibus-daemon`, seeds the `goblins-textshortcuts` IBus source and preload engine in dconf, and removes the old forced simple GTK/QT/XIM overrides without setting `GTK_IM_MODULE=ibus` globally. Core still keeps runtime readiness false until qemu proves the session service, active input source, adapter callbacks, and safe replacement commits.
 - [ ] **Live IBus engine + session enablement (deferred, XL/highest-risk):** the `goblins-textshortcuts` IBus engine loop (preedit/commit over `text-input-v3`, pass-through by default, never in password fields), the dconf input-source seed, accept bubble, and the optional model-gated autocorrect tier.
 - **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (web-verified for Fedora 44 and asserted with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
 - **gsettings/dconf:** `org.freedesktop.ibus.general preload-engines` (+`goblins-textshortcuts`); `org.gnome.desktop.input-sources sources=[('ibus','goblins-textshortcuts')]`, `per-window=false`; dconf seed in `10-goblins-os-desktop`. The replacement table itself is **JSON** under `~/.config/goblins-os/text-shortcuts.json`, written only through the core bridge — not a gsetting.

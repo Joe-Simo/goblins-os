@@ -18,9 +18,9 @@ export GOBLINS_OS_CORE_URL="${GOBLINS_OS_CORE_URL:-${OPENAI_OS_CORE_URL:-http://
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-GoblinsOS:GNOME}"
 export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-goblins-os}"
 export DESKTOP_SESSION="${DESKTOP_SESSION:-goblins-os}"
-export GTK_IM_MODULE="${GTK_IM_MODULE:-gtk-im-context-simple}"
-export QT_IM_MODULE="${QT_IM_MODULE:-simple}"
-export XMODIFIERS="${XMODIFIERS:-@im=none}"
+# GNOME Wayland brokers IBus through Mutter/text-input-v3. Do not force GTK,
+# Qt, or XIM modules here; the Goblins IBus source is enabled by session
+# defaults and the user-session IBus service instead of a global env flip.
 export IBUS_ENABLE_SYNC_MODE="${IBUS_ENABLE_SYNC_MODE:-0}"
 
 # Goblins OS owns the GNOME compositor through a custom shell mode so the desktop

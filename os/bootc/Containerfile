@@ -359,9 +359,6 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && ! grep -Eq '^[[:space:]]*[A-Za-z0-9_]*(KEY|SECRET|TOKEN)[[:space:]]*=' /etc/goblins-os/openai-secrets.env \
     && ! grep -Eq '^[[:space:]]*[A-Za-z0-9_]*(KEY|SECRET|TOKEN)[[:space:]]*=' /etc/goblins-os/environment \
     && printf '%s\n' \
-        'GTK_IM_MODULE=gtk-im-context-simple' \
-        'QT_IM_MODULE=simple' \
-        'XMODIFIERS=@im=none' \
         'IBUS_ENABLE_SYNC_MODE=0' \
         > /var/home/goblin/.config/environment.d/10-goblins-os-input.conf \
     && chown goblin:goblin /var/home/goblin/.config/environment.d/10-goblins-os-input.conf \

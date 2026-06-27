@@ -7981,6 +7981,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/bootc/run-selftest.sh"),
+            "selftest-firewall-status-endpoint",
+            "/v1/firewall/status",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "selftest-firewall-enabled-endpoint",
+            "/v1/firewall/enabled",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "selftest-firewall-honest-toggle-outcome",
+            r#"502|503) [ "$firewall_toggle_ok" = "false" ]"#,
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
             "selftest-app-builder-catalog-endpoint",
             "/v1/apps/build-catalog",
         ),

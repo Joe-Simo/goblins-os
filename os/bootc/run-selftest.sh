@@ -41,11 +41,24 @@ core_pid=$!
 for _ in $(seq 1 60); do curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1 && break; sleep 0.2; done
 for ep in /health /v1/readiness /v1/ai/actions /v1/ai/action-history /v1/system/hardware /v1/local-models \
           /v1/policy/status /v1/ai/runtime/status /v1/codex/resident/status /v1/auth/openai/status \
-          /v1/system/services /v1/installer/install-targets /v1/apps/build-catalog /v1/apps; do
+          /v1/system/services /v1/installer/install-targets /v1/firewall/status /v1/apps/build-catalog /v1/apps; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8787$ep")
   echo "  GET $ep -> HTTP $code"
   [ "$code" = "200" ] || fail=1
 done
+firewall_toggle_code=$(curl -s -o /tmp/goblins-os-firewall-toggle.json -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":true}' \
+  http://127.0.0.1:8787/v1/firewall/enabled)
+firewall_toggle_ok=$(jq -r '.ok // empty' /tmp/goblins-os-firewall-toggle.json 2>/dev/null || true)
+firewall_toggle_text=$(jq -r '.text // empty' /tmp/goblins-os-firewall-toggle.json 2>/dev/null || true)
+echo "  POST /v1/firewall/enabled -> HTTP $firewall_toggle_code ok=$firewall_toggle_ok"
+case "$firewall_toggle_code" in
+  200) [ "$firewall_toggle_ok" = "true" ] || fail=1 ;;
+  502|503) [ "$firewall_toggle_ok" = "false" ] || fail=1 ;;
+  *) fail=1 ;;
+esac
+[ -n "$firewall_toggle_text" ] || fail=1
 app_build_code=$(curl -s -o /tmp/goblins-os-app-build.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"intent":"Self-test app-builder route check. Create a tiny notes app plan only."}' \

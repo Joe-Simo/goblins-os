@@ -89,7 +89,11 @@ Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings
 **blocked=0 (1506)**, `git diff --check`, helper `bash -n`, polkit rule
 `node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
-`systemd-analyze verify` is not available on this macOS host.
+The installed-image self-test now exercises `/v1/firewall/status` and the
+`/v1/firewall/enabled` POST with an honest-success/honest-failure assertion;
+this does **not** replace the missing CI/qemu proof of the GTK render, polkit
+oneshot path, or live toggle. `systemd-analyze verify` is not available on this
+macOS host.
 
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: first run the CI/qemu interaction proof for the
@@ -195,7 +199,7 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 ### `in-progress` Firewall toggle + status (firewalld) in Settings ▸ Security
 - [x] **Status read** (`crates/goblins-os-core/src/firewall.rs` + `/v1/firewall/status`): honest read-only posture via `firewall-cmd --state` (running requires success AND "running" text — pure, unit-tested), honest-gated to "unavailable" when firewalld isn't installed.
 - [x] **Settings row (GTK) shipped**: Settings ▸ Security ▸ Protection now shows a live **Firewall** row (on / off / unavailable) fed by the status endpoint, alongside the boot-image + keyring rows. Compile- + `clippy -D warnings`-clean in the native container; verify gate added.
-- [x] **Gated On/Off toggle substrate + Settings binding (CI/qemu interaction proof pending):** core writes only by starting `goblins-os-firewall@enable/disable.service`, with a root helper that touches only `firewalld.service`, a scoped polkit rule for the `goblins-os` service user, image-time helper/unit/rule assertions, and a GTK switch that disables/reverts honestly when the bridge or live write fails. Feature remains `in-progress` until qemu render + live toggle proof are green.
+- [x] **Gated On/Off toggle substrate + Settings binding (CI/qemu interaction proof pending):** core writes only by starting `goblins-os-firewall@enable/disable.service`, with a root helper that touches only `firewalld.service`, a scoped polkit rule for the `goblins-os` service user, image-time helper/unit/rule assertions, an installed-image self-test that exercises status + honest toggle outcomes, and a GTK switch that disables/reverts honestly when the bridge or live write fails. Feature remains `in-progress` until qemu render + live toggle proof are green.
 - **Packages:** `firewalld` (verified canonical name; minimal/bootc images can omit it).
 - **Files:** `crates/goblins-os-core/src/firewall.rs` (status + toggle, mirror `bluetooth.rs`), `crates/goblins-os-core/src/main.rs` (`GET /v1/firewall/status`, `POST /v1/firewall/enabled`), `crates/goblins-os-settings/src/main.rs` (`FirewallStatus` + `build_security` row + `set_firewall_enabled` mirroring `set_bluetooth_power`), `os/bootc/Containerfile` (`firewalld` + `systemctl enable firewalld.service`), `os/bootc/goblins-os-firewall` + `os/systemd-system/goblins-os-firewall@.service` + `os/bootc/60-goblins-os-firewall.rules` (privileged helper/oneshot plus **scoped** polkit rule).
 - **APIs:** read path `firewall-cmd --state`/`--get-default-zone` + `systemctl is-active/is-enabled` (all unprivileged for the active session); write path via the oneshot helper.

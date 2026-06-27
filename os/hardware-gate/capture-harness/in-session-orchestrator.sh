@@ -19,6 +19,7 @@ export GOBLINS_OS_RENDER_FULLSCREEN=1
 sig(){ curl -s "http://$H/ready/$1" >/dev/null 2>&1; sleep 5; }
 proof_firewall(){ curl -s "http://$H/proof/firewall-live-toggle?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts(){ curl -s "http://$H/proof/text-shortcuts-session-enable?$1" >/dev/null 2>&1 || true; }
+proof_text_shortcuts_live(){ curl -s "http://$H/proof/text-shortcuts-live-keystroke?$1" >/dev/null 2>&1 || true; }
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -153,6 +154,73 @@ text_shortcuts_session_enable_proof(){
   proof_text_shortcuts "status=pass&route=/v1/text-shortcuts&service=active&service_unit=org.goblins.OS.IBus.service&input_source_configured=true&preload_configured=true&engine_listed=true&adapter_self_test=pass&engine_set=pass&active_engine=goblins-textshortcuts&core_http=200&core_engine_available=false&core_runtime_loop_available=false&runtime_ready_claim=false"
   return 0
 }
+text_shortcuts_live_keystroke_proof(){
+  local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/goblins-os"
+  local table_file="$config_dir/text-shortcuts.json"
+  local normal_file=/tmp/gate-text-shortcuts-normal.txt
+  local password_file=/tmp/gate-text-shortcuts-password.txt
+  local normal_actual password_actual normal_pid password_pid active_engine
+
+  mkdir -p "$config_dir"
+  printf '[{"replace":"omw","with":"onmyway"}]\n' > "$table_file"
+  rm -f "$normal_file" "$password_file"
+
+  pkill -f goblins-textshortcuts-ibus 2>/dev/null || true
+  pkill -f goblins-textshortcuts-engine 2>/dev/null || true
+  sleep 1
+  if ! ibus engine goblins-textshortcuts >/dev/null 2>&1; then
+    proof_text_shortcuts_live "status=fail&stage=engine-set&input_driver=wtype&active_engine=missing"
+    return 1
+  fi
+  active_engine="$(ibus engine 2>/dev/null | tr -d '\n' || true)"
+  if [ "$active_engine" != "goblins-textshortcuts" ]; then
+    proof_text_shortcuts_live "status=fail&stage=engine-active&input_driver=wtype&active_engine=${active_engine:-missing}"
+    return 1
+  fi
+
+  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$normal_file" "$B/goblins-os-shell" --text-shortcuts-proof normal >/tmp/gate-text-shortcuts-normal.log 2>&1 &
+  normal_pid=$!
+  sleep 4
+  if ! wtype -- "omw." >/dev/null 2>&1; then
+    kill "$normal_pid" 2>/dev/null || true
+    proof_text_shortcuts_live "status=fail&stage=normal-wtype&input_driver=wtype&active_engine=goblins-textshortcuts"
+    return 1
+  fi
+  for _ in $(seq 1 20); do
+    normal_actual="$(cat "$normal_file" 2>/dev/null || true)"
+    [ "$normal_actual" = "onmyway." ] && break
+    sleep 0.5
+  done
+  kill "$normal_pid" 2>/dev/null || true
+  wait "$normal_pid" 2>/dev/null || true
+  if [ "$normal_actual" != "onmyway." ]; then
+    proof_text_shortcuts_live "status=fail&stage=normal-readback&input_driver=wtype&active_engine=goblins-textshortcuts&normal_expected=onmyway.&normal_actual=${normal_actual:-missing}"
+    return 1
+  fi
+
+  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$password_file" "$B/goblins-os-shell" --text-shortcuts-proof password >/tmp/gate-text-shortcuts-password.log 2>&1 &
+  password_pid=$!
+  sleep 4
+  if ! wtype -- "omw." >/dev/null 2>&1; then
+    kill "$password_pid" 2>/dev/null || true
+    proof_text_shortcuts_live "status=fail&stage=password-wtype&input_driver=wtype&active_engine=goblins-textshortcuts"
+    return 1
+  fi
+  for _ in $(seq 1 20); do
+    password_actual="$(cat "$password_file" 2>/dev/null || true)"
+    [ "$password_actual" = "omw." ] && break
+    sleep 0.5
+  done
+  kill "$password_pid" 2>/dev/null || true
+  wait "$password_pid" 2>/dev/null || true
+  if [ "$password_actual" != "omw." ]; then
+    proof_text_shortcuts_live "status=fail&stage=password-readback&input_driver=wtype&active_engine=goblins-textshortcuts&password_expected=omw.&password_actual=${password_actual:-missing}"
+    return 1
+  fi
+
+  proof_text_shortcuts_live "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-proof&input_driver=wtype&active_engine=goblins-textshortcuts&normal_trigger=omw.&normal_expected=onmyway.&normal_actual=onmyway.&password_expected=omw.&password_actual=omw.&password_refusal=true&runtime_ready_claim=false"
+  return 0
+}
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication
 # is single-instance, so relaunching the same binary (e.g. the installer with a new
@@ -168,6 +236,7 @@ curl -s "http://$H/ready/ORCH_START" >/dev/null 2>&1
 pkill -f goblins-os-login 2>/dev/null; pkill -f goblins-os-installer 2>/dev/null; sleep 2
 firewall_live_toggle_proof || true
 text_shortcuts_session_enable_proof || true
+text_shortcuts_live_keystroke_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
 FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device

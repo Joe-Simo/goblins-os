@@ -43,10 +43,14 @@ hardware run").
    The Text Shortcuts session proof writes
    `text-shortcuts-session-enable-proof.json` and only passes when the installed
    GNOME session has the Goblins IBus service, source seed, preload, active
-   engine, adapter self-test, and core runtime-honesty signal in place.
+   engine, adapter self-test, and core runtime-honesty signal in place. The live
+   Text Shortcuts keystroke proof writes
+   `text-shortcuts-live-keystroke-proof.json` after driving a focused GTK Entry
+   with `wtype`; it must observe normal expansion and password-field refusal.
 7. The host writes `proof-manifest.json` (architecture, iso path, iso_sha256,
    captured_at, screenshot_run_dir, firewall proof filename, Text Shortcuts
-   session proof filename) and runs `close-signoff.sh`.
+   session proof filename, Text Shortcuts live keystroke proof filename) and runs
+   `close-signoff.sh`.
 
 ## Status
 

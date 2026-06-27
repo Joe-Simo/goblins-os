@@ -703,6 +703,28 @@ This is still CI/qemu-pending and does **not** prove live key replacement,
 adapter callbacks from a focused text field, password-field refusal in-session,
 or the accept bubble.
 
+Current Text Shortcuts live-keystroke proof continuation: the display-backed VM
+capture harness now has a proof-only GTK text field surface in
+`goblins-os-shell --text-shortcuts-proof normal|password` and fail-closes on
+`text-shortcuts-live-keystroke-proof.json`. In qemu it seeds a single
+`omw` -> `onmyway` shortcut, selects the `goblins-textshortcuts` IBus engine,
+drives the focused field with `wtype -- "omw."`, requires normal text to read
+back as `onmyway.`, and requires the password-purpose field to read back as the
+unchanged `omw.` with `password_refusal=true`. `run-capture.sh`,
+`drive-capture.py`, `close-signoff.sh`, `verify-shipping-status.sh`, and
+`goblins-os-verify` now reject screenshot/signoff runs without that live
+keystroke proof, while core still keeps `runtime_ready_claim=false` until qemu
+artifacts are reviewed and the runtime gate is intentionally flipped. Local
+source gates: `cargo fmt --all --check`, `bash -n` for the capture/signoff
+scripts, `python3 -m py_compile` for the capture driver,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`git diff --check`, `cargo run -p goblins-os-verify -- --source-root .` ->
+**blocked=0 (1795)**, and the Rust 1.88 GTK container
+`cargo clippy -p goblins-os-shell --features goblins-os-shell/native-desktop -- -D warnings`
+after installing `libgtk-4-dev`, `pkg-config`, and the missing `clippy`
+component in the disposable container. This is still CI/qemu-pending and does
+**not** prove the live keystroke path locally or mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -1039,6 +1061,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **IBus GI adapter source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus` registers the IBus engine, translates GI key/focus/content-purpose callbacks into the Rust `--stdio` runtime protocol, applies only returned preedit/delete/commit/hide operations, and fails open to pass-through on missing or unhealthy runtime state. The component XML points to this adapter, and the image runs pycompile + adapter self-test + component-contract gates. This is still not a seeded session input source or live expansion proof.
 - [x] **IBus session seed source-gated (CI/qemu-pending):** the Goblins session starts a user `ibus-daemon`, seeds the `goblins-textshortcuts` IBus source and preload engine in dconf, and removes the old forced simple GTK/QT/XIM overrides without setting `GTK_IM_MODULE=ibus` globally. Core still keeps runtime readiness false until qemu proves the session service, active input source, adapter callbacks, and safe replacement commits.
 - [x] **IBus session-enable hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now requires `text-shortcuts-session-enable-proof.json` before signoff, proving the installed session service/source/preload/active-engine path and adapter self-test while explicitly keeping core `engine_available=false` and `runtime_loop_available=false`. This does not prove live keystroke replacement, adapter callbacks from a focused text field, password-field refusal in-session, or the accept bubble.
+- [x] **IBus live-keystroke hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now launches `goblins-os-shell --text-shortcuts-proof normal|password`, drives focused GTK entries with `wtype -- "omw."`, and requires normal replacement (`onmyway.`) plus password-purpose refusal (`omw.` unchanged, `password_refusal=true`) before signoff. Core still keeps `runtime_ready_claim=false` until the qemu artifact is reviewed and the runtime gate is flipped deliberately.
 - [ ] **Live IBus engine + session enablement (deferred, XL/highest-risk):** the `goblins-textshortcuts` IBus engine loop (preedit/commit over `text-input-v3`, pass-through by default, never in password fields), the dconf input-source seed, accept bubble, and the optional model-gated autocorrect tier.
 - **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (web-verified for Fedora 44 and asserted with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
 - **gsettings/dconf:** `org.freedesktop.ibus.general preload-engines` (+`goblins-textshortcuts`); `org.gnome.desktop.input-sources sources=[('ibus','goblins-textshortcuts')]`, `per-window=false`; dconf seed in `10-goblins-os-desktop`. The replacement table itself is **JSON** under `~/.config/goblins-os/text-shortcuts.json`, written only through the core bridge — not a gsetting.

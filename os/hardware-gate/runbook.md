@@ -141,7 +141,8 @@ the release media that was booted:
   "captured_at": "<UTC timestamp>",
   "screenshot_run_dir": "os/screenshots/hardware-gate/<arch>/<YYYY-MM-DD>",
   "firewall_live_toggle_proof": "firewall-live-toggle-proof.json",
-  "text_shortcuts_session_enable_proof": "text-shortcuts-session-enable-proof.json"
+  "text_shortcuts_session_enable_proof": "text-shortcuts-session-enable-proof.json",
+  "text_shortcuts_live_keystroke_proof": "text-shortcuts-live-keystroke-proof.json"
 }
 ```
 
@@ -158,6 +159,13 @@ seeded `goblins-textshortcuts` input source and preload engine, active IBus
 engine selection, adapter self-test, and core honesty that runtime expansion is
 still gated off. It does not ship Text Shortcuts expansion; the keystroke commit
 proof remains a separate qemu gate.
+
+The keystroke gate is `text-shortcuts-live-keystroke-proof.json`. It launches the
+Goblins shell's proof-only GTK field, drives it through the Wayland `wtype` path,
+and rejects the run unless a normal entry expands `omw.` to `onmyway.` while a
+password-purpose entry keeps `omw.` unchanged. This is the first live
+text-input proof; it still keeps the Settings/Core runtime-ready claim disabled
+until the qemu artifact is reviewed and the feature is flipped deliberately.
 
 Capture exactly at minimum these names:
 1. `01-installer.png` — ISO boot + installer launch
@@ -234,6 +242,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - gaming readiness result, including Steam absence from installed-root verifier
 - firewall toggle result, including `firewall-live-toggle-proof.json`
 - Text Shortcuts session-enable result, including `text-shortcuts-session-enable-proof.json`
+- Text Shortcuts live keystroke result, including `text-shortcuts-live-keystroke-proof.json`
 - install destination, formatting/root filesystem, bootloader/EFI, and dual-boot preservation result
 - for custom formatting, encryption, separate `/home`, LUKS/LVM, TPM2 LUKS, ext4, or btrfs, show an advanced storage summary before writes
 - if dual boot is tested, show the Open advanced storage action or Install Goblins OS Beside Another OS desktop entry, Custom/manual storage or Reclaim Space, the free-space/dedicated-disk target, the backup/free-space preparation note, and the untouched existing OS/recovery/EFI partitions

@@ -132,6 +132,7 @@ python3 "$HERE/drive-capture.py"
 
 FIREWALL_PROOF="$RUN_DIR/firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_PROOF="$RUN_DIR/text-shortcuts-session-enable-proof.json"
+TEXT_SHORTCUTS_LIVE_PROOF="$RUN_DIR/text-shortcuts-live-keystroke-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
@@ -153,6 +154,20 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"core_runtime_loop_available": "false"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_PROOF"; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof at $TEXT_SHORTCUTS_PROOF"
+  exit 4
+fi
+if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"surface": "goblins-os-shell-text-shortcuts-proof"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"input_driver": "wtype"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"active_engine": "goblins-textshortcuts"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"normal_trigger": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"normal_expected": "onmyway."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"normal_actual": "onmyway."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"password_expected": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"password_actual": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"password_refusal": "true"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_LIVE_PROOF"; then
+  echo "HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof at $TEXT_SHORTCUTS_LIVE_PROOF"
   exit 4
 fi
 
@@ -184,6 +199,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "captured_at":date+"T00:00:00Z","screenshot_run_dir":run_dir,
           "firewall_live_toggle_proof":"firewall-live-toggle-proof.json",
           "text_shortcuts_session_enable_proof":"text-shortcuts-session-enable-proof.json",
+          "text_shortcuts_live_keystroke_proof":"text-shortcuts-live-keystroke-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY

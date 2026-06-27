@@ -5173,6 +5173,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "text-shortcuts-session-enable-proof.json",
         ),
         contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-live-keystroke-proof",
+            "text-shortcuts-live-keystroke-proof.json",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-firewall-live-toggle-proof",
             "/proof/firewall-live-toggle",
@@ -5181,6 +5186,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-textshortcuts-session-proof",
             "/proof/text-shortcuts-session-enable",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-textshortcuts-live-keystroke-proof",
+            "/proof/text-shortcuts-live-keystroke",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5208,6 +5218,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "runtime_ready_claim=false",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-drives-textshortcuts-with-wtype",
+            "wtype -- \"omw.\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-checks-textshortcuts-password-refusal",
+            "password_refusal=true",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-requires-proof-signals",
             "require_proofs",
@@ -5223,6 +5243,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "text-shortcuts-session-enable-proof.json",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-textshortcuts-live-keystroke-proof-json",
+            "text-shortcuts-live-keystroke-proof.json",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-firewall-proof",
             "HONESTY GUARD: missing or failing live firewall toggle proof",
@@ -5231,6 +5256,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-session-proof",
             "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-keystroke-proof",
+            "HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -5599,6 +5629,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-textshortcuts-live-keystroke-proof",
+            "text_shortcuts_live_keystroke_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-firewall-proof-filename",
             "firewall-live-toggle-proof.json",
         ),
@@ -5606,6 +5641,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-textshortcuts-session-proof-filename",
             "text-shortcuts-session-enable-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-textshortcuts-live-keystroke-proof-filename",
+            "text-shortcuts-live-keystroke-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -5779,6 +5819,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-textshortcuts-live-keystroke-proof",
+            "text_shortcuts_live_keystroke_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-firewall-live-toggle-proof",
             "Firewall live toggle checked",
         ),
@@ -5786,6 +5831,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-textshortcuts-session-proof",
             "Text Shortcuts session enablement checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-textshortcuts-live-keystroke-proof",
+            "Text Shortcuts live keystrokes checked",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -8803,6 +8853,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-text-shortcuts-editor-helper",
             "text_shortcuts_with_entry",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-mode-arg",
+            "--text-shortcuts-proof",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-file-env",
+            "GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-normal-field",
+            "TextShortcutsProofMode::Normal",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-password-purpose",
+            "gtk::InputPurpose::Password",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),

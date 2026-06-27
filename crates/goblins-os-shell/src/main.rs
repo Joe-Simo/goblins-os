@@ -363,25 +363,55 @@ impl fmt::Display for CoreFetchError {
 }
 
 /// A standalone window the launcher (⌘-Space) can open without disturbing the
-/// running session shell: a single built app's detail, or the Build Studio.
+/// running session shell: a single built app's detail, the Build Studio, or a
+/// qemu-only text input proof surface.
+#[derive(Debug, PartialEq, Eq)]
 enum StandaloneTarget {
     Studio,
     App(String),
+    TextShortcutsProof(TextShortcutsProofMode),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextShortcutsProofMode {
+    Normal,
+    Password,
 }
 
 /// Parse the launcher's deep-link from argv (or the env fallback the launcher can
-/// also set): `--studio` or `--open-app <name>`.
+/// also set): `--studio`, `--open-app <name>`, or the qemu-only Text Shortcuts
+/// proof surface.
 fn standalone_target() -> Option<StandaloneTarget> {
-    let mut args = env::args().skip(1);
+    standalone_target_from_args(env::args().skip(1)).or_else(|| {
+        match env::var("GOBLINS_OS_SHELL_OPEN_APP") {
+            Ok(name) if !name.is_empty() => Some(StandaloneTarget::App(name)),
+            _ => None,
+        }
+    })
+}
+
+fn standalone_target_from_args(args: impl Iterator<Item = String>) -> Option<StandaloneTarget> {
+    let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--studio" => return Some(StandaloneTarget::Studio),
             "--open-app" => return args.next().map(StandaloneTarget::App),
+            "--text-shortcuts-proof" => {
+                return args
+                    .next()
+                    .and_then(|mode| text_shortcuts_proof_mode(&mode))
+                    .map(StandaloneTarget::TextShortcutsProof);
+            }
             _ => {}
         }
     }
-    match env::var("GOBLINS_OS_SHELL_OPEN_APP") {
-        Ok(name) if !name.is_empty() => Some(StandaloneTarget::App(name)),
+    None
+}
+
+fn text_shortcuts_proof_mode(mode: &str) -> Option<TextShortcutsProofMode> {
+    match mode {
+        "normal" => Some(TextShortcutsProofMode::Normal),
+        "password" => Some(TextShortcutsProofMode::Password),
         _ => None,
     }
 }
@@ -2393,6 +2423,10 @@ fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<
     use gtk::prelude::*;
     use gtk4 as gtk;
 
+    if let StandaloneTarget::TextShortcutsProof(mode) = target {
+        return run_text_shortcuts_proof_window(mode);
+    }
+
     let boot_state = inspect_boot_state(&config);
     let shell_state = load_shell_state(&config, boot_state);
 
@@ -2447,6 +2481,9 @@ fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<
                     body.set_visible_child_name("home");
                 }
             }
+            StandaloneTarget::TextShortcutsProof(_) => {
+                unreachable!("Text Shortcuts proof targets use a dedicated GTK window")
+            }
         }
 
         root.append(&body);
@@ -2458,11 +2495,104 @@ fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<
     Ok(())
 }
 
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<()> {
+    use gtk::prelude::*;
+    use gtk4 as gtk;
+
+    let proof_file = env::var("GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE").ok();
+    if let Some(path) = &proof_file {
+        std::fs::write(path, "")?;
+    }
+
+    let application = gtk::Application::builder()
+        .application_id("org.goblins.OS.Shell.TextShortcutsProof")
+        .build();
+
+    application.connect_activate(move |app| {
+        goblins_os_ui::init_theming(GOBLINS_OS_CSS);
+
+        let window = gtk::ApplicationWindow::builder()
+            .application(app)
+            .title("Goblins OS Text Shortcuts Proof")
+            .decorated(false)
+            .build();
+        window.add_css_class("gos-windowed");
+        window.set_default_size(560, 220);
+
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.add_css_class("gos-root");
+
+        let top_bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        top_bar.add_css_class("gos-top-bar");
+        top_bar.append(&goblins_os_ui::window_controls(&window));
+        top_bar.append(&goblins_os_ui::themed_brand_mark(22));
+        let brand = label("Goblins OS", &["gos-brand"]);
+        brand.set_wrap(false);
+        top_bar.append(&brand);
+        top_bar.append(&spacer());
+        root.append(&top_bar);
+
+        let center = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        center.set_margin_top(28);
+        center.set_margin_bottom(28);
+        center.set_margin_start(36);
+        center.set_margin_end(36);
+        center.set_valign(gtk::Align::Center);
+        center.set_vexpand(true);
+
+        let title = match mode {
+            TextShortcutsProofMode::Normal => "Text Shortcuts proof field",
+            TextShortcutsProofMode::Password => "Password-field refusal proof",
+        };
+        center.append(&label(title, &["gos-card-title"]));
+
+        let entry = gtk::Entry::new();
+        entry.set_hexpand(true);
+        entry.set_input_purpose(match mode {
+            TextShortcutsProofMode::Normal => gtk::InputPurpose::FreeForm,
+            TextShortcutsProofMode::Password => gtk::InputPurpose::Password,
+        });
+        if mode == TextShortcutsProofMode::Password {
+            entry.set_visibility(false);
+        }
+        entry.set_placeholder_text(Some(match mode {
+            TextShortcutsProofMode::Normal => "Type omw.",
+            TextShortcutsProofMode::Password => "Password field",
+        }));
+
+        if let Some(path) = proof_file.clone() {
+            entry.connect_changed(move |entry| {
+                let _ = std::fs::write(&path, entry.text().as_str());
+            });
+        }
+
+        center.append(&entry);
+        root.append(&center);
+        window.set_child(Some(&root));
+        window.present();
+
+        let entry = entry.clone();
+        gtk::glib::idle_add_local_once(move || {
+            entry.grab_focus();
+        });
+    });
+
+    application.run_with_args(&["goblins-os-shell", "--text-shortcuts-proof"]);
+    Ok(())
+}
+
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
 fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<()> {
     let _ = config.core_url.as_str();
-    if let StandaloneTarget::App(name) = &target {
-        let _ = name.as_str();
+    match &target {
+        StandaloneTarget::App(name) => {
+            let _ = name.as_str();
+        }
+        StandaloneTarget::TextShortcutsProof(mode) => {
+            let _ = mode;
+        }
+        StandaloneTarget::Studio => {}
     }
     println!("native_shell_state=unavailable");
     println!("native_shell_reason=build_requires_linux_native_desktop_feature");
@@ -2958,8 +3088,9 @@ window.gos-windowed .gos-top-bar {
 mod tests {
     use super::{
         launch_local_action, local_action_command, openai_login_destination_from_response,
-        parse_http_body, parse_http_endpoint, parse_http_response, status_label, CoreFetchError,
-        HttpEndpoint, HttpResponse,
+        parse_http_body, parse_http_endpoint, parse_http_response, standalone_target_from_args,
+        status_label, CoreFetchError, HttpEndpoint, HttpResponse, StandaloneTarget,
+        TextShortcutsProofMode,
     };
 
     #[test]
@@ -2975,6 +3106,38 @@ mod tests {
         let lower = source.to_ascii_lowercase();
         assert!(!lower.contains(&apple_assistant));
         assert!(!lower.contains(&passive_claim));
+    }
+
+    #[test]
+    fn parses_text_shortcuts_proof_targets() {
+        assert_eq!(
+            standalone_target_from_args(
+                ["--text-shortcuts-proof", "normal"]
+                    .map(String::from)
+                    .into_iter()
+            ),
+            Some(StandaloneTarget::TextShortcutsProof(
+                TextShortcutsProofMode::Normal
+            ))
+        );
+        assert_eq!(
+            standalone_target_from_args(
+                ["--text-shortcuts-proof", "password"]
+                    .map(String::from)
+                    .into_iter()
+            ),
+            Some(StandaloneTarget::TextShortcutsProof(
+                TextShortcutsProofMode::Password
+            ))
+        );
+        assert_eq!(
+            standalone_target_from_args(
+                ["--text-shortcuts-proof", "bogus"]
+                    .map(String::from)
+                    .into_iter()
+            ),
+            None
+        );
     }
 
     #[test]

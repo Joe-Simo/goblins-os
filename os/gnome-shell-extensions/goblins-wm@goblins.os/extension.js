@@ -26,6 +26,7 @@ const ACTION_MODE = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW | Shell.
 
 const KEYBINDINGS = [
     ['mission-control', '_showMissionControl'],
+    ['app-expose', '_showAppExpose'],
     ['window-switcher', '_showSwitcher'],
     ['window-hud', '_showHud'],
     ['snap-left', '_snapLeft'],
@@ -264,6 +265,19 @@ export default class GoblinsWindowManagement extends Extension {
         this._showMissionControl({spacesFocus: true});
     }
 
+    // App Exposé — spread only the focused app's windows (macOS App Exposé). Falls
+    // back to full Mission Control when nothing is focused / the app is unknown.
+    _showAppExpose() {
+        const focus = global.display.focus_window;
+        const app = focus ? this._tracker.get_window_app(focus) : null;
+        const appId = app?.get_id?.();
+        if (!appId) {
+            this._showMissionControl();
+            return;
+        }
+        this._showMissionControl({appExpose: appId, title: app.get_name?.() || 'App Exposé'});
+    }
+
     showSwitcherDemo() {
         this._showSwitcher();
     }
@@ -298,12 +312,21 @@ export default class GoblinsWindowManagement extends Extension {
     _showMissionControl(options = {}) {
         this.hide();
         this._selectedIndex = 0;
+        // App Exposé reuses the Mission Control overlay, pre-filtered to one app
+        // (the existing per-app rail filter); hide() clears the filter afterwards.
+        if (options.appExpose)
+            this._groupFilter = options.appExpose;
         this._createOverlay('goblins-wm-overlay goblins-wm-mission-control');
         if (options.spacesFocus)
             this._overlay.add_style_class_name('spaces-focus');
+        if (options.appExpose)
+            this._overlay.add_style_class_name('app-expose');
 
         const header = new St.BoxLayout({style_class: 'goblins-wm-header'});
-        header.add_child(new St.Label({text: 'Mission Control', style_class: 'goblins-wm-title'}));
+        header.add_child(new St.Label({
+            text: options.title || 'Mission Control',
+            style_class: 'goblins-wm-title',
+        }));
         const spacer = new St.Widget({x_expand: true});
         header.add_child(spacer);
         const search = new St.Entry({

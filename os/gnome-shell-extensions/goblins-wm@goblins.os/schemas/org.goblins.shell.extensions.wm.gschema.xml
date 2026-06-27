@@ -6,6 +6,11 @@
       <summary>Show Mission Control</summary>
       <description>Shows all open windows grouped by workspace.</description>
     </key>
+    <key name="app-expose" type="as">
+      <default>['&lt;Super&gt;e', 'F10']</default>
+      <summary>Show App Exposé</summary>
+      <description>Spreads only the focused application's windows, mirroring macOS App Exposé.</description>
+    </key>
     <key name="window-switcher" type="as">
       <default>['&lt;Super&gt;Tab']</default>
       <summary>Show Goblins app switcher</summary>

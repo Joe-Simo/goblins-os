@@ -7588,6 +7588,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "settings-network-hotspot-row",
             "Personal Hotspot",
         ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/schemas/org.goblins.shell.extensions.wm.gschema.xml"),
+            "goblins-wm-app-expose-keybinding",
+            "app-expose",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
+            "goblins-wm-app-expose-handler",
+            "_showAppExpose",
+        ),
         // Color picker — portal eyedropper helper, packaged + keybound, copying via
         // wl-clipboard with an honest no-clipboard fallback.
         contains_check(

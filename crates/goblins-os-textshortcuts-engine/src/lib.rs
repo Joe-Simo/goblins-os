@@ -14,7 +14,7 @@ const MAX_SHORTCUTS: usize = 500;
 pub const TEXT_SHORTCUTS_CONFIG_DIR: &str = "goblins-os";
 pub const TEXT_SHORTCUTS_CONFIG_FILE: &str = "text-shortcuts.json";
 pub const IBUS_ENGINE_NAME: &str = "goblins-textshortcuts";
-pub const IBUS_COMPONENT_EXEC: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus";
+pub const IBUS_COMPONENT_EXEC: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-ibus";
 pub const IBUS_COMPONENT_LONGNAME: &str = "Goblins Text Shortcuts";
 pub const IBUS_COMPONENT_LAYOUT: &str = "default";
 
@@ -1757,7 +1757,7 @@ mod tests {
     fn valid_component_xml_matches_the_registration_contract() {
         let xml = r#"
 <component>
-  <exec>/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus</exec>
+  <exec>/usr/libexec/goblins-os/goblins-textshortcuts-ibus</exec>
   <engines>
     <engine>
       <name>goblins-textshortcuts</name>

@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""Goblins OS Text Shortcuts IBus adapter.
+
+This adapter owns the GI/IBus boundary and delegates replacement decisions to
+the Rust runtime over the line-oriented JSON stdio protocol. It deliberately
+keeps IBus errors fail-open: text input must continue as pass-through if the
+Rust child is absent, exits, or returns invalid JSON.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import select
+import subprocess
+import sys
+from typing import Any, Callable
+
+
+ENGINE_NAME = "goblins-textshortcuts"
+COMPONENT_NAME = "org.goblins.OS.TextShortcuts"
+RUNTIME_PATH = "/usr/libexec/goblins-os/goblins-textshortcuts-engine"
+RESPONSE_TIMEOUT_SECONDS = 0.35
+
+
+def _runtime_argv() -> list[str]:
+    runtime = os.environ.get("GOBLINS_TEXTSHORTCUTS_ENGINE", RUNTIME_PATH)
+    return [runtime, "--stdio"]
+
+
+class RuntimeBridge:
+    def __init__(self, argv: list[str] | None = None) -> None:
+        self._argv = argv or _runtime_argv()
+        self._process: subprocess.Popen[str] | None = None
+        self._disabled = False
+
+    def send(self, request: dict[str, Any]) -> dict[str, Any]:
+        if self._disabled:
+            return _passthrough_response()
+        process = self._ensure_process()
+        if process is None or process.stdin is None or process.stdout is None:
+            return _passthrough_response()
+        try:
+            process.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
+            process.stdin.flush()
+            readable, _, _ = select.select(
+                [process.stdout], [], [], RESPONSE_TIMEOUT_SECONDS
+            )
+            if not readable:
+                self._disable("runtime did not answer before timeout")
+                return _passthrough_response()
+            line = process.stdout.readline()
+            if not line:
+                self._disable("runtime closed stdout")
+                return _passthrough_response()
+            response = json.loads(line)
+            if not isinstance(response, dict):
+                self._disable("runtime returned non-object JSON")
+                return _passthrough_response()
+            return response
+        except (BrokenPipeError, OSError, json.JSONDecodeError) as error:
+            self._disable(f"runtime bridge failed: {error}")
+            return _passthrough_response()
+
+    def close(self) -> None:
+        process = self._process
+        self._process = None
+        if process is None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=0.5)
+
+    def _ensure_process(self) -> subprocess.Popen[str] | None:
+        if self._process is not None and self._process.poll() is None:
+            return self._process
+        try:
+            self._process = subprocess.Popen(
+                self._argv,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+            )
+        except OSError as error:
+            self._disable(f"could not start runtime: {error}")
+            return None
+        return self._process
+
+    def _disable(self, message: str) -> None:
+        print(f"goblins-textshortcuts-ibus: {message}", file=sys.stderr)
+        self._disabled = True
+        self.close()
+
+
+def _passthrough_response() -> dict[str, Any]:
+    return {"handled": False, "operations": [], "error": None}
+
+
+def _key_request(keyval: int, state: int, ibus: Any) -> dict[str, Any]:
+    release_mask = int(getattr(ibus.ModifierType, "RELEASE_MASK", 1 << 30))
+    pressed = (state & release_mask) == 0
+    return {
+        "type": "key",
+        "keyval": int(keyval),
+        "unicode": _unicode_for_keyval(keyval, ibus) if pressed else None,
+        "pressed": pressed,
+        "command_modifier_active": _command_modifier_active(state, ibus),
+    }
+
+
+def _unicode_for_keyval(keyval: int, ibus: Any) -> str | None:
+    codepoint = int(ibus.keyval_to_unicode(keyval))
+    if codepoint < 0x20 or codepoint > 0x10FFFF:
+        return None
+    return chr(codepoint)
+
+
+def _command_modifier_active(state: int, ibus: Any) -> bool:
+    modifiers = (
+        "CONTROL_MASK",
+        "META_MASK",
+        "MOD1_MASK",
+        "MOD4_MASK",
+        "SUPER_MASK",
+        "HYPER_MASK",
+    )
+    for name in modifiers:
+        value = getattr(ibus.ModifierType, name, None)
+        if value is not None and state & int(value):
+            return True
+    return False
+
+
+def _content_purpose_request(event_type: str, purpose: int) -> dict[str, Any]:
+    return {"type": event_type, "purpose": int(purpose)}
+
+
+def _apply_response_operations(
+    target: Any,
+    response: dict[str, Any],
+    text_factory: Callable[[str], Any],
+) -> None:
+    operations = response.get("operations", [])
+    if not isinstance(operations, list):
+        return
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        operation_type = operation.get("type")
+        if operation_type == "update-preedit-text":
+            target.update_preedit_text(
+                text_factory(str(operation.get("text", ""))),
+                int(operation.get("cursor_pos", 0)),
+                bool(operation.get("visible", False)),
+            )
+        elif operation_type == "hide-preedit-text":
+            target.hide_preedit_text()
+        elif operation_type == "delete-surrounding-text":
+            target.delete_surrounding_text(
+                int(operation.get("offset", 0)),
+                int(operation.get("n_chars", 0)),
+            )
+        elif operation_type == "commit-text":
+            target.commit_text(text_factory(str(operation.get("text", ""))))
+
+
+def _run_self_test() -> None:
+    class FakeModifierType:
+        RELEASE_MASK = 1 << 30
+        CONTROL_MASK = 1 << 2
+        MOD1_MASK = 1 << 3
+        MOD4_MASK = 1 << 6
+
+    class FakeIbus:
+        ModifierType = FakeModifierType
+
+        @staticmethod
+        def keyval_to_unicode(keyval: int) -> int:
+            if keyval == 0xFF0D:
+                return 0
+            return keyval
+
+    assert _key_request(ord("o"), 0, FakeIbus) == {
+        "type": "key",
+        "keyval": ord("o"),
+        "unicode": "o",
+        "pressed": True,
+        "command_modifier_active": False,
+    }
+    assert _key_request(ord("o"), FakeModifierType.RELEASE_MASK, FakeIbus)[
+        "pressed"
+    ] is False
+    assert _key_request(ord("w"), FakeModifierType.CONTROL_MASK, FakeIbus)[
+        "command_modifier_active"
+    ] is True
+    assert _key_request(0xFF0D, 0, FakeIbus)["unicode"] is None
+    assert _content_purpose_request("content-purpose-changed", 9) == {
+        "type": "content-purpose-changed",
+        "purpose": 9,
+    }
+
+    class FakeTarget:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def update_preedit_text(self, text: str, cursor_pos: int, visible: bool) -> None:
+            self.calls.append(("update", text, cursor_pos, visible))
+
+        def hide_preedit_text(self) -> None:
+            self.calls.append(("hide",))
+
+        def delete_surrounding_text(self, offset: int, n_chars: int) -> None:
+            self.calls.append(("delete", offset, n_chars))
+
+        def commit_text(self, text: str) -> None:
+            self.calls.append(("commit", text))
+
+    target = FakeTarget()
+    _apply_response_operations(
+        target,
+        {
+            "handled": True,
+            "operations": [
+                {
+                    "type": "update-preedit-text",
+                    "text": "On my way!",
+                    "cursor_pos": 10,
+                    "visible": True,
+                },
+                {"type": "delete-surrounding-text", "offset": -3, "n_chars": 3},
+                {"type": "commit-text", "text": "On my way!"},
+                {"type": "hide-preedit-text"},
+            ],
+        },
+        lambda text: text,
+    )
+    assert target.calls == [
+        ("update", "On my way!", 10, True),
+        ("delete", -3, 3),
+        ("commit", "On my way!"),
+        ("hide",),
+    ]
+
+
+def _run_ibus() -> int:
+    import gi
+
+    gi.require_version("IBus", "1.0")
+    from gi.repository import GLib, IBus
+
+    IBus.init()
+
+    class GoblinsTextShortcutsEngine(IBus.Engine):
+        def __init__(self) -> None:
+            super().__init__()
+            self._bridge = RuntimeBridge()
+
+        def do_focus_in(self) -> None:
+            self._bridge.send(_content_purpose_request("focus-in", self._purpose()))
+
+        def do_focus_out(self) -> None:
+            self._bridge.send({"type": "focus-out"})
+
+        def do_reset(self) -> None:
+            self._bridge.send({"type": "reset"})
+
+        def do_set_content_type(self, purpose: int, hints: int) -> None:
+            del hints
+            self._bridge.send(_content_purpose_request("content-purpose-changed", purpose))
+
+        def do_process_key_event(self, keyval: int, keycode: int, state: int) -> bool:
+            del keycode
+            response = self._bridge.send(_key_request(keyval, state, IBus))
+            _apply_response_operations(
+                self,
+                response,
+                IBus.Text.new_from_string,
+            )
+            return bool(response.get("handled", False))
+
+        def do_destroy(self) -> None:
+            self._bridge.close()
+            super().do_destroy()
+
+        def _purpose(self) -> int:
+            try:
+                purpose, _hints = self.get_content_type()
+                return int(purpose)
+            except (AttributeError, TypeError, ValueError):
+                return 0
+
+    bus = IBus.Bus()
+    if not bus.is_connected():
+        print("goblins-textshortcuts-ibus: IBus bus is not connected", file=sys.stderr)
+        return 0
+
+    loop = GLib.MainLoop()
+    bus.connect("disconnected", lambda *_args: loop.quit())
+    factory = IBus.Factory.new(bus.get_connection())
+    factory.add_engine(ENGINE_NAME, GoblinsTextShortcutsEngine)
+    bus.request_name(COMPONENT_NAME, 0)
+    loop.run()
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Goblins OS Text Shortcuts IBus adapter")
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args(argv)
+    if args.self_test:
+        _run_self_test()
+        print("goblins_textshortcuts_ibus_adapter_selftest ok")
+        return 0
+    return _run_ibus()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

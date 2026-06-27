@@ -625,6 +625,33 @@ and `cargo run -p goblins-os-textshortcuts-engine -- --stdio-self-test`.
 CI/qemu must still prove the live IBus runtime loop, input-source seed, GTK
 render, and keystroke selftest before Text Shortcuts can ship.
 
+Current Text Shortcuts IBus-adapter continuation: the IBus component now points
+to `/usr/libexec/goblins-os/goblins-textshortcuts-ibus`, a Python GI adapter
+that registers the `goblins-textshortcuts` `IBus.Engine`, translates key/focus/
+content-purpose callbacks into the Rust `--stdio` JSON protocol, and applies
+only explicit operations returned by that runtime (`update_preedit_text`,
+`delete_surrounding_text`, `commit_text`, `hide_preedit_text`). The bridge is
+fail-open: if the Rust child is missing, exits, times out, or returns invalid
+JSON, key events pass through instead of blocking text input. The Containerfile
+installs the adapter, runs `python3 -m py_compile`, runs
+`goblins-textshortcuts-ibus --self-test`, and keeps the component XML contract
+check tied to the adapter entrypoint. This pass does not seed the IBus input
+source, does not flip the session input-method environment, and does not claim
+qemu/live expansion proof; core still reports the runtime loop as pending until
+the real session path is proven. Local source gates:
+`cargo fmt -p goblins-os-textshortcuts-engine -p goblins-os-verify`,
+`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `goblins-os-verify --source-root .` ->
+**blocked=0 (1738)**, `git diff --check`,
+`python3 -m py_compile os/goblins-os-textshortcuts/goblins-textshortcuts-ibus`,
+`python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus --self-test`,
+targeted `cargo test -p goblins-os-textshortcuts-engine -- --nocapture`,
+`cargo run -p goblins-os-textshortcuts-engine -- --component-check
+os/goblins-os-textshortcuts/goblins-textshortcuts.xml`, and
+`cargo run -p goblins-os-textshortcuts-engine -- --stdio-self-test`. CI/qemu
+must still prove the live IBus runtime loop, input-source seed, GTK render, and
+keystroke selftest before Text Shortcuts can ship.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -954,6 +981,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **Table watch/reload contract source-gated (CI/qemu-pending):** the engine crate now fingerprints the JSON table content, exposes `TextShortcutTableWatcher`, reloads only when the content state changes, preserves active candidates on unchanged polls, clears stale preedit candidates on changed/missing/invalid tables, and ships an installed `--table-watch-self-test` image-build gate. This is still a source/image contract; no live file monitor, GI loop, dconf seed, or text-input proof is claimed.
 - [x] **IBus content-purpose decoder source-gated (CI/qemu-pending):** the engine crate decodes IBus numeric/symbolic content purposes and refuses replacements in PASSWORD/PIN fields through an installed `--content-purpose-self-test`; unknown purposes stay free-form. This is still a source/image contract; no live GI callback or text-input proof is claimed.
 - [x] **IBus stdio runtime protocol source-gated (CI/qemu-pending):** `--stdio` provides a long-lived JSON protocol for key/focus/table events and returns explicit IBus operation JSON so the future GI shim can drive the Rust runtime without reimplementing replacement logic. The installed `--stdio-self-test` image gate covers candidate preedit, boundary commit, and PIN-field pass-through. This is still not a live IBus loop.
+- [x] **IBus GI adapter source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus` registers the IBus engine, translates GI key/focus/content-purpose callbacks into the Rust `--stdio` runtime protocol, applies only returned preedit/delete/commit/hide operations, and fails open to pass-through on missing or unhealthy runtime state. The component XML points to this adapter, and the image runs pycompile + adapter self-test + component-contract gates. This is still not a seeded session input source or live expansion proof.
 - [ ] **Live IBus engine + session enablement (deferred, XL/highest-risk):** the `goblins-textshortcuts` IBus engine loop (preedit/commit over `text-input-v3`, pass-through by default, never in password fields), the dconf input-source seed, accept bubble, and the optional model-gated autocorrect tier.
 - **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (web-verified for Fedora 44 and asserted with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
 - **gsettings/dconf:** `org.freedesktop.ibus.general preload-engines` (+`goblins-textshortcuts`); `org.gnome.desktop.input-sources sources=[('ibus','goblins-textshortcuts')]`, `per-window=false`; dconf seed in `10-goblins-os-desktop`. The replacement table itself is **JSON** under `~/.config/goblins-os/text-shortcuts.json`, written only through the core bridge — not a gsetting.

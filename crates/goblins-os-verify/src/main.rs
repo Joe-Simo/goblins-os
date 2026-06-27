@@ -8182,8 +8182,23 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-installs-textshortcuts-ibus-adapter",
+            "COPY --chmod=0755 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus /usr/libexec/goblins-os/goblins-textshortcuts-ibus",
+        ),
+        container_contains_check(
+            root,
             "bootc-installs-textshortcuts-component",
             "COPY os/goblins-os-textshortcuts/goblins-textshortcuts.xml /usr/share/ibus/component/goblins-textshortcuts.xml",
+        ),
+        container_contains_check(
+            root,
+            "bootc-runs-textshortcuts-ibus-adapter-pycompile",
+            "python3 -m py_compile /usr/libexec/goblins-os/goblins-textshortcuts-ibus",
+        ),
+        container_contains_check(
+            root,
+            "bootc-runs-textshortcuts-ibus-adapter-self-test",
+            "goblins-textshortcuts-ibus --self-test",
         ),
         container_contains_check(
             root,
@@ -8218,7 +8233,67 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts.xml"),
             "textshortcuts-component-engine-exec",
-            "/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus",
+            "/usr/libexec/goblins-os/goblins-textshortcuts-ibus",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-requires-ibus-gi",
+            "gi.require_version(\"IBus\", \"1.0\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-delegates-to-stdio-runtime",
+            "RUNTIME_PATH = \"/usr/libexec/goblins-os/goblins-textshortcuts-engine\"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-uses-stdio",
+            "return [runtime, \"--stdio\"]",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-fail-open-timeout",
+            "runtime did not answer before timeout",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-process-key-event",
+            "def do_process_key_event",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-content-purpose",
+            "def do_set_content_type",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-updates-preedit",
+            "update_preedit_text",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-deletes-surrounding-text",
+            "delete_surrounding_text",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-commits-text",
+            "commit_text",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-registers-factory-engine",
+            "factory.add_engine(ENGINE_NAME, GoblinsTextShortcutsEngine)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-self-test",
+            "goblins_textshortcuts_ibus_adapter_selftest ok",
+        ),
+        contains_check(
+            root.join("os/release/source-tree-manifest.toml"),
+            "source-manifest-includes-textshortcuts-assets",
+            "os/goblins-os-textshortcuts/",
         ),
         absent_check(
             root.join("os/dconf/db/local.d/10-goblins-os-desktop"),

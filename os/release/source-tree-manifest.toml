@@ -21,6 +21,7 @@ paths = [
   "os/etc/",
   "os/gdm/",
   "os/glib-schemas/",
+  "os/goblins-os-textshortcuts/",
   "os/gnome-session/",
   "os/gnome-shell-extensions/",
   "os/gnome-shell-modes/",

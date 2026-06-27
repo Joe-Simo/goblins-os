@@ -255,6 +255,7 @@ COPY os/session/goblins-os-session /usr/libexec/goblins-os/goblins-os-session
 COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.desktop
 COPY os/gnome-session/goblins-os.session /usr/share/gnome-session/sessions/goblins-os.session
 COPY os/gnome-shell-modes/goblins-os.json /usr/share/gnome-shell/modes/goblins-os.json
+COPY --chmod=0755 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus /usr/libexec/goblins-os/goblins-textshortcuts-ibus
 COPY os/goblins-os-textshortcuts/goblins-textshortcuts.xml /usr/share/ibus/component/goblins-textshortcuts.xml
 COPY --chmod=0755 os/voice/goblins-os-dictate /usr/libexec/goblins-os/goblins-os-dictate
 COPY --chmod=0755 os/voice/goblins-os-voice-control /usr/libexec/goblins-os/goblins-os-voice-control
@@ -332,7 +333,10 @@ RUN sed -i 's/#51a2da/#0b0b0f/g' /usr/share/anaconda/pixmaps/fedora.css 2>/dev/n
 
 RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && test -x /usr/libexec/goblins-os/goblins-textshortcuts-engine \
+    && test -x /usr/libexec/goblins-os/goblins-textshortcuts-ibus \
     && test -f /usr/share/ibus/component/goblins-textshortcuts.xml \
+    && python3 -m py_compile /usr/libexec/goblins-os/goblins-textshortcuts-ibus \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --self-test \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --keystroke-self-test \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --table-watch-self-test \
@@ -340,7 +344,7 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --stdio-self-test \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --component-check /usr/share/ibus/component/goblins-textshortcuts.xml \
     && grep -Fq '<name>goblins-textshortcuts</name>' /usr/share/ibus/component/goblins-textshortcuts.xml \
-    && grep -Fq '/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus' /usr/share/ibus/component/goblins-textshortcuts.xml \
+    && grep -Fq '/usr/libexec/goblins-os/goblins-textshortcuts-ibus' /usr/share/ibus/component/goblins-textshortcuts.xml \
     && test -x /usr/libexec/goblins-os/goblins-os-firewall \
     && test -f /usr/lib/systemd/system/goblins-os-firewall@.service \
     && test -f /etc/polkit-1/rules.d/60-goblins-os-firewall.rules \

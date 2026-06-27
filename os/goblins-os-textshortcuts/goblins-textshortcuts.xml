@@ -2,7 +2,7 @@
 <component>
   <name>org.goblins.OS.TextShortcuts</name>
   <description>Goblins OS Text Shortcuts input engine</description>
-  <exec>/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus</exec>
+  <exec>/usr/libexec/goblins-os/goblins-textshortcuts-ibus</exec>
   <version>0.1.0</version>
   <author>Goblins OS</author>
   <license>MIT</license>

@@ -1140,6 +1140,32 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "render-settings-scope-build-env",
         "GOBLINS_OS_RENDER_SCOPE=\"$GOBLINS_OS_RENDER_SCOPE\"",
     ));
+    checks.push(file_check(root, "os/bootc/verify.suffix.Dockerfile"));
+    checks.push(contains_check(
+        root.join("os/bootc/verify.suffix.Dockerfile"),
+        "image-verify-suffix-target",
+        "FROM goblins-os AS verify",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/verify.suffix.Dockerfile"),
+        "image-verify-suffix-blocked-zero",
+        "grep -q 'blocked=0'",
+    ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-cacheonly-output",
+        "--output type=cacheonly",
+    ));
+    checks.push(absent_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-no-daemon-export-tag",
+        "-t goblins-os:${{ matrix.arch }}",
+    ));
+    checks.push(absent_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-no-daemon-run",
+        "docker run --rm goblins-os:${{ matrix.arch }}",
+    ));
     checks.extend(settings_render_screenshot_checks(root));
     checks.extend(settings_interaction_screenshot_checks(root));
     checks.push(file_check(root, "os/bootc/render-desktop.sh"));

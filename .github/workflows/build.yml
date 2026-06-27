@@ -118,16 +118,16 @@ jobs:
           sudo swapon /mnt/swapfile
           df -h /
           free -h
-      - name: Build the Goblins OS image
-        run: docker build -f os/bootc/Containerfile --target goblins-os -t goblins-os:${{ matrix.arch }} .
+      - name: Build the Goblins OS image layers (cache only)
+        run: DOCKER_BUILDKIT=1 docker buildx build -f os/bootc/Containerfile --target goblins-os --output type=cacheonly .
       - name: Verify the packaging contract (must be 0 blocked)
         run: |
-          docker run --rm goblins-os:${{ matrix.arch }} /usr/libexec/goblins-os/goblins-os-verify | tee verify-${{ matrix.arch }}.log
-          grep -q 'blocked=0' verify-${{ matrix.arch }}.log
+          cat os/bootc/Containerfile os/bootc/verify.suffix.Dockerfile > /tmp/verify.Dockerfile
+          DOCKER_BUILDKIT=1 docker buildx build -f /tmp/verify.Dockerfile --target verify --output type=cacheonly .
       - name: Run the install + services self-test (non-zero fails the build)
         run: |
           cat os/bootc/Containerfile os/bootc/selftest.suffix.Dockerfile > /tmp/selftest.Dockerfile
-          DOCKER_BUILDKIT=1 docker build -f /tmp/selftest.Dockerfile --target selftest -t goblins-os:selftest-${{ matrix.arch }} .
+          DOCKER_BUILDKIT=1 docker buildx build -f /tmp/selftest.Dockerfile --target selftest --output type=cacheonly .
       - name: Render design-proof screenshots
         run: |
           cat os/bootc/Containerfile os/bootc/render.suffix.Dockerfile > /tmp/render.Dockerfile

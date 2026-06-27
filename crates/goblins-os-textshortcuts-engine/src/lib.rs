@@ -179,6 +179,69 @@ impl InputEvent {
     }
 }
 
+pub const IBUS_KEY_BACKSPACE: u32 = 0xff08;
+pub const IBUS_KEY_TAB: u32 = 0xff09;
+pub const IBUS_KEY_RETURN: u32 = 0xff0d;
+pub const IBUS_KEY_ESCAPE: u32 = 0xff1b;
+pub const IBUS_KEY_LEFT: u32 = 0xff51;
+pub const IBUS_KEY_UP: u32 = 0xff52;
+pub const IBUS_KEY_RIGHT: u32 = 0xff53;
+pub const IBUS_KEY_DOWN: u32 = 0xff54;
+pub const IBUS_KEY_DELETE: u32 = 0xffff;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IbusKeyEvent {
+    keyval: u32,
+    unicode: Option<char>,
+    pressed: bool,
+    command_modifier_active: bool,
+}
+
+impl IbusKeyEvent {
+    pub fn new(
+        keyval: u32,
+        unicode: Option<char>,
+        pressed: bool,
+        command_modifier_active: bool,
+    ) -> Self {
+        Self {
+            keyval,
+            unicode,
+            pressed,
+            command_modifier_active,
+        }
+    }
+
+    pub fn keyval(&self) -> u32 {
+        self.keyval
+    }
+
+    pub fn unicode(&self) -> Option<char> {
+        self.unicode
+    }
+}
+
+pub fn input_event_from_ibus_key(event: IbusKeyEvent) -> InputEvent {
+    if !event.pressed {
+        return InputEvent::Other;
+    }
+    if event.command_modifier_active {
+        return InputEvent::Reset;
+    }
+    match event.keyval {
+        IBUS_KEY_BACKSPACE => InputEvent::Backspace,
+        IBUS_KEY_TAB => InputEvent::Boundary('\t'),
+        IBUS_KEY_RETURN => InputEvent::Boundary('\n'),
+        IBUS_KEY_ESCAPE | IBUS_KEY_LEFT | IBUS_KEY_UP | IBUS_KEY_RIGHT | IBUS_KEY_DOWN
+        | IBUS_KEY_DELETE => InputEvent::Reset,
+        _ => event
+            .unicode
+            .filter(|value| !value.is_control())
+            .map(InputEvent::from_typed_char)
+            .unwrap_or(InputEvent::Other),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EngineAction {
     PassThrough,
@@ -368,8 +431,10 @@ pub fn is_boundary_char(value: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ibus_runtime_decision, sanitize_shortcuts, ContentPurpose, EngineAction, EngineState,
-        IbusOperation, IbusRuntimeDecision, InputEvent, ShortcutTable, TextShortcut,
+        ibus_runtime_decision, input_event_from_ibus_key, sanitize_shortcuts, ContentPurpose,
+        EngineAction, EngineState, IbusKeyEvent, IbusOperation, IbusRuntimeDecision, InputEvent,
+        ShortcutTable, TextShortcut, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE, IBUS_KEY_DOWN,
+        IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
     };
 
     fn table() -> ShortcutTable {
@@ -546,6 +611,75 @@ mod tests {
         )
         .unwrap();
         assert_eq!(table.replacement_for("brb"), Some("back soon"));
+    }
+
+    #[test]
+    fn ibus_key_events_normalize_printable_boundaries_and_backspace() {
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new('o' as u32, Some('o'), true, false)),
+            InputEvent::Character('o')
+        );
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new(' ' as u32, Some(' '), true, false)),
+            InputEvent::Boundary(' ')
+        );
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new('.' as u32, Some('.'), true, false)),
+            InputEvent::Boundary('.')
+        );
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new(IBUS_KEY_BACKSPACE, None, true, false)),
+            InputEvent::Backspace
+        );
+    }
+
+    #[test]
+    fn ibus_key_events_reset_on_navigation_and_command_modifiers() {
+        for keyval in [
+            IBUS_KEY_ESCAPE,
+            IBUS_KEY_LEFT,
+            IBUS_KEY_UP,
+            IBUS_KEY_RIGHT,
+            IBUS_KEY_DOWN,
+            IBUS_KEY_DELETE,
+        ] {
+            assert_eq!(
+                input_event_from_ibus_key(IbusKeyEvent::new(keyval, None, true, false)),
+                InputEvent::Reset
+            );
+        }
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new('w' as u32, Some('w'), true, true)),
+            InputEvent::Reset
+        );
+    }
+
+    #[test]
+    fn ibus_key_events_keep_releases_and_unknown_keys_passthrough() {
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new('o' as u32, Some('o'), false, false)),
+            InputEvent::Other
+        );
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new(0, None, true, false)),
+            InputEvent::Other
+        );
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new(0, Some('\u{7f}'), true, false)),
+            InputEvent::Other
+        );
+    }
+
+    #[test]
+    fn ibus_key_events_treat_return_and_tab_as_boundaries() {
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new(IBUS_KEY_RETURN, None, true, false)),
+            InputEvent::Boundary('\n')
+        );
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new(IBUS_KEY_TAB, None, true, false)),
+            InputEvent::Boundary('\t')
+        );
     }
 
     #[test]

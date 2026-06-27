@@ -34,12 +34,24 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-27)
 
-A long build pass landed **25 commits** (head `f6b24fd`), all on `main`, each its own
-feature, every one host-verified: `cargo test --workspace` (195 core tests),
-per-crate `cargo clippy -- -D warnings`, GTK crates compile + clippy-clean + rustfmt-1.88
-in the **local Linux container loop**, shell JS via `node --check`, gschemas via
-`glib-compile-schemas`, and `goblins-os-verify --source-root .` → **blocked=0 (1465)**.
-Nothing was pushed blind.
+Proven code head is `7c8c76d` on `main`. The latest pass shipped the Sound
+Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
+name, added the App Exposé / Hot Corner desktop-proof hooks, and changed the
+image workflow to avoid exporting the full bootc image into the runner daemon.
+Host gates for that source: `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, `git diff --check`, and
+`goblins-os-verify --source-root .` → **blocked=0 (1494)**.
+
+CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
+jobs passed the cache-only bootc build, in-image packaging verifier, self-test,
+design screenshot render, desktop screenshot render, and artifact uploads on
+`x86_64` and `aarch64`. Inspected artifacts:
+`goblins-os-screenshots-{x86_64,aarch64}` (110 PNGs each, matching file sets) and
+`goblins-os-desktop-screenshots-{x86_64,aarch64}` (18 PNGs each, matching file
+sets; includes App Exposé, Hot Corner, Snap Assist, Mission Control, Spaces,
+Switcher, and HUD light/dark captures). Pixel samples were nonblank. The
+workflow's installer ISO jobs are still a separate long-running proof and do
+not mark Batch 5 shipped.
 
 **Reusable capabilities now in place** (use these — don't reinvent):
 - **GTK container loop** — `git archive HEAD | tar -x -C /tmp/gob-build`, then a
@@ -58,7 +70,8 @@ Nothing was pushed blind.
 **Done so far (21 of 26 features advanced):**
 - **Batch 1 (Bucket A) — complete:** Live Text/OCR (core+handoff+markup Copy Text),
   Color picker. *(IME read+list also shipped.)*
-- **Batch 2 (shell) — complete:** App Exposé, Hot Corners, Snap Assist.
+- **Batch 2 (shell) — shipped with CI/qemu render proof:** App Exposé, Hot
+  Corners, Snap Assist.
 - **Batch 3 (Settings surfaces) — all 9 have a shipped read/status/UI surface:**
   Accessibility rows, Firewall, Keyboard shortcuts, Focus (substrate+gschema),
   Migration (substrate), Multi-display (read side via `displays.rs`), Personal
@@ -69,10 +82,15 @@ Nothing was pushed blind.
   Sound Recognition, Live Captions.
 
 **NEXT — pick up exactly here:**
-1. **CI/qemu UI pass**: run the `build` image workflow to render + validate
-   every deferred GTK/shell surface (Batch 2 extensions, all Batch-3 Settings rows,
-   the engine UIs), turning `in-progress` → `shipped` per item.
-2. **Batch 5 (Bucket D) LAST, qemu-gated:** FileVault-at-install, btrfs `/home` +
+1. **Gated writes pass**: implement and prove the deferred writes one feature at a
+   time — firewall toggle, IME set, Focus arm/disarm, per-app permission revoke,
+   multi-display apply, and keyboard rebinding. Do not flip any of these from
+   `in-progress` until the write path and qemu interaction proof are green.
+2. **Batch 4 engine UI pass**: build the deferred engine UIs/overlays one feature
+   at a time (Voice Control, Live Captions, Switch Control, Sound Recognition,
+   Today/Widgets, Text Shortcuts/IBus, Visual Look Up), with host-tested core
+   logic first and CI/qemu render or live-engine proof before status changes.
+3. **Batch 5 (Bucket D) LAST, qemu-gated:** FileVault-at-install, btrfs `/home` +
    snapshots — never blind-edit PAM/root-fs (use `authselect`); do under the hardware gate.
 
 Each substrate follows the proven shape: **pure unit-tested core + honest capability
@@ -185,8 +203,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - **Verifiable:** host — SSID/password validation, PSK-leak sanitization, single-radio/uplink decision, terse parsing. CI/qemu — panel render + live AP (needs a virtual/passed-through Wi-Fi device).
 - **Effort:** M · **Risk:** MED. Route writes through policy (no ungated path); start/stop idempotent (fixed con-name "Goblins Hotspot"); never persist the PSK.
 
-### `in-progress` Hot Corners
-- [x] **Opt-in hot corners shipped (render qemu-pending)** (`goblins-wm@goblins.os`): four `hot-corner-{top,bottom}-{left,right}` gschema keys (`s`, choices `none`/`mission-control`/`app-expose`, **default `none`** so nothing changes until opted in — macOS-style). Each enabled corner gets a tiny reactive actor (`addChrome`) that triggers the action on pointer entry, rebuilt on settings change, fully torn down on disable. Locally verified: `node --check`, `glib-compile-schemas` (choices enum compiles), 2 verify gates. Live trigger renders in CI/qemu.
+### `shipped` Hot Corners
+- [x] **Opt-in hot corners shipped** (`goblins-wm@goblins.os`): four `hot-corner-{top,bottom}-{left,right}` gschema keys (`s`, choices `none`/`mission-control`/`app-expose`, **default `none`** so nothing changes until opted in — macOS-style). Each enabled corner gets a tiny reactive actor (`addChrome`) that triggers the action on pointer entry, rebuilt on settings change, fully torn down on disable. Verified with `node --check`, `glib-compile-schemas`, verify gates, and CI/qemu desktop artifacts from build run `28287964440`: `52c-wm-hot-corner-{light,dark}.png` on both `x86_64` and `aarch64`.
 - [ ] Optional polish: more corner actions (Show Desktop, Control/Notification Center, Lock), a modifier-key guard, and the Settings ▸ Desktop chooser UI; set `org.gnome.desktop.interface enable-hot-corners=false` in dconf if GNOME's built-in corner ever conflicts.
 - **Packages:** none.
 - **gsettings:** EXTEND `org.goblins.shell.extensions.wm` — add `HotCornerAction` enum + `hot-corner-{top,bottom}-{left,right}` (`s`, default 'none'), `hot-corner-modifier` (none/super/ctrl/alt/shift), `hot-corners-enabled` (b). SET `org.gnome.desktop.interface enable-hot-corners=false` in dconf so GNOME's built-in corner doesn't fight the barriers.
@@ -197,8 +215,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - **Verifiable:** host — enum↔nick mapping, allowlist, request parsing, outcome strings; gschema `--dry-run`. CI/qemu — barrier/dispatch + the Settings card (Multitasking-panel render + a new interaction render).
 - **Effort:** L · **Risk:** MED (barrier code runs in gnome-shell — wrap every dispatch in try/catch, tear down barriers in `disable()`, target `backend:` for 47+, fail-closed on any error).
 
-### `in-progress` Snap Assist (second-half chooser)
-- [x] **Chooser shipped (render qemu-pending)** (`goblins-wm@goblins.os`): after a `_snapWindow` half-snap, a self-contained overlay on the empty half lists the other usable windows; picking one snaps it to the complementary zone, Esc / a 4s timeout / a pick dismiss it. Guarded by the new `snap-assist` boolean (default true), recursion-guarded (assist-initiated snaps never re-trigger), and fully isolated/try-catch-wrapped so it can never break core snapping. Goblins-styled (`.goblins-wm-snap-assist*` in the existing palette). Locally verified: `node --check`, `glib-compile-schemas`, 2 verify gates (complementing the existing edge-tiling + tile-preview theming + render-capture gates). Live thumbnails render in CI/qemu.
+### `shipped` Snap Assist (second-half chooser)
+- [x] **Chooser shipped** (`goblins-wm@goblins.os`): after a `_snapWindow` half-snap, a self-contained overlay on the empty half lists the other usable windows; picking one snaps it to the complementary zone, Esc / a 4s timeout / a pick dismiss it. Guarded by the new `snap-assist` boolean (default true), recursion-guarded (assist-initiated snaps never re-trigger), and fully isolated/try-catch-wrapped so it can never break core snapping. Goblins-styled (`.goblins-wm-snap-assist*` in the existing palette). Verified with `node --check`, `glib-compile-schemas`, verify gates, and CI/qemu desktop artifacts from build run `28287964440`: `55-wm-snap-assist-{light,dark}.png` on both `x86_64` and `aarch64`.
 - [ ] Optional polish: live window-thumbnail previews in the chooser (currently app + title rows), and a 4-finger/edge-drag trigger.
 - **Packages:** none.
 - **gsettings:** NEW `snap-assist` boolean (default true) in `…wm.gschema.xml`, recompiled by the existing `Containerfile:288` step. Reads existing `color-scheme` (light/dark) and `enable-animations` (reduced-motion). No new dconf seed.
@@ -209,8 +227,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - **Verifiable:** host — `cargo test -p goblins-os-design` accent-pin; gschema `--dry-run`; `node --check`. CI/qemu — chooser render, live clones, selection flow, second-half fill.
 - **Effort:** M · **Risk:** MED (boot NOT affected — session extension; failure = chooser doesn't appear). Wrong gschema type bricks the schema compile → mirror the existing boolean-key form.
 
-### `in-progress` App Exposé (single-app Mission Control)
-- [x] **Keyboard App Exposé shipped (render qemu-pending)** (`goblins-wm@goblins.os`): `_showAppExpose` resolves the focused app via `Shell.WindowTracker` and reuses the Mission Control overlay pre-filtered to that app (the existing per-app rail filter; `hide()` clears it), titled with the app name. New `app-expose` gschema key (`['<Super>e', 'F10']` — F10 mirrors macOS, avoids the taken `<Super>Down`). Locally verified: `node --check` (JS syntax), `glib-compile-schemas` (schema compiles), no binding conflicts, 2 verify gates. The live spread renders only in CI/qemu.
+### `shipped` App Exposé (single-app Mission Control)
+- [x] **Keyboard App Exposé shipped** (`goblins-wm@goblins.os`): `_showAppExpose` resolves the focused app via `Shell.WindowTracker` and reuses the Mission Control overlay pre-filtered to that app (the existing per-app rail filter; `hide()` clears it), titled with the app name. New `app-expose` gschema key (`['<Super>e', 'F10']` — F10 mirrors macOS, avoids the taken `<Super>Down`). Verified with `node --check`, `glib-compile-schemas`, no binding conflicts, verify gates, and CI/qemu desktop artifacts from build run `28287964440`: `52b-wm-app-expose-{light,dark}.png` on both `x86_64` and `aarch64`.
 - [ ] Optional polish: 4-finger swipe-down (`Clutter.SwipeAction`), dock-icon-click → expose, and the window HUD entry.
 - **Packages:** none (pure JS/CSS/gschema in an already-shipped extension — zero image-build risk).
 - **gsettings:** NEW `app-expose` (`as`, default `['<Control>Down', 'F10']`) in `…wm.gschema.xml` — chosen to avoid the existing `<Super>Down` restore-window binding. Optional 4-finger swipe is JS-wired (`Clutter.SwipeAction`), no dconf key. Reads existing `color-scheme`/`enable-animations`.

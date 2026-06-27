@@ -9245,6 +9245,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "Main.layoutManager.addChrome",
         ),
         contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-quick-settings-import",
+            "resource:///org/gnome/shell/ui/quickSettings.js",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-system-indicator",
+            "QuickSettings.SystemIndicator",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-quick-toggle",
+            "QuickSettings.QuickToggle",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-adds-external-indicator",
+            "addExternalIndicator",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-toggle-binds-enabled-schema",
+            "this._settings.bind('enabled', this, 'checked'",
+        ),
+        contains_check(
             root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/stylesheet.css"),
             "live-captions-extension-inter",
             "font-family: \"Inter\"",

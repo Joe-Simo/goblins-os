@@ -271,10 +271,13 @@ extension is enabled in the Goblins shell mode, but its existing GSettings
 schema still defaults `enabled=false`, so it starts hidden; when explicitly
 enabled before the live stream exists it shows an honest "waiting for the local
 caption stream" capsule using Inter and the existing Goblins material/accent
-language. No RPM, keybinding, QuickToggle, or live STT loop is claimed in this
+language. The current shell-control continuation adds a source-gated Quick
+Settings toggle bound to the existing `enabled=false` captions schema; it only
+shows the honest waiting overlay when toggled and does not start capture or
+fabricate captions. No RPM, keybinding, or live STT loop is claimed in this
 pass. Local source gates: `cargo fmt --all --check`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
-`goblins-os-verify --source-root .` → **blocked=0 (1602)**,
+`goblins-os-verify --source-root .` → **blocked=0 (1810)**,
 `node --check os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js`,
 `glib-compile-schemas --dry-run os/glib-schemas` in a Linux container,
 `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
@@ -1001,7 +1004,8 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 ### `in-progress` Live Captions (real-time on-device caption overlay)
 - [x] **Status/config substrate shipped** (`crates/goblins-os-core/src/live_captions.rs` + `/v1/live-captions/status`, NEW `org.goblins.shell.extensions.captions` gschema via `os/glib-schemas/`, dconf-seeded off): STT runtime/model/PipeWire/capture capability gates, caption config normalizers (source, text size, position, auto-hide, keep-onscreen), Whisper argv builder, and VAD/RMS segment helpers are pure + host-tested. Live capture/transcription remains CI/qemu-pending.
 - [x] **Overlay + stream contract source-gated (CI/qemu-pending):** `/v1/captions/status` aliases the status substrate and `/v1/captions/stream` returns an honest SSE status event; `goblins-captions@goblins.os` is installed/enabled in the Goblins shell mode but hidden by default through the existing disabled schema. If explicitly enabled before the live engine exists, it shows "Live Captions are waiting for the local caption stream" rather than fake captions. Node syntax, gschema dry-run, host tests, and verifier gates are green; qemu render and live stream remain pending.
-- [ ] **Live capture/transcribe/menu proof (deferred, L):** implement/prove the privileged capture loop, real transcription stream, menu-bar toggle or non-conflicting shortcut, and rendered overlay behavior in CI/qemu. The feature remains `in-progress`.
+- [x] **Quick Settings toggle source-gated (CI/qemu-pending):** the shell extension registers a GNOME Quick Settings `SystemIndicator`/`QuickToggle` bound to the existing `enabled` key. The toggle exposes only the already-honest waiting overlay; it does not start capture, add an RPM, add a shortcut, or claim live captions.
+- [ ] **Live capture/transcribe/menu proof (deferred, L):** implement/prove the privileged capture loop, real transcription stream, rendered Quick Settings control/overlay behavior, and a non-conflicting shortcut if one is added. The feature remains `in-progress`.
 - **Packages:** `whisper-cpp`/`whisper-cpp-devel` exist in Fedora 44 as `1.8.1-2.fc44`, but the current repoquery proof did **not** find a `whisper-cli` binary provider; do not add an RPM or `command -v whisper-cli` gate until the CLI provider is proven. **Do NOT** depend on `whisper-stream` (SDL2, often unpackaged, mic-via-SDL — wrong tool).
 - **gsettings/dconf:** NEW `org.goblins.shell.extensions.captions` (enabled, toggle-captions `['<Super><Alt>c']`, source system|microphone|both, auto-hide, keep-onscreen, text-size, position) + a `30-captions` seed shipping installed-but-off (`enabled=false`).
 - **Files:** `os/gnome-shell-extensions/goblins-captions@goblins.os/{metadata.json,extension.js,stylesheet.css,schemas/…captions.gschema.xml}` (NEW — overlay St actor + menu-bar QuickToggle + capture/transcribe driver), `os/dconf/db/local.d/30-captions`, `os/bootc/Containerfile` (`whisper-cpp` + `command -v whisper-cli`), `crates/goblins-os-core/src/captions.rs` (NEW — the **privileged** pw-record monitor-capture + whisper-cli loop + `/v1/captions/*`, mirroring `voice.rs`), `crates/goblins-os-core/src/main.rs` (`/v1/captions/status` + an SSE caption route), `crates/goblins-os-core/src/accelerators.rs` (allowlist the toggle key), `crates/goblins-os-settings/src/main.rs` (Accessibility "Live Captions" row), `os/gnome-shell-modes/goblins-os.json` (enable the uuid).

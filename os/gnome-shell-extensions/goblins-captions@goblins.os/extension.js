@@ -6,12 +6,64 @@
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
+import GObject from 'gi://GObject';
 import St from 'gi://St';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 
 const SCHEMA_ID = 'org.goblins.shell.extensions.captions';
 const MARGIN = 36;
+const WAITING_COPY = 'Live Captions are waiting for the local caption stream.';
+
+const LiveCaptionsToggle = GObject.registerClass(
+class LiveCaptionsToggle extends QuickSettings.QuickToggle {
+    constructor(settings) {
+        super({
+            title: 'Live Captions',
+            subtitle: 'Off',
+            iconName: 'audio-input-microphone-symbolic',
+            toggleMode: true,
+        });
+
+        this._settings = settings;
+        this._settings.bind('enabled', this, 'checked', Gio.SettingsBindFlags.DEFAULT);
+        this._settingsChangedId = this._settings.connect('changed::enabled', () => this._sync());
+        this._sync();
+    }
+
+    destroy() {
+        if (this._settingsChangedId) {
+            this._settings.disconnect(this._settingsChangedId);
+            this._settingsChangedId = 0;
+        }
+        this._settings = null;
+        super.destroy();
+    }
+
+    _sync() {
+        this.subtitle = this.checked ? 'Waiting for stream' : 'Off';
+    }
+});
+
+const LiveCaptionsIndicator = GObject.registerClass(
+class LiveCaptionsIndicator extends QuickSettings.SystemIndicator {
+    constructor(settings) {
+        super();
+
+        this._settings = settings;
+        this._indicator = this._addIndicator();
+        this._indicator.icon_name = 'audio-input-microphone-symbolic';
+        this._settings.bind('enabled', this._indicator, 'visible', Gio.SettingsBindFlags.DEFAULT);
+        this.quickSettingsItems.push(new LiveCaptionsToggle(settings));
+    }
+
+    destroy() {
+        this.quickSettingsItems.forEach(item => item.destroy());
+        this._settings = null;
+        super.destroy();
+    }
+});
 
 function settingString(settings, key, fallback) {
     try {
@@ -25,6 +77,8 @@ export default class GoblinsLiveCaptions extends Extension {
     enable() {
         this._settings = new Gio.Settings({schema_id: SCHEMA_ID});
         this._signals = [];
+        this._indicator = new LiveCaptionsIndicator(this._settings);
+        Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
 
         this._overlay = new St.BoxLayout({
             style_class: 'goblins-captions-overlay',
@@ -64,6 +118,11 @@ export default class GoblinsLiveCaptions extends Extension {
         if (globalThis.goblinsLiveCaptions === this)
             delete globalThis.goblinsLiveCaptions;
 
+        if (this._indicator) {
+            this._indicator.destroy();
+            this._indicator = null;
+        }
+
         if (this._overlay) {
             Main.layoutManager.removeChrome(this._overlay);
             this._overlay.destroy();
@@ -75,7 +134,7 @@ export default class GoblinsLiveCaptions extends Extension {
         this._settings = null;
     }
 
-    showStatus(text = 'Live Captions are waiting for the local caption stream.') {
+    showStatus(text = WAITING_COPY) {
         if (!this._overlay)
             return;
         this._label.set_text(text);

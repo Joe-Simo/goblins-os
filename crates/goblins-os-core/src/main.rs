@@ -244,6 +244,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/v1/accessibility/switch-control/status",
             get(switch_control::switch_control_status),
         )
+        .route(
+            "/v1/accessibility/switch-control/preference",
+            post(switch_control::set_switch_control_preference),
+        )
         .route("/v1/ocr/status", get(ocr::ocr_status))
         .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
         .route("/v1/firewall/status", get(firewall_status))

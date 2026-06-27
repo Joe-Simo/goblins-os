@@ -8221,6 +8221,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/accessibility/switch-control/status",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-switch-control-preference-route",
+            "/v1/accessibility/switch-control/preference",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/switch_control.rs"),
+            "switch-control-write-engine-honesty",
+            "scanner engine must be active before highlighting",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/switch_control.rs"),
+            "switch-control-write-range-normalization",
+            "clamp_interval(value)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-fetches-switch-control-status",
+            "/v1/accessibility/switch-control/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-posts-switch-control-preference",
+            "/v1/accessibility/switch-control/preference",
+        ),
+        contains_check(
             root.join("os/glib-schemas/org.goblins.os.a11y.switch-control.gschema.xml"),
             "switch-control-gschema-present",
             "org.goblins.os.a11y.switch-control",

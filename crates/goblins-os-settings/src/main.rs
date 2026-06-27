@@ -108,6 +108,7 @@ struct SettingsState {
     privacy: Option<PrivacyStatus>,
     vision: Option<VisionStatus>,
     voice: Option<VoiceStatus>,
+    switch_control: Option<SwitchControlStatus>,
     sound_recognition: Option<SoundRecognitionStatus>,
     codex: Option<CodexStatus>,
     appearance: Option<AppearanceStatus>,
@@ -791,6 +792,14 @@ struct SoundPreferenceOutcome {
 }
 
 #[derive(Deserialize)]
+struct SwitchControlPreferenceOutcome {
+    ok: bool,
+    #[allow(dead_code)]
+    target: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
 struct SoundRecognitionPreferenceOutcome {
     ok: bool,
     #[allow(dead_code)]
@@ -860,6 +869,20 @@ struct VoiceStatus {
 #[derive(Clone, Deserialize)]
 struct VoiceCapability {
     ready: bool,
+    detail: String,
+}
+
+/// Switch Control status. The real scanner extension is qemu-gated; Settings
+/// writes only the existing schema preferences and keeps the engine state honest.
+#[derive(Clone, Deserialize)]
+struct SwitchControlStatus {
+    schema_available: bool,
+    enabled: bool,
+    mode: String,
+    scanning: String,
+    auto_interval_ms: i64,
+    dwell_ms: i64,
+    debounce_ms: i64,
     detail: String,
 }
 
@@ -973,6 +996,50 @@ fn voice_control_settings_detail(voice: &VoiceStatus) -> String {
     format!(
         "Voice Control is source-gated and push-to-talk only. Add local speech-to-text and microphone capture before it can run. {stt_detail} {capture_detail}"
     )
+}
+
+fn switch_control_state(status: &SwitchControlStatus) -> (&'static str, bool) {
+    if !status.schema_available {
+        return ("unavailable", false);
+    }
+    if status.enabled {
+        return ("configured", true);
+    }
+    ("off", false)
+}
+
+fn switch_control_enabled_detail(enabled: bool) -> String {
+    if enabled {
+        "Switch Control preferences are on. The scanner engine must be active before highlighting, selection, or input injection can run.".to_string()
+    } else {
+        "Switch Control is off. No scanning or selection input runs.".to_string()
+    }
+}
+
+fn switch_control_mode_detail(value: &str) -> String {
+    match value {
+        "point" => "Point scan moves a crosshair before selection.".to_string(),
+        _ => "Item scan steps through on-screen controls.".to_string(),
+    }
+}
+
+fn switch_control_scanning_detail(value: &str) -> String {
+    match value {
+        "step" => "Step scan advances only when a switch is pressed.".to_string(),
+        _ => "Auto scan advances on the configured interval.".to_string(),
+    }
+}
+
+fn normalized_switch_interval_ms(value: f64) -> f64 {
+    f64::from(round_to_step(value.round().clamp(300.0, 5000.0) as u32, 50))
+}
+
+fn normalized_switch_dwell_ms(value: f64) -> f64 {
+    f64::from(round_to_step(value.round().clamp(0.0, 5000.0) as u32, 50))
+}
+
+fn normalized_switch_debounce_ms(value: f64) -> f64 {
+    f64::from(round_to_step(value.round().clamp(0.0, 2000.0) as u32, 10))
 }
 
 fn sound_recognition_state(status: &SoundRecognitionStatus) -> (&'static str, bool) {
@@ -2792,6 +2859,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             privacy: None,
             vision: None,
             voice: None,
+            switch_control: None,
             sound_recognition: None,
             codex: None,
             appearance: None,
@@ -2827,6 +2895,8 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         privacy: get_core_json(&config.core_url, "/v1/privacy/status").ok(),
         vision: get_core_json(&config.core_url, "/v1/vision/status").ok(),
         voice: get_core_json(&config.core_url, "/v1/voice/status").ok(),
+        switch_control: get_core_json(&config.core_url, "/v1/accessibility/switch-control/status")
+            .ok(),
         sound_recognition: get_core_json(&config.core_url, "/v1/sound-recognition/status").ok(),
         codex: get_core_json(&config.core_url, "/v1/codex/status").ok(),
         appearance: get_core_json(&config.core_url, "/v1/appearance/status").ok(),
@@ -6291,6 +6361,7 @@ fn build_accessibility(panel: &gtk4::Box, state: &SettingsState) {
         "Waiting for AT-SPI accessibility status.",
     );
     append_assistive_technology_settings(panel, state);
+    append_switch_control_settings(panel, state);
     append_sound_recognition_settings(panel, state);
     append_motion_preference(panel, state);
     append_text_scale_preference(panel, state);
@@ -11487,6 +11558,104 @@ fn append_assistive_technology_settings(panel: &gtk4::Box, state: &SettingsState
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_switch_control_settings(panel: &gtk4::Box, state: &SettingsState) {
+    panel.append(&label("Switch Control", &["gos-subsection-title"]));
+    let Some(status) = &state.switch_control else {
+        panel.append(&system_row(
+            "Switch Control",
+            "Waiting for Switch Control status.",
+        ));
+        return;
+    };
+
+    let (state_label, ready) = switch_control_state(status);
+    panel.append(&health_row(
+        "Switch Control",
+        state_label,
+        ready,
+        &status.detail,
+    ));
+
+    if !status.schema_available {
+        panel.append(&system_row("Switch Control controls", &status.detail));
+        return;
+    }
+
+    let core_url = config_core_url(state);
+    panel.append(&switch_row_dynamic(
+        "Switch Control",
+        status.enabled,
+        true,
+        switch_control_enabled_detail,
+        move |enabled| set_switch_control_bool(&core_url, "enabled", enabled),
+    ));
+
+    let core_url = config_core_url(state);
+    panel.append(&choice_row(
+        "Scan mode",
+        &status.mode,
+        SWITCH_CONTROL_MODE_OPTIONS,
+        switch_control_mode_detail,
+        move |value| set_switch_control_string(&core_url, "mode", value),
+    ));
+
+    let core_url = config_core_url(state);
+    panel.append(&choice_row(
+        "Scanning",
+        &status.scanning,
+        SWITCH_CONTROL_SCANNING_OPTIONS,
+        switch_control_scanning_detail,
+        move |value| set_switch_control_string(&core_url, "scanning", value),
+    ));
+
+    panel.append(&label("Switch timing", &["gos-subsection-title"]));
+    let core_url = config_core_url(state);
+    panel.append(&slider_row(
+        SliderSpec {
+            title: "Auto interval",
+            detail: "How long each item stays highlighted before auto-scan advances.",
+            value: normalized_switch_interval_ms(status.auto_interval_ms as f64),
+            min: 300.0,
+            max: 5000.0,
+            step: 50.0,
+        },
+        milliseconds_label,
+        normalized_switch_interval_ms,
+        move |value| set_switch_control_number(&core_url, "auto-interval-ms", value),
+    ));
+
+    let core_url = config_core_url(state);
+    panel.append(&slider_row(
+        SliderSpec {
+            title: "Dwell time",
+            detail: "How long point scan rests before a dwell selection fires.",
+            value: normalized_switch_dwell_ms(status.dwell_ms as f64),
+            min: 0.0,
+            max: 5000.0,
+            step: 50.0,
+        },
+        milliseconds_label,
+        normalized_switch_dwell_ms,
+        move |value| set_switch_control_number(&core_url, "dwell-ms", value),
+    ));
+
+    let core_url = config_core_url(state);
+    panel.append(&slider_row(
+        SliderSpec {
+            title: "Debounce",
+            detail: "Ignore repeated switch presses inside this window.",
+            value: normalized_switch_debounce_ms(status.debounce_ms as f64),
+            min: 0.0,
+            max: 2000.0,
+            step: 10.0,
+        },
+        milliseconds_label,
+        normalized_switch_debounce_ms,
+        move |value| set_switch_control_number(&core_url, "debounce-ms", value),
+    ));
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_sound_recognition_settings(panel: &gtk4::Box, state: &SettingsState) {
     panel.append(&label("Sound Recognition", &["gos-subsection-title"]));
     let Some(status) = &state.sound_recognition else {
@@ -15248,6 +15417,30 @@ struct ChoiceOption<'a> {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+const SWITCH_CONTROL_MODE_OPTIONS: &[ChoiceOption<'static>] = &[
+    ChoiceOption {
+        id: "item",
+        label: "Item",
+    },
+    ChoiceOption {
+        id: "point",
+        label: "Point",
+    },
+];
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+const SWITCH_CONTROL_SCANNING_OPTIONS: &[ChoiceOption<'static>] = &[
+    ChoiceOption {
+        id: "auto",
+        label: "Auto",
+    },
+    ChoiceOption {
+        id: "step",
+        label: "Step",
+    },
+];
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 const SOUND_RECOGNITION_SENSITIVITY_OPTIONS: &[ChoiceOption<'static>] = &[
     ChoiceOption {
         id: "low",
@@ -17580,6 +17773,54 @@ fn accessibility_preference_outcome(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_switch_control_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
+    set_switch_control_preference(base_url, target, serde_json::json!(value))
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_switch_control_number(base_url: &str, target: &str, value: f64) -> Result<String, String> {
+    set_switch_control_preference(base_url, target, serde_json::json!(value.round() as i64))
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_switch_control_string(base_url: &str, target: &str, value: &str) -> Result<String, String> {
+    set_switch_control_preference(base_url, target, serde_json::json!(value))
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_switch_control_preference(
+    base_url: &str,
+    target: &str,
+    value: serde_json::Value,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "target": target,
+        "value": value,
+    })
+    .to_string();
+    let response = http_post_json_response(
+        base_url,
+        "/v1/accessibility/switch-control/preference",
+        &body,
+    )
+    .map_err(|error| format!("Goblins OS could not reach Switch Control settings: {error}."))?;
+    let outcome =
+        switch_control_preference_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn switch_control_preference_outcome(
+    body: &[u8],
+) -> Result<SwitchControlPreferenceOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_sound_recognition_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
     set_sound_recognition_preference(base_url, target, serde_json::json!(value))
 }
@@ -19077,6 +19318,34 @@ fn test_voice_status(available: bool) -> VoiceStatus {
         } else {
             "Goblin voice runs on local Whisper and Piper models. Add the missing voice components."
                 .to_string()
+        },
+    }
+}
+
+#[cfg(test)]
+fn test_switch_control_status(
+    schema_available: bool,
+    enabled: bool,
+    mode: &str,
+    scanning: &str,
+) -> SwitchControlStatus {
+    SwitchControlStatus {
+        schema_available,
+        enabled,
+        mode: mode.to_string(),
+        scanning: scanning.to_string(),
+        auto_interval_ms: 1200,
+        dwell_ms: 800,
+        debounce_ms: 60,
+        detail: if !schema_available {
+            "Switch Control is unavailable here (its preferences schema is not installed)."
+                .to_string()
+        } else if enabled {
+            format!(
+                "Switch Control preferences are on for {mode} scan, {scanning}. The scanner engine must be active before highlighting or selection can run."
+            )
+        } else {
+            "Switch Control is off.".to_string()
         },
     }
 }
@@ -22838,6 +23107,42 @@ mod tests {
         assert!(detail.contains("Background wake listening is not ready"));
         assert!(!detail.to_ascii_lowercase().contains("siri"));
         assert!(!detail.to_ascii_lowercase().contains("always listening"));
+    }
+
+    #[test]
+    fn switch_control_copy_does_not_claim_engine_activity() {
+        let unavailable = super::test_switch_control_status(false, false, "item", "auto");
+        assert_eq!(
+            super::switch_control_state(&unavailable),
+            ("unavailable", false)
+        );
+
+        let off = super::test_switch_control_status(true, false, "item", "auto");
+        assert_eq!(super::switch_control_state(&off), ("off", false));
+        assert!(super::switch_control_enabled_detail(false).contains("No scanning"));
+
+        let configured = super::test_switch_control_status(true, true, "point", "step");
+        assert_eq!(
+            super::switch_control_state(&configured),
+            ("configured", true)
+        );
+        let enabled_detail = super::switch_control_enabled_detail(true);
+        assert!(enabled_detail.contains("preferences are on"));
+        assert!(enabled_detail.contains("scanner engine must be active"));
+        assert!(enabled_detail.contains("before highlighting"));
+        assert!(super::switch_control_mode_detail("point").contains("crosshair"));
+        assert!(super::switch_control_scanning_detail("step").contains("switch is pressed"));
+    }
+
+    #[test]
+    fn switch_control_timing_helpers_use_schema_ranges() {
+        assert_eq!(super::normalized_switch_interval_ms(10.0), 300.0);
+        assert_eq!(super::normalized_switch_interval_ms(1234.0), 1250.0);
+        assert_eq!(super::normalized_switch_interval_ms(9000.0), 5000.0);
+        assert_eq!(super::normalized_switch_dwell_ms(-20.0), 0.0);
+        assert_eq!(super::normalized_switch_dwell_ms(777.0), 800.0);
+        assert_eq!(super::normalized_switch_debounce_ms(63.0), 60.0);
+        assert_eq!(super::normalized_switch_debounce_ms(9000.0), 2000.0);
     }
 
     #[test]

@@ -788,6 +788,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "goblins-os-textshortcuts-engine"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goblins-os-today"
 version = "0.1.0"
 dependencies = [

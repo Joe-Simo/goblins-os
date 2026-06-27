@@ -8126,6 +8126,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "ibus_available && component_registered && engine_binary_available",
         ),
         contains_check(
+            root.join("Cargo.toml"),
+            "workspace-textshortcuts-engine-crate",
+            "crates/goblins-os-textshortcuts-engine",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/Cargo.toml"),
+            "textshortcuts-engine-bin-name",
+            "name = \"goblins-textshortcuts-engine\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-boundary-commit",
+            "CommitReplacement",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-deletes-trigger-before-commit",
+            "delete_previous_chars",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-refuses-password-fields",
+            "ContentPurpose::Password",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
+            "textshortcuts-engine-self-test-cli",
+            "--self-test",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-fetches-text-shortcuts-route",
             "/v1/text-shortcuts",

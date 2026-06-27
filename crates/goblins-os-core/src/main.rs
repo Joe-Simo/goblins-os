@@ -230,6 +230,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/firewall/status", get(firewall_status))
         .route("/v1/firewall/enabled", post(set_firewall_enabled))
         .route("/v1/focus/status", get(focus::focus_status))
+        .route("/v1/focus/activate", post(focus::activate_focus))
+        .route("/v1/focus/deactivate", post(focus::deactivate_focus))
+        .route("/v1/focus/tick", post(focus::focus_tick))
         .route("/v1/keychain/status", get(keychain::keychain_status))
         .route(
             "/v1/text-shortcuts",

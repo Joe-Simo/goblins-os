@@ -16,5 +16,20 @@
       <summary>Focus schedules (JSON)</summary>
       <description>JSON array of schedules that auto-arm a mode: [{"mode":"work","start":540,"end":1020,"weekdays":[1,2,3,4,5]}] where start/end are minutes from midnight and weekdays are 1=Mon..7=Sun.</description>
     </key>
+    <key name="armed-by-schedule" type="b">
+      <default>false</default>
+      <summary>Focus was armed by a schedule</summary>
+      <description>Whether the active Focus mode was last armed by the scheduler rather than a manual user action.</description>
+    </key>
+    <key name="restore-banners" type="s">
+      <default>''</default>
+      <summary>Notification banner restore snapshot</summary>
+      <description>Saved true/false value for org.gnome.desktop.notifications show-banners while Focus is active, or empty when no snapshot exists.</description>
+    </key>
+    <key name="restore-apps" type="s">
+      <default>'[]'</default>
+      <summary>Per-application notification restore snapshot (JSON)</summary>
+      <description>Reserved JSON array for per-application notification breakthrough restore state. The current substrate preserves the global banner setting first.</description>
+    </key>
   </schema>
 </schemalist>

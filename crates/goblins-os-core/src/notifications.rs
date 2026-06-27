@@ -103,6 +103,10 @@ pub async fn set_notification_preference(
 }
 
 pub(crate) fn apply_ai_notification_banners(value: bool) -> (StatusCode, String) {
+    apply_notification_banners(value)
+}
+
+pub(crate) fn apply_notification_banners(value: bool) -> (StatusCode, String) {
     let request = SetNotificationPreferenceRequest {
         target: NotificationPreferenceTarget::ShowBanners,
         child: None,
@@ -110,6 +114,23 @@ pub(crate) fn apply_ai_notification_banners(value: bool) -> (StatusCode, String)
     };
     let (status, Json(outcome)) = notification_preference_outcome(request);
     (status, outcome.text)
+}
+
+pub(crate) fn read_notification_banners() -> Result<bool, String> {
+    if gsettings(&["list-schemas"]).is_err() {
+        return Err("Desktop preferences are not ready, so Focus cannot read notification banners in this session.".to_string());
+    }
+
+    let schema = schema_snapshot(true, NOTIFICATIONS_SCHEMA);
+    if !schema.available || !schema.has_key("show-banners") {
+        return Err(
+            "Show notification banners is not ready because the desktop session does not report that preference."
+                .to_string(),
+        );
+    }
+
+    setting_bool(&schema, NOTIFICATIONS_SCHEMA, "show-banners")
+        .ok_or_else(|| "Show notification banners is not reported by this session.".to_string())
 }
 
 fn build_notifications_status() -> NotificationsStatus {

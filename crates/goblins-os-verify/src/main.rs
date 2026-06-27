@@ -8002,6 +8002,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-focus-activate-route",
+            "/v1/focus/activate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-focus-deactivate-route",
+            "/v1/focus/deactivate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-focus-tick-route",
+            "/v1/focus/tick",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/focus.rs"),
+            "core-focus-restores-notification-banners",
+            "restore-banners",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/focus.rs"),
+            "core-focus-reuses-notification-bridge",
+            "apply_notification_banners",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-keychain-status-route",
             "/v1/keychain/status",
         ),
@@ -8109,6 +8134,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/glib-schemas/org.goblins.os.focus.gschema.xml"),
             "focus-gschema-present",
             "org.goblins.os.focus",
+        ),
+        contains_check(
+            root.join("os/glib-schemas/org.goblins.os.focus.gschema.xml"),
+            "focus-gschema-restore-banners-key",
+            "restore-banners",
+        ),
+        contains_check(
+            root.join("os/glib-schemas/org.goblins.os.focus.gschema.xml"),
+            "focus-gschema-armed-by-schedule-key",
+            "armed-by-schedule",
+        ),
+        contains_check(
+            root.join("os/glib-schemas/org.goblins.os.focus.gschema.xml"),
+            "focus-gschema-restore-apps-key",
+            "restore-apps",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),

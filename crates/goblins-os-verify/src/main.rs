@@ -7608,6 +7608,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "goblins-wm-hot-corner-handler",
             "_setupHotCorners",
         ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/schemas/org.goblins.shell.extensions.wm.gschema.xml"),
+            "goblins-wm-snap-assist-key",
+            "snap-assist",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
+            "goblins-wm-snap-assist-handler",
+            "_showSnapAssist",
+        ),
         // Color picker — portal eyedropper helper, packaged + keybound, copying via
         // wl-clipboard with an honest no-clipboard fallback.
         contains_check(

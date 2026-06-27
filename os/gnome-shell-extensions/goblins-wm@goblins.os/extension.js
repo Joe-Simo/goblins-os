@@ -89,6 +89,9 @@ export default class GoblinsWindowManagement extends Extension {
         this._screenshotTimeout = 0;
         this._screenshotThumbTimeout = 0;
         this._lastShot = null;
+        this._snapAssist = null;
+        this._snapAssistKeyId = 0;
+        this._snapAssistTimeout = 0;
 
         for (const [name, method] of KEYBINDINGS) {
             Main.wm.addKeybinding(
@@ -132,6 +135,7 @@ export default class GoblinsWindowManagement extends Extension {
         this.hide();
         this._teardownHotCorners();
         this._hotCorners = null;
+        this._clearSnapAssist();
         this._clearSnapPreview();
         this._teardownScreenshotWatch();
         if (globalThis.goblinsWindowManager === this)
@@ -1103,9 +1107,10 @@ export default class GoblinsWindowManagement extends Extension {
             this._showSnapPreview(this._rectForZone(win, zone));
     }
 
-    _snapWindow(win, zone) {
+    _snapWindow(win, zone, fromAssist = false) {
         if (!this._isUsableWindow(win))
             return;
+        this._clearSnapAssist();
         const key = this._windowKey(win);
         if (!this._geometryBeforeSnap.has(key))
             this._geometryBeforeSnap.set(key, win.get_frame_rect());
@@ -1120,8 +1125,106 @@ export default class GoblinsWindowManagement extends Extension {
             } catch (error) {
                 logError(error, 'goblins-wm: snap failed');
             }
+            // Snap Assist: after a half-snap, offer the other half. Never from an
+            // assist-initiated snap (would recurse), and isolated so it can never
+            // break the snap itself.
+            if (!fromAssist)
+                this._maybeShowSnapAssist(win, zone);
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    // ── Snap Assist ───────────────────────────────────────────────────────────
+    // After snapping a window to one half, offer the other windows for the other
+    // half (the Snap Assist idiom). Self-contained overlay; Escape / a pick / a
+    // timeout dismiss it. Guarded by the `snap-assist` setting (default on).
+    _maybeShowSnapAssist(snappedWin, zone) {
+        if (!this._settings || !this._settings.get_boolean('snap-assist'))
+            return;
+        let opposite;
+        if (zone === 'left')
+            opposite = 'right';
+        else if (zone === 'right')
+            opposite = 'left';
+        else
+            return; // only the left/right halves offer an assist
+        try {
+            const candidates = this._windowEntries()
+                .map(entry => entry.window)
+                .filter(win => win !== snappedWin && this._isUsableWindow(win));
+            if (candidates.length)
+                this._showSnapAssist(candidates, opposite, snappedWin);
+        } catch (error) {
+            logError(error, 'goblins-wm: snap assist failed');
+        }
+    }
+
+    _showSnapAssist(candidates, oppositeZone, snappedWin) {
+        this._clearSnapAssist();
+        const rect = this._rectForZone(snappedWin, oppositeZone);
+        const overlay = new St.Widget({
+            style_class: 'goblins-wm-snap-assist',
+            reactive: true,
+            layout_manager: new Clutter.BinLayout(),
+        });
+        overlay.set_position(rect.x, rect.y);
+        overlay.set_size(rect.width, rect.height);
+
+        const panel = new St.BoxLayout({
+            style_class: 'goblins-wm-snap-assist-panel',
+            vertical: true,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        panel.add_child(new St.Label({
+            text: 'Fill the other half',
+            style_class: 'goblins-wm-snap-assist-title',
+        }));
+        for (const win of candidates.slice(0, 6)) {
+            const app = this._tracker.get_window_app(win);
+            const label = `${app?.get_name?.() || ''}  ${safeTitle(win)}`.trim();
+            const button = new St.Button({
+                style_class: 'goblins-wm-snap-assist-item',
+                label,
+                x_expand: true,
+            });
+            button.connect('clicked', () => this._snapWindow(win, oppositeZone, true));
+            panel.add_child(button);
+        }
+        overlay.add_child(panel);
+
+        this._snapAssistKeyId = overlay.connect('key-press-event', (_actor, event) => {
+            if (event.get_key_symbol() === Clutter.KEY_Escape) {
+                this._clearSnapAssist();
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+
+        Main.layoutManager.addChrome(overlay);
+        this._snapAssist = overlay;
+        overlay.grab_key_focus();
+        this._snapAssistTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 4000, () => {
+            this._snapAssistTimeout = 0;
+            this._clearSnapAssist();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _clearSnapAssist() {
+        if (this._snapAssistTimeout) {
+            GLib.source_remove(this._snapAssistTimeout);
+            this._snapAssistTimeout = 0;
+        }
+        if (this._snapAssist) {
+            if (this._snapAssistKeyId) {
+                this._snapAssist.disconnect(this._snapAssistKeyId);
+                this._snapAssistKeyId = 0;
+            }
+            Main.layoutManager.removeChrome(this._snapAssist);
+            this._snapAssist.destroy();
+            this._snapAssist = null;
+        }
     }
 
     _restoreFocusedWindow() {

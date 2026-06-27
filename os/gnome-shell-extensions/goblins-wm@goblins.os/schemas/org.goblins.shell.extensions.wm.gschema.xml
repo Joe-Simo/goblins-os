@@ -111,5 +111,10 @@
       <summary>Bottom-right hot corner action</summary>
       <description>Action triggered when the pointer reaches the bottom-right corner. 'none' disables the corner.</description>
     </key>
+    <key name="snap-assist" type="b">
+      <default>true</default>
+      <summary>Offer Snap Assist after a half-snap</summary>
+      <description>After snapping a window to the left or right half, offer the other open windows to fill the other half. Dismissed by Escape, a pick, or a short timeout.</description>
+    </key>
   </schema>
 </schemalist>

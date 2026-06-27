@@ -7568,6 +7568,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "settings-keyboard-input-sources-list",
             "Input sources",
         ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-security-firewall-status-row",
+            "/v1/firewall/status",
+        ),
         // Color picker — portal eyedropper helper, packaged + keybound, copying via
         // wl-clipboard with an honest no-clipboard fallback.
         contains_check(

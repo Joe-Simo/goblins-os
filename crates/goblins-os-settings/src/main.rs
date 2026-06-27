@@ -116,6 +116,20 @@ struct SettingsState {
     audio: Option<AudioStatus>,
     input: Option<InputStatus>,
     accessibility: Option<AccessibilityStatus>,
+    firewall: Option<FirewallStatus>,
+}
+
+/// Read-only firewall posture from `GET /v1/firewall/status` (firewalld). The Settings
+/// UI mirrors it honestly; the gated On/Off toggle stays a deliberate future capability.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct FirewallStatus {
+    available: bool,
+    active: bool,
+    detail: String,
 }
 
 /// Read-only system-image deployment status from `GET /v1/system/image`, backed
@@ -2489,6 +2503,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             audio: None,
             input: None,
             accessibility: None,
+            firewall: None,
         };
     }
 
@@ -2517,6 +2532,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         audio: get_core_json(&config.core_url, "/v1/audio/status").ok(),
         input: get_core_json(&config.core_url, "/v1/input/status").ok(),
         accessibility: get_core_json(&config.core_url, "/v1/accessibility/status").ok(),
+        firewall: get_core_json(&config.core_url, "/v1/firewall/status").ok(),
     }
 }
 
@@ -4763,6 +4779,21 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
             facility_state_label(&facility.state).to_string(),
             facility_state_is_ready(&facility.state),
             facility_user_detail(facility),
+        ));
+    }
+    if let Some(firewall) = &state.firewall {
+        let (firewall_label, firewall_ready) = if !firewall.available {
+            ("unavailable".to_string(), false)
+        } else if firewall.active {
+            ("on".to_string(), true)
+        } else {
+            ("off".to_string(), false)
+        };
+        rows.push((
+            "Firewall",
+            firewall_label,
+            firewall_ready,
+            firewall.detail.clone(),
         ));
     }
     panel.append(&health_summary_group(rows));

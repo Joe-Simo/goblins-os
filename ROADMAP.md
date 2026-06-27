@@ -231,8 +231,9 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - **Effort:** M · **Risk:** LOW-MED (read/edit a live credential store — never log or expose secrets; server-side/keyring boundary).
 - _Note: spec agent connection-failed; libsecret API + `seahorse` fc44 name to web-verify before building._
 
-### `TODO` Per-app privacy permissions UI (camera / mic / location / files)
-- [ ] A Goblins "Privacy & Security" surface listing which apps have been granted camera, microphone, location, screen-recording, and file access — view + revoke per app (macOS TCC altitude). The portal permission store already records grants; today Goblins shows only global status.
+### `in-progress` Per-app privacy permissions UI (camera / mic / location / files)
+- [x] **Read substrate + surface shipped** (`crates/goblins-os-core/src/app_permissions.rs` + `/v1/app-privacy/status`, Settings ▸ Privacy "App permissions" group): reads the xdg `PermissionStore` over `gdbus` (`List(in s table, out as ids)`, **web-verified** against the spec — no new package, the portal already ships) for the `location`/`background`/`notifications`/`devices` tables and lists the entries per category, honest-gated when the store isn't running. Pure `parse_list_reply` unit-tested (183 core tests); container clippy `-D warnings` clean; route + surface verify gates.
+- [ ] **Per-app revoke (deferred):** the `DeletePermission`/`Set` write behind the policy bridge + flatpak app-metadata friendly names + the per-app toggle UI.
 - **Approach:** custom_surface (own Goblins panel reading/writing the xdg-desktop-portal permission store).
 - **Packages:** none (xdg-desktop-portal already shipped).
 - **APIs:** `org.freedesktop.impl.portal.PermissionStore` D-Bus (Lookup/Set/Delete per table: `devices` for camera/mic, `location`, `screenshot`, `background`); flatpak app metadata for friendly names.

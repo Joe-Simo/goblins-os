@@ -120,6 +120,30 @@ struct SettingsState {
     hotspot: Option<HotspotStatus>,
     shortcuts: Option<ShortcutsStatus>,
     keychain: Option<KeychainStatus>,
+    app_privacy: Option<AppPrivacyStatus>,
+}
+
+/// Read-only per-app permission entries from `GET /v1/app-privacy/status` (xdg
+/// PermissionStore). Revoking is a deliberate future capability; this is a reference.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct AppPrivacyStatus {
+    available: bool,
+    tables: Vec<PermissionTable>,
+    detail: String,
+}
+
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct PermissionTable {
+    label: String,
+    entries: Vec<String>,
 }
 
 /// Read-only "Passwords & Keys" (Secret Service) status from `GET /v1/keychain/status`.
@@ -2559,6 +2583,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             hotspot: None,
             shortcuts: None,
             keychain: None,
+            app_privacy: None,
         };
     }
 
@@ -2591,6 +2616,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         hotspot: get_core_json(&config.core_url, "/v1/hotspot/status").ok(),
         shortcuts: get_core_json(&config.core_url, "/v1/shortcuts/status").ok(),
         keychain: get_core_json(&config.core_url, "/v1/keychain/status").ok(),
+        app_privacy: get_core_json(&config.core_url, "/v1/app-privacy/status").ok(),
     }
 }
 
@@ -6632,6 +6658,7 @@ fn build_privacy_permissions(panel: &gtk4::Box, state: &SettingsState) {
         "Waiting for protected action prompt status.",
     ));
     append_preference_group(panel, "Boundaries & access", boundary_rows);
+    append_app_permissions(panel, state);
     panel.append(&label("Advanced controls", &["gos-subsection-title"]));
     append_device_settings_handoff(
         panel,
@@ -6640,6 +6667,30 @@ fn build_privacy_permissions(panel: &gtk4::Box, state: &SettingsState) {
         "Open the desktop system tool for location, camera, microphone, and portal permissions.",
         state.system.as_ref(),
     );
+}
+
+/// Read-only per-app permission entries from the xdg PermissionStore (macOS
+/// per-app Privacy altitude). Revoking stays a deliberate future capability.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_app_permissions(panel: &gtk4::Box, state: &SettingsState) {
+    let Some(app_privacy) = &state.app_privacy else {
+        return;
+    };
+    panel.append(&label("App permissions", &["gos-subsection-title"]));
+    if !app_privacy.available {
+        panel.append(&system_row("App permissions", &app_privacy.detail));
+        return;
+    }
+    let mut rows: Vec<gtk4::Box> = Vec::new();
+    for table in &app_privacy.tables {
+        let value = if table.entries.is_empty() {
+            "No apps".to_string()
+        } else {
+            table.entries.join(", ")
+        };
+        rows.push(system_row(&table.label, &value));
+    }
+    append_preference_group(panel, "Granted access", rows);
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]

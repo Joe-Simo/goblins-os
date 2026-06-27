@@ -2,6 +2,7 @@ mod accelerators;
 mod accessibility;
 mod ai;
 mod app_builder;
+mod app_permissions;
 mod appearance;
 mod audio;
 mod auth;
@@ -196,6 +197,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/firewall/status", get(firewall::firewall_status))
         .route("/v1/focus/status", get(focus::focus_status))
         .route("/v1/keychain/status", get(keychain::keychain_status))
+        .route(
+            "/v1/app-privacy/status",
+            get(app_permissions::app_privacy_status),
+        )
         .route("/v1/hotspot/status", get(hotspot::hotspot_status))
         .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
         .route(

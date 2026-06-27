@@ -16,6 +16,7 @@ mod http_error;
 mod input;
 mod install_targets;
 mod installer;
+mod migration;
 mod model_manager;
 mod network;
 mod notifications;
@@ -193,6 +194,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/firewall/status", get(firewall::firewall_status))
         .route("/v1/hotspot/status", get(hotspot::hotspot_status))
         .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
+        .route(
+            "/v1/migration/capabilities",
+            get(migration::migration_capabilities),
+        )
         .route("/v1/studio/turn", post(studio_turn))
         .route("/v1/studio/sessions", get(studio_sessions))
         .route("/v1/studio/session", get(studio_session))

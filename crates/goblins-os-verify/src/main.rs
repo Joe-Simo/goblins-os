@@ -7594,6 +7594,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/shortcuts/status",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-migration-capabilities-route",
+            "/v1/migration/capabilities",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-keyboard-shortcuts-list",
             "append_keyboard_shortcuts",

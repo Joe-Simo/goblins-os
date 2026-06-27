@@ -22,6 +22,13 @@ const OVERLAY_FADE_MS = 180;
 const SNAP_PREVIEW_FADE_MS = 140;
 const SNAP_PREVIEW_VISIBLE_MS = 420;
 const TOUCH_SWIPE_MIN = 84;
+const HOT_CORNER_SIZE = 3;
+const HOT_CORNERS = [
+    ['hot-corner-top-left', 'tl'],
+    ['hot-corner-top-right', 'tr'],
+    ['hot-corner-bottom-left', 'bl'],
+    ['hot-corner-bottom-right', 'br'],
+];
 const ACTION_MODE = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW | Shell.ActionMode.POPUP;
 
 const KEYBINDINGS = [
@@ -101,6 +108,16 @@ export default class GoblinsWindowManagement extends Extension {
 
         this._setupScreenshotWatch();
 
+        this._hotCorners = [];
+        this._setupHotCorners();
+        this._signals.push([
+            this._settings,
+            this._settings.connect('changed', (_settings, key) => {
+                if (key.startsWith('hot-corner-'))
+                    this._setupHotCorners();
+            }),
+        ]);
+
         globalThis.goblinsWindowManager = this;
     }
 
@@ -113,6 +130,8 @@ export default class GoblinsWindowManagement extends Extension {
         this._signals = [];
 
         this.hide();
+        this._teardownHotCorners();
+        this._hotCorners = null;
         this._clearSnapPreview();
         this._teardownScreenshotWatch();
         if (globalThis.goblinsWindowManager === this)
@@ -276,6 +295,68 @@ export default class GoblinsWindowManagement extends Extension {
             return;
         }
         this._showMissionControl({appExpose: appId, title: app.get_name?.() || 'App Exposé'});
+    }
+
+    // ── Hot Corners ───────────────────────────────────────────────────────────
+    // macOS-style opt-in hot corners. Each corner defaults to 'none' (no actor, no
+    // behavior change); when set to an action the corner gets a tiny reactive actor
+    // that triggers it on pointer entry. Contained so a failure can't break enable().
+    _setupHotCorners() {
+        this._teardownHotCorners();
+        const monitor = Main.layoutManager.primaryMonitor;
+        if (!monitor || !this._settings)
+            return;
+        const right = monitor.x + monitor.width - HOT_CORNER_SIZE;
+        const bottom = monitor.y + monitor.height - HOT_CORNER_SIZE;
+        const positions = {
+            'hot-corner-top-left': [monitor.x, monitor.y],
+            'hot-corner-top-right': [right, monitor.y],
+            'hot-corner-bottom-left': [monitor.x, bottom],
+            'hot-corner-bottom-right': [right, bottom],
+        };
+        for (const [key] of HOT_CORNERS) {
+            const action = this._settings.get_string(key);
+            if (!action || action === 'none')
+                continue;
+            const [x, y] = positions[key];
+            this._makeHotCorner(x, y, action);
+        }
+    }
+
+    _makeHotCorner(x, y, action) {
+        const corner = new St.Widget({
+            reactive: true,
+            track_hover: true,
+            width: HOT_CORNER_SIZE,
+            height: HOT_CORNER_SIZE,
+        });
+        corner.set_position(x, y);
+        const id = corner.connect('enter-event', () => {
+            this._triggerCornerAction(action);
+            return Clutter.EVENT_PROPAGATE;
+        });
+        Main.layoutManager.addChrome(corner);
+        this._hotCorners.push([corner, id]);
+    }
+
+    _teardownHotCorners() {
+        if (!this._hotCorners)
+            return;
+        for (const [corner, id] of this._hotCorners) {
+            corner.disconnect(id);
+            Main.layoutManager.removeChrome(corner);
+            corner.destroy();
+        }
+        this._hotCorners = [];
+    }
+
+    _triggerCornerAction(action) {
+        if (this._overlay)
+            return; // an overlay is already up — don't re-trigger on dwell
+        if (action === 'mission-control')
+            this._showMissionControl();
+        else if (action === 'app-expose')
+            this._showAppExpose();
     }
 
     showSwitcherDemo() {

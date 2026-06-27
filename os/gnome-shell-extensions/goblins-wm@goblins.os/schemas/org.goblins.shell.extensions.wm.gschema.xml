@@ -71,5 +71,45 @@
       <summary>Move to the next space</summary>
       <description>Activates the next workspace.</description>
     </key>
+    <key name="hot-corner-top-left" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="mission-control"/>
+        <choice value="app-expose"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Top-left hot corner action</summary>
+      <description>Action triggered when the pointer reaches the top-left corner (macOS-style hot corners). 'none' disables the corner.</description>
+    </key>
+    <key name="hot-corner-top-right" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="mission-control"/>
+        <choice value="app-expose"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Top-right hot corner action</summary>
+      <description>Action triggered when the pointer reaches the top-right corner. 'none' disables the corner.</description>
+    </key>
+    <key name="hot-corner-bottom-left" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="mission-control"/>
+        <choice value="app-expose"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Bottom-left hot corner action</summary>
+      <description>Action triggered when the pointer reaches the bottom-left corner. 'none' disables the corner.</description>
+    </key>
+    <key name="hot-corner-bottom-right" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="mission-control"/>
+        <choice value="app-expose"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Bottom-right hot corner action</summary>
+      <description>Action triggered when the pointer reaches the bottom-right corner. 'none' disables the corner.</description>
+    </key>
   </schema>
 </schemalist>

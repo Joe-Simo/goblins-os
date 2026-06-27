@@ -16,6 +16,49 @@ fn main() -> MarkupResult<()> {
     run()
 }
 
+/// JSON body for the local core's OCR request (`POST /v1/ocr/recognize`). Pure so the
+/// "Copy Text" handoff is unit-tested on the host without a running core.
+fn ocr_request_body(image_path: &str) -> String {
+    serde_json::json!({ "image_path": image_path }).to_string()
+}
+
+/// Recognized clipboard text from the core OCR response, or `None` when recognition
+/// failed or found nothing — so "Copy Text" never puts empty/garbage on the clipboard.
+fn parse_ocr_response_text(response_body: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct OcrResponse {
+        ok: bool,
+        text: String,
+    }
+    let parsed: OcrResponse = serde_json::from_str(response_body).ok()?;
+    let text = parsed.text.trim();
+    (parsed.ok && !text.is_empty()).then(|| text.to_string())
+}
+
+#[cfg(test)]
+mod ocr_handoff_tests {
+    use super::{ocr_request_body, parse_ocr_response_text};
+
+    #[test]
+    fn request_body_carries_the_image_path() {
+        assert_eq!(
+            ocr_request_body("/tmp/a b.png"),
+            r#"{"image_path":"/tmp/a b.png"}"#
+        );
+    }
+
+    #[test]
+    fn parse_returns_trimmed_text_only_on_success() {
+        assert_eq!(
+            parse_ocr_response_text(r#"{"ok":true,"text":"  Hello\nWorld \n"}"#).as_deref(),
+            Some("Hello\nWorld")
+        );
+        assert!(parse_ocr_response_text(r#"{"ok":true,"text":"   "}"#).is_none());
+        assert!(parse_ocr_response_text(r#"{"ok":false,"text":"x"}"#).is_none());
+        assert!(parse_ocr_response_text("not json").is_none());
+    }
+}
+
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
 fn run() -> MarkupResult<()> {
     println!("goblins_os_markup=unavailable");
@@ -41,6 +84,7 @@ mod native {
     use gtk::gdk;
     use gtk::gdk::prelude::GdkCairoContextExt;
     use gtk::gdk_pixbuf::Pixbuf;
+    use gtk::gio;
     use gtk::glib;
     use gtk::prelude::*;
     use gtk4 as gtk;
@@ -440,6 +484,36 @@ mod native {
         }
         toolbar.append(&copy);
 
+        // Copy Text — on-device OCR of the source image to the clipboard (macOS Live
+        // Text). Runs off the UI loop via gio::spawn_blocking; honest status on miss.
+        let copy_text = gtk::Button::with_label("Copy Text");
+        copy_text.add_css_class("gos-markup-action");
+        set_accessible(&copy_text, "Recognize text in the image and copy it");
+        {
+            let status = status.clone();
+            let source = path.clone();
+            copy_text.connect_clicked(move |btn| {
+                let Some(image_path) = source.clone() else {
+                    status.set_text("No image to recognize");
+                    return;
+                };
+                let status = status.clone();
+                let clipboard = btn.clipboard();
+                status.set_text("Recognizing text…");
+                glib::spawn_future_local(async move {
+                    match gio::spawn_blocking(move || recognize_text_via_core(&image_path)).await {
+                        Ok(Some(text)) => {
+                            clipboard.set_text(&text);
+                            status.set_text("Copied text");
+                        }
+                        Ok(None) => status.set_text("No text found"),
+                        Err(_) => status.set_text("Couldn’t recognize text"),
+                    }
+                });
+            });
+        }
+        toolbar.append(&copy_text);
+
         let save = gtk::Button::with_label("Save");
         save.add_css_class("gos-markup-action");
         save.add_css_class("is-primary");
@@ -571,6 +645,39 @@ mod native {
         let out = annotated_path(source);
         texture.save_to_png(&out).ok()?;
         Some(out)
+    }
+
+    /// Recognize text in the source image via the local core's on-device OCR (no
+    /// network, no HTTP-client dep). Runs on a blocking thread off the UI loop; any
+    /// failure (core down, no Tesseract, no text) returns None and the caller shows an
+    /// honest status. `Connection: close` lets us read the whole body to EOF.
+    fn recognize_text_via_core(image_path: &str) -> Option<String> {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        const CORE_HOST: &str = "127.0.0.1:8787";
+        const MAX_BODY: u64 = 1_048_576;
+
+        let body = super::ocr_request_body(image_path);
+        let mut stream = TcpStream::connect(CORE_HOST).ok()?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .ok()?;
+        stream
+            .set_write_timeout(Some(Duration::from_secs(10)))
+            .ok()?;
+        let request = format!(
+            "POST /v1/ocr/recognize HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).ok()?;
+        let mut raw = Vec::new();
+        stream.take(MAX_BODY).read_to_end(&mut raw).ok()?;
+        let text = String::from_utf8_lossy(&raw);
+        let body_start = text.find("\r\n\r\n")? + 4;
+        super::parse_ocr_response_text(&text[body_start..])
     }
 
     fn copy_to_clipboard(widget: &impl IsA<gtk::Widget>, texture: &gdk::MemoryTexture) {

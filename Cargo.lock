@@ -733,6 +733,8 @@ dependencies = [
  "goblins-os-design",
  "goblins-os-ui",
  "gtk4",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

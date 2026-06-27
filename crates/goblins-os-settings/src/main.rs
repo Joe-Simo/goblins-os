@@ -108,6 +108,7 @@ struct SettingsState {
     privacy: Option<PrivacyStatus>,
     vision: Option<VisionStatus>,
     voice: Option<VoiceStatus>,
+    sound_recognition: Option<SoundRecognitionStatus>,
     codex: Option<CodexStatus>,
     appearance: Option<AppearanceStatus>,
     network: Option<NetworkStatus>,
@@ -789,6 +790,24 @@ struct SoundPreferenceOutcome {
     text: String,
 }
 
+#[derive(Deserialize)]
+struct SoundRecognitionPreferenceOutcome {
+    ok: bool,
+    #[allow(dead_code)]
+    target: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct SoundRecognitionSoundToggleOutcome {
+    ok: bool,
+    #[allow(dead_code)]
+    id: String,
+    #[allow(dead_code)]
+    enabled: bool,
+    text: String,
+}
+
 /// Codex CLI (the user's OpenAI account) status from Goblins OS. The GUI mirrors
 /// install/sign-in state and asks the core to start `codex login`; the credential
 /// stays with Codex under the service-owned CODEX_HOME — the session never sees it.
@@ -842,6 +861,43 @@ struct VoiceStatus {
 struct VoiceCapability {
     ready: bool,
     detail: String,
+}
+
+/// Accessibility Sound Recognition status. The always-listening engine is separate
+/// and qemu-gated; Settings only mirrors honest readiness and writes allowlisted
+/// GSettings preferences through core.
+#[derive(Clone, Deserialize)]
+struct SoundRecognitionStatus {
+    schema_available: bool,
+    enabled: bool,
+    available: bool,
+    active: bool,
+    sensitivity: String,
+    min_confidence: f64,
+    alert_sound: bool,
+    alert_flash: bool,
+    notify_in_lock_screen: bool,
+    classifier_model: SoundRecognitionCapability,
+    listener: SoundRecognitionCapability,
+    capture: SoundRecognitionCapability,
+    sounds: Vec<SoundRecognitionCategory>,
+    reliability_detail: String,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct SoundRecognitionCapability {
+    ready: bool,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct SoundRecognitionCategory {
+    id: String,
+    name: String,
+    group: String,
+    enabled: bool,
+    description: String,
 }
 
 impl VoiceStatus {
@@ -917,6 +973,81 @@ fn voice_control_settings_detail(voice: &VoiceStatus) -> String {
     format!(
         "Voice Control is source-gated and push-to-talk only. Add local speech-to-text and microphone capture before it can run. {stt_detail} {capture_detail}"
     )
+}
+
+fn sound_recognition_state(status: &SoundRecognitionStatus) -> (&'static str, bool) {
+    if !status.schema_available {
+        return ("unavailable", false);
+    }
+    if status.active {
+        return ("listening", true);
+    }
+    if !status.enabled {
+        return ("off", false);
+    }
+    if status.available {
+        return ("ready", true);
+    }
+    ("waiting", false)
+}
+
+fn sound_recognition_status_detail(status: &SoundRecognitionStatus) -> String {
+    format!("{} {}", status.detail, status.reliability_detail)
+}
+
+fn sound_recognition_enabled_detail(enabled: bool) -> String {
+    if enabled {
+        "Sound Recognition can listen only after the local classifier model, listener, microphone capture path, and selected sounds are ready.".to_string()
+    } else {
+        "Sound Recognition is off. No microphone audio is captured by Sound Recognition."
+            .to_string()
+    }
+}
+
+fn sound_recognition_sensitivity_detail(value: &str) -> String {
+    match value {
+        "low" => "Low sensitivity reduces alerts and may miss quieter sounds.",
+        "high" => "High sensitivity catches more sounds and may alert more often.",
+        _ => "Medium sensitivity balances missed sounds and extra alerts.",
+    }
+    .to_string()
+}
+
+fn sound_recognition_category_detail(
+    name: &str,
+    group: &str,
+    description: &str,
+    enabled: bool,
+) -> String {
+    let state = if enabled { "selected" } else { "not selected" };
+    format!(
+        "{group}: {description} {name} is {state}. This recognizes sounds approximately and on-device only. Do not rely on it in emergencies or high-risk situations."
+    )
+}
+
+fn sound_recognition_alert_sound_detail(enabled: bool) -> String {
+    if enabled {
+        "Recognized sounds can play a local alert sound after the listener is actually ready."
+            .to_string()
+    } else {
+        "Recognized sounds will not play an extra alert sound.".to_string()
+    }
+}
+
+fn sound_recognition_alert_flash_detail(enabled: bool) -> String {
+    if enabled {
+        "Recognized sounds can use the desktop visual-bell flash path.".to_string()
+    } else {
+        "Recognized sounds will not flash the screen.".to_string()
+    }
+}
+
+fn sound_recognition_lock_screen_detail(enabled: bool) -> String {
+    if enabled {
+        "Sound Recognition alerts may appear while the session is locked.".to_string()
+    } else {
+        "Sound Recognition alerts stay out of the lock screen.".to_string()
+    }
 }
 
 /// Offline / private-mode status from Goblins OS. The toggle only mirrors and
@@ -2661,6 +2792,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             privacy: None,
             vision: None,
             voice: None,
+            sound_recognition: None,
             codex: None,
             appearance: None,
             network: None,
@@ -2695,6 +2827,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         privacy: get_core_json(&config.core_url, "/v1/privacy/status").ok(),
         vision: get_core_json(&config.core_url, "/v1/vision/status").ok(),
         voice: get_core_json(&config.core_url, "/v1/voice/status").ok(),
+        sound_recognition: get_core_json(&config.core_url, "/v1/sound-recognition/status").ok(),
         codex: get_core_json(&config.core_url, "/v1/codex/status").ok(),
         appearance: get_core_json(&config.core_url, "/v1/appearance/status").ok(),
         network: get_core_json(&config.core_url, "/v1/network/status").ok(),
@@ -6158,6 +6291,7 @@ fn build_accessibility(panel: &gtk4::Box, state: &SettingsState) {
         "Waiting for AT-SPI accessibility status.",
     );
     append_assistive_technology_settings(panel, state);
+    append_sound_recognition_settings(panel, state);
     append_motion_preference(panel, state);
     append_text_scale_preference(panel, state);
     panel.append(&label("Advanced controls", &["gos-subsection-title"]));
@@ -11353,6 +11487,152 @@ fn append_assistive_technology_settings(panel: &gtk4::Box, state: &SettingsState
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_sound_recognition_settings(panel: &gtk4::Box, state: &SettingsState) {
+    panel.append(&label("Sound Recognition", &["gos-subsection-title"]));
+    let Some(status) = &state.sound_recognition else {
+        panel.append(&system_row(
+            "Sound Recognition",
+            "Waiting for Sound Recognition status.",
+        ));
+        return;
+    };
+
+    let (state_label, ready) = sound_recognition_state(status);
+    panel.append(&health_row(
+        "Sound Recognition",
+        state_label,
+        ready,
+        &sound_recognition_status_detail(status),
+    ));
+    panel.append(&health_row(
+        "Classifier model",
+        ready_word(status.classifier_model.ready),
+        status.classifier_model.ready,
+        &status.classifier_model.detail,
+    ));
+    panel.append(&health_row(
+        "Session listener",
+        ready_word(status.listener.ready),
+        status.listener.ready,
+        &status.listener.detail,
+    ));
+    panel.append(&health_row(
+        "Microphone capture",
+        ready_word(status.capture.ready),
+        status.capture.ready,
+        &status.capture.detail,
+    ));
+
+    if !status.schema_available {
+        panel.append(&system_row("Sound Recognition controls", &status.detail));
+        return;
+    }
+
+    let core_url = config_core_url(state);
+    panel.append(&switch_row_dynamic(
+        "Sound Recognition",
+        status.enabled,
+        true,
+        sound_recognition_enabled_detail,
+        move |enabled| set_sound_recognition_bool(&core_url, "enabled", enabled),
+    ));
+
+    let core_url = config_core_url(state);
+    panel.append(&choice_row(
+        "Sensitivity",
+        &status.sensitivity,
+        SOUND_RECOGNITION_SENSITIVITY_OPTIONS,
+        sound_recognition_sensitivity_detail,
+        move |value| set_sound_recognition_string(&core_url, "sensitivity", value),
+    ));
+
+    let core_url = config_core_url(state);
+    panel.append(&slider_row(
+        SliderSpec {
+            title: "Minimum confidence",
+            detail: "Require a higher confidence score before Sound Recognition can alert.",
+            value: normalized_sound_recognition_confidence(status.min_confidence),
+            min: 0.30,
+            max: 0.95,
+            step: 0.05,
+        },
+        sound_recognition_confidence_label,
+        normalized_sound_recognition_confidence,
+        move |value| set_sound_recognition_number(&core_url, "min-confidence", value),
+    ));
+
+    panel.append(&label("Sound categories", &["gos-subsection-title"]));
+    if status.sounds.is_empty() {
+        panel.append(&system_row(
+            "Sound categories",
+            "The Sound Recognition category registry is empty in this build.",
+        ));
+    } else {
+        for sound in &status.sounds {
+            let core_url = config_core_url(state);
+            let id = sound.id.clone();
+            let name = sound.name.clone();
+            let group = sound.group.clone();
+            let description = sound.description.clone();
+            panel.append(&switch_row_dynamic(
+                &sound.name,
+                sound.enabled,
+                true,
+                move |enabled| {
+                    sound_recognition_category_detail(&name, &group, &description, enabled)
+                },
+                move |enabled| set_sound_recognition_sound(&core_url, &id, enabled),
+            ));
+        }
+    }
+
+    panel.append(&label("Alerts", &["gos-subsection-title"]));
+    append_sound_recognition_bool_row(
+        panel,
+        state,
+        "alert-sound",
+        "Play alert sound",
+        status.alert_sound,
+        sound_recognition_alert_sound_detail,
+    );
+    append_sound_recognition_bool_row(
+        panel,
+        state,
+        "alert-flash",
+        "Flash the screen",
+        status.alert_flash,
+        sound_recognition_alert_flash_detail,
+    );
+    append_sound_recognition_bool_row(
+        panel,
+        state,
+        "notify-in-lock-screen",
+        "Show on lock screen",
+        status.notify_in_lock_screen,
+        sound_recognition_lock_screen_detail,
+    );
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_sound_recognition_bool_row(
+    panel: &gtk4::Box,
+    state: &SettingsState,
+    target: &'static str,
+    title: &'static str,
+    value: bool,
+    detail_for_state: fn(bool) -> String,
+) {
+    let core_url = config_core_url(state);
+    panel.append(&switch_row_dynamic(
+        title,
+        value,
+        true,
+        detail_for_state,
+        move |enabled| set_sound_recognition_bool(&core_url, target, enabled),
+    ));
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_night_light_settings(panel: &gtk4::Box, state: &SettingsState) {
     panel.append(&label("Display comfort", &["gos-subsection-title"]));
     let Some(accessibility) = &state.accessibility else {
@@ -14910,6 +15190,22 @@ fn normalized_keyboard_repeat_interval_slider(value: f64) -> f64 {
     f64::from(normalized_keyboard_repeat_interval(value.round() as u32))
 }
 
+fn normalized_sound_recognition_confidence(value: f64) -> f64 {
+    let bounded = if value.is_finite() {
+        value.clamp(0.30, 0.95)
+    } else {
+        0.70
+    };
+    ((bounded / 0.05).round() * 0.05 * 100.0).round() / 100.0
+}
+
+fn sound_recognition_confidence_label(value: f64) -> String {
+    format!(
+        "{}%",
+        (normalized_sound_recognition_confidence(value) * 100.0).round() as u32
+    )
+}
+
 fn round_to_step(value: u32, step: u32) -> u32 {
     ((value + (step / 2)) / step) * step
 }
@@ -14950,6 +15246,22 @@ struct ChoiceOption<'a> {
     id: &'a str,
     label: &'a str,
 }
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+const SOUND_RECOGNITION_SENSITIVITY_OPTIONS: &[ChoiceOption<'static>] = &[
+    ChoiceOption {
+        id: "low",
+        label: "Low",
+    },
+    ChoiceOption {
+        id: "medium",
+        label: "Medium",
+    },
+    ChoiceOption {
+        id: "high",
+        label: "High",
+    },
+];
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 const BACKGROUND_PICTURE_OPTIONS: &[ChoiceOption<'static>] = &[
@@ -17268,6 +17580,87 @@ fn accessibility_preference_outcome(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_sound_recognition_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
+    set_sound_recognition_preference(base_url, target, serde_json::json!(value))
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_sound_recognition_number(
+    base_url: &str,
+    target: &str,
+    value: f64,
+) -> Result<String, String> {
+    set_sound_recognition_preference(base_url, target, serde_json::json!(value))
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_sound_recognition_string(
+    base_url: &str,
+    target: &str,
+    value: &str,
+) -> Result<String, String> {
+    set_sound_recognition_preference(base_url, target, serde_json::json!(value))
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_sound_recognition_preference(
+    base_url: &str,
+    target: &str,
+    value: serde_json::Value,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "target": target,
+        "value": value,
+    })
+    .to_string();
+    let response = http_post_json_response(base_url, "/v1/sound-recognition/preference", &body)
+        .map_err(|error| {
+            format!("Goblins OS could not reach Sound Recognition settings: {error}.")
+        })?;
+    let outcome =
+        sound_recognition_preference_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_sound_recognition_sound(base_url: &str, id: &str, enabled: bool) -> Result<String, String> {
+    let body = serde_json::json!({
+        "id": id,
+        "enabled": enabled,
+    })
+    .to_string();
+    let response = http_post_json_response(base_url, "/v1/sound-recognition/sound-toggle", &body)
+        .map_err(|error| {
+        format!("Goblins OS could not reach Sound Recognition settings: {error}.")
+    })?;
+    let outcome =
+        sound_recognition_sound_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn sound_recognition_preference_outcome(
+    body: &[u8],
+) -> Result<SoundRecognitionPreferenceOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+fn sound_recognition_sound_outcome(
+    body: &[u8],
+) -> Result<SoundRecognitionSoundToggleOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_input_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
     set_input_preference(base_url, target, serde_json::json!(value))
 }
@@ -18684,6 +19077,70 @@ fn test_voice_status(available: bool) -> VoiceStatus {
         } else {
             "Goblin voice runs on local Whisper and Piper models. Add the missing voice components."
                 .to_string()
+        },
+    }
+}
+
+#[cfg(test)]
+fn test_sound_recognition_status(
+    schema_available: bool,
+    enabled: bool,
+    available: bool,
+    active: bool,
+) -> SoundRecognitionStatus {
+    SoundRecognitionStatus {
+        schema_available,
+        enabled,
+        available,
+        active,
+        sensitivity: "medium".to_string(),
+        min_confidence: 0.70,
+        alert_sound: false,
+        alert_flash: false,
+        notify_in_lock_screen: false,
+        classifier_model: SoundRecognitionCapability {
+            ready: available,
+            detail: if available {
+                "Classifier model ready.".to_string()
+            } else {
+                "No recognition model in /var/lib/goblins-os/sound-recognition.".to_string()
+            },
+        },
+        listener: SoundRecognitionCapability {
+            ready: available,
+            detail: if available {
+                "Sound Recognition listener is installed.".to_string()
+            } else {
+                "Sound Recognition listener is not installed in this session.".to_string()
+            },
+        },
+        capture: SoundRecognitionCapability {
+            ready: available,
+            detail: if available {
+                "Microphone capture path is available.".to_string()
+            } else {
+                "Microphone capture is not ready on this device.".to_string()
+            },
+        },
+        sounds: vec![SoundRecognitionCategory {
+            id: "doorbell".to_string(),
+            name: "Doorbell".to_string(),
+            group: "Home".to_string(),
+            enabled: true,
+            description: "Doorbell chimes or buzzer-style entrance alerts.".to_string(),
+        }],
+        reliability_detail: "This recognizes sounds approximately and on-device only. Do not rely on it in emergencies or high-risk situations.".to_string(),
+        detail: if !schema_available {
+            "Sound Recognition is unavailable here (its preferences schema is not installed)."
+                .to_string()
+        } else if !enabled {
+            "Sound Recognition is off. It listens only after you turn it on and choose sounds."
+                .to_string()
+        } else if active {
+            "Sound Recognition is listening for 1 selected sound categories on this device."
+                .to_string()
+        } else {
+            "Sound Recognition needs the local classifier model, listener, and microphone capture path before it can listen.".to_string()
         },
     }
 }
@@ -22381,6 +22838,52 @@ mod tests {
         assert!(detail.contains("Background wake listening is not ready"));
         assert!(!detail.to_ascii_lowercase().contains("siri"));
         assert!(!detail.to_ascii_lowercase().contains("always listening"));
+    }
+
+    #[test]
+    fn sound_recognition_copy_stays_gated_and_truthful() {
+        let unavailable = super::test_sound_recognition_status(false, false, false, false);
+        assert_eq!(
+            super::sound_recognition_state(&unavailable),
+            ("unavailable", false)
+        );
+
+        let off = super::test_sound_recognition_status(true, false, false, false);
+        assert_eq!(super::sound_recognition_state(&off), ("off", false));
+        assert!(super::sound_recognition_enabled_detail(false).contains("No microphone audio"));
+
+        let waiting = super::test_sound_recognition_status(true, true, false, false);
+        assert_eq!(super::sound_recognition_state(&waiting), ("waiting", false));
+        let waiting_detail = super::sound_recognition_status_detail(&waiting);
+        assert!(waiting_detail.contains("local classifier model"));
+        assert!(waiting_detail.contains("Do not rely on it in emergencies"));
+
+        let ready = super::test_sound_recognition_status(true, true, true, false);
+        assert_eq!(super::sound_recognition_state(&ready), ("ready", true));
+        let listening = super::test_sound_recognition_status(true, true, true, true);
+        assert_eq!(
+            super::sound_recognition_state(&listening),
+            ("listening", true)
+        );
+
+        let category = super::sound_recognition_category_detail(
+            "Doorbell",
+            "Home",
+            "Doorbell chimes or buzzer-style entrance alerts.",
+            true,
+        );
+        assert!(category.contains("Doorbell is selected"));
+        assert!(category.contains("on-device only"));
+        assert!(category.contains("Do not rely on it in emergencies"));
+    }
+
+    #[test]
+    fn sound_recognition_confidence_uses_supported_steps() {
+        assert_eq!(super::normalized_sound_recognition_confidence(0.1), 0.30);
+        assert_eq!(super::normalized_sound_recognition_confidence(0.72), 0.70);
+        assert_eq!(super::normalized_sound_recognition_confidence(0.73), 0.75);
+        assert_eq!(super::normalized_sound_recognition_confidence(2.0), 0.95);
+        assert_eq!(super::sound_recognition_confidence_label(0.735), "75%");
     }
 
     #[test]

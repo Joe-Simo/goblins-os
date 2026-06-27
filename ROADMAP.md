@@ -327,10 +327,30 @@ CI/qemu still must prove the GTK render, GNOME Shell/menu-bar date entry,
 edge-open behavior, and any future live weather/calendar/brief integrations
 before Today/Widgets can ship.
 
+Current Sound Recognition continuation: the Settings controls + write bridge are
+now source-gated but not shipped. Core exposes
+`/v1/sound-recognition/preference` and `/v1/sound-recognition/sound-toggle`,
+writes only the allowlisted `org.goblins.SoundRecognition` keys, rejects unknown
+sound ids, clamps confidence, and never reports listening just because a
+preference saved. Settings ▸ Accessibility now shows model/listener/capture
+readiness, the reliability caveat, the master toggle, per-sound toggles,
+sensitivity, confidence, and alert options through those core routes. No RPM,
+listener daemon, model weights, capture loop, notification integration, or live
+mic behavior is claimed in this pass. Local source gates: `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (1638)**,
+`git diff --check`, targeted `cargo test -p goblins-os-core sound_recognition`,
+targeted `cargo test -p goblins-os-settings sound_recognition`, and the Rust 1.88
+GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
+CI/qemu must still prove the GTK render, installed schema/write behavior,
+session-user listener, PipeWire capture, notification/flash path, and reliability
+copy before Sound Recognition can ship.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. Next is
-   Sound Recognition, then Switch Control, and Text Shortcuts/IBus. Use
+   Switch Control, then Text Shortcuts/IBus. Use
    host-tested pure logic first, keep every live/render surface `in-progress`
    until CI/qemu proof is green, and do not add `whisper-cpp` as a CLI
    dependency until the actual Fedora 44 `whisper-cli` provider is proven.
@@ -616,6 +636,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 
 ### `in-progress` Sound Recognition (alerting for safety/attention sounds)
 - [x] **Category registry + status substrate shipped** (`crates/goblins-os-core/src/sound_recognition.rs` + `/v1/sound-recognition/status`, NEW `org.goblins.SoundRecognition` gschema via `os/glib-schemas/`, dconf-seeded all-off): the fixed sound catalog, per-sound allowlist/normalizer, classifier-model/listener/capture capability gates, reliability caveat, and honest JSON status are host-testable. No listener or Settings UI is claimed yet; if the model/listener/capture/schema is absent the route reports exactly that.
+- [x] **Settings controls + write bridge source-gated (CI/qemu-pending):** core exposes `/v1/sound-recognition/preference` and `/v1/sound-recognition/sound-toggle`, writes only the allowlisted `org.goblins.SoundRecognition` keys, rejects unknown sound ids, clamps confidence, and returns honest saved-but-not-listening copy until model/listener/capture/categories are ready. Settings ▸ Accessibility renders readiness, reliability caveat, master toggle, per-sound switches, sensitivity, confidence, and alert toggles through those routes. No listener, model weights, capture loop, notification firing, or live mic behavior is claimed yet.
 - [ ] Always-listening on-device recognition of a fixed catalog (smoke/fire alarm, siren, doorbell, knock, baby crying, dog bark, car horn, appliance beep, running water, shouting) firing a Goblins notification + optional sound/flash, for deaf/HoH users. **Reliability honesty is first-class** (not a footnote).
 - **Packages:** `python3-onnxruntime` (`1.22.2`), `python3-numpy`, `libnotify` (`0.8.7-1.fc44`), `alsa-utils`, `pipewire`, `pipewire-alsa`, `wireplumber`, `sox` (audio stack already present; `sox` already used in the brand-sound layer).
 - **gsettings/dconf:** NEW relocatable `org.goblins.SoundRecognition` (enabled, sounds `as`, sensitivity, alert-sound, alert-flash → drives `…a11y.keyboard visual-bell`, min-confidence, notify-in-lock-screen) seeded **all-off**. Reuse existing notifications + per-app registry so alerts respect DND/lock-screen.

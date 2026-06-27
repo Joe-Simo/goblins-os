@@ -12,8 +12,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use axum::Json;
-use serde::Serialize;
+use axum::{http::StatusCode, Json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 const SCHEMA: &str = "org.goblins.SoundRecognition";
 const DEFAULT_MODEL_DIR: &str = "/var/lib/goblins-os/sound-recognition";
@@ -145,8 +146,79 @@ struct SoundCategoryStatus {
     audioset_classes: &'static [&'static str],
 }
 
+#[derive(Deserialize)]
+pub struct SetSoundRecognitionPreferenceRequest {
+    target: SoundRecognitionPreferenceTarget,
+    value: Value,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum SoundRecognitionPreferenceTarget {
+    Enabled,
+    Sensitivity,
+    MinConfidence,
+    AlertSound,
+    AlertFlash,
+    NotifyInLockScreen,
+}
+
+#[derive(Deserialize)]
+pub struct SetSoundToggleRequest {
+    id: String,
+    enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct SoundRecognitionPreferenceOutcome {
+    ok: bool,
+    target: &'static str,
+    text: String,
+}
+
+#[derive(Serialize)]
+pub struct SoundRecognitionSoundToggleOutcome {
+    ok: bool,
+    id: String,
+    enabled: bool,
+    text: String,
+}
+
+#[derive(Clone, Copy)]
+enum SoundRecognitionValueKind {
+    Bool,
+    Sensitivity,
+    MinConfidence,
+}
+
+#[derive(Clone, Copy)]
+struct SoundRecognitionTargetSpec {
+    target: &'static str,
+    key: &'static str,
+    label: &'static str,
+    kind: SoundRecognitionValueKind,
+}
+
+enum SoundRecognitionPreferenceValue {
+    Bool(bool),
+    Sensitivity(&'static str),
+    MinConfidence(f64),
+}
+
 pub async fn sound_recognition_status() -> Json<SoundRecognitionStatus> {
     Json(build_status())
+}
+
+pub async fn set_sound_recognition_preference(
+    Json(request): Json<SetSoundRecognitionPreferenceRequest>,
+) -> (StatusCode, Json<SoundRecognitionPreferenceOutcome>) {
+    set_sound_recognition_preference_outcome(request)
+}
+
+pub async fn set_sound_toggle(
+    Json(request): Json<SetSoundToggleRequest>,
+) -> (StatusCode, Json<SoundRecognitionSoundToggleOutcome>) {
+    set_sound_toggle_outcome(request)
 }
 
 fn build_status() -> SoundRecognitionStatus {
@@ -214,6 +286,277 @@ fn build_status() -> SoundRecognitionStatus {
             &enabled_sounds,
         ),
     }
+}
+
+fn set_sound_recognition_preference_outcome(
+    request: SetSoundRecognitionPreferenceRequest,
+) -> (StatusCode, Json<SoundRecognitionPreferenceOutcome>) {
+    let spec = sound_recognition_target_spec(request.target);
+    let value = match parse_sound_recognition_value(spec, &request.value) {
+        Ok(value) => value,
+        Err(text) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(SoundRecognitionPreferenceOutcome {
+                    ok: false,
+                    target: spec.target,
+                    text,
+                }),
+            );
+        }
+    };
+
+    if gsettings(&["list-schemas"]).is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SoundRecognitionPreferenceOutcome {
+                ok: false,
+                target: spec.target,
+                text: "Desktop preferences are not ready, so Sound Recognition cannot be changed in this session.".to_string(),
+            }),
+        );
+    }
+
+    if !schema_has_key(spec.key) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SoundRecognitionPreferenceOutcome {
+                ok: false,
+                target: spec.target,
+                text: format!(
+                    "{} is not ready because the Sound Recognition preference is not installed.",
+                    spec.label
+                ),
+            }),
+        );
+    }
+
+    let encoded = encode_sound_recognition_value(&value);
+    match gsettings(&["set", SCHEMA, spec.key, &encoded]) {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(SoundRecognitionPreferenceOutcome {
+                ok: true,
+                target: spec.target,
+                text: sound_recognition_preference_success_detail(spec, &value),
+            }),
+        ),
+        Err(_) => (
+            StatusCode::BAD_GATEWAY,
+            Json(SoundRecognitionPreferenceOutcome {
+                ok: false,
+                target: spec.target,
+                text: format!("{} could not be saved by the desktop session.", spec.label),
+            }),
+        ),
+    }
+}
+
+fn set_sound_toggle_outcome(
+    request: SetSoundToggleRequest,
+) -> (StatusCode, Json<SoundRecognitionSoundToggleOutcome>) {
+    let requested_id = request.id.trim();
+    let Some(category) = sound_category_by_id(requested_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SoundRecognitionSoundToggleOutcome {
+                ok: false,
+                id: requested_id.to_string(),
+                enabled: request.enabled,
+                text: "Unknown sound category. Sound Recognition only accepts its fixed on-device sound registry.".to_string(),
+            }),
+        );
+    };
+
+    if gsettings(&["list-schemas"]).is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SoundRecognitionSoundToggleOutcome {
+                ok: false,
+                id: category.id.to_string(),
+                enabled: request.enabled,
+                text: "Desktop preferences are not ready, so Sound Recognition categories cannot be changed in this session.".to_string(),
+            }),
+        );
+    }
+
+    if !schema_has_key("sounds") {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SoundRecognitionSoundToggleOutcome {
+                ok: false,
+                id: category.id.to_string(),
+                enabled: request.enabled,
+                text: "Sound Recognition categories are not ready because the preference is not installed.".to_string(),
+            }),
+        );
+    }
+
+    let current = normalize_enabled_sounds(read_sound_ids());
+    let next = toggled_sound_ids(&current, category.id, request.enabled);
+    let encoded = encode_sound_ids(&next);
+    match gsettings(&["set", SCHEMA, "sounds", &encoded]) {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(SoundRecognitionSoundToggleOutcome {
+                ok: true,
+                id: category.id.to_string(),
+                enabled: request.enabled,
+                text: sound_toggle_success_detail(category, request.enabled),
+            }),
+        ),
+        Err(_) => (
+            StatusCode::BAD_GATEWAY,
+            Json(SoundRecognitionSoundToggleOutcome {
+                ok: false,
+                id: category.id.to_string(),
+                enabled: request.enabled,
+                text: format!(
+                    "{} could not be saved by the desktop session.",
+                    category.name
+                ),
+            }),
+        ),
+    }
+}
+
+fn sound_recognition_target_spec(
+    target: SoundRecognitionPreferenceTarget,
+) -> SoundRecognitionTargetSpec {
+    match target {
+        SoundRecognitionPreferenceTarget::Enabled => SoundRecognitionTargetSpec {
+            target: "enabled",
+            key: "enabled",
+            label: "Sound Recognition",
+            kind: SoundRecognitionValueKind::Bool,
+        },
+        SoundRecognitionPreferenceTarget::Sensitivity => SoundRecognitionTargetSpec {
+            target: "sensitivity",
+            key: "sensitivity",
+            label: "Sound Recognition sensitivity",
+            kind: SoundRecognitionValueKind::Sensitivity,
+        },
+        SoundRecognitionPreferenceTarget::MinConfidence => SoundRecognitionTargetSpec {
+            target: "min-confidence",
+            key: "min-confidence",
+            label: "Sound Recognition confidence",
+            kind: SoundRecognitionValueKind::MinConfidence,
+        },
+        SoundRecognitionPreferenceTarget::AlertSound => SoundRecognitionTargetSpec {
+            target: "alert-sound",
+            key: "alert-sound",
+            label: "Sound Recognition alert sound",
+            kind: SoundRecognitionValueKind::Bool,
+        },
+        SoundRecognitionPreferenceTarget::AlertFlash => SoundRecognitionTargetSpec {
+            target: "alert-flash",
+            key: "alert-flash",
+            label: "Sound Recognition screen flash",
+            kind: SoundRecognitionValueKind::Bool,
+        },
+        SoundRecognitionPreferenceTarget::NotifyInLockScreen => SoundRecognitionTargetSpec {
+            target: "notify-in-lock-screen",
+            key: "notify-in-lock-screen",
+            label: "Sound Recognition lock-screen alerts",
+            kind: SoundRecognitionValueKind::Bool,
+        },
+    }
+}
+
+fn parse_sound_recognition_value(
+    spec: SoundRecognitionTargetSpec,
+    value: &Value,
+) -> Result<SoundRecognitionPreferenceValue, String> {
+    match spec.kind {
+        SoundRecognitionValueKind::Bool => value
+            .as_bool()
+            .map(SoundRecognitionPreferenceValue::Bool)
+            .ok_or_else(|| format!("{} expects true or false.", spec.label)),
+        SoundRecognitionValueKind::Sensitivity => {
+            let Some(value) = value.as_str() else {
+                return Err(
+                    "Sound Recognition sensitivity must be low, medium, or high.".to_string(),
+                );
+            };
+            match value.trim() {
+                "low" => Ok(SoundRecognitionPreferenceValue::Sensitivity("low")),
+                "medium" => Ok(SoundRecognitionPreferenceValue::Sensitivity("medium")),
+                "high" => Ok(SoundRecognitionPreferenceValue::Sensitivity("high")),
+                _ => Err("Sound Recognition sensitivity must be low, medium, or high.".to_string()),
+            }
+        }
+        SoundRecognitionValueKind::MinConfidence => {
+            let Some(value) = value.as_f64() else {
+                return Err("Sound Recognition confidence expects a number.".to_string());
+            };
+            Ok(SoundRecognitionPreferenceValue::MinConfidence(
+                clamp_min_confidence(value),
+            ))
+        }
+    }
+}
+
+fn encode_sound_recognition_value(value: &SoundRecognitionPreferenceValue) -> String {
+    match value {
+        SoundRecognitionPreferenceValue::Bool(value) => value.to_string(),
+        SoundRecognitionPreferenceValue::Sensitivity(value) => format!("'{value}'"),
+        SoundRecognitionPreferenceValue::MinConfidence(value) => format!("{value:.2}"),
+    }
+}
+
+fn sound_recognition_preference_success_detail(
+    spec: SoundRecognitionTargetSpec,
+    value: &SoundRecognitionPreferenceValue,
+) -> String {
+    match (spec.target, value) {
+        ("enabled", SoundRecognitionPreferenceValue::Bool(false)) => {
+            "Sound Recognition is off. No microphone audio is captured by Sound Recognition."
+                .to_string()
+        }
+        ("enabled", SoundRecognitionPreferenceValue::Bool(true)) => format!(
+            "Sound Recognition is on, but it listens only when the local classifier model, listener, microphone capture path, and selected sounds are ready. {RELIABILITY_DETAIL}"
+        ),
+        ("sensitivity", SoundRecognitionPreferenceValue::Sensitivity(value)) => format!(
+            "Sound Recognition sensitivity is set to {value}. It still requires the local classifier model, listener, and microphone capture path before it can listen."
+        ),
+        ("min-confidence", SoundRecognitionPreferenceValue::MinConfidence(value)) => format!(
+            "Sound Recognition minimum confidence is set to {}%. It still requires the local classifier model, listener, and microphone capture path before it can listen.",
+            (value * 100.0).round() as u32
+        ),
+        _ => format!(
+            "{} saved. Sound Recognition still requires the local classifier model, listener, and microphone capture path before it can listen.",
+            spec.label
+        ),
+    }
+}
+
+fn toggled_sound_ids(current: &[String], id: &str, enabled: bool) -> Vec<String> {
+    let mut next = normalize_enabled_sounds(current.to_vec());
+    if enabled {
+        if !next.iter().any(|candidate| candidate == id) {
+            next.push(id.to_string());
+        }
+    } else {
+        next.retain(|candidate| candidate != id);
+    }
+    next
+}
+
+fn encode_sound_ids(ids: &[String]) -> String {
+    let normalized = normalize_enabled_sounds(ids.to_vec());
+    if normalized.is_empty() {
+        return "@as []".to_string();
+    }
+    let quoted: Vec<String> = normalized.iter().map(|id| format!("'{id}'")).collect();
+    format!("[{}]", quoted.join(", "))
+}
+
+fn sound_toggle_success_detail(category: &SoundCategory, enabled: bool) -> String {
+    let state = if enabled { "enabled" } else { "disabled" };
+    format!(
+        "{} alerts are {state}. Sound Recognition still requires the local classifier model, listener, and microphone capture path before it can listen. {RELIABILITY_DETAIL}",
+        category.name
+    )
 }
 
 fn status_detail(
@@ -396,6 +739,12 @@ fn schema_available(schema: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn schema_has_key(key: &str) -> bool {
+    gsettings(&["list-keys", SCHEMA])
+        .map(|out| out.lines().any(|candidate| candidate.trim() == key))
+        .unwrap_or(false)
+}
+
 fn get_bool(key: &str) -> Option<bool> {
     match gsettings(&["get", SCHEMA, key]).ok()?.trim() {
         "true" => Some(true),
@@ -436,8 +785,10 @@ fn gsettings(args: &[&str]) -> Result<String, ()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_min_confidence, normalize_enabled_sounds, normalize_sensitivity,
-        parse_gsettings_strv, SoundCategoryStatus, SoundRecognitionStatus, SOUND_CATEGORIES,
+        clamp_min_confidence, encode_sound_ids, normalize_enabled_sounds, normalize_sensitivity,
+        parse_gsettings_strv, parse_sound_recognition_value, sound_recognition_target_spec,
+        toggled_sound_ids, SoundCategoryStatus, SoundRecognitionPreferenceTarget,
+        SoundRecognitionPreferenceValue, SoundRecognitionStatus, SOUND_CATEGORIES,
     };
 
     #[test]
@@ -498,6 +849,58 @@ mod tests {
             vec!["doorbell".to_string(), "siren".to_string()]
         );
         assert_eq!(parse_gsettings_strv("@as []"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn encodes_sound_arrays_from_allowlisted_ids() {
+        assert_eq!(
+            encode_sound_ids(&[
+                "doorbell".to_string(),
+                "unknown".to_string(),
+                "doorbell".to_string(),
+                "siren".to_string(),
+            ]),
+            "['doorbell', 'siren']"
+        );
+        assert_eq!(encode_sound_ids(&[]), "@as []");
+    }
+
+    #[test]
+    fn toggles_sound_ids_without_leaking_unknown_categories() {
+        let current = vec!["doorbell".to_string(), "unknown".to_string()];
+        assert_eq!(
+            toggled_sound_ids(&current, "siren", true),
+            vec!["doorbell".to_string(), "siren".to_string()]
+        );
+        assert_eq!(
+            toggled_sound_ids(&current, "doorbell", false),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn preference_values_are_type_checked_and_normalized() {
+        let enabled = sound_recognition_target_spec(SoundRecognitionPreferenceTarget::Enabled);
+        assert!(matches!(
+            parse_sound_recognition_value(enabled, &serde_json::json!(true)).unwrap(),
+            SoundRecognitionPreferenceValue::Bool(true)
+        ));
+        assert!(parse_sound_recognition_value(enabled, &serde_json::json!("true")).is_err());
+
+        let sensitivity =
+            sound_recognition_target_spec(SoundRecognitionPreferenceTarget::Sensitivity);
+        assert!(matches!(
+            parse_sound_recognition_value(sensitivity, &serde_json::json!("high")).unwrap(),
+            SoundRecognitionPreferenceValue::Sensitivity("high")
+        ));
+        assert!(parse_sound_recognition_value(sensitivity, &serde_json::json!("loud")).is_err());
+
+        let confidence =
+            sound_recognition_target_spec(SoundRecognitionPreferenceTarget::MinConfidence);
+        assert!(matches!(
+            parse_sound_recognition_value(confidence, &serde_json::json!(0.99)).unwrap(),
+            SoundRecognitionPreferenceValue::MinConfidence(value) if value == 0.95
+        ));
     }
 
     #[test]

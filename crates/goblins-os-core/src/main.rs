@@ -233,6 +233,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(sound_recognition::sound_recognition_status),
         )
         .route(
+            "/v1/sound-recognition/preference",
+            post(sound_recognition::set_sound_recognition_preference),
+        )
+        .route(
+            "/v1/sound-recognition/sound-toggle",
+            post(sound_recognition::set_sound_toggle),
+        )
+        .route(
             "/v1/accessibility/switch-control/status",
             get(switch_control::switch_control_status),
         )

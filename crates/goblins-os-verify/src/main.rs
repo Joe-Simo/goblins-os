@@ -8281,6 +8281,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/sound-recognition/status",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-sound-recognition-preference-route",
+            "/v1/sound-recognition/preference",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-sound-recognition-sound-toggle-route",
+            "/v1/sound-recognition/sound-toggle",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/sound_recognition.rs"),
             "sound-recognition-reliability-honesty",
             "Do not rely on it in emergencies or high-risk situations.",
@@ -8289,6 +8299,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/sound_recognition.rs"),
             "sound-recognition-model-gate",
             "No recognition model in",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-write-unknown-category-reject",
+            "Unknown sound category",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-write-not-fake-listening",
+            "it listens only when the local classifier model, listener, microphone capture path, and selected sounds are ready",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-fetches-sound-recognition-status",
+            "/v1/sound-recognition/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-posts-sound-recognition-preference",
+            "/v1/sound-recognition/preference",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-posts-sound-recognition-sound-toggle",
+            "/v1/sound-recognition/sound-toggle",
         ),
         contains_check(
             root.join("os/glib-schemas/org.goblins.SoundRecognition.gschema.xml"),

@@ -86,7 +86,7 @@ implemented and locally gated, but the feature remains `in-progress` until the
 CI/qemu image pass proves the GTK render, polkit oneshot path, and live toggle.
 Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, `goblins-os-verify --source-root .` →
-**blocked=0 (1523)**, `git diff --check`, helper `bash -n`, polkit rule
+**blocked=0 (1538)**, `git diff --check`, helper `bash -n`, polkit rule
 `node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 The installed-image self-test now exercises `/v1/firewall/status` and the
@@ -114,13 +114,20 @@ and `goblins-os-desktop-screenshots-*` (18 PNGs each) all had matching
 cross-arch file sets and nonblank pixel samples. This proves the CI GTK render,
 installed self-test, and honest failure/revert interaction path; it does **not**
 prove the live systemd/polkit oneshot success path, so Firewall remains
-`in-progress` until live POST + polkit toggle proof is green.
+`in-progress` until live POST + polkit toggle proof is green. The display-backed
+VM capture harness now fail-closes on `firewall-live-toggle-proof.json`: inside
+the installed session it posts disable/enable to `/v1/firewall/enabled`, requires
+HTTP 200 plus `/v1/firewall/status` inactive/active observations, writes the
+proof beside the screenshot run, ties it into `proof-manifest.json`, and makes
+`close-signoff.sh`/`verify-shipping-status.sh` reject runs without it. This
+source/harness gate is local-only so far; no live VM run has proved it yet.
 `systemd-analyze verify` is not available on this macOS host.
 
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: firewall CI image/render proof is green; next prove the
-   live systemd/polkit oneshot success path for the firewall toggle. Only flip it
-   to `shipped` if the render, live POST, and polkit oneshot path are green. Then
+   live systemd/polkit oneshot success path for the firewall toggle by running
+   the display-backed VM capture and inspecting `firewall-live-toggle-proof.json`.
+   Only flip it to `shipped` if the render, live POST, and polkit oneshot path are green. Then
    continue one feature at a time — IME set, Focus arm/disarm, per-app permission
    revoke, multi-display apply, and keyboard rebinding. Do not flip any of these
    from `in-progress` until the write path and qemu interaction proof are green.

@@ -80,6 +80,16 @@ export GOS_QMP="$WORK/qmp.sock" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_D
 # desktop, dismisses onboarding, launches the orchestrator, captures on signals).
 python3 "$HERE/drive-capture.py"
 
+FIREWALL_PROOF="$RUN_DIR/firewall-live-toggle-proof.json"
+if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
+  || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
+  || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
+  || ! grep -Fq '"enable_http": "200"' "$FIREWALL_PROOF" \
+  || ! grep -Fq '"enable_active": "true"' "$FIREWALL_PROOF"; then
+  echo "HONESTY GUARD: missing or failing live firewall toggle proof at $FIREWALL_PROOF"
+  exit 4
+fi
+
 # HONESTY GUARD: refuse to write a signoff for a run whose surfaces aren't all
 # distinct. GNOME 42+ returns AccessDenied to scripted screenshots (org.gnome.
 # Shell.Screenshot), so the only automation path is the host QMP framebuffer
@@ -106,6 +116,7 @@ import json,sys
 run_dir,arch,iso,sha,date=sys.argv[1:6]
 json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "captured_at":date+"T00:00:00Z","screenshot_run_dir":run_dir,
+          "firewall_live_toggle_proof":"firewall-live-toggle-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY

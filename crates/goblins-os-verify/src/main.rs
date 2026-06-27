@@ -4946,6 +4946,41 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-firewall-live-toggle-proof",
+            "firewall-live-toggle-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-firewall-live-toggle-proof",
+            "/proof/firewall-live-toggle",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-uses-firewall-toggle-route",
+            "/v1/firewall/enabled",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-requires-proof-signals",
+            "require_proofs",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-firewall-proof-json",
+            "firewall-live-toggle-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-firewall-proof",
+            "HONESTY GUARD: missing or failing live firewall toggle proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-firewall-proof",
+            "firewall_live_toggle_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-rejects-legacy-non-arch-screenshot-roots",
             "Legacy/non-shipping screenshot roots",
         ),
@@ -5276,6 +5311,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-firewall-live-toggle-proof",
+            "firewall_live_toggle_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-firewall-proof-filename",
+            "firewall-live-toggle-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-firewall-proof-disable-state",
+            "\"disable_active\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-firewall-proof-enable-state",
+            "\"enable_active\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-reports-legacy-screenshot-roots",
             "Legacy/non-shipping screenshot roots ignored by architecture proof gate",
         ),
@@ -5423,6 +5478,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-requires-screenshot-proof-manifest",
             "screenshot_manifest_matches_iso",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-firewall-live-toggle-proof",
+            "firewall_live_toggle_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-firewall-live-toggle-proof",
+            "Firewall live toggle checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-firewall-proof-disable-state",
+            "\"disable_active\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-firewall-proof-enable-state",
+            "\"enable_active\"",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),

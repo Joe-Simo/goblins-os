@@ -15,9 +15,12 @@ settle there if surfaces capture as duplicates (md5-identical). KVM (CI) makes
 the VM fast enough that the same timings that work under hvf hold.
 """
 import json, os, socket, subprocess, time
+from urllib.parse import parse_qs, urlparse
 
 QMP = os.environ["GOS_QMP"]; HTTPLOG = os.environ["GOS_HTTPLOG"]
 OUTDIR = os.environ["GOS_OUTDIR"]; PORT = os.environ.get("GOS_PORT", "8099")
+REQUIRED_PROOFS = ("firewall-live-toggle",)
+PROOF_FILENAMES = {"firewall-live-toggle": "firewall-live-toggle-proof.json"}
 
 CMAP = {c: (c, False) for c in "abcdefghijklmnopqrstuvwxyz0123456789"}
 CMAP.update({" ": ("spc", False), "-": ("minus", False), ".": ("dot", False),
@@ -62,6 +65,35 @@ def fb_size():
     try: return os.path.getsize(p)
     except OSError: return 0
 
+def http_get_path(line):
+    marker = '"GET '
+    if marker not in line:
+        return None
+    return line.split(marker, 1)[1].split(" ", 1)[0]
+
+def write_proof(path, proofs):
+    parsed = urlparse(path)
+    name = parsed.path.rsplit("/", 1)[-1]
+    values = {k: v[-1] for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
+    values.update({
+        "name": name,
+        "captured_via": "display-backed VM HTTP proof signal",
+    })
+    proofs[name] = values
+    filename = PROOF_FILENAMES.get(name, f"{name}-proof.json")
+    with open(f"{OUTDIR}/{filename}", "w", encoding="utf-8") as fh:
+        json.dump(values, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+def require_proofs(proofs):
+    bad = [
+        f"{name}={proofs.get(name, {}).get('status', 'missing')}"
+        for name in REQUIRED_PROOFS
+        if proofs.get(name, {}).get("status") != "pass"
+    ]
+    if bad:
+        raise SystemExit("missing or failing required proof signals: " + ", ".join(bad))
+
 def wait_frame(lo, hi, timeout):
     t = time.time()
     while time.time() - t < timeout:
@@ -83,14 +115,22 @@ key("alt+f2"); time.sleep(2); typ("bash /tmp/o"); time.sleep(1); key("ret")
 # 5. capture on signals
 os.makedirs(OUTDIR, exist_ok=True)
 pos = os.path.getsize(HTTPLOG) if os.path.exists(HTTPLOG) else 0
-seen = set(); t = time.time()
+seen = set(); proofs = {}; t = time.time()
 while time.time() - t < 600:
     with open(HTTPLOG, errors="ignore") as fh:
         fh.seek(pos); chunk = fh.read(); pos = fh.tell()
     for line in chunk.splitlines():
-        if "/ready/" in line:
-            name = line.split("/ready/")[1].split()[0].split("?")[0]
+        path = http_get_path(line)
+        if not path:
+            continue
+        if path.startswith("/proof/"):
+            write_proof(path, proofs)
+            print(f"proof {path.split('?', 1)[0].rsplit('/', 1)[-1]}={proofs[path.split('?', 1)[0].rsplit('/', 1)[-1]].get('status', 'unknown')}", flush=True)
+            continue
+        if path.startswith("/ready/"):
+            name = path.split("/ready/")[1].split("?")[0]
             if name == "ORCH_ALLDONE":
+                require_proofs(proofs)
                 print("ORCH_ALLDONE", flush=True); raise SystemExit(0)
             if name and name not in seen and name not in ("ORCH_START",):
                 seen.add(name); ppm = f"{OUTDIR}/{name}.ppm"
@@ -111,4 +151,6 @@ while time.time() - t < 600:
                 except OSError: pass
                 print(f"captured {name} ({len(seen)})", flush=True)
     time.sleep(0.3)
+require_proofs(proofs)
 print(f"timeout; captured {len(seen)}", flush=True)
+raise SystemExit(1)

@@ -7,6 +7,7 @@ exec >/tmp/gate-cap.log 2>&1
 set -x
 H=10.0.2.2:8099
 B=/usr/libexec/goblins-os
+LIVE_URL=http://127.0.0.1:8787
 export GDK_BACKEND=wayland XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
 # Maximize every captured GTK surface so the host QMP screendump catches it filling
 # the work area (keeping window chrome + the menu bar/dock) instead of an ambiguous
@@ -16,6 +17,73 @@ export GDK_BACKEND=wayland XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
 # fullscreen by design.
 export GOBLINS_OS_RENDER_FULLSCREEN=1
 sig(){ curl -s "http://$H/ready/$1" >/dev/null 2>&1; sleep 5; }
+proof_firewall(){ curl -s "http://$H/proof/firewall-live-toggle?$1" >/dev/null 2>&1 || true; }
+json_field(){
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8"))
+    for part in sys.argv[2].split("."):
+        value = value[part]
+    if isinstance(value, bool):
+        print("true" if value else "false")
+    else:
+        print(value)
+except Exception:
+    print("")
+PY
+}
+firewall_live_toggle_proof(){
+  local status_file=/tmp/gate-firewall-status.json
+  local disable_file=/tmp/gate-firewall-disable.json
+  local enable_file=/tmp/gate-firewall-enable.json
+  local status_code disable_code enable_code before_available before_manageable
+  local disable_ok disable_enabled disable_active enable_ok enable_enabled enable_active
+
+  for _ in $(seq 1 60); do
+    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+
+  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/firewall/status" || true)
+  before_available=$(json_field "$status_file" available)
+  before_manageable=$(json_field "$status_file" manageable)
+  if [ "$status_code" != "200" ] || [ "$before_available" != "true" ] || [ "$before_manageable" != "true" ]; then
+    proof_firewall "status=fail&stage=status&status_http=${status_code:-000}&available=${before_available:-missing}&manageable=${before_manageable:-missing}"
+    return 1
+  fi
+
+  disable_code=$(curl -s -o "$disable_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"enabled":false}' \
+    "$LIVE_URL/v1/firewall/enabled" || true)
+  disable_ok=$(json_field "$disable_file" ok)
+  disable_enabled=$(json_field "$disable_file" enabled)
+  sleep 2
+  curl -s -o "$status_file" "$LIVE_URL/v1/firewall/status" >/dev/null 2>&1 || true
+  disable_active=$(json_field "$status_file" active)
+
+  enable_code=$(curl -s -o "$enable_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"enabled":true}' \
+    "$LIVE_URL/v1/firewall/enabled" || true)
+  enable_ok=$(json_field "$enable_file" ok)
+  enable_enabled=$(json_field "$enable_file" enabled)
+  sleep 2
+  curl -s -o "$status_file" "$LIVE_URL/v1/firewall/status" >/dev/null 2>&1 || true
+  enable_active=$(json_field "$status_file" active)
+
+  if [ "$disable_code" = "200" ] && [ "$disable_ok" = "true" ] && [ "$disable_enabled" = "false" ] && [ "$disable_active" = "false" ] \
+    && [ "$enable_code" = "200" ] && [ "$enable_ok" = "true" ] && [ "$enable_enabled" = "true" ] && [ "$enable_active" = "true" ]; then
+    proof_firewall "status=pass&route=/v1/firewall/enabled&status_route=/v1/firewall/status&disable_http=200&disable_ok=true&disable_enabled=false&disable_active=false&enable_http=200&enable_ok=true&enable_enabled=true&enable_active=true&unit_template=goblins-os-firewall@.service&polkit_rule=60-goblins-os-firewall.rules"
+    return 0
+  fi
+
+  proof_firewall "status=fail&stage=toggle&disable_http=${disable_code:-000}&disable_ok=${disable_ok:-missing}&disable_enabled=${disable_enabled:-missing}&disable_active=${disable_active:-missing}&enable_http=${enable_code:-000}&enable_ok=${enable_ok:-missing}&enable_enabled=${enable_enabled:-missing}&enable_active=${enable_active:-missing}"
+  return 1
+}
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication
 # is single-instance, so relaunching the same binary (e.g. the installer with a new
@@ -29,6 +97,7 @@ darkoff(){ gsettings set org.gnome.desktop.interface color-scheme default 2>/dev
 sleep 3
 curl -s "http://$H/ready/ORCH_START" >/dev/null 2>&1
 pkill -f goblins-os-login 2>/dev/null; pkill -f goblins-os-installer 2>/dev/null; sleep 2
+firewall_live_toggle_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
 FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device

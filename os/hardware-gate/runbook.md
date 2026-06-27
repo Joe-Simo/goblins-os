@@ -133,12 +133,17 @@ the release media that was booted:
   "iso": "os/iso/output/<arch>/bootiso/goblins-os-<arch>.iso",
   "iso_sha256": "<64-char sha256 from the matching .sha256 file>",
   "captured_at": "<UTC timestamp>",
-  "screenshot_run_dir": "os/screenshots/hardware-gate/<arch>/<YYYY-MM-DD>"
+  "screenshot_run_dir": "os/screenshots/hardware-gate/<arch>/<YYYY-MM-DD>",
+  "firewall_live_toggle_proof": "firewall-live-toggle-proof.json"
 }
 ```
 
 `close-signoff.sh` rejects missing, empty, or non-PNG screenshot files and
-rejects a manifest that does not match the current architecture ISO and SHA.
+rejects a manifest that does not match the current architecture ISO and SHA. It
+also rejects the run unless `firewall-live-toggle-proof.json` records the live
+core route disabling firewalld with HTTP 200 and observed inactive status, then
+enabling it with HTTP 200 and observed active status through the scoped systemd
+oneshot/polkit bridge.
 
 Capture exactly at minimum these names:
 1. `01-installer.png` — ISO boot + installer launch
@@ -213,6 +218,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - each check pass/fail and screenshot filenames
 - SBOM result, including `release-evidence-manifest.json`, `cargo-lock-packages.tsv`, and `rpm-packages.tsv`
 - gaming readiness result, including Steam absence from installed-root verifier
+- firewall toggle result, including `firewall-live-toggle-proof.json`
 - install destination, formatting/root filesystem, bootloader/EFI, and dual-boot preservation result
 - for custom formatting, encryption, separate `/home`, LUKS/LVM, TPM2 LUKS, ext4, or btrfs, show an advanced storage summary before writes
 - if dual boot is tested, show the Open advanced storage action or Install Goblins OS Beside Another OS desktop entry, Custom/manual storage or Reclaim Space, the free-space/dedicated-disk target, the backup/free-space preparation note, and the untouched existing OS/recovery/EFI partitions

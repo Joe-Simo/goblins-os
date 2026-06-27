@@ -44,6 +44,7 @@ REQ_SCREENSHOTS=(
   "27-dual-boot-preserve-existing-os.png"
   "28-bootloader-efi-summary.png"
 )
+FIREWALL_LIVE_TOGGLE_PROOF="firewall-live-toggle-proof.json"
 
 check() {
   local label="$1"
@@ -202,6 +203,7 @@ screenshot_run_is_complete() {
     screenshot_file_is_valid_png "$run_dir/$shot" || return 1
   done
   screenshot_manifest_matches_iso "$run_dir" "$arch" || return 1
+  firewall_live_toggle_proof_passes "$run_dir/$FIREWALL_LIVE_TOGGLE_PROOF" || return 1
   return 0
 }
 
@@ -245,7 +247,27 @@ screenshot_manifest_matches_iso() {
     && rg -q '"iso"[[:space:]]*:[[:space:]]*"'"$iso_path"'"' "$manifest" \
     && rg -q '"iso_sha256"[[:space:]]*:[[:space:]]*"'"$iso_sha"'"' "$manifest" \
     && rg -q '"captured_at"[[:space:]]*:[[:space:]]*"[^"]+"' "$manifest" \
-    && rg -q '"screenshot_run_dir"[[:space:]]*:[[:space:]]*"'"$run_dir"'"' "$manifest"
+    && rg -q '"screenshot_run_dir"[[:space:]]*:[[:space:]]*"'"$run_dir"'"' "$manifest" \
+    && rg -q '"firewall_live_toggle_proof"[[:space:]]*:[[:space:]]*"'"$FIREWALL_LIVE_TOGGLE_PROOF"'"' "$manifest"
+}
+
+firewall_live_toggle_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/firewall/enabled"' "$proof" \
+    && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/firewall/status"' "$proof" \
+    && rg -q '"disable_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"disable_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"disable_enabled"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"disable_active"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"enable_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"enable_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"enable_enabled"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"enable_active"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"unit_template"[[:space:]]*:[[:space:]]*"goblins-os-firewall@\.service"' "$proof" \
+    && rg -q '"polkit_rule"[[:space:]]*:[[:space:]]*"60-goblins-os-firewall.rules"' "$proof"
 }
 
 print_missing_screenshot_paths() {
@@ -260,6 +282,10 @@ print_missing_screenshot_paths() {
   done
   if [ ! -s "$run_dir/proof-manifest.json" ]; then
     echo "  $run_dir/proof-manifest.json"
+    missing=1
+  fi
+  if ! firewall_live_toggle_proof_passes "$run_dir/$FIREWALL_LIVE_TOGGLE_PROOF"; then
+    echo "  $run_dir/$FIREWALL_LIVE_TOGGLE_PROOF"
     missing=1
   fi
   return "$missing"
@@ -340,6 +366,12 @@ print_screenshot_run_checks() {
     echo "[PASS] proof-manifest.json"
   else
     echo "[FAIL] proof-manifest.json"
+    missing=1
+  fi
+  if firewall_live_toggle_proof_passes "$run_dir/$FIREWALL_LIVE_TOGGLE_PROOF"; then
+    echo "[PASS] $FIREWALL_LIVE_TOGGLE_PROOF"
+  else
+    echo "[FAIL] $FIREWALL_LIVE_TOGGLE_PROOF (missing or live firewall toggle proof failed)"
     missing=1
   fi
   return "$missing"
@@ -630,6 +662,9 @@ check "core AI system status route uses policy and audit" "rg -q 'system_trouble
 check "installed self-test checks system status route" "rg -q '/v1/ai/system-status' os/bootc/run-selftest.sh && rg -q 'Summarize current system state' os/bootc/run-selftest.sh"
 check "installed self-test checks firewall status and honest toggle route" "rg -q '/v1/firewall/status' os/bootc/run-selftest.sh && rg -q '/v1/firewall/enabled' os/bootc/run-selftest.sh && rg -Fq '502|503) [ \"\$firewall_toggle_ok\" != \"true\" ]' os/bootc/run-selftest.sh && rg -q 'firewall_toggle_body' os/bootc/run-selftest.sh"
 check "settings interaction render captures firewall toggle failure" "rg -q 'capture_settings_firewall_toggle_interaction' os/bootc/render-screens.sh && rg -q '118-settings-firewall-before.png' os/bootc/render-screens.sh && rg -q '119-settings-firewall-toggle-failed.png' os/bootc/render-screens.sh"
+check "capture harness proves live firewall polkit toggle path" "rg -q '/proof/firewall-live-toggle' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/firewall/enabled' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'disable_active=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'enable_active=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "capture driver persists live firewall proof" "rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'require_proofs' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing live firewall toggle proof' os/hardware-gate/capture-harness/run-capture.sh"
+check "hardware gate requires live firewall proof in signoff" "rg -q 'firewall_live_toggle_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Firewall live toggle checked' os/hardware-gate/close-signoff.sh && rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/runbook.md"
 check "core AI safe setting route requires policy and confirmation" "rg -Fq 'policy_state_for_control(\"settings-control\")' crates/goblins-os-core/src/ai.rs && rg -q 'StatusCode::PRECONDITION_REQUIRED' crates/goblins-os-core/src/ai.rs && rg -Fq 'audit_ai_action(\"change-safe-setting\"' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route has narrow allowlist" "rg -q 'appearance.color-scheme, accessibility.reduce-motion, or notifications.show-banners' crates/goblins-os-core/src/ai.rs && rg -q 'safe_setting_change_rejects_arbitrary_settings_and_wrong_values' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route reuses settings wrappers" "rg -q 'apply_ai_color_scheme' crates/goblins-os-core/src/appearance.rs && rg -q 'apply_ai_reduce_motion' crates/goblins-os-core/src/accessibility.rs && rg -q 'apply_ai_notification_banners' crates/goblins-os-core/src/notifications.rs"

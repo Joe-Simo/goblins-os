@@ -443,7 +443,21 @@ struct InputStatus {
     keyboard: KeyboardInputStatus,
     mouse: MouseInputStatus,
     touchpad: TouchpadInputStatus,
+    input_sources: InputSourcesStatus,
     detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct InputSourcesStatus {
+    schema_available: bool,
+    sources: Vec<InputSourceEntry>,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct InputSourceEntry {
+    kind: String,
+    id: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -10983,6 +10997,26 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
         remember_numlock_detail,
         "The Num Lock restore preference is not reported by this session.",
     );
+
+    // Read-only list of configured input sources (xkb layouts + IBus engines). Adding,
+    // reordering, and re-enabling Super+Space switching are the deliberate follow-up.
+    let input_sources = &input.input_sources;
+    panel.append(&label("Input sources", &["gos-subsection-title"]));
+    if !input_sources.schema_available {
+        panel.append(&system_row("Input sources", &input_sources.detail));
+    } else if input_sources.sources.is_empty() {
+        panel.append(&system_row(
+            "Input sources",
+            "No input sources are configured for this session.",
+        ));
+    } else {
+        for source in &input_sources.sources {
+            panel.append(&system_row(
+                &input_source_label(&source.kind, &source.id),
+                &format!("{} · {}", source.kind, source.id),
+            ));
+        }
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -12011,6 +12045,26 @@ fn input_summary_spec(
         state: state.into(),
         ready,
         detail: detail.into(),
+    }
+}
+
+/// Human-readable label for a GNOME input source (`org.gnome.desktop.input-sources`).
+/// Pure + unit-tested so the Keyboard list shows a real language/method name with an
+/// honest fallback for layouts we do not have a friendly name for.
+fn input_source_label(kind: &str, id: &str) -> String {
+    match (kind, id) {
+        ("xkb", "us") => "English (US)".to_string(),
+        ("xkb", "gb") => "English (UK)".to_string(),
+        ("xkb", "de") => "German".to_string(),
+        ("xkb", "fr") => "French".to_string(),
+        ("xkb", "es") => "Spanish".to_string(),
+        ("xkb", "latam") => "Spanish (Latin America)".to_string(),
+        ("xkb", _) => format!("Keyboard layout “{id}”"),
+        ("ibus", "libpinyin" | "pinyin") => "Pinyin (Chinese)".to_string(),
+        ("ibus", "anthy" | "mozc") => "Japanese".to_string(),
+        ("ibus", "hangul") => "Korean (Hangul)".to_string(),
+        ("ibus", _) => format!("Input method “{id}”"),
+        _ => format!("{kind}: {id}"),
     }
 }
 
@@ -18083,6 +18137,28 @@ fn test_input_status(
                 unavailable_detail.to_string()
             },
         },
+        input_sources: InputSourcesStatus {
+            schema_available: keyboard_schema_available,
+            sources: if gsettings_available && keyboard_schema_available {
+                vec![
+                    InputSourceEntry {
+                        kind: "xkb".to_string(),
+                        id: "us".to_string(),
+                    },
+                    InputSourceEntry {
+                        kind: "ibus".to_string(),
+                        id: "libpinyin".to_string(),
+                    },
+                ]
+            } else {
+                Vec::new()
+            },
+            detail: if gsettings_available && keyboard_schema_available {
+                "Input sources are ready.".to_string()
+            } else {
+                unavailable_detail.to_string()
+            },
+        },
         detail: if gsettings_available {
             "Keyboard, mouse, and trackpad preferences are ready for this desktop.".to_string()
         } else {
@@ -20484,6 +20560,23 @@ mod tests {
         assert_eq!(normalized_keyboard_repeat_interval(27), 25);
         assert_eq!(normalized_keyboard_repeat_interval(999), 120);
         assert_eq!(milliseconds_label(27.4), "27 ms");
+    }
+
+    #[test]
+    fn input_source_labels_name_known_layouts_and_fall_back_honestly() {
+        assert_eq!(super::input_source_label("xkb", "us"), "English (US)");
+        assert_eq!(
+            super::input_source_label("ibus", "libpinyin"),
+            "Pinyin (Chinese)"
+        );
+        assert_eq!(
+            super::input_source_label("ibus", "hangul"),
+            "Korean (Hangul)"
+        );
+        // Unknown ids keep the raw id visible rather than guessing.
+        assert!(super::input_source_label("xkb", "cz").contains("cz"));
+        assert!(super::input_source_label("ibus", "table:wubi").contains("table:wubi"));
+        assert_eq!(super::input_source_label("other", "x"), "other: x");
     }
 
     #[test]

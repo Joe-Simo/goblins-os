@@ -7624,6 +7624,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/voice/control/resolve",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-visual-lookup-route",
+            "/v1/ai/visual-lookup",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-privacy-app-permissions",
             "App permissions",

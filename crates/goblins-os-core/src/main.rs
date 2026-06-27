@@ -37,6 +37,7 @@ mod studio;
 mod system;
 mod system_image;
 mod text_shortcuts;
+mod vision;
 mod voice;
 mod voice_control;
 
@@ -202,6 +203,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/v1/voice/control/resolve",
             post(voice_control::resolve_voice_command),
         )
+        .route("/v1/vision/status", get(vision::vision_status))
+        .route("/v1/ai/visual-lookup", post(vision::visual_lookup))
         .route("/v1/ocr/status", get(ocr::ocr_status))
         .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
         .route("/v1/firewall/status", get(firewall::firewall_status))

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.goblins.os.focus" path="/org/goblins/os/focus/">
+    <key name="active-mode" type="s">
+      <default>''</default>
+      <summary>Active Focus mode</summary>
+      <description>The id of the currently active Focus mode, or empty when Focus is off.</description>
+    </key>
+    <key name="modes" type="s">
+      <default>'[]'</default>
+      <summary>Focus modes (JSON)</summary>
+      <description>JSON array of user-defined Focus modes: [{"id":"work","name":"Work"}].</description>
+    </key>
+    <key name="schedules" type="s">
+      <default>'[]'</default>
+      <summary>Focus schedules (JSON)</summary>
+      <description>JSON array of schedules that auto-arm a mode: [{"mode":"work","start":540,"end":1020,"weekdays":[1,2,3,4,5]}] where start/end are minutes from midnight and weekdays are 1=Mon..7=Sun.</description>
+    </key>
+  </schema>
+</schemalist>

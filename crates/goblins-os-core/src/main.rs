@@ -10,6 +10,7 @@ mod boot_lock;
 mod codex;
 mod displays;
 mod firewall;
+mod focus;
 mod hardware;
 mod hotspot;
 mod http_error;
@@ -192,6 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/ocr/status", get(ocr::ocr_status))
         .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
         .route("/v1/firewall/status", get(firewall::firewall_status))
+        .route("/v1/focus/status", get(focus::focus_status))
         .route("/v1/hotspot/status", get(hotspot::hotspot_status))
         .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
         .route(

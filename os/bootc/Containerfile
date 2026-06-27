@@ -236,6 +236,9 @@ COPY os/gnome-shell-modes/goblins-os.json /usr/share/gnome-shell/modes/goblins-o
 COPY --chmod=0755 os/voice/goblins-os-dictate /usr/libexec/goblins-os/goblins-os-dictate
 COPY os/systemd-user/ /usr/lib/systemd/user/
 COPY os/applications/ /usr/share/applications/
+# Goblins-owned system GSettings schemas (e.g. Focus modes). Compiled below with
+# the rest of the system schema set.
+COPY os/glib-schemas/ /usr/share/glib-2.0/schemas/
 RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
@@ -294,6 +297,9 @@ RUN (gtk4-update-icon-cache -f /usr/share/icons/GoblinsOS \
 # Shell-extension keybindings live in the extension's GSettings schema so Mutter
 # owns the shortcuts directly.
 RUN glib-compile-schemas /usr/share/gnome-shell/extensions/goblins-wm@goblins.os/schemas
+
+# Goblins-owned system schemas (Focus modes, …) compiled into the shared schema set.
+RUN glib-compile-schemas /usr/share/glib-2.0/schemas
 
 # Rebrand the Anaconda installer chrome (the disk installer the ISO boots into):
 # recolor the Fedora-blue sidebar base (#51a2da) to Goblins ink so the sidebar

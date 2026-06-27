@@ -20,6 +20,7 @@ paths = [
   "os/dconf/",
   "os/etc/",
   "os/gdm/",
+  "os/glib-schemas/",
   "os/gnome-session/",
   "os/gnome-shell-extensions/",
   "os/gnome-shell-modes/",

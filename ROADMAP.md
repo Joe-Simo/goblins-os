@@ -384,6 +384,22 @@ container
 CI/qemu must still prove the GTK render and later the real IBus
 engine/keystroke selftest before Text Shortcuts can ship.
 
+Current Text Shortcuts engine-readiness continuation: the core status now
+requires all three engine facts before reporting `engine_available=true`: the
+`ibus` command, the Goblins IBus component XML at
+`/usr/share/ibus/component/goblins-textshortcuts.xml`, and the Goblins engine
+binary at `/usr/libexec/goblins-os/goblins-textshortcuts-engine`. This prevents
+future IBus/CJK package work from falsely claiming Text Shortcuts expansion is
+active just because IBus is present. No RPMs, dconf seed, component XML,
+session input-module change, engine process, password-field handling, or live
+text expansion is claimed in this pass. Local source gates:
+`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `goblins-os-verify --source-root .` →
+**blocked=0 (1650)**, `git diff --check`, and targeted
+`cargo test -p goblins-os-core text_shortcuts`. CI/qemu must still prove the
+installed component, engine startup, GTK render, and keystroke selftest before
+Text Shortcuts can ship.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -700,6 +716,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 ### `in-progress` Autocorrect / Text Replacement (system-wide, own IBus engine)
 - [x] **Curated-table substrate shipped** (`crates/goblins-os-core/src/text_shortcuts.rs` + `/v1/text-shortcuts` GET/POST + `/v1/text-shortcuts/preview`): the Replace→With table stored as JSON at `~/.config/goblins-os/text-shortcuts.json`, edited through the allowlisted bridge with `sanitize_table` (trim, drop empties/identity, de-dupe last-wins, cap 500) and `find_replacement` (the exact word-boundary match the engine will perform) — both pure + unit-tested (185 core tests). `engine_available` honest-gating (the table is always editable; replacements apply only when the engine runs). The table needs no model — ships ready. clippy/fmt clean; route verify gate.
 - [x] **Settings table editor source-gated (CI/qemu-pending):** Settings ▸ Keyboard fetches `/v1/text-shortcuts`, shows engine readiness honestly, lists saved Replace→With entries, removes entries, and adds/replaces entries through the existing core bridge. The UI sanitizes empty/identity entries and preserves the core last-wins de-dupe contract before POSTing. No IBus engine, packages, component XML, input-source seed, candidate bubble, password-field handling, or live text expansion is claimed yet.
+- [x] **Engine-readiness gate source-gated (CI/qemu-pending):** core reports `engine_available=true` only when `ibus` is on PATH, the Goblins IBus component XML is installed, and the Goblins engine binary is installed. This keeps future CJK/IBus package installation from falsely marking Text Shortcuts expansion active before the Goblins engine is actually registered.
 - [ ] **IBus engine + packages (deferred, XL/highest-risk):** the `goblins-textshortcuts` IBus engine (preedit/commit over `text-input-v3`, pass-through by default, never in password fields), the `ibus*` packages + component XML, the dconf seed, accept bubble, and the optional model-gated autocorrect tier.
 - **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (confirm exact NVRs with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
 - **gsettings/dconf:** `org.freedesktop.ibus.general preload-engines` (+`goblins-textshortcuts`); `org.gnome.desktop.input-sources sources=[('ibus','goblins-textshortcuts')]`, `per-window=false`; dconf seed in `10-goblins-os-desktop`. The replacement table itself is **JSON** under `~/.config/goblins-os/text-shortcuts.json`, written only through the core bridge — not a gsetting.

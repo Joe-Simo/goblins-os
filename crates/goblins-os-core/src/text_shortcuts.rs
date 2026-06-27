@@ -17,6 +17,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 const MAX_SHORTCUTS: usize = 500;
+const ENGINE_BINARY_PATH: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine";
+const ENGINE_COMPONENT_PATH: &str = "/usr/share/ibus/component/goblins-textshortcuts.xml";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TextShortcut {
@@ -29,6 +31,7 @@ pub struct TextShortcutsStatus {
     source: &'static str,
     /// Whether the IBus engine that applies replacements system-wide is present.
     engine_available: bool,
+    engine: TextShortcutsEngineStatus,
     shortcuts: Vec<TextShortcut>,
     detail: String,
 }
@@ -47,6 +50,15 @@ pub struct PreviewQuery {
 pub struct PreviewResult {
     trigger: String,
     replacement: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TextShortcutsEngineStatus {
+    ibus_available: bool,
+    component_registered: bool,
+    engine_binary_available: bool,
+    ready: bool,
+    detail: String,
 }
 
 pub async fn text_shortcuts_status() -> Json<TextShortcutsStatus> {
@@ -81,17 +93,58 @@ pub async fn preview_text_shortcut(Query(query): Query<PreviewQuery>) -> Json<Pr
 }
 
 fn build_status(shortcuts: Vec<TextShortcut>) -> TextShortcutsStatus {
-    let engine_available = engine_present();
-    let detail = if engine_available {
+    let engine = probe_engine_status();
+    let detail = if engine.ready {
         "Text Shortcuts expand as you type across the desktop.".to_string()
     } else {
-        "Text Shortcuts are saved, but the replacement engine isn't running on this session yet."
-            .to_string()
+        engine.detail.clone()
     };
     TextShortcutsStatus {
         source: "goblins-os-core",
-        engine_available,
+        engine_available: engine.ready,
+        engine,
         shortcuts,
+        detail,
+    }
+}
+
+fn probe_engine_status() -> TextShortcutsEngineStatus {
+    text_shortcuts_engine_status(
+        command_on_path("ibus"),
+        PathBuf::from(ENGINE_COMPONENT_PATH).is_file(),
+        PathBuf::from(ENGINE_BINARY_PATH).is_file(),
+    )
+}
+
+fn text_shortcuts_engine_status(
+    ibus_available: bool,
+    component_registered: bool,
+    engine_binary_available: bool,
+) -> TextShortcutsEngineStatus {
+    let ready = ibus_available && component_registered && engine_binary_available;
+    let detail = if ready {
+        "Text Shortcuts expand as you type across the desktop.".to_string()
+    } else {
+        let mut missing = Vec::new();
+        if !ibus_available {
+            missing.push("IBus is not installed for this session");
+        }
+        if !component_registered {
+            missing.push("the Goblins Text Shortcuts IBus component is not registered");
+        }
+        if !engine_binary_available {
+            missing.push("the Goblins Text Shortcuts engine binary is not installed");
+        }
+        format!(
+            "Text Shortcuts are saved, but the replacement engine isn't running on this session yet: {}.",
+            missing.join("; ")
+        )
+    };
+    TextShortcutsEngineStatus {
+        ibus_available,
+        component_registered,
+        engine_binary_available,
+        ready,
         detail,
     }
 }
@@ -161,14 +214,14 @@ fn table_path() -> Option<PathBuf> {
     Some(base.join("goblins-os").join("text-shortcuts.json"))
 }
 
-fn engine_present() -> bool {
+fn command_on_path(binary: &str) -> bool {
     std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join("ibus").is_file()))
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(binary).is_file()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{find_replacement, sanitize_table, TextShortcut};
+    use super::{find_replacement, sanitize_table, text_shortcuts_engine_status, TextShortcut};
 
     fn s(replace: &str, with: &str) -> TextShortcut {
         TextShortcut {
@@ -197,5 +250,32 @@ mod tests {
         assert_eq!(table.len(), 1);
         assert_eq!(table[0].replace, "omw");
         assert_eq!(table[0].with, "omw — updated");
+    }
+
+    #[test]
+    fn engine_status_requires_ibus_component_and_binary() {
+        let missing_all = text_shortcuts_engine_status(false, false, false);
+        assert!(!missing_all.ready);
+        assert!(!missing_all.ibus_available);
+        assert!(!missing_all.component_registered);
+        assert!(!missing_all.engine_binary_available);
+        assert!(missing_all.detail.contains("IBus is not installed"));
+        assert!(missing_all.detail.contains("component is not registered"));
+        assert!(missing_all
+            .detail
+            .contains("engine binary is not installed"));
+
+        let ibus_only = text_shortcuts_engine_status(true, false, false);
+        assert!(!ibus_only.ready);
+        assert!(ibus_only.ibus_available);
+        assert!(ibus_only.detail.contains("component is not registered"));
+        assert!(ibus_only.detail.contains("engine binary is not installed"));
+
+        let ready = text_shortcuts_engine_status(true, true, true);
+        assert!(ready.ready);
+        assert_eq!(
+            ready.detail,
+            "Text Shortcuts expand as you type across the desktop."
+        );
     }
 }

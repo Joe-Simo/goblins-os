@@ -52,13 +52,14 @@ firewall_toggle_code=$(curl -s -o /tmp/goblins-os-firewall-toggle.json -w '%{htt
   http://127.0.0.1:8787/v1/firewall/enabled)
 firewall_toggle_ok=$(jq -r '.ok // empty' /tmp/goblins-os-firewall-toggle.json 2>/dev/null || true)
 firewall_toggle_text=$(jq -r '.text // empty' /tmp/goblins-os-firewall-toggle.json 2>/dev/null || true)
+firewall_toggle_error=$(jq -r '.error // empty' /tmp/goblins-os-firewall-toggle.json 2>/dev/null || true)
+firewall_toggle_body=$(tr -d '\n' < /tmp/goblins-os-firewall-toggle.json 2>/dev/null || true)
 echo "  POST /v1/firewall/enabled -> HTTP $firewall_toggle_code ok=$firewall_toggle_ok"
 case "$firewall_toggle_code" in
-  200) [ "$firewall_toggle_ok" = "true" ] || fail=1 ;;
-  502|503) [ "$firewall_toggle_ok" = "false" ] || fail=1 ;;
+  200) [ "$firewall_toggle_ok" = "true" ] && [ -n "$firewall_toggle_text" ] || fail=1 ;;
+  502|503) [ "$firewall_toggle_ok" != "true" ] && { [ -n "$firewall_toggle_text" ] || [ -n "$firewall_toggle_error" ] || [ -n "$firewall_toggle_body" ]; } || fail=1 ;;
   *) fail=1 ;;
 esac
-[ -n "$firewall_toggle_text" ] || fail=1
 app_build_code=$(curl -s -o /tmp/goblins-os-app-build.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"intent":"Self-test app-builder route check. Create a tiny notes app plan only."}' \

@@ -86,14 +86,15 @@ implemented and locally gated, but the feature remains `in-progress` until the
 CI/qemu image pass proves the GTK render, polkit oneshot path, and live toggle.
 Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, `goblins-os-verify --source-root .` →
-**blocked=0 (1506)**, `git diff --check`, helper `bash -n`, polkit rule
+**blocked=0 (1510)**, `git diff --check`, helper `bash -n`, polkit rule
 `node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 The installed-image self-test now exercises `/v1/firewall/status` and the
 `/v1/firewall/enabled` POST with an honest-success/honest-failure assertion;
-this does **not** replace the missing CI/qemu proof of the GTK render, polkit
-oneshot path, or live toggle. `systemd-analyze verify` is not available on this
-macOS host.
+the local aarch64 Docker bootc `selftest` target passes with the expected
+non-systemd honest 502 firewall-toggle degradation. This does **not** replace the
+missing CI/qemu proof of the GTK render, polkit oneshot path, or live toggle.
+`systemd-analyze verify` is not available on this macOS host.
 
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: first run the CI/qemu interaction proof for the

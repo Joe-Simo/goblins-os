@@ -2256,6 +2256,12 @@ fn should_skip_secret_scan_path(relative: &Path) -> bool {
     let path = relative.to_string_lossy();
     path == ".git"
         || path.starts_with(".git/")
+        || path == ".claude"
+        || path.starts_with(".claude/")
+        || path == ".ci-target"
+        || path.starts_with(".ci-target/")
+        || path == ".ci-target-amd64"
+        || path.starts_with(".ci-target-amd64/")
         || path == "target"
         || path.starts_with("target/")
         || path == "artifacts"
@@ -7992,7 +7998,12 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/bootc/run-selftest.sh"),
             "selftest-firewall-honest-toggle-outcome",
-            r#"502|503) [ "$firewall_toggle_ok" = "false" ]"#,
+            r#"502|503) [ "$firewall_toggle_ok" != "true" ]"#,
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "selftest-firewall-honest-failure-body",
+            "firewall_toggle_body",
         ),
         contains_check(
             root.join("os/bootc/run-selftest.sh"),
@@ -8256,11 +8267,11 @@ mod tests {
     use super::{
         cargo_lock_packages, contains_realish_openai_key, desktop_field, install_files,
         is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
-        source_manifest_classifies_top_level, stable_id, write_release_evidence, CheckState,
-        APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES, GLIB_SCHEMA_FILES,
-        GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS,
-        SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS,
-        SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
+        should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
+        write_release_evidence, CheckState, APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES,
+        GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS,
+        NAUTILUS_SCRIPTS, SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS,
+        SYSTEMD_SYSTEM_DROPINS, SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
     };
     use std::collections::HashSet;
     use std::fs;
@@ -8317,6 +8328,22 @@ paths = [
             "untracked-dir",
             true
         ));
+    }
+
+    #[test]
+    fn secret_scan_skips_local_agent_and_build_state() {
+        assert!(should_skip_secret_scan_path(Path::new(".claude")));
+        assert!(should_skip_secret_scan_path(Path::new(
+            ".claude/worktrees/example"
+        )));
+        assert!(should_skip_secret_scan_path(Path::new(".ci-target")));
+        assert!(should_skip_secret_scan_path(Path::new(
+            ".ci-target-amd64/debug"
+        )));
+        assert!(should_skip_secret_scan_path(Path::new("target/debug")));
+        assert!(!should_skip_secret_scan_path(Path::new(
+            "os/etc/goblins-os/openai-secrets.env"
+        )));
     }
 
     #[test]

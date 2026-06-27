@@ -86,7 +86,7 @@ implemented and locally gated, but the feature remains `in-progress` until the
 CI/qemu image pass proves the GTK render, polkit oneshot path, and live toggle.
 Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, `goblins-os-verify --source-root .` →
-**blocked=0 (1544)**, `git diff --check`, helper `bash -n`, polkit rule
+**blocked=0 (1553)**, `git diff --check`, helper `bash -n`, polkit rule
 `node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 The installed-image self-test now exercises `/v1/firewall/status` and the
@@ -131,7 +131,13 @@ GHCR, then calls `os/iso/build-iso.sh` with
 bootc-image-builder pulls the registry image without exporting the full bootc
 image into the runner daemon. That unblock is source-gated only; Firewall still
 requires the next display-backed run to prove the live POST + polkit oneshot
-success path.
+success path. The CI speed pass is source-gated too: `build.yml`,
+`hardware-gate-capture.yml`, and `release.yml` now use
+`docker/setup-buildx-action@v3` plus a nonblocking per-arch
+`type=gha,scope=goblins-os-bootc-${{ matrix.arch }}` BuildKit cache for expensive
+bootc image builds; the hardware gate also cancels superseded manual runs by
+ref/date. This does **not** make the installed OS faster and does **not** prove
+Firewall shipped; it only reduces repeated CI/image-build work on later runs.
 `systemd-analyze verify` is not available on this macOS host.
 
 **NEXT — pick up exactly here:**

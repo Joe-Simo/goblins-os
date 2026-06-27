@@ -61,8 +61,16 @@ jobs:
           owner='${{ github.repository_owner }}'
           owner="${owner,,}"
           echo "ref=ghcr.io/${owner}/goblins-os:${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
       - name: Build the Goblins OS image
-        run: docker build -f os/bootc/Containerfile -t localhost/goblins-os:${{ matrix.arch }} .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: os/bootc/Containerfile
+          load: true
+          tags: localhost/goblins-os:${{ matrix.arch }}
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
       - name: Publish the image to GHCR (real pullable release ref)
         run: |
           docker tag localhost/goblins-os:${{ matrix.arch }} '${{ steps.ref.outputs.ref }}'

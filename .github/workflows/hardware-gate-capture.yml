@@ -12,6 +12,11 @@ on:
       run_date:
         description: "Screenshot run date (YYYY-MM-DD)"
         required: true
+
+concurrency:
+  group: hardware-gate-${{ github.ref }}-${{ inputs.run_date }}
+  cancel-in-progress: true
+
 jobs:
   capture:
     # x86_64 only: GitHub's ubuntu-24.04-arm runners have no /dev/kvm (no nested
@@ -59,14 +64,17 @@ jobs:
         run: |
           owner='${{ github.repository_owner }}'; owner="${owner,,}"
           echo "ref=ghcr.io/${owner}/goblins-os:${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
       - name: Build and publish the Goblins OS image to GHCR
-        run: |
-          docker buildx build \
-            --platform ${{ matrix.platform }} \
-            --push \
-            -f os/bootc/Containerfile \
-            -t '${{ steps.ref.outputs.ref }}' \
-            .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: os/bootc/Containerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.ref.outputs.ref }}
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
       - name: Build the shippable installer ISO from the published ref
         run: |
           GOBLINS_OS_CONTAINER_RUNTIME=docker \

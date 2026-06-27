@@ -120,22 +120,53 @@ jobs:
           sudo swapon /mnt/swapfile
           df -h /
           free -h
+      - uses: docker/setup-buildx-action@v3
       - name: Build the Goblins OS image layers (cache only)
-        run: DOCKER_BUILDKIT=1 docker buildx build -f os/bootc/Containerfile --target goblins-os --output type=cacheonly .
-      - name: Verify the packaging contract (must be 0 blocked)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: os/bootc/Containerfile
+          target: goblins-os
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
+      - name: Prepare packaging verifier Dockerfile
         run: |
           cat os/bootc/Containerfile os/bootc/verify.suffix.Dockerfile > /tmp/verify.Dockerfile
-          DOCKER_BUILDKIT=1 docker buildx build -f /tmp/verify.Dockerfile --target verify --output type=cacheonly .
-      - name: Run the install + services self-test (non-zero fails the build)
+      - name: Verify the packaging contract (must be 0 blocked)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: /tmp/verify.Dockerfile
+          target: verify
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
+      - name: Prepare install + services self-test Dockerfile
         run: |
           cat os/bootc/Containerfile os/bootc/selftest.suffix.Dockerfile > /tmp/selftest.Dockerfile
-          DOCKER_BUILDKIT=1 docker buildx build -f /tmp/selftest.Dockerfile --target selftest --output type=cacheonly .
-      - name: Render design-proof screenshots
+      - name: Run the install + services self-test (non-zero fails the build)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: /tmp/selftest.Dockerfile
+          target: selftest
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
+      - name: Prepare design-proof screenshot Dockerfile
         run: |
           cat os/bootc/Containerfile os/bootc/render.suffix.Dockerfile > /tmp/render.Dockerfile
           mkdir -p screenshots
-          DOCKER_BUILDKIT=1 docker build -f /tmp/render.Dockerfile \
-            --target screenshots --output type=local,dest=screenshots .
+      - name: Render design-proof screenshots
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: /tmp/render.Dockerfile
+          target: screenshots
+          outputs: type=local,dest=screenshots
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
       - uses: actions/upload-artifact@v4
         with:
           name: goblins-os-screenshots-${{ matrix.arch }}
@@ -144,9 +175,17 @@ jobs:
         run: |
           cat os/bootc/Containerfile os/bootc/render.suffix.Dockerfile > /tmp/render-settings-interactions.Dockerfile
           mkdir -p settings-interactions
-          DOCKER_BUILDKIT=1 docker build -f /tmp/render-settings-interactions.Dockerfile \
-            --build-arg GOBLINS_OS_RENDER_SCOPE=settings-interactions \
-            --target screenshots --output type=local,dest=settings-interactions .
+      - name: Build Settings interaction screenshots
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: /tmp/render-settings-interactions.Dockerfile
+          target: screenshots
+          build-args: |
+            GOBLINS_OS_RENDER_SCOPE=settings-interactions
+          outputs: type=local,dest=settings-interactions
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
       - uses: actions/upload-artifact@v4
         with:
           name: goblins-os-settings-interactions-${{ matrix.arch }}
@@ -158,8 +197,15 @@ jobs:
         run: |
           cat os/bootc/Containerfile os/bootc/render-desktop.suffix.Dockerfile > /tmp/render-desktop.Dockerfile
           mkdir -p desktop-screenshots
-          DOCKER_BUILDKIT=1 docker build -f /tmp/render-desktop.Dockerfile \
-            --target desktop-screenshots --output type=local,dest=desktop-screenshots .
+      - name: Build desktop-proof screenshots (light + dark)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: /tmp/render-desktop.Dockerfile
+          target: desktop-screenshots
+          outputs: type=local,dest=desktop-screenshots
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
       - uses: actions/upload-artifact@v4
         with:
           name: goblins-os-desktop-screenshots-${{ matrix.arch }}
@@ -204,8 +250,16 @@ jobs:
           sudo swapon /mnt/swapfile
           df -h /
           free -h
+      - uses: docker/setup-buildx-action@v3
       - name: Build the Goblins OS image
-        run: docker build -f os/bootc/Containerfile -t localhost/goblins-os:${{ matrix.arch }} .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: os/bootc/Containerfile
+          load: true
+          tags: localhost/goblins-os:${{ matrix.arch }}
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
       - name: Build the installer ISO
         run: GOBLINS_OS_CONTAINER_RUNTIME=docker GOBLINS_OS_ARCH=${{ matrix.arch }} GOBLINS_OS_IMAGE=localhost/goblins-os:${{ matrix.arch }} os/iso/build-iso.sh
       - name: Generate release evidence

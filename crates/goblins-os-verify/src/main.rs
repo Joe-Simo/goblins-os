@@ -1191,12 +1191,27 @@ fn source_checks(root: &Path) -> Vec<Check> {
     checks.push(contains_check(
         root.join(".github/workflows/build.yml"),
         "image-workflow-cacheonly-output",
-        "--output type=cacheonly",
+        "outputs: type=cacheonly",
+    ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-uses-buildx-builder",
+        "docker/setup-buildx-action@v3",
+    ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-buildkit-gha-cache-scope",
+        "type=gha,scope=goblins-os-bootc-${{ matrix.arch }}",
+    ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-buildkit-gha-cache-nonblocking",
+        "mode=max,ignore-error=true",
     ));
     checks.push(contains_check(
         root.join(".github/workflows/build.yml"),
         "image-workflow-renders-settings-interactions-scope",
-        "--build-arg GOBLINS_OS_RENDER_SCOPE=settings-interactions",
+        "GOBLINS_OS_RENDER_SCOPE=settings-interactions",
     ));
     checks.push(contains_check(
         root.join(".github/workflows/build.yml"),
@@ -4896,13 +4911,28 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-direct-registry-buildx-push",
-            "docker buildx build",
+            "hardware-gate-direct-registry-build-action",
+            "docker/build-push-action@v7",
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-direct-registry-buildx-push-flag",
-            "--push",
+            "hardware-gate-direct-registry-build-action-push",
+            "push: true",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-buildx-builder-action",
+            "docker/setup-buildx-action@v3",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-buildkit-gha-cache-scope",
+            "type=gha,scope=goblins-os-bootc-${{ matrix.arch }}",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-cancels-superseded-runs",
+            "cancel-in-progress: true",
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
@@ -5082,7 +5112,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join(".github/workflows/build.yml"),
             "installer-iso-workflow-builds-docker-image",
-            "docker build -f os/bootc/Containerfile",
+            "docker/build-push-action@v7",
+        ),
+        contains_check(
+            root.join(".github/workflows/build.yml"),
+            "installer-iso-workflow-loads-local-image",
+            "load: true",
         ),
         contains_check(
             root.join(".github/workflows/build.yml"),
@@ -5643,6 +5678,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join(".github/workflows/build.yml"),
             "ci-release-evidence-upload-artifact",
             "goblins-os-release-evidence-${{ matrix.arch }}",
+        ),
+        contains_check(
+            root.join(".github/workflows/release.yml"),
+            "release-workflow-buildx-builder-action",
+            "docker/setup-buildx-action@v3",
+        ),
+        contains_check(
+            root.join(".github/workflows/release.yml"),
+            "release-workflow-buildkit-gha-cache-scope",
+            "type=gha,scope=goblins-os-bootc-${{ matrix.arch }}",
         ),
     ]
 }

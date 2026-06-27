@@ -12,6 +12,7 @@ use serde_json::Value;
 const KEYBOARD_SCHEMA: &str = "org.gnome.desktop.peripherals.keyboard";
 const MOUSE_SCHEMA: &str = "org.gnome.desktop.peripherals.mouse";
 const TOUCHPAD_SCHEMA: &str = "org.gnome.desktop.peripherals.touchpad";
+const INPUT_SOURCES_SCHEMA: &str = "org.gnome.desktop.input-sources";
 
 #[derive(Serialize)]
 pub struct InputStatus {
@@ -20,6 +21,7 @@ pub struct InputStatus {
     keyboard: KeyboardInputStatus,
     mouse: MouseInputStatus,
     touchpad: TouchpadInputStatus,
+    input_sources: InputSourcesStatus,
     detail: String,
 }
 
@@ -51,6 +53,23 @@ pub struct TouchpadInputStatus {
     natural_scroll: Option<bool>,
     two_finger_scrolling_enabled: Option<bool>,
     disable_while_typing: Option<bool>,
+    detail: String,
+}
+
+/// One configured keyboard input source (IME / layout) from
+/// `org.gnome.desktop.input-sources sources` — e.g. `("xkb", "us")` or
+/// `("ibus", "libpinyin")`. The read substrate for IME/CJK; add/reorder + the
+/// `Super+Space` switching are the deferred (boot/keybinding-sensitive) follow-up.
+#[derive(Serialize, PartialEq, Eq, Debug)]
+pub struct InputSourceEntry {
+    kind: String,
+    id: String,
+}
+
+#[derive(Serialize)]
+pub struct InputSourcesStatus {
+    schema_available: bool,
+    sources: Vec<InputSourceEntry>,
     detail: String,
 }
 
@@ -132,6 +151,7 @@ fn build_input_status() -> InputStatus {
     let keyboard_schema = schema_snapshot(gsettings_available, KEYBOARD_SCHEMA);
     let mouse_schema = schema_snapshot(gsettings_available, MOUSE_SCHEMA);
     let touchpad_schema = schema_snapshot(gsettings_available, TOUCHPAD_SCHEMA);
+    let input_sources_schema = schema_snapshot(gsettings_available, INPUT_SOURCES_SCHEMA);
 
     InputStatus {
         source: "goblins-os-core",
@@ -195,8 +215,76 @@ fn build_input_status() -> InputStatus {
                 TOUCHPAD_SCHEMA,
             ),
         },
+        input_sources: InputSourcesStatus {
+            schema_available: input_sources_schema.available,
+            sources: setting_raw(&input_sources_schema, INPUT_SOURCES_SCHEMA, "sources")
+                .map(|raw| parse_input_sources(&raw))
+                .unwrap_or_default(),
+            detail: schema_detail(
+                gsettings_available,
+                input_sources_schema.available,
+                "Input sources",
+                INPUT_SOURCES_SCHEMA,
+            ),
+        },
         detail: input_status_detail(gsettings_available),
     }
+}
+
+/// Read a raw gsettings value (unparsed) when the key exists — used for the
+/// `a(ss)` input-sources array that the scalar getters don't cover.
+fn setting_raw(schema: &SchemaSnapshot, schema_name: &str, key: &str) -> Option<String> {
+    if !schema.has_key(key) {
+        return None;
+    }
+    gsettings(&["get", schema_name, key]).ok()
+}
+
+/// Parse the `a(ss)` GVariant from `org.gnome.desktop.input-sources sources`
+/// (e.g. `[('xkb', 'us'), ('ibus', 'libpinyin')]`) into ordered entries. Pure —
+/// unit-tested. Tolerant of spacing and of an empty / `@a(ss) []` value.
+fn parse_input_sources(gvariant: &str) -> Vec<InputSourceEntry> {
+    let mut out = Vec::new();
+    let mut rest = gvariant;
+    while let Some(open) = rest.find('(') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(')') else { break };
+        let strings = single_quoted_strings(&after[..close]);
+        if strings.len() == 2 {
+            out.push(InputSourceEntry {
+                kind: strings[0].clone(),
+                id: strings[1].clone(),
+            });
+        }
+        rest = &after[close + 1..];
+    }
+    out
+}
+
+/// Extract single-quoted string literals from a GVariant fragment, honoring
+/// backslash escapes (input-source ids are ASCII, but escapes are handled safely).
+fn single_quoted_strings(fragment: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = fragment.chars();
+    while let Some(c) = chars.next() {
+        if c != '\'' {
+            continue;
+        }
+        let mut value = String::new();
+        loop {
+            match chars.next() {
+                None | Some('\'') => break,
+                Some('\\') => {
+                    if let Some(escaped) = chars.next() {
+                        value.push(escaped);
+                    }
+                }
+                Some(ch) => value.push(ch),
+            }
+        }
+        out.push(value);
+    }
+    out
 }
 
 fn set_input_preference_outcome(
@@ -636,6 +724,28 @@ mod tests {
             parse_preference_value(speed, &json!(2.5)),
             Ok(InputPreferenceValue::F64(1.0))
         ));
+    }
+
+    #[test]
+    fn parses_input_sources_a_ss_gvariant() {
+        use super::{parse_input_sources, InputSourceEntry};
+        let parsed = parse_input_sources("[('xkb', 'us'), ('ibus', 'libpinyin')]");
+        assert_eq!(
+            parsed,
+            vec![
+                InputSourceEntry {
+                    kind: "xkb".into(),
+                    id: "us".into()
+                },
+                InputSourceEntry {
+                    kind: "ibus".into(),
+                    id: "libpinyin".into()
+                },
+            ]
+        );
+        // Empty / typed-empty values yield no sources, never a panic.
+        assert!(parse_input_sources("@a(ss) []").is_empty());
+        assert!(parse_input_sources("[]").is_empty());
     }
 
     #[test]

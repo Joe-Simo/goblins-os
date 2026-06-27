@@ -10,6 +10,7 @@
 #   DOCKER_BUILDKIT=1 docker build -f /tmp/render-desktop.Dockerfile \
 #     --target desktop-screenshots --output type=local,dest=os/screenshots/desktop .
 FROM goblins-os AS desktop-render
+COPY --chmod=0755 os/bootc/render-desktop.sh /usr/local/bin/render-desktop.sh
 RUN dnf -y --setopt=retries=20 --setopt=timeout=600 --setopt=minrate=1 install \
       mesa-dri-drivers \
       mesa-libEGL \
@@ -19,9 +20,8 @@ RUN dnf -y --setopt=retries=20 --setopt=timeout=600 --setopt=minrate=1 install \
       dconf \
       glib2 \
       curl \
-    && dnf clean all
-COPY os/bootc/render-desktop.sh /usr/local/bin/render-desktop.sh
-RUN chmod +x /usr/local/bin/render-desktop.sh && /usr/local/bin/render-desktop.sh
+    && dnf clean all \
+    && /usr/local/bin/render-desktop.sh
 
 FROM scratch AS desktop-screenshots
 COPY --from=desktop-render /out/ /

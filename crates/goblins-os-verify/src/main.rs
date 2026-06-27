@@ -1147,6 +1147,36 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "render-settings-scope-build-env",
         "GOBLINS_OS_RENDER_SCOPE=\"$GOBLINS_OS_RENDER_SCOPE\"",
     ));
+    checks.push(contains_check(
+        root.join("os/bootc/selftest.suffix.Dockerfile"),
+        "selftest-suffix-copy-chmod-layer",
+        "COPY --chmod=0755 os/bootc/run-selftest.sh",
+    ));
+    checks.push(absent_check(
+        root.join("os/bootc/selftest.suffix.Dockerfile"),
+        "selftest-suffix-no-extra-chmod-run-layer",
+        "RUN chmod +x /usr/local/bin/run-selftest.sh",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render.suffix.Dockerfile"),
+        "render-suffix-copy-chmod-layer",
+        "COPY --chmod=0755 os/bootc/render-screens.sh",
+    ));
+    checks.push(absent_check(
+        root.join("os/bootc/render.suffix.Dockerfile"),
+        "render-suffix-no-extra-chmod-run-layer",
+        "RUN chmod +x /usr/local/bin/render-screens.sh",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.suffix.Dockerfile"),
+        "desktop-render-suffix-copy-chmod-layer",
+        "COPY --chmod=0755 os/bootc/render-desktop.sh",
+    ));
+    checks.push(absent_check(
+        root.join("os/bootc/render-desktop.suffix.Dockerfile"),
+        "desktop-render-suffix-no-extra-chmod-run-layer",
+        "RUN chmod +x /usr/local/bin/render-desktop.sh",
+    ));
     checks.push(file_check(root, "os/bootc/verify.suffix.Dockerfile"));
     checks.push(contains_check(
         root.join("os/bootc/verify.suffix.Dockerfile"),

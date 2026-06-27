@@ -86,7 +86,7 @@ implemented and locally gated, but the feature remains `in-progress` until the
 CI/qemu image pass proves the GTK render, polkit oneshot path, and live toggle.
 Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, `goblins-os-verify --source-root .` →
-**blocked=0 (1513)**, `git diff --check`, helper `bash -n`, polkit rule
+**blocked=0 (1521)**, `git diff --check`, helper `bash -n`, polkit rule
 `node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 The installed-image self-test now exercises `/v1/firewall/status` and the
@@ -99,7 +99,12 @@ does **not** replace the missing CI/qemu proof of the GTK render, polkit oneshot
 path, or live toggle. The image workflow now has a source-gated explicit
 `[image]` push marker so the CI/qemu image proof can be started when manual
 workflow dispatch is unavailable in the local tool session; unmarked pushes still
-run only the fast Rust gate, and installer ISO artifacts remain manual-only.
+run only the fast Rust gate, and installer ISO artifacts remain manual-only. The
+first opt-in CI run (`28289894898`) proved the aarch64 image build and packaging
+verifier, then exposed a BuildKit overlay-depth failure before the installed
+self-test script could run; the CI-only self-test/render suffixes now collapse
+their chmod/script execution into fewer layers. The collapsed local aarch64
+Docker `selftest` target passes; a fresh CI image proof is still required.
 `systemd-analyze verify` is not available on this macOS host.
 
 **NEXT — pick up exactly here:**

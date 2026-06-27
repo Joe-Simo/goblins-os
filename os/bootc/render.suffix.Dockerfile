@@ -3,6 +3,7 @@
 # stage is never shipped; it only renders the native apps and exports PNGs.
 FROM goblins-os AS render
 ARG GOBLINS_OS_RENDER_SCOPE=all
+COPY --chmod=0755 os/bootc/render-screens.sh /usr/local/bin/render-screens.sh
 RUN dnf -y install \
       xorg-x11-server-Xvfb \
       ImageMagick \
@@ -12,9 +13,7 @@ RUN dnf -y install \
       google-noto-sans-fonts \
       abattis-cantarell-fonts \
       dejavu-sans-fonts \
-    && dnf clean all
-COPY os/bootc/render-screens.sh /usr/local/bin/render-screens.sh
-RUN chmod +x /usr/local/bin/render-screens.sh \
+    && dnf clean all \
     && GOBLINS_OS_RENDER_SCOPE="$GOBLINS_OS_RENDER_SCOPE" /usr/local/bin/render-screens.sh
 
 FROM scratch AS screenshots

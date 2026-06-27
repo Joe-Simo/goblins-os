@@ -342,6 +342,7 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && test -f /usr/share/ibus/component/goblins-textshortcuts.xml \
     && python3 -m py_compile /usr/libexec/goblins-os/goblins-textshortcuts-ibus \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --self-test \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --runtime-self-test \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"adapter_contract_ready": true' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"runtime_ready_claim": false' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \

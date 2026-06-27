@@ -8400,6 +8400,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-runs-textshortcuts-ibus-adapter-runtime-self-test",
+            "goblins-textshortcuts-ibus --runtime-self-test",
+        ),
+        container_contains_check(
+            root,
             "bootc-runs-textshortcuts-ibus-adapter-capability-check",
             "goblins-textshortcuts-ibus --capability-check",
         ),
@@ -8502,6 +8507,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-self-test",
             "goblins_textshortcuts_ibus_adapter_selftest ok",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-self-test",
+            "goblins_textshortcuts_ibus_runtime_selftest ok",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-self-test-uses-bridge",
+            "RuntimeBridge(response_timeout=CAPABILITY_TIMEOUT_SECONDS)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-self-test-sensitive-refusal",
+            "\"focus-in\", \"purpose\": 9",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),

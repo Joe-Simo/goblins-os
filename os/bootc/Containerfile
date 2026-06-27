@@ -115,7 +115,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       snapper \
       deja-dup \
       localsearch \
-      gnome-sushi \
+      sushi \
       gnome-font-viewer \
       seahorse \
       tesseract \
@@ -130,7 +130,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       gnome-shell-extension-gsconnect \
       snapper \
       deja-dup \
-      gnome-sushi \
+      sushi \
       gnome-font-viewer \
       seahorse \
       tesseract \

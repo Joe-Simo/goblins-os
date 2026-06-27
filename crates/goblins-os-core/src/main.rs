@@ -38,6 +38,7 @@ mod system;
 mod system_image;
 mod text_shortcuts;
 mod voice;
+mod voice_control;
 
 use std::net::SocketAddr;
 
@@ -193,6 +194,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/voice/status", get(voice_status))
         .route("/v1/voice/converse", post(voice_converse))
         .route("/v1/voice/dictate", post(voice_dictate))
+        .route(
+            "/v1/voice/control/vocabulary",
+            get(voice_control::voice_control_vocabulary),
+        )
+        .route(
+            "/v1/voice/control/resolve",
+            post(voice_control::resolve_voice_command),
+        )
         .route("/v1/ocr/status", get(ocr::ocr_status))
         .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
         .route("/v1/firewall/status", get(firewall::firewall_status))

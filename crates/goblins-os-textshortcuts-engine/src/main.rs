@@ -3,8 +3,9 @@ use std::fs;
 use std::process::ExitCode;
 
 use goblins_os_textshortcuts_engine::{
-    run_text_shortcuts_keystroke_self_test, run_text_shortcuts_table_watch_self_test,
-    validate_ibus_component_xml, ShortcutTable, TextShortcutTableStore,
+    run_text_shortcuts_content_purpose_self_test, run_text_shortcuts_keystroke_self_test,
+    run_text_shortcuts_table_watch_self_test, validate_ibus_component_xml, ShortcutTable,
+    TextShortcutTableStore,
 };
 use serde::Serialize;
 
@@ -41,6 +42,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
             println!("goblins_textshortcuts_table_watch_selftest ok");
             Ok(())
         }
+        [flag] if flag == "--content-purpose-self-test" => {
+            run_text_shortcuts_content_purpose_self_test().map_err(|error| error.to_string())?;
+            println!("goblins_textshortcuts_content_purpose_selftest ok");
+            Ok(())
+        }
         [flag] if flag == "--ibus" => Err(
             "IBus runtime loop is not enabled in this source-gated build yet; install and component registration are present, but live expansion remains CI/qemu-pending."
                 .to_string(),
@@ -62,7 +68,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             print_preview(trigger, &table)
         }
         _ => Err(
-            "usage: goblins-textshortcuts-engine --self-test | --keystroke-self-test | --table-watch-self-test | --component-check <component.xml> | --preview <trigger> [table.json]"
+            "usage: goblins-textshortcuts-engine --self-test | --keystroke-self-test | --table-watch-self-test | --content-purpose-self-test | --component-check <component.xml> | --preview <trigger> [table.json]"
                 .to_string(),
         ),
     }

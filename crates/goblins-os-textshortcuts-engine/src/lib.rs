@@ -639,6 +639,146 @@ impl ContentPurpose {
     }
 }
 
+pub const IBUS_INPUT_PURPOSE_FREE_FORM: u32 = 0;
+pub const IBUS_INPUT_PURPOSE_PASSWORD: u32 = 8;
+pub const IBUS_INPUT_PURPOSE_PIN: u32 = 9;
+
+pub fn content_purpose_from_ibus_input_purpose(value: u32) -> ContentPurpose {
+    match value {
+        IBUS_INPUT_PURPOSE_PASSWORD => ContentPurpose::Password,
+        IBUS_INPUT_PURPOSE_PIN => ContentPurpose::HiddenText,
+        _ => ContentPurpose::Normal,
+    }
+}
+
+pub fn content_purpose_from_ibus_input_purpose_name(value: &str) -> ContentPurpose {
+    let normalized = value
+        .trim()
+        .trim_start_matches("IBUS_INPUT_PURPOSE_")
+        .trim_start_matches("InputPurpose.")
+        .replace(['-', ' '], "_")
+        .to_ascii_uppercase();
+    match normalized.as_str() {
+        "PASSWORD" => ContentPurpose::Password,
+        "PIN" | "HIDDEN_TEXT" | "HIDDENTEXT" => ContentPurpose::HiddenText,
+        "SENSITIVE" => ContentPurpose::Sensitive,
+        _ => ContentPurpose::Normal,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContentPurposeSelfTestError {
+    UnexpectedPurpose {
+        phase: &'static str,
+        expected: ContentPurpose,
+        actual: ContentPurpose,
+    },
+    UnexpectedDecision {
+        phase: &'static str,
+        expected: IbusRuntimeDecision,
+        actual: IbusRuntimeDecision,
+    },
+}
+
+impl std::fmt::Display for ContentPurposeSelfTestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnexpectedPurpose {
+                phase,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "unexpected Text Shortcuts content purpose during {phase}: expected {expected:?}, got {actual:?}"
+            ),
+            Self::UnexpectedDecision {
+                phase,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "unexpected Text Shortcuts content-purpose decision during {phase}: expected {expected:?}, got {actual:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ContentPurposeSelfTestError {}
+
+pub fn run_text_shortcuts_content_purpose_self_test() -> Result<(), ContentPurposeSelfTestError> {
+    expect_content_purpose(
+        "password-numeric-purpose",
+        content_purpose_from_ibus_input_purpose(IBUS_INPUT_PURPOSE_PASSWORD),
+        ContentPurpose::Password,
+    )?;
+    expect_content_purpose(
+        "pin-numeric-purpose",
+        content_purpose_from_ibus_input_purpose(IBUS_INPUT_PURPOSE_PIN),
+        ContentPurpose::HiddenText,
+    )?;
+    expect_content_purpose(
+        "unknown-purpose-free-form",
+        content_purpose_from_ibus_input_purpose(999),
+        ContentPurpose::Normal,
+    )?;
+    expect_content_purpose(
+        "password-symbolic-purpose",
+        content_purpose_from_ibus_input_purpose_name("IBUS_INPUT_PURPOSE_PASSWORD"),
+        ContentPurpose::Password,
+    )?;
+    expect_content_purpose(
+        "pin-symbolic-purpose",
+        content_purpose_from_ibus_input_purpose_name("InputPurpose.PIN"),
+        ContentPurpose::HiddenText,
+    )?;
+
+    let table = ShortcutTable::from_shortcuts(vec![TextShortcut::new("omw", "on my way")]);
+    let mut runtime = IbusTextShortcutsRuntime::new(table);
+    let purpose = content_purpose_from_ibus_input_purpose(IBUS_INPUT_PURPOSE_PIN);
+    expect_content_decision(
+        "pin-focus",
+        runtime.handle_event(IbusRuntimeEvent::FocusIn(purpose)),
+        IbusRuntimeDecision::pass_through(),
+    )?;
+    expect_content_decision(
+        "pin-pass-through",
+        type_runtime_text_for_self_test(&mut runtime, "omw "),
+        IbusRuntimeDecision::pass_through(),
+    )
+}
+
+fn expect_content_purpose(
+    phase: &'static str,
+    actual: ContentPurpose,
+    expected: ContentPurpose,
+) -> Result<(), ContentPurposeSelfTestError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(ContentPurposeSelfTestError::UnexpectedPurpose {
+            phase,
+            expected,
+            actual,
+        })
+    }
+}
+
+fn expect_content_decision(
+    phase: &'static str,
+    actual: IbusRuntimeDecision,
+    expected: IbusRuntimeDecision,
+) -> Result<(), ContentPurposeSelfTestError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(ContentPurposeSelfTestError::UnexpectedDecision {
+            phase,
+            expected,
+            actual,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputEvent {
     Character(char),
@@ -1131,13 +1271,15 @@ mod tests {
     use std::fs;
 
     use super::{
+        content_purpose_from_ibus_input_purpose, content_purpose_from_ibus_input_purpose_name,
         default_text_shortcuts_table_path, ibus_runtime_decision, input_event_from_ibus_key,
-        run_text_shortcuts_keystroke_self_test, run_text_shortcuts_table_watch_self_test,
-        sanitize_shortcuts, ContentPurpose, EngineAction, EngineState, IbusKeyEvent, IbusOperation,
-        IbusRuntimeDecision, IbusRuntimeEvent, IbusTextShortcutsRuntime, InputEvent, ShortcutTable,
-        TableLoadStatus, TextShortcut, TextShortcutTableStore, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE,
-        IBUS_KEY_DOWN, IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT,
-        IBUS_KEY_TAB, IBUS_KEY_UP,
+        run_text_shortcuts_content_purpose_self_test, run_text_shortcuts_keystroke_self_test,
+        run_text_shortcuts_table_watch_self_test, sanitize_shortcuts, ContentPurpose, EngineAction,
+        EngineState, IbusKeyEvent, IbusOperation, IbusRuntimeDecision, IbusRuntimeEvent,
+        IbusTextShortcutsRuntime, InputEvent, ShortcutTable, TableLoadStatus, TextShortcut,
+        TextShortcutTableStore, IBUS_INPUT_PURPOSE_FREE_FORM, IBUS_INPUT_PURPOSE_PASSWORD,
+        IBUS_INPUT_PURPOSE_PIN, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE, IBUS_KEY_DOWN,
+        IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
     };
 
     fn table() -> ShortcutTable {
@@ -1377,6 +1519,34 @@ mod tests {
             );
             assert_eq!(state.current_word(), "");
         }
+    }
+
+    #[test]
+    fn ibus_content_purposes_decode_to_safe_runtime_purposes() {
+        assert_eq!(
+            content_purpose_from_ibus_input_purpose(IBUS_INPUT_PURPOSE_FREE_FORM),
+            ContentPurpose::Normal
+        );
+        assert_eq!(
+            content_purpose_from_ibus_input_purpose(IBUS_INPUT_PURPOSE_PASSWORD),
+            ContentPurpose::Password
+        );
+        assert_eq!(
+            content_purpose_from_ibus_input_purpose(IBUS_INPUT_PURPOSE_PIN),
+            ContentPurpose::HiddenText
+        );
+        assert_eq!(
+            content_purpose_from_ibus_input_purpose_name("IBUS_INPUT_PURPOSE_PASSWORD"),
+            ContentPurpose::Password
+        );
+        assert_eq!(
+            content_purpose_from_ibus_input_purpose_name("InputPurpose.PIN"),
+            ContentPurpose::HiddenText
+        );
+        assert_eq!(
+            content_purpose_from_ibus_input_purpose_name("unknown"),
+            ContentPurpose::Normal
+        );
     }
 
     #[test]
@@ -1707,6 +1877,11 @@ mod tests {
     #[test]
     fn text_shortcuts_table_watch_self_test_covers_reload_contract() {
         assert_eq!(run_text_shortcuts_table_watch_self_test(), Ok(()));
+    }
+
+    #[test]
+    fn text_shortcuts_content_purpose_self_test_covers_hidden_input_contract() {
+        assert_eq!(run_text_shortcuts_content_purpose_self_test(), Ok(()));
     }
 
     #[test]

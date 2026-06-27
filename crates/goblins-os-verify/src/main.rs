@@ -8200,6 +8200,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "bootc-runs-textshortcuts-table-watch-self-test",
             "goblins-textshortcuts-engine --table-watch-self-test",
         ),
+        container_contains_check(
+            root,
+            "bootc-runs-textshortcuts-content-purpose-self-test",
+            "goblins-textshortcuts-engine --content-purpose-self-test",
+        ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts.xml"),
             "textshortcuts-component-engine-name",
@@ -8362,6 +8367,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-ibus-password-purpose",
+            "IBUS_INPUT_PURPOSE_PASSWORD: u32 = 8",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-ibus-pin-purpose",
+            "IBUS_INPUT_PURPOSE_PIN: u32 = 9",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-content-purpose-decoder",
+            "content_purpose_from_ibus_input_purpose",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-content-purpose-self-test-contract",
+            "pub fn run_text_shortcuts_content_purpose_self_test",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-runtime-event-router",
             "pub enum IbusRuntimeEvent",
         ),
@@ -8414,6 +8439,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
             "textshortcuts-engine-table-watch-self-test-cli",
             "--table-watch-self-test",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
+            "textshortcuts-engine-content-purpose-self-test-cli",
+            "--content-purpose-self-test",
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),

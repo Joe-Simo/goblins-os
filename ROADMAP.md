@@ -347,25 +347,24 @@ CI/qemu must still prove the GTK render, installed schema/write behavior,
 session-user listener, PipeWire capture, notification/flash path, and reliability
 copy before Sound Recognition can ship.
 
-Current Switch Control continuation: the preference bridge + Settings subsection
-are now source-gated but not shipped. Core exposes
-`/v1/accessibility/switch-control/preference`, writes only the allowlisted
-`org.goblins.os.a11y.switch-control` keys, type-checks mode/scanning/timing
-values, clamps the timing ranges, and returns honest saved-but-not-scanning copy
-until the scanner engine is active. Settings ▸ Accessibility now renders the
-Switch Control status, master toggle, scan mode/style, and timing controls
-through that route. No GNOME Shell extension, AT-SPI tree walk, highlight ring,
-crosshair, switch input, or synthetic selection is claimed in this pass. Local
-source gates: `cargo fmt --all --check`,
+Current Switch Control continuation: the GNOME Shell scanner scaffold is now
+source-gated but not shipped. The `goblins-switch@goblins.os` extension is
+installed in the Goblins shell mode and dconf seed, reads the existing
+`org.goblins.os.a11y.switch-control` system schema, stays inert while the
+feature is disabled, attempts session AT-SPI target discovery when enabled,
+renders a highlight ring or point-scan crosshair, supports auto/step scan
+advance, and hard-disables on Escape. It falls back honestly to point scan when
+AT-SPI controls are absent and keeps pointer injection paused with explicit qemu
+proof copy instead of faking a click path. Local source gates for this pass:
+`node --check` over every bundled shell extension, `cargo fmt --all --check`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
-`goblins-os-verify --source-root .` → **blocked=0 (1643)**,
-`git diff --check`, targeted `cargo test -p goblins-os-core switch_control`,
-targeted `cargo test -p goblins-os-settings switch_control`, and the Rust 1.88
-GTK container
-`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
-CI/qemu must still prove the Settings render, installed schema/write behavior,
-real scanner state machine, AT-SPI walk, overlay, and gated input injection
-before Switch Control can ship.
+`goblins-os-verify --source-root .` → **blocked=0 (1765)**, `git diff --check`,
+and `bash -n os/hardware-gate/verify-shipping-status.sh`. `glib-compile-schemas`
+is not available on this macOS host and Docker did not respond for a container
+dry-run; the Switch Control schema itself was not changed in this pass, and CI
+image compile remains the schema proof. CI/qemu must still prove the Settings
+render, installed schema/write behavior, live extension load, AT-SPI target
+walk, overlay pixels, and gated selection/input before Switch Control can ship.
 
 Current Text Shortcuts continuation: the Settings table editor is now
 source-gated but not shipped. Settings ▸ Keyboard reads `/v1/text-shortcuts`,
@@ -950,6 +949,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 ### `in-progress` Switch Control (scanning input for adaptive switches)
 - [x] **Status + schema substrate shipped** (`crates/goblins-os-core/src/switch_control.rs` + `/v1/accessibility/switch-control/status`, NEW `org.goblins.os.a11y.switch-control` gschema via the existing `os/glib-schemas/` plumbing — off by default): reads enabled/mode/scanning/timings with the same normalization the engine will trust (`normalize_mode`/`normalize_scanning`/`clamp_interval` 300–5000 / `clamp_ms`), honest-gated when the schema is absent. Pure normalizers unit-tested (193 core tests); `glib-compile-schemas` clean; clippy/fmt clean; route + schema verify gates.
 - [x] **Preference bridge + Settings subsection source-gated (CI/qemu-pending):** core exposes `/v1/accessibility/switch-control/preference`, writes only the allowlisted `org.goblins.os.a11y.switch-control` keys, validates mode/scanning, clamps timing values, and returns honest saved-but-not-scanning copy until the scanner engine is active. Settings ▸ Accessibility renders status, master toggle, mode/style choices, and timing sliders through that route. No Shell extension, AT-SPI walk, highlight overlay, switch input, or selection injection is claimed yet.
+- [x] **Shell scanner scaffold source-gated (CI/qemu-pending):** `goblins-switch@goblins.os` is installed in the Goblins shell mode, seeded off through dconf, reads the system Switch Control schema, exposes item/point scan state, attempts AT-SPI discovery, renders the highlight ring/crosshair overlay, supports auto/step advance, and Escape disables the feature. AT-SPI runtime behavior, overlay pixels, switch input, and pointer injection remain qemu-pending; point selection explicitly stays paused until that proof exists.
 - [ ] **Scanning engine + overlay/input proof (deferred, XL/highest-risk):** the `goblins-switch@goblins.os` extension (item/point scan state machine, AT-SPI tree walk, Clutter highlight ring/crosshair, gated input injection, hard Escape→disable, never on by default, session-only) plus qemu proof of highlighting, fallback, and selection behavior.
 - **Packages:** `at-spi2-core` (already in the image at Containerfile L44 — no new RPM; gnome-shell/libei present too).
 - **gsettings/dconf:** NEW `org.goblins.os.a11y.switch-control` (enabled, mode item|point, scanning auto|step, auto/interface-interval-ms, loops-before-pause, dwell-ms, switch-debounce-ms, point-precision, audio-cues, select/next/pause-key) shipped as a compiled gschema + dconf-seeded off. Reuse existing `…a11y.applications screen-keyboard-enabled` for the on-screen keyboard under scan.

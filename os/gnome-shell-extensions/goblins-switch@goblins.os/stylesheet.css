@@ -1,0 +1,41 @@
+/* Goblins OS Switch Control - one accent, Inter, session-scoped overlay. */
+
+.goblins-switch-panel {
+  width: 420px;
+  max-width: 560px;
+  background-color: rgba(26, 26, 31, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 22px;
+  padding: 14px 16px;
+  spacing: 5px;
+  color: rgba(255, 255, 255, 0.94);
+  font-family: "Inter";
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.44);
+}
+
+.goblins-switch-title {
+  color: rgba(255, 255, 255, 0.95);
+  font-family: "Inter";
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.goblins-switch-detail {
+  color: rgba(255, 255, 255, 0.74);
+  font-family: "Inter";
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.goblins-switch-highlight {
+  border: 3px solid rgba(16, 163, 127, 0.98);
+  border-radius: 8px;
+  background-color: rgba(16, 163, 127, 0.08);
+  box-shadow: 0 0 0 5px rgba(16, 163, 127, 0.16), 0 12px 36px rgba(0, 0, 0, 0.24);
+}
+
+.goblins-switch-crosshair-x,
+.goblins-switch-crosshair-y {
+  background-color: rgba(16, 163, 127, 0.42);
+  box-shadow: 0 0 0 1px rgba(16, 163, 127, 0.36);
+}

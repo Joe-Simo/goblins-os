@@ -1,0 +1,7 @@
+{
+  "uuid": "goblins-switch@goblins.os",
+  "name": "Goblins Switch Control",
+  "description": "Session-scoped Switch Control scanner overlay for Goblins OS.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "session-modes": ["user", "goblins-os"]
+}

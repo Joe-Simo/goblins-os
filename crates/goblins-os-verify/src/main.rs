@@ -73,6 +73,9 @@ const GLIB_SCHEMA_FILES: &[&str] = &[
 ];
 
 const GNOME_SHELL_EXTENSION_FILES: &[&str] = &[
+    "goblins-switch@goblins.os/metadata.json",
+    "goblins-switch@goblins.os/extension.js",
+    "goblins-switch@goblins.os/stylesheet.css",
     "goblins-wm@goblins.os/metadata.json",
     "goblins-wm@goblins.os/extension.js",
     "goblins-wm@goblins.os/stylesheet.css",
@@ -982,6 +985,21 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "goblins-wm-enabled-shell-mode",
         "\"goblins-wm@goblins.os\"",
     ));
+    checks.push(contains_check(
+        root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
+        "goblins-switch-enabled-dconf",
+        "goblins-switch@goblins.os",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-modes/goblins-os.json"),
+        "goblins-switch-enabled-shell-mode",
+        "\"goblins-switch@goblins.os\"",
+    ));
+    checks.push(contains_check(
+        root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
+        "goblins-switch-dconf-default-off",
+        "[org/goblins/os/a11y/switch-control]",
+    ));
     checks.push(container_contains_check(
         root,
         "goblins-wm-schema-compiled",
@@ -1406,6 +1424,36 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "goblins-wm-snap-uses-motion-token",
         "_fadeIn(this._snapPreview, SNAP_PREVIEW_FADE_MS);",
     ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-uses-system-schema",
+        "const SCHEMA_ID = 'org.goblins.os.a11y.switch-control';",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-atspi-discovery",
+        "import('gi://Atspi')",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-point-fallback",
+        "This window has no scannable controls - using point scan.",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-escape-disable",
+        "Clutter.KEY_Escape",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-qemu-input-honesty",
+        "Point selection needs live qemu proof before pointer injection is enabled.",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/stylesheet.css"),
+        "goblins-switch-inter",
+        "font-family: \"Inter\"",
+    ));
 
     // The session must OWN GNOME via a custom shell mode (no stock chrome),
     // not present stock GNOME.
@@ -1642,6 +1690,16 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         root.join("usr/share/gnome-shell/modes/goblins-os.json"),
         "installed-goblins-wm-enabled-shell-mode",
         "\"goblins-wm@goblins.os\"",
+    ));
+    checks.push(contains_check(
+        root.join("etc/dconf/db/local.d/10-goblins-os-desktop"),
+        "installed-goblins-switch-enabled-dconf",
+        "goblins-switch@goblins.os",
+    ));
+    checks.push(contains_check(
+        root.join("usr/share/gnome-shell/modes/goblins-os.json"),
+        "installed-goblins-switch-enabled-shell-mode",
+        "\"goblins-switch@goblins.os\"",
     ));
     checks
 }
@@ -8810,6 +8868,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/glib-schemas/org.goblins.os.a11y.switch-control.gschema.xml"),
             "switch-control-gschema-present",
             "org.goblins.os.a11y.switch-control",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+            "switch-control-shell-state-machine",
+            "_advanceScan()",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+            "switch-control-shell-overlay",
+            "goblins-switch-highlight",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+            "switch-control-shell-honest-fallback",
+            "Selection is paused on this screen.",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),

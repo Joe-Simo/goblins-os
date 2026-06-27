@@ -131,7 +131,7 @@ show-screen-recording-ui=['<Shift><Super>5']
 # Desktop surfaces: the GoblinsOS theme (menu bar / control center) + our
 # own overview-independent dock (dash-to-dock needs the overview, which this mode
 # strips out). Version validation off as belt-and-suspenders for bundled extensions.
-enabled-extensions=['user-theme@gnome-shell-extensions.gcampax.github.com', 'gsconnect@andyholmes.github.io', 'goblins-dock@goblins.os', 'goblins-menubar@goblins.os', 'goblins-wm@goblins.os']
+enabled-extensions=['user-theme@gnome-shell-extensions.gcampax.github.com', 'gsconnect@andyholmes.github.io', 'goblins-dock@goblins.os', 'goblins-menubar@goblins.os', 'goblins-switch@goblins.os', 'goblins-wm@goblins.os']
 disable-extension-version-validation=true
 # The dock's pinned surfaces (Build Studio + Settings). The Home IS the shell, so
 # it is not pinned; built apps and utilities join the dock when running.
@@ -139,6 +139,14 @@ favorite-apps=['org.goblins.OS.OpenAI.Codex.desktop', 'org.gnome.Nautilus.deskto
 
 [org/gnome/shell/extensions/user-theme]
 name='GoblinsOS'
+
+[org/goblins/os/a11y/switch-control]
+enabled=false
+mode='item'
+scanning='auto'
+auto-interval-ms=1200
+dwell-ms=800
+debounce-ms=60
 
 [org/freedesktop/ibus/general]
 preload-engines=['goblins-textshortcuts']

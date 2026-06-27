@@ -11,6 +11,7 @@
     "goblins-captions@goblins.os",
     "goblins-dock@goblins.os",
     "goblins-menubar@goblins.os",
+    "goblins-switch@goblins.os",
     "goblins-wm@goblins.os"
   ],
   "panel": {

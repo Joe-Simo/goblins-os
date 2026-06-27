@@ -8190,6 +8190,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "bootc-runs-textshortcuts-component-check",
             "goblins-textshortcuts-engine --component-check /usr/share/ibus/component/goblins-textshortcuts.xml",
         ),
+        container_contains_check(
+            root,
+            "bootc-runs-textshortcuts-keystroke-self-test",
+            "goblins-textshortcuts-engine --keystroke-self-test",
+        ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts.xml"),
             "textshortcuts-component-engine-name",
@@ -8356,6 +8361,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "IbusRuntimeEvent::TableChanged",
         ),
         contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-keystroke-self-test-contract",
+            "pub fn run_text_shortcuts_keystroke_self_test",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-keystroke-self-test-errors",
+            "pub enum KeystrokeSelfTestError",
+        ),
+        contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
             "textshortcuts-engine-cli-reuses-table-store",
             "TextShortcutTableStore::from_environment()",
@@ -8363,7 +8378,12 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
             "textshortcuts-engine-self-test-uses-event-router",
-            "IbusRuntimeEvent::Key",
+            "run_text_shortcuts_keystroke_self_test()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
+            "textshortcuts-engine-keystroke-self-test-cli",
+            "--keystroke-self-test",
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),

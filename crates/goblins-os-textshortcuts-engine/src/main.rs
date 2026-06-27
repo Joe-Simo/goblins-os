@@ -3,8 +3,7 @@ use std::fs;
 use std::process::ExitCode;
 
 use goblins_os_textshortcuts_engine::{
-    validate_ibus_component_xml, IbusKeyEvent, IbusOperation, IbusRuntimeDecision,
-    IbusRuntimeEvent, IbusTextShortcutsRuntime, ShortcutTable, TextShortcut,
+    run_text_shortcuts_keystroke_self_test, validate_ibus_component_xml, ShortcutTable,
     TextShortcutTableStore,
 };
 use serde::Serialize;
@@ -32,6 +31,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
             println!("goblins_textshortcuts_engine_selftest ok");
             Ok(())
         }
+        [flag] if flag == "--keystroke-self-test" => {
+            run_text_shortcuts_keystroke_self_test().map_err(|error| error.to_string())?;
+            println!("goblins_textshortcuts_keystroke_selftest ok");
+            Ok(())
+        }
         [flag] if flag == "--ibus" => Err(
             "IBus runtime loop is not enabled in this source-gated build yet; install and component registration are present, but live expansion remains CI/qemu-pending."
                 .to_string(),
@@ -53,7 +57,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             print_preview(trigger, &table)
         }
         _ => Err(
-            "usage: goblins-textshortcuts-engine --self-test | --component-check <component.xml> | --preview <trigger> [table.json]"
+            "usage: goblins-textshortcuts-engine --self-test | --keystroke-self-test | --component-check <component.xml> | --preview <trigger> [table.json]"
                 .to_string(),
         ),
     }
@@ -83,51 +87,5 @@ fn print_preview(trigger: &str, table: &ShortcutTable) -> Result<(), String> {
 }
 
 fn self_test() -> Result<(), String> {
-    let table = ShortcutTable::from_shortcuts(vec![TextShortcut::new("omw", "on my way")]);
-    let mut runtime = IbusTextShortcutsRuntime::new(table);
-    let mut candidate = IbusRuntimeDecision::pass_through();
-    for character in "omw".chars() {
-        candidate = runtime.handle_event(IbusRuntimeEvent::Key(IbusKeyEvent::new(
-            character as u32,
-            Some(character),
-            true,
-            false,
-        )));
-    }
-    if candidate.key_handled()
-        || candidate.operations()
-            != [IbusOperation::UpdatePreeditText {
-                text: "on my way".to_string(),
-                cursor_pos: 9,
-                visible: true,
-            }]
-    {
-        return Err(format!(
-            "unexpected Text Shortcuts candidate decision: {candidate:?}"
-        ));
-    }
-
-    let decision = runtime.handle_event(IbusRuntimeEvent::Key(IbusKeyEvent::new(
-        ' ' as u32,
-        Some(' '),
-        true,
-        false,
-    )));
-    if decision.key_handled()
-        && decision.operations()
-            == [
-                IbusOperation::DeleteSurroundingText {
-                    offset: -3,
-                    n_chars: 3,
-                },
-                IbusOperation::CommitText("on my way ".to_string()),
-                IbusOperation::HidePreeditText,
-            ]
-    {
-        Ok(())
-    } else {
-        Err(format!(
-            "unexpected Text Shortcuts runtime decision: {decision:?}"
-        ))
-    }
+    run_text_shortcuts_keystroke_self_test().map_err(|error| error.to_string())
 }

@@ -334,6 +334,7 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && test -x /usr/libexec/goblins-os/goblins-textshortcuts-engine \
     && test -f /usr/share/ibus/component/goblins-textshortcuts.xml \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-engine --keystroke-self-test \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --component-check /usr/share/ibus/component/goblins-textshortcuts.xml \
     && grep -Fq '<name>goblins-textshortcuts</name>' /usr/share/ibus/component/goblins-textshortcuts.xml \
     && grep -Fq '/usr/libexec/goblins-os/goblins-textshortcuts-engine --ibus' /usr/share/ibus/component/goblins-textshortcuts.xml \

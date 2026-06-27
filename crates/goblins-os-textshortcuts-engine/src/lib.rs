@@ -571,6 +571,122 @@ impl Default for IbusTextShortcutsRuntime {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KeystrokeSelfTestError {
+    UnexpectedDecision {
+        phase: &'static str,
+        expected: IbusRuntimeDecision,
+        actual: IbusRuntimeDecision,
+    },
+}
+
+impl std::fmt::Display for KeystrokeSelfTestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnexpectedDecision {
+                phase,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "unexpected Text Shortcuts keystroke decision during {phase}: expected {expected:?}, got {actual:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for KeystrokeSelfTestError {}
+
+pub fn run_text_shortcuts_keystroke_self_test() -> Result<(), KeystrokeSelfTestError> {
+    let table = ShortcutTable::from_shortcuts(vec![TextShortcut::new("omw", "on my way")]);
+
+    let mut runtime = IbusTextShortcutsRuntime::new(table.clone());
+    let candidate = type_runtime_text_for_self_test(&mut runtime, "omw");
+    expect_keystroke_decision(
+        "candidate-preedit",
+        candidate,
+        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+            text: "on my way".to_string(),
+            cursor_pos: 9,
+            visible: true,
+        }]),
+    )?;
+    expect_keystroke_decision(
+        "boundary-commit",
+        runtime.handle_event(IbusRuntimeEvent::Key(char_key_event_for_self_test(' '))),
+        IbusRuntimeDecision::handled(vec![
+            IbusOperation::DeleteSurroundingText {
+                offset: -3,
+                n_chars: 3,
+            },
+            IbusOperation::CommitText("on my way ".to_string()),
+            IbusOperation::HidePreeditText,
+        ]),
+    )?;
+
+    let mut password_runtime = IbusTextShortcutsRuntime::new(table.clone());
+    expect_keystroke_decision(
+        "password-focus",
+        password_runtime.handle_event(IbusRuntimeEvent::FocusIn(ContentPurpose::Password)),
+        IbusRuntimeDecision::pass_through(),
+    )?;
+    expect_keystroke_decision(
+        "password-pass-through",
+        type_runtime_text_for_self_test(&mut password_runtime, "omw "),
+        IbusRuntimeDecision::pass_through(),
+    )?;
+
+    let mut focus_runtime = IbusTextShortcutsRuntime::new(table);
+    let focus_candidate = type_runtime_text_for_self_test(&mut focus_runtime, "omw");
+    expect_keystroke_decision(
+        "focus-candidate",
+        focus_candidate,
+        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+            text: "on my way".to_string(),
+            cursor_pos: 9,
+            visible: true,
+        }]),
+    )?;
+    expect_keystroke_decision(
+        "focus-out",
+        focus_runtime.handle_event(IbusRuntimeEvent::FocusOut),
+        IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText]),
+    )
+}
+
+fn type_runtime_text_for_self_test(
+    runtime: &mut IbusTextShortcutsRuntime,
+    value: &str,
+) -> IbusRuntimeDecision {
+    let mut decision = IbusRuntimeDecision::pass_through();
+    for character in value.chars() {
+        decision = runtime.handle_event(IbusRuntimeEvent::Key(char_key_event_for_self_test(
+            character,
+        )));
+    }
+    decision
+}
+
+fn char_key_event_for_self_test(value: char) -> IbusKeyEvent {
+    IbusKeyEvent::new(value as u32, Some(value), true, false)
+}
+
+fn expect_keystroke_decision(
+    phase: &'static str,
+    actual: IbusRuntimeDecision,
+    expected: IbusRuntimeDecision,
+) -> Result<(), KeystrokeSelfTestError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(KeystrokeSelfTestError::UnexpectedDecision {
+            phase,
+            expected,
+            actual,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EngineState {
     current_word: String,
@@ -672,11 +788,11 @@ mod tests {
 
     use super::{
         default_text_shortcuts_table_path, ibus_runtime_decision, input_event_from_ibus_key,
-        sanitize_shortcuts, ContentPurpose, EngineAction, EngineState, IbusKeyEvent, IbusOperation,
-        IbusRuntimeDecision, IbusRuntimeEvent, IbusTextShortcutsRuntime, InputEvent, ShortcutTable,
-        TableLoadStatus, TextShortcut, TextShortcutTableStore, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE,
-        IBUS_KEY_DOWN, IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT,
-        IBUS_KEY_TAB, IBUS_KEY_UP,
+        run_text_shortcuts_keystroke_self_test, sanitize_shortcuts, ContentPurpose, EngineAction,
+        EngineState, IbusKeyEvent, IbusOperation, IbusRuntimeDecision, IbusRuntimeEvent,
+        IbusTextShortcutsRuntime, InputEvent, ShortcutTable, TableLoadStatus, TextShortcut,
+        TextShortcutTableStore, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE, IBUS_KEY_DOWN,
+        IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
     };
 
     fn table() -> ShortcutTable {
@@ -1236,6 +1352,11 @@ mod tests {
                 visible: true,
             }])
         );
+    }
+
+    #[test]
+    fn text_shortcuts_keystroke_self_test_covers_runtime_contract() {
+        assert_eq!(run_text_shortcuts_keystroke_self_test(), Ok(()));
     }
 
     #[test]

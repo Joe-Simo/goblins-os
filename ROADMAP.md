@@ -98,8 +98,9 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 
 Goblins-branded rows/cards on existing stable seams. Logic host-testable; render and writes proven in CI/qemu.
 
-### `TODO` Branded Accessibility panel rows
-- [ ] High contrast, sticky/slow/bounce/mouse keys, dwell + secondary-click delay, and magnifier (zoom factor + lens mode) as Goblins rows in Settings ▸ Accessibility, written through the allowlisted core bridge.
+### `in-progress` Branded Accessibility panel rows
+- [x] **Core bridge shipped** (`crates/goblins-os-core/src/accessibility.rs`): high contrast (`a11y.interface`), sticky/slow/bounce/mouse keys (`a11y.keyboard`), and dwell click (`a11y.mouse`) are now read in `/v1/accessibility/status` and settable via `/v1/accessibility/preference` through the allowlisted, type-checked bridge — honest-gated per schema. 6 new boolean targets + status structs, unit-tested on the host (169 core tests).
+- [ ] **GTK Settings rows (CI-gated, remaining):** render the new toggles as Goblins rows in Settings ▸ Accessibility (Contrast / Typing assistance / Pointer assistance groups) via the existing `append_accessibility_bool_row`; plus the magnifier zoom-factor + lens-mode sliders.
 - **Packages:** none (schemas ship in gsettings-desktop-schemas, pulled by gnome-control-center).
 - **gsettings:** `org.gnome.desktop.a11y.interface high-contrast`; `…a11y.keyboard` stickykeys/slowkeys(+delay)/bouncekeys(+delay)/mousekeys(+max-speed/init-delay/accel-time); `…a11y.mouse` dwell-click-enabled/dwell-time(`d`)/dwell-threshold/secondary-click-enabled/secondary-click-time(`d`); `…a11y.magnifier` mag-factor(`d`)/lens-mode/screen-position; gated by existing `…a11y.applications screen-magnifier-enabled`.
 - **Files:** `crates/goblins-os-core/src/accessibility.rs` (new `AccessibilityPreferenceTarget` arms + normalizers/clamps), `crates/goblins-os-settings/src/main.rs` (new "Contrast"/"Typing assistance"/"Pointer assistance"/"Magnifier" groups via existing `switch_row_dynamic`/`slider_row`/`append_accessibility_bool_row`), `crates/goblins-os-design/src/lib.rs` (only if a new label fn is needed; reuse `gos-subsection-title` + `gos-switch-row` first).

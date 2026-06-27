@@ -12,6 +12,9 @@ use serde_json::Value;
 
 const INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
 const A11Y_APPS_SCHEMA: &str = "org.gnome.desktop.a11y.applications";
+const A11Y_INTERFACE_SCHEMA: &str = "org.gnome.desktop.a11y.interface";
+const A11Y_KEYBOARD_SCHEMA: &str = "org.gnome.desktop.a11y.keyboard";
+const A11Y_MOUSE_SCHEMA: &str = "org.gnome.desktop.a11y.mouse";
 const COLOR_SCHEMA: &str = "org.gnome.settings-daemon.plugins.color";
 
 #[derive(Serialize)]
@@ -20,6 +23,9 @@ pub struct AccessibilityStatus {
     gsettings_available: bool,
     interface: InterfaceAccessibilityStatus,
     assistive: AssistiveTechnologyStatus,
+    visual: VisualAccessibilityStatus,
+    typing: TypingAccessibilityStatus,
+    pointing: PointingAccessibilityStatus,
     display_comfort: DisplayComfortStatus,
     detail: String,
 }
@@ -38,6 +44,35 @@ pub struct AssistiveTechnologyStatus {
     screen_reader: Option<bool>,
     screen_keyboard: Option<bool>,
     magnifier: Option<bool>,
+    detail: String,
+}
+
+/// Visual accommodations from `org.gnome.desktop.a11y.interface`.
+#[derive(Serialize)]
+pub struct VisualAccessibilityStatus {
+    schema_available: bool,
+    high_contrast: Option<bool>,
+    detail: String,
+}
+
+/// Typing accommodations (Sticky/Slow/Bounce/Mouse keys) from
+/// `org.gnome.desktop.a11y.keyboard` — the macOS "Keyboard accommodations" set.
+#[derive(Serialize)]
+pub struct TypingAccessibilityStatus {
+    schema_available: bool,
+    sticky_keys: Option<bool>,
+    slow_keys: Option<bool>,
+    bounce_keys: Option<bool>,
+    mouse_keys: Option<bool>,
+    detail: String,
+}
+
+/// Pointing accommodations from `org.gnome.desktop.a11y.mouse` — dwell click is
+/// the cross-vendor stand-in for macOS's pointer-alternative dwell.
+#[derive(Serialize)]
+pub struct PointingAccessibilityStatus {
+    schema_available: bool,
+    dwell_click: Option<bool>,
     detail: String,
 }
 
@@ -64,6 +99,12 @@ enum AccessibilityPreferenceTarget {
     ScreenReader,
     ScreenKeyboard,
     Magnifier,
+    HighContrast,
+    StickyKeys,
+    SlowKeys,
+    BounceKeys,
+    MouseKeys,
+    DwellClick,
     NightLight,
     NightLightAutomaticSchedule,
     NightLightTemperature,
@@ -132,6 +173,9 @@ fn build_accessibility_status() -> AccessibilityStatus {
     let gsettings_available = gsettings(&["list-schemas"]).is_ok();
     let interface_schema = schema_snapshot(gsettings_available, INTERFACE_SCHEMA);
     let a11y_schema = schema_snapshot(gsettings_available, A11Y_APPS_SCHEMA);
+    let a11y_interface_schema = schema_snapshot(gsettings_available, A11Y_INTERFACE_SCHEMA);
+    let a11y_keyboard_schema = schema_snapshot(gsettings_available, A11Y_KEYBOARD_SCHEMA);
+    let a11y_mouse_schema = schema_snapshot(gsettings_available, A11Y_MOUSE_SCHEMA);
     let color_schema = schema_snapshot(gsettings_available, COLOR_SCHEMA);
 
     AccessibilityStatus {
@@ -164,6 +208,59 @@ fn build_accessibility_status() -> AccessibilityStatus {
                 a11y_schema.available,
                 "Assistive technologies",
                 A11Y_APPS_SCHEMA,
+            ),
+        },
+        visual: VisualAccessibilityStatus {
+            schema_available: a11y_interface_schema.available,
+            high_contrast: setting_bool(
+                &a11y_interface_schema,
+                A11Y_INTERFACE_SCHEMA,
+                "high-contrast",
+            ),
+            detail: schema_detail(
+                gsettings_available,
+                a11y_interface_schema.available,
+                "Visual accommodations",
+                A11Y_INTERFACE_SCHEMA,
+            ),
+        },
+        typing: TypingAccessibilityStatus {
+            schema_available: a11y_keyboard_schema.available,
+            sticky_keys: setting_bool(
+                &a11y_keyboard_schema,
+                A11Y_KEYBOARD_SCHEMA,
+                "stickykeys-enable",
+            ),
+            slow_keys: setting_bool(
+                &a11y_keyboard_schema,
+                A11Y_KEYBOARD_SCHEMA,
+                "slowkeys-enable",
+            ),
+            bounce_keys: setting_bool(
+                &a11y_keyboard_schema,
+                A11Y_KEYBOARD_SCHEMA,
+                "bouncekeys-enable",
+            ),
+            mouse_keys: setting_bool(
+                &a11y_keyboard_schema,
+                A11Y_KEYBOARD_SCHEMA,
+                "mousekeys-enable",
+            ),
+            detail: schema_detail(
+                gsettings_available,
+                a11y_keyboard_schema.available,
+                "Typing accommodations",
+                A11Y_KEYBOARD_SCHEMA,
+            ),
+        },
+        pointing: PointingAccessibilityStatus {
+            schema_available: a11y_mouse_schema.available,
+            dwell_click: setting_bool(&a11y_mouse_schema, A11Y_MOUSE_SCHEMA, "dwell-click-enabled"),
+            detail: schema_detail(
+                gsettings_available,
+                a11y_mouse_schema.available,
+                "Pointing accommodations",
+                A11Y_MOUSE_SCHEMA,
             ),
         },
         display_comfort: DisplayComfortStatus {
@@ -435,6 +532,48 @@ fn accessibility_target_spec(target: AccessibilityPreferenceTarget) -> Accessibi
             label: "Magnifier",
             kind: AccessibilityValueKind::Bool,
         },
+        AccessibilityPreferenceTarget::HighContrast => AccessibilityTargetSpec {
+            target: "high-contrast",
+            schema: A11Y_INTERFACE_SCHEMA,
+            key: "high-contrast",
+            label: "High contrast",
+            kind: AccessibilityValueKind::Bool,
+        },
+        AccessibilityPreferenceTarget::StickyKeys => AccessibilityTargetSpec {
+            target: "sticky-keys",
+            schema: A11Y_KEYBOARD_SCHEMA,
+            key: "stickykeys-enable",
+            label: "Sticky Keys",
+            kind: AccessibilityValueKind::Bool,
+        },
+        AccessibilityPreferenceTarget::SlowKeys => AccessibilityTargetSpec {
+            target: "slow-keys",
+            schema: A11Y_KEYBOARD_SCHEMA,
+            key: "slowkeys-enable",
+            label: "Slow Keys",
+            kind: AccessibilityValueKind::Bool,
+        },
+        AccessibilityPreferenceTarget::BounceKeys => AccessibilityTargetSpec {
+            target: "bounce-keys",
+            schema: A11Y_KEYBOARD_SCHEMA,
+            key: "bouncekeys-enable",
+            label: "Bounce Keys",
+            kind: AccessibilityValueKind::Bool,
+        },
+        AccessibilityPreferenceTarget::MouseKeys => AccessibilityTargetSpec {
+            target: "mouse-keys",
+            schema: A11Y_KEYBOARD_SCHEMA,
+            key: "mousekeys-enable",
+            label: "Mouse Keys",
+            kind: AccessibilityValueKind::Bool,
+        },
+        AccessibilityPreferenceTarget::DwellClick => AccessibilityTargetSpec {
+            target: "dwell-click",
+            schema: A11Y_MOUSE_SCHEMA,
+            key: "dwell-click-enabled",
+            label: "Dwell click",
+            kind: AccessibilityValueKind::Bool,
+        },
         AccessibilityPreferenceTarget::NightLight => AccessibilityTargetSpec {
             target: "night-light",
             schema: COLOR_SCHEMA,
@@ -478,6 +617,24 @@ fn accessibility_preference_success_detail(
         }
         ("magnifier", AccessibilityPreferenceValue::Bool(enabled)) => {
             magnifier_detail(*enabled).to_string()
+        }
+        ("high-contrast", AccessibilityPreferenceValue::Bool(enabled)) => {
+            high_contrast_detail(*enabled).to_string()
+        }
+        ("sticky-keys", AccessibilityPreferenceValue::Bool(enabled)) => {
+            sticky_keys_detail(*enabled).to_string()
+        }
+        ("slow-keys", AccessibilityPreferenceValue::Bool(enabled)) => {
+            slow_keys_detail(*enabled).to_string()
+        }
+        ("bounce-keys", AccessibilityPreferenceValue::Bool(enabled)) => {
+            bounce_keys_detail(*enabled).to_string()
+        }
+        ("mouse-keys", AccessibilityPreferenceValue::Bool(enabled)) => {
+            mouse_keys_detail(*enabled).to_string()
+        }
+        ("dwell-click", AccessibilityPreferenceValue::Bool(enabled)) => {
+            dwell_click_detail(*enabled).to_string()
         }
         ("night-light", AccessibilityPreferenceValue::Bool(enabled)) => {
             night_light_detail(*enabled).to_string()
@@ -566,6 +723,54 @@ fn magnifier_detail(enabled: bool) -> &'static str {
     }
 }
 
+fn high_contrast_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "High contrast is on. Interface colors use stronger contrast for legibility."
+    } else {
+        "High contrast is off. The desktop uses its standard color contrast."
+    }
+}
+
+fn sticky_keys_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Sticky Keys is on. Modifier keys latch so shortcuts can be pressed one key at a time."
+    } else {
+        "Sticky Keys is off. Modifier shortcuts are pressed together as usual."
+    }
+}
+
+fn slow_keys_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Slow Keys is on. A key must be held briefly before it registers, filtering accidental taps."
+    } else {
+        "Slow Keys is off. Keys register as soon as they are pressed."
+    }
+}
+
+fn bounce_keys_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Bounce Keys is on. Rapid repeated presses of the same key are ignored."
+    } else {
+        "Bounce Keys is off. Every key press registers, including quick repeats."
+    }
+}
+
+fn mouse_keys_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Mouse Keys is on. The numeric keypad can move the pointer and click."
+    } else {
+        "Mouse Keys is off. The pointer is controlled by the mouse or trackpad."
+    }
+}
+
+fn dwell_click_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Dwell click is on. Resting the pointer briefly performs a click without pressing a button."
+    } else {
+        "Dwell click is off. Clicks are made by pressing the mouse or trackpad."
+    }
+}
+
 fn night_light_detail(enabled: bool) -> &'static str {
     if enabled {
         "Night Light is on. The display shifts warmer when the schedule says it should."
@@ -644,6 +849,26 @@ mod tests {
             Ok(AccessibilityPreferenceValue::U32(3400))
         ));
         assert!(parse_preference_value(temperature, &json!(-1)).is_err());
+    }
+
+    #[test]
+    fn keyboard_visual_pointing_accommodations_are_boolean_targets() {
+        for target in [
+            AccessibilityPreferenceTarget::HighContrast,
+            AccessibilityPreferenceTarget::StickyKeys,
+            AccessibilityPreferenceTarget::SlowKeys,
+            AccessibilityPreferenceTarget::BounceKeys,
+            AccessibilityPreferenceTarget::MouseKeys,
+            AccessibilityPreferenceTarget::DwellClick,
+        ] {
+            let spec = accessibility_target_spec(target);
+            assert!(matches!(
+                parse_preference_value(spec, &json!(true)),
+                Ok(AccessibilityPreferenceValue::Bool(true))
+            ));
+            // A non-boolean is rejected, not silently coerced.
+            assert!(parse_preference_value(spec, &json!("yes")).is_err());
+        }
     }
 
     #[test]

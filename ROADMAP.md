@@ -455,6 +455,22 @@ os/goblins-os-textshortcuts/goblins-textshortcuts.xml`. CI/qemu must still prove
 the live IBus runtime loop, dconf input-source seed, GTK render, and keystroke
 selftest before Text Shortcuts can ship.
 
+Current Text Shortcuts runtime-adapter continuation: the engine crate now maps
+pure `EngineAction` decisions to host-tested IBus runtime operations:
+candidate matches update preedit text without swallowing typed keys, boundary
+matches atomically delete the typed trigger and commit the replacement text,
+and candidate clears hide preedit while passing Backspace through. The installed
+`--self-test` now asserts that IBus operation contract too. This is still
+source-gated only: no GI/IBus event loop, no `ibus-daemon` user unit, no dconf
+input-source seed, and no keystroke expansion is claimed. Local source gates:
+`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `goblins-os-verify --source-root .` -> **blocked=0
+(1679)**, `git diff --check`, targeted
+`cargo test -p goblins-os-textshortcuts-engine`, and
+`cargo run -p goblins-os-textshortcuts-engine -- --self-test`. CI/qemu must
+still prove the live IBus runtime loop, input-source seed, GTK render, and
+keystroke selftest before Text Shortcuts can ship.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -775,6 +791,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **Engine decision substrate source-gated (CI/qemu-pending):** `crates/goblins-os-textshortcuts-engine` provides pure trigger tracking, candidate, boundary commit, and password/hidden/sensitive-field refusal logic plus a `goblins-textshortcuts-engine --self-test` CLI. It is not installed in the image and does not claim live IBus expansion yet.
 - [x] **Shared core/engine table contract source-gated (CI/qemu-pending):** core reuses the engine crate's `TextShortcut` JSON shape and `sanitize_shortcuts` helper for `/v1/text-shortcuts`, removing duplicate table behavior before live IBus integration.
 - [x] **IBus package/component registration source-gated (CI/qemu-pending):** Fedora 44 package names are web-verified and lockstep-gated in the Containerfile install list and `rpm -q`; the image installs `/usr/libexec/goblins-os/goblins-textshortcuts-engine` plus `/usr/share/ibus/component/goblins-textshortcuts.xml` and runs the engine self-test/component-contract check. Core still reports `engine_available=false` until the input source and live runtime loop are present; no dconf seed or live expansion is claimed.
+- [x] **IBus runtime-operation adapter source-gated (CI/qemu-pending):** engine decisions now map to explicit IBus operations: pass-through for ordinary keys, preedit update for candidates, delete-surrounding-text + commit-text for accepted replacements, and hide-preedit for clears. The installed `--self-test` asserts this contract, but no GI/IBus loop or live expansion is claimed.
 - [ ] **Live IBus engine + session enablement (deferred, XL/highest-risk):** the `goblins-textshortcuts` IBus engine loop (preedit/commit over `text-input-v3`, pass-through by default, never in password fields), the dconf input-source seed, accept bubble, and the optional model-gated autocorrect tier.
 - **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (web-verified for Fedora 44 and asserted with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
 - **gsettings/dconf:** `org.freedesktop.ibus.general preload-engines` (+`goblins-textshortcuts`); `org.gnome.desktop.input-sources sources=[('ibus','goblins-textshortcuts')]`, `per-window=false`; dconf seed in `10-goblins-os-desktop`. The replacement table itself is **JSON** under `~/.config/goblins-os/text-shortcuts.json`, written only through the core bridge — not a gsetting.

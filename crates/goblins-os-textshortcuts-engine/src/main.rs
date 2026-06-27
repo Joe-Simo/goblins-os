@@ -3,8 +3,8 @@ use std::fs;
 use std::process::ExitCode;
 
 use goblins_os_textshortcuts_engine::{
-    validate_ibus_component_xml, ContentPurpose, EngineAction, EngineState, InputEvent,
-    ShortcutTable, TextShortcut,
+    ibus_runtime_decision, validate_ibus_component_xml, ContentPurpose, EngineAction, EngineState,
+    IbusOperation, InputEvent, ShortcutTable, TextShortcut,
 };
 use serde::Serialize;
 
@@ -99,11 +99,31 @@ fn self_test() -> Result<(), String> {
             &table,
         );
     }
-    match state.handle_event(ContentPurpose::Normal, InputEvent::Boundary(' '), &table) {
+    let action = state.handle_event(ContentPurpose::Normal, InputEvent::Boundary(' '), &table);
+    match action.clone() {
         EngineAction::CommitReplacement {
             delete_previous_chars: 3,
             text,
-        } if text == "on my way " => Ok(()),
+        } if text == "on my way " => {
+            let decision = ibus_runtime_decision(action);
+            if decision.key_handled()
+                && decision.operations()
+                    == [
+                        IbusOperation::DeleteSurroundingText {
+                            offset: -3,
+                            n_chars: 3,
+                        },
+                        IbusOperation::CommitText("on my way ".to_string()),
+                        IbusOperation::HidePreeditText,
+                    ]
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "unexpected Text Shortcuts runtime decision: {decision:?}"
+                ))
+            }
+        }
         other => Err(format!(
             "unexpected Text Shortcuts self-test action: {other:?}"
         )),

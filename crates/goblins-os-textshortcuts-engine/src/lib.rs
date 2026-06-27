@@ -193,6 +193,83 @@ pub enum EngineAction {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum IbusOperation {
+    UpdatePreeditText {
+        text: String,
+        cursor_pos: u32,
+        visible: bool,
+    },
+    HidePreeditText,
+    DeleteSurroundingText {
+        offset: i32,
+        n_chars: u32,
+    },
+    CommitText(String),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct IbusRuntimeDecision {
+    handled: bool,
+    operations: Vec<IbusOperation>,
+}
+
+impl IbusRuntimeDecision {
+    pub fn pass_through() -> Self {
+        Self::default()
+    }
+
+    pub fn handled(operations: Vec<IbusOperation>) -> Self {
+        Self {
+            handled: true,
+            operations,
+        }
+    }
+
+    pub fn side_effects(operations: Vec<IbusOperation>) -> Self {
+        Self {
+            handled: false,
+            operations,
+        }
+    }
+
+    pub fn key_handled(&self) -> bool {
+        self.handled
+    }
+
+    pub fn operations(&self) -> &[IbusOperation] {
+        &self.operations
+    }
+}
+
+pub fn ibus_runtime_decision(action: EngineAction) -> IbusRuntimeDecision {
+    match action {
+        EngineAction::PassThrough => IbusRuntimeDecision::pass_through(),
+        EngineAction::ShowCandidate { replacement, .. } => {
+            let cursor_pos = replacement.chars().count() as u32;
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+                text: replacement,
+                cursor_pos,
+                visible: true,
+            }])
+        }
+        EngineAction::ClearCandidate => {
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+        }
+        EngineAction::CommitReplacement {
+            delete_previous_chars,
+            text,
+        } => IbusRuntimeDecision::handled(vec![
+            IbusOperation::DeleteSurroundingText {
+                offset: -(delete_previous_chars as i32),
+                n_chars: delete_previous_chars as u32,
+            },
+            IbusOperation::CommitText(text),
+            IbusOperation::HidePreeditText,
+        ]),
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EngineState {
     current_word: String,
@@ -291,8 +368,8 @@ pub fn is_boundary_char(value: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        sanitize_shortcuts, ContentPurpose, EngineAction, EngineState, InputEvent, ShortcutTable,
-        TextShortcut,
+        ibus_runtime_decision, sanitize_shortcuts, ContentPurpose, EngineAction, EngineState,
+        IbusOperation, IbusRuntimeDecision, InputEvent, ShortcutTable, TextShortcut,
     };
 
     fn table() -> ShortcutTable {
@@ -469,5 +546,56 @@ mod tests {
         )
         .unwrap();
         assert_eq!(table.replacement_for("brb"), Some("back soon"));
+    }
+
+    #[test]
+    fn ibus_adapter_passes_through_plain_keys() {
+        let decision = ibus_runtime_decision(EngineAction::PassThrough);
+        assert!(!decision.key_handled());
+        assert!(decision.operations().is_empty());
+    }
+
+    #[test]
+    fn ibus_adapter_shows_candidate_without_swallowing_typed_key() {
+        let decision = ibus_runtime_decision(EngineAction::ShowCandidate {
+            trigger: "omw".to_string(),
+            replacement: "on my way".to_string(),
+        });
+        assert_eq!(
+            decision,
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+                text: "on my way".to_string(),
+                cursor_pos: 9,
+                visible: true,
+            }])
+        );
+    }
+
+    #[test]
+    fn ibus_adapter_commits_replacement_atomically_on_boundary() {
+        let decision = ibus_runtime_decision(EngineAction::CommitReplacement {
+            delete_previous_chars: 3,
+            text: "on my way ".to_string(),
+        });
+        assert_eq!(
+            decision,
+            IbusRuntimeDecision::handled(vec![
+                IbusOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                },
+                IbusOperation::CommitText("on my way ".to_string()),
+                IbusOperation::HidePreeditText,
+            ])
+        );
+    }
+
+    #[test]
+    fn ibus_adapter_hides_candidate_without_swallowing_backspace() {
+        let decision = ibus_runtime_decision(EngineAction::ClearCandidate);
+        assert_eq!(
+            decision,
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+        );
     }
 }

@@ -8262,6 +8262,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-adapter",
+            "ibus_runtime_decision",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-uses-delete-surrounding-text",
+            "IbusOperation::DeleteSurroundingText",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-uses-commit-text",
+            "IbusOperation::CommitText",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-preedit-candidate",
+            "IbusOperation::UpdatePreeditText",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-refuses-password-fields",
             "ContentPurpose::Password",
         ),

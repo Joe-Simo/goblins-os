@@ -77,8 +77,9 @@ not mark Batch 5 shipped.
 - **Batch 3 (Settings surfaces) — all 9 have a shipped read/status/UI surface:**
   Accessibility rows, Firewall, Keyboard shortcuts, Focus (substrate+gschema),
   Migration (substrate), Multi-display (read side via `displays.rs`), Personal
-  Hotspot, Per-app privacy, Keychain. **Gated WRITES remain deferred** (firewall
-  toggle, IME set, focus arm, per-app revoke, multi-display apply, keyboard rebind).
+  Hotspot, Per-app privacy, Keychain. **Gated WRITES remain qemu-pending** for
+  firewall toggle, IME set, focus arm, and per-app revoke; multi-display apply
+  and keyboard rebind remain TODO.
 - **Batch 4 (engines) — 7 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**
   Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today,
   Sound Recognition, Live Captions.
@@ -191,9 +192,23 @@ and reserved `restore-apps` keys. Local source gates: `cargo fmt --all --check`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
 container `glib-compile-schemas --dry-run os/glib-schemas`, scoped
 `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
-`goblins-os-verify --source-root .` → **blocked=0 (1570)**. Settings/Control
+`goblins-os-verify --source-root .` → **blocked=0 (1571)**. Settings/Control
 Center/menu-bar surfaces, per-app breakthroughs, a user timer, and live qemu
 write proof remain deferred.
+
+Current Per-app Privacy continuation: app-keyed portal permission revokes are now
+source-gated but not shipped. Core exposes `/v1/app-privacy/revoke`, validates
+the known PermissionStore tables plus safe desktop app/resource IDs, and calls
+`org.freedesktop.impl.portal.PermissionStore.DeletePermission(table, id, app)`
+only for app-keyed grants; resource-keyed device grants remain read-only until
+the store can map resources back to owning apps. Settings ▸ Privacy now renders
+one row per app-keyed grant with a Revoke action and reports the exact core
+outcome. Local source gates: `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, the Rust 1.88 GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`,
+scoped `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`,
+and `goblins-os-verify --source-root .` → **blocked=0 (1575)**. CI/qemu render
+and a live portal revoke/reload proof remain pending.
 
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: firewall CI image/render proof is green and the
@@ -203,8 +218,8 @@ write proof remain deferred.
    reaches the in-guest firewall toggle. That proof must show the live
    systemd/polkit oneshot success path for the firewall toggle.
    Only flip it to `shipped` if the render, live POST, and polkit oneshot path are green. Then
-   prove the IME set and Focus interactions in CI/qemu, then continue one feature at a time — per-app permission
-   revoke, multi-display apply, and keyboard rebinding. Do not flip any of these
+   prove the IME set, Focus, and per-app permission revoke interactions in CI/qemu,
+   then continue one feature at a time — multi-display apply and keyboard rebinding. Do not flip any of these
    from `in-progress` until the write path and qemu interaction proof are green.
 2. **Batch 4 engine UI pass**: build the deferred engine UIs/overlays one feature
    at a time (Voice Control, Live Captions, Switch Control, Sound Recognition,
@@ -422,7 +437,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 
 ### `in-progress` Per-app privacy permissions UI (camera / mic / location / files)
 - [x] **Read substrate + surface shipped** (`crates/goblins-os-core/src/app_permissions.rs` + `/v1/app-privacy/status`, Settings ▸ Privacy "App permissions" group): reads the xdg `PermissionStore` over `gdbus` (`List(in s table, out as ids)`, **web-verified** against the spec — no new package, the portal already ships) for the `location`/`background`/`notifications`/`devices` tables and lists the entries per category, honest-gated when the store isn't running. Pure `parse_list_reply` unit-tested (183 core tests); container clippy `-D warnings` clean; route + surface verify gates.
-- [ ] **Per-app revoke (deferred):** the `DeletePermission`/`Set` write behind the policy bridge + flatpak app-metadata friendly names + the per-app toggle UI.
+- [x] **Per-app revoke substrate source-gated (CI/qemu-pending):** `/v1/app-privacy/revoke` validates the known PermissionStore tables and safe desktop IDs, then calls `DeletePermission(table, id, app)` only for app-keyed grants. Settings ▸ Privacy now renders per-app revoke rows with exact core feedback. Resource-keyed device grants and live portal reload proof remain deferred.
+- [ ] **Portal write proof + resource mappings (deferred):** CI/qemu render plus live revoke/reload proof, and `Lookup`/metadata mapping for camera/microphone resource-keyed grants before any device revoke UI.
 - **Approach:** custom_surface (own Goblins panel reading/writing the xdg-desktop-portal permission store).
 - **Packages:** none (xdg-desktop-portal already shipped).
 - **APIs:** `org.freedesktop.impl.portal.PermissionStore` D-Bus (Lookup/Set/Delete per table: `devices` for camera/mic, `location`, `screenshot`, `background`); flatpak app metadata for friendly names.

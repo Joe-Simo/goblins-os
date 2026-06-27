@@ -246,6 +246,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/v1/app-privacy/status",
             get(app_permissions::app_privacy_status),
         )
+        .route(
+            "/v1/app-privacy/revoke",
+            post(app_permissions::revoke_app_permission),
+        )
         .route("/v1/hotspot/status", get(hotspot::hotspot_status))
         .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
         .route(

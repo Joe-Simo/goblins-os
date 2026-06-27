@@ -8037,6 +8037,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-app-privacy-revoke-route",
+            "/v1/app-privacy/revoke",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/app_permissions.rs"),
+            "core-app-privacy-uses-delete-permission",
+            "PermissionStore.DeletePermission",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/app_permissions.rs"),
+            "core-app-privacy-revoke-validates-ids",
+            "permission_id_is_safe",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-text-shortcuts-route",
             "/v1/text-shortcuts",
         ),
@@ -8124,6 +8139,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-privacy-app-permissions",
             "App permissions",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-privacy-app-permission-revoke-control",
+            "app_permission_revoke_row",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),

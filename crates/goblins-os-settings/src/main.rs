@@ -123,8 +123,8 @@ struct SettingsState {
     app_privacy: Option<AppPrivacyStatus>,
 }
 
-/// Read-only per-app permission entries from `GET /v1/app-privacy/status` (xdg
-/// PermissionStore). Revoking is a deliberate future capability; this is a reference.
+/// Per-app permission entries from `GET /v1/app-privacy/status` (xdg
+/// PermissionStore). Revokes go back through the core allowlisted bridge.
 #[cfg_attr(
     not(all(target_os = "linux", feature = "native-desktop")),
     allow(dead_code)
@@ -142,8 +142,27 @@ struct AppPrivacyStatus {
 )]
 #[derive(Clone, Deserialize)]
 struct PermissionTable {
+    table: String,
     label: String,
-    entries: Vec<String>,
+    app_keyed: bool,
+    entries: Vec<PermissionEntry>,
+}
+
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct PermissionEntry {
+    id: String,
+    app: String,
+    label: String,
+}
+
+#[derive(Deserialize)]
+struct AppPrivacyRevokeOutcome {
+    ok: bool,
+    text: String,
 }
 
 /// Read-only "Passwords & Keys" (Secret Service) status from `GET /v1/keychain/status`.
@@ -6789,10 +6808,13 @@ fn build_privacy_permissions(panel: &gtk4::Box, state: &SettingsState) {
     );
 }
 
-/// Read-only per-app permission entries from the xdg PermissionStore (macOS
-/// per-app Privacy altitude). Revoking stays a deliberate future capability.
+/// Per-app permission entries from the xdg PermissionStore (macOS per-app Privacy
+/// altitude). Revokes are scoped to app-keyed grants that the core bridge can
+/// delete by exact table/id/app.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_app_permissions(panel: &gtk4::Box, state: &SettingsState) {
+    use gtk4::prelude::*;
+
     let Some(app_privacy) = &state.app_privacy else {
         return;
     };
@@ -6802,15 +6824,83 @@ fn append_app_permissions(panel: &gtk4::Box, state: &SettingsState) {
         return;
     }
     let mut rows: Vec<gtk4::Box> = Vec::new();
+    let core_url = config_core_url(state);
     for table in &app_privacy.tables {
-        let value = if table.entries.is_empty() {
-            "No apps".to_string()
-        } else {
-            table.entries.join(", ")
-        };
-        rows.push(system_row(&table.label, &value));
+        if table.entries.is_empty() {
+            rows.push(system_row(&table.label, "No apps have a recorded grant."));
+            continue;
+        }
+        if !table.app_keyed {
+            let value = table
+                .entries
+                .iter()
+                .map(|entry| entry.label.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            rows.push(system_row(
+                &table.label,
+                &format!("{value}. Resource-keyed grants are shown read-only until the portal reports the owning app."),
+            ));
+            continue;
+        }
+        for entry in &table.entries {
+            rows.push(app_permission_revoke_row(&core_url, table, entry));
+        }
     }
     append_preference_group(panel, "Granted access", rows);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn app_permission_revoke_row(
+    core_url: &str,
+    table: &PermissionTable,
+    entry: &PermissionEntry,
+) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 14);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-permission-row");
+
+    let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    copy.set_hexpand(true);
+    let title = format!("{} · {}", entry.label, table.label);
+    let initial_detail = format!(
+        "Portal app id {} can use {} until you revoke the grant.",
+        entry.app, table.label
+    );
+    set_accessible_label_description(&row, &title, &initial_detail);
+    copy.append(&label(&title, &["gos-row-title"]));
+    let detail = label(&initial_detail, &["gos-row-copy"]);
+    copy.append(&detail);
+    row.append(&copy);
+
+    let action = button("Revoke", &["gos-permission-action"]);
+    action.set_valign(gtk4::Align::Center);
+    set_accessible_label_description(&action, "Revoke permission", &initial_detail);
+    let core_url = core_url.to_string();
+    let table_id = table.table.clone();
+    let grant_id = entry.id.clone();
+    let app_id = entry.app.clone();
+    let detail_clone = detail.clone();
+    action.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        match revoke_app_permission(&core_url, &table_id, &grant_id, &app_id) {
+            Ok(message) => {
+                detail_clone.set_text(&message);
+                set_accessible_label_description(button, "Permission revoked", &message);
+            }
+            Err(error) => {
+                let message = setting_change_rejected_detail(&error);
+                detail_clone.set_text(&message);
+                set_accessible_label_description(button, "Revoke permission", &message);
+                button.set_sensitive(true);
+                eprintln!("settings_app_permission_revoke_error={error}");
+            }
+        }
+    });
+    row.append(&action);
+    row
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -16760,6 +16850,34 @@ fn set_firewall_enabled(base_url: &str, enabled: bool) -> Result<String, String>
 }
 
 fn firewall_toggle_outcome(body: &[u8]) -> Result<FirewallToggleOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn revoke_app_permission(
+    base_url: &str,
+    table: &str,
+    id: &str,
+    app: &str,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "table": table,
+        "id": id,
+        "app": app,
+    })
+    .to_string();
+    let response = http_post_json_response(base_url, "/v1/app-privacy/revoke", &body)
+        .map_err(|error| format!("Goblins OS could not reach app permissions: {error}."))?;
+    let outcome = app_privacy_revoke_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn app_privacy_revoke_outcome(body: &[u8]) -> Result<AppPrivacyRevokeOutcome, CoreFetchError> {
     serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
 }
 

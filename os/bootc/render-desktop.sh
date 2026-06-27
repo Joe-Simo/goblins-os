@@ -245,6 +245,12 @@ render_scheme() {
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
+  shell_eval "globalThis.goblinsWindowManager.showAppExposeDemo(); 'app-expose';" || return 1
+  sleep 0.9
+  shoot "52b-wm-app-expose-$suffix.png"
+  shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
+  sleep 0.3
+
   shell_eval "globalThis.goblinsWindowManager.showSpacesDemo(); 'spaces';" || return 1
   sleep 0.9
   shoot "53-wm-spaces-$suffix.png"

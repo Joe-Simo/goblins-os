@@ -1170,6 +1170,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
+        "render-wm-app-expose",
+        "52b-wm-app-expose-$suffix.png",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
         "render-wm-spaces",
         "53-wm-spaces-$suffix.png",
     ));
@@ -7765,6 +7770,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
             "goblins-wm-app-expose-handler",
             "_showAppExpose",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
+            "goblins-wm-app-expose-render-hook",
+            "showAppExposeDemo",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/schemas/org.goblins.shell.extensions.wm.gschema.xml"),

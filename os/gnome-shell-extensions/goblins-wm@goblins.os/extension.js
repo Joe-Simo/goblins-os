@@ -284,6 +284,15 @@ export default class GoblinsWindowManagement extends Extension {
         this._showMissionControl();
     }
 
+    showAppExposeDemo() {
+        const entry = this._focusedEntry() || this._windowEntries()[0];
+        if (!entry?.appId || entry.appId === 'unknown') {
+            this._showAppExpose();
+            return;
+        }
+        this._showMissionControl({appExpose: entry.appId, title: entry.appName || 'App Exposé'});
+    }
+
     showSpacesDemo() {
         this._showMissionControl({spacesFocus: true});
     }

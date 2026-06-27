@@ -213,7 +213,15 @@ struct ShortcutEntry {
 #[derive(Clone, Deserialize)]
 struct TextShortcutsStatus {
     engine_available: bool,
+    autocorrect: Option<TextShortcutsAutocorrectStatus>,
     shortcuts: Vec<TextShortcutEntry>,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct TextShortcutsAutocorrectStatus {
+    available: bool,
+    enabled: bool,
     detail: String,
 }
 
@@ -1074,6 +1082,24 @@ fn text_shortcuts_editor_detail(status: &TextShortcutsStatus) -> String {
             status.detail
         )
     }
+}
+
+fn text_shortcuts_autocorrect_state(
+    status: Option<&TextShortcutsAutocorrectStatus>,
+) -> (&'static str, bool) {
+    match status {
+        Some(status) if status.enabled => ("active", true),
+        Some(status) if status.available => ("available", false),
+        Some(_) => ("off", false),
+        None => ("waiting", false),
+    }
+}
+
+fn text_shortcuts_autocorrect_detail(status: Option<&TextShortcutsAutocorrectStatus>) -> String {
+    status.map_or_else(
+        || "Waiting for Autocorrect capability.".to_string(),
+        |status| status.detail.clone(),
+    )
 }
 
 fn normalize_text_shortcuts(shortcuts: Vec<TextShortcutEntry>) -> Vec<TextShortcutEntry> {
@@ -12210,6 +12236,14 @@ fn append_text_shortcuts_editor(panel: &gtk4::Box, state: &SettingsState) {
         ready,
         &text_shortcuts_editor_detail(status),
     ));
+    let (autocorrect_state, autocorrect_ready) =
+        text_shortcuts_autocorrect_state(status.autocorrect.as_ref());
+    panel.append(&health_row(
+        "Autocorrect",
+        autocorrect_state,
+        autocorrect_ready,
+        &text_shortcuts_autocorrect_detail(status.autocorrect.as_ref()),
+    ));
 
     let core_url = config_core_url(state);
     if status.shortcuts.is_empty() {
@@ -19629,6 +19663,13 @@ fn test_voice_status(available: bool) -> VoiceStatus {
 fn test_text_shortcuts_status(engine_available: bool) -> TextShortcutsStatus {
     TextShortcutsStatus {
         engine_available,
+        autocorrect: Some(TextShortcutsAutocorrectStatus {
+            available: false,
+            enabled: false,
+            detail:
+                "Autocorrect is off because no local model or Hunspell dictionary is installed."
+                    .to_string(),
+        }),
         shortcuts: vec![
             TextShortcutEntry {
                 replace: "omw".to_string(),
@@ -23478,6 +23519,14 @@ mod tests {
         let detail = super::text_shortcuts_editor_detail(&status);
         assert!(detail.contains("replacement engine isn't running"));
         assert!(detail.contains("editable now"));
+        assert_eq!(
+            super::text_shortcuts_autocorrect_state(status.autocorrect.as_ref()),
+            ("off", false)
+        );
+        assert!(
+            super::text_shortcuts_autocorrect_detail(status.autocorrect.as_ref())
+                .contains("no local model or Hunspell dictionary")
+        );
 
         let updated =
             super::text_shortcuts_with_entry(&status.shortcuts, "  omw ", " on my way now ")
@@ -23500,6 +23549,18 @@ mod tests {
         let active = super::test_text_shortcuts_status(true);
         assert_eq!(super::text_shortcuts_state(&active), ("active", true));
         assert!(super::text_shortcuts_editor_detail(&active).contains("2 shortcuts saved"));
+
+        let mut available = active.clone();
+        available.autocorrect = Some(super::TextShortcutsAutocorrectStatus {
+            available: true,
+            enabled: false,
+            detail: "Autocorrect resources are present, but live autocorrect remains off."
+                .to_string(),
+        });
+        assert_eq!(
+            super::text_shortcuts_autocorrect_state(available.autocorrect.as_ref()),
+            ("available", false)
+        );
     }
 
     #[test]

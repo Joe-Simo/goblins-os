@@ -8635,6 +8635,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "runtime loop is still pending CI/qemu proof",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-autocorrect-status",
+            "pub struct TextShortcutsAutocorrectStatus",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-autocorrect-model-gate",
+            "GOBLINS_TEXTSHORTCUTS_AUTOCORRECT_MODEL",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-autocorrect-hunspell-gate",
+            "Hunspell dictionary",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-autocorrect-keeps-disabled",
+            "enabled: false",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/Cargo.toml"),
             "core-text-shortcuts-depends-on-engine-substrate",
             "goblins-os-textshortcuts-engine",
@@ -8923,6 +8943,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-text-shortcuts-editor-helper",
             "text_shortcuts_with_entry",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-text-shortcuts-autocorrect-status",
+            "struct TextShortcutsAutocorrectStatus",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-text-shortcuts-autocorrect-row",
+            "\"Autocorrect\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-text-shortcuts-autocorrect-helper",
+            "text_shortcuts_autocorrect_state",
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),

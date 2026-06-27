@@ -9,6 +9,7 @@
 //! that engine will use.
 
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -23,6 +24,9 @@ const ENGINE_COMPONENT_PATH: &str = "/usr/share/ibus/component/goblins-textshort
 const INPUT_SOURCES_SCHEMA: &str = "org.gnome.desktop.input-sources";
 const TEXTSHORTCUTS_INPUT_KIND: &str = "ibus";
 const TEXTSHORTCUTS_INPUT_ID: &str = "goblins-textshortcuts";
+const AUTOCORRECT_MODEL_ENV: &str = "GOBLINS_TEXTSHORTCUTS_AUTOCORRECT_MODEL";
+const AUTOCORRECT_MODEL_DIR: &str = "/usr/share/goblins-os/models/autocorrect";
+const HUNSPELL_DICTIONARY_DIRS: &[&str] = &["/usr/share/hunspell", "/usr/share/myspell"];
 
 #[derive(Serialize)]
 pub struct TextShortcutsStatus {
@@ -30,6 +34,7 @@ pub struct TextShortcutsStatus {
     /// Whether the IBus engine that applies replacements system-wide is present.
     engine_available: bool,
     engine: TextShortcutsEngineStatus,
+    autocorrect: TextShortcutsAutocorrectStatus,
     shortcuts: Vec<TextShortcut>,
     detail: String,
 }
@@ -58,6 +63,15 @@ pub struct TextShortcutsEngineStatus {
     input_source_configured: bool,
     runtime_loop_available: bool,
     ready: bool,
+    detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TextShortcutsAutocorrectStatus {
+    available: bool,
+    model_available: bool,
+    dictionary_available: bool,
+    enabled: bool,
     detail: String,
 }
 
@@ -94,6 +108,7 @@ pub async fn preview_text_shortcut(Query(query): Query<PreviewQuery>) -> Json<Pr
 
 fn build_status(shortcuts: Vec<TextShortcut>) -> TextShortcutsStatus {
     let engine = probe_engine_status();
+    let autocorrect = probe_autocorrect_status();
     let detail = if engine.ready {
         "Text Shortcuts expand as you type across the desktop.".to_string()
     } else {
@@ -103,6 +118,7 @@ fn build_status(shortcuts: Vec<TextShortcut>) -> TextShortcutsStatus {
         source: "goblins-os-core",
         engine_available: engine.ready,
         engine,
+        autocorrect,
         shortcuts,
         detail,
     }
@@ -163,6 +179,58 @@ fn text_shortcuts_engine_status(
         ready,
         detail,
     }
+}
+
+fn probe_autocorrect_status() -> TextShortcutsAutocorrectStatus {
+    text_shortcuts_autocorrect_status(
+        autocorrect_model_available(),
+        hunspell_dictionary_available(),
+    )
+}
+
+fn text_shortcuts_autocorrect_status(
+    model_available: bool,
+    dictionary_available: bool,
+) -> TextShortcutsAutocorrectStatus {
+    let available = model_available || dictionary_available;
+    let detail = if available {
+        "Autocorrect resources are present, but live autocorrect remains off until the IBus engine is proven in CI/qemu."
+            .to_string()
+    } else {
+        "Autocorrect is off because no local model or Hunspell dictionary is installed.".to_string()
+    };
+    TextShortcutsAutocorrectStatus {
+        available,
+        model_available,
+        dictionary_available,
+        enabled: false,
+        detail,
+    }
+}
+
+fn autocorrect_model_available() -> bool {
+    std::env::var_os(AUTOCORRECT_MODEL_ENV)
+        .map(PathBuf::from)
+        .is_some_and(|path| path.is_file())
+        || directory_has_extension(Path::new(AUTOCORRECT_MODEL_DIR), "gguf")
+}
+
+fn hunspell_dictionary_available() -> bool {
+    HUNSPELL_DICTIONARY_DIRS
+        .iter()
+        .any(|path| directory_has_extension(Path::new(path), "dic"))
+}
+
+fn directory_has_extension(path: &Path, extension: &str) -> bool {
+    fs::read_dir(path).is_ok_and(|entries| {
+        entries.filter_map(Result::ok).any(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+        })
+    })
 }
 
 fn text_shortcuts_input_source_configured() -> bool {
@@ -266,7 +334,8 @@ fn command_on_path(binary: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_replacement, input_sources_contains, text_shortcuts_engine_status, TextShortcut,
+        find_replacement, input_sources_contains, text_shortcuts_autocorrect_status,
+        text_shortcuts_engine_status, TextShortcut,
     };
 
     fn s(replace: &str, with: &str) -> TextShortcut {
@@ -352,5 +421,30 @@ mod tests {
             "ibus",
             "goblins-textshortcuts"
         ));
+    }
+
+    #[test]
+    fn autocorrect_status_never_enables_without_live_engine_proof() {
+        let missing = text_shortcuts_autocorrect_status(false, false);
+        assert!(!missing.available);
+        assert!(!missing.model_available);
+        assert!(!missing.dictionary_available);
+        assert!(!missing.enabled);
+        assert!(missing
+            .detail
+            .contains("no local model or Hunspell dictionary"));
+
+        let dictionary = text_shortcuts_autocorrect_status(false, true);
+        assert!(dictionary.available);
+        assert!(!dictionary.model_available);
+        assert!(dictionary.dictionary_available);
+        assert!(!dictionary.enabled);
+        assert!(dictionary.detail.contains("remains off"));
+
+        let model = text_shortcuts_autocorrect_status(true, false);
+        assert!(model.available);
+        assert!(model.model_available);
+        assert!(!model.dictionary_available);
+        assert!(!model.enabled);
     }
 }

@@ -92,9 +92,12 @@ Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings
 The installed-image self-test now exercises `/v1/firewall/status` and the
 `/v1/firewall/enabled` POST with an honest-success/honest-failure assertion;
 the local aarch64 Docker bootc `selftest` target passes with the expected
-non-systemd honest 502 firewall-toggle degradation. This does **not** replace the
-missing CI/qemu proof of the GTK render, polkit oneshot path, or live toggle.
-`systemd-analyze verify` is not available on this macOS host.
+non-systemd honest 502 firewall-toggle degradation. The local aarch64 Docker
+`settings-interactions` render target now captures the Security firewall switch
+before click and after the real `/v1/firewall/enabled` failure/revert path. This
+does **not** replace the missing CI/qemu proof of the GTK render, polkit oneshot
+path, or live toggle. `systemd-analyze verify` is not available on this macOS
+host.
 
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: first run the CI/qemu interaction proof for the

@@ -374,9 +374,59 @@ capture_settings_search_recovery_interaction() {
   cleanup_app_windows
 }
 
+capture_settings_firewall_toggle_interaction() {
+  seed_first_boot_profile cloud-openai
+  cleanup_app_windows
+  dbus-run-session -- /usr/libexec/goblins-os/goblins-os-settings --panel=security &
+
+  local wid=""
+  wid=$(wait_for_exact_title "Goblins OS Settings - Security" || true)
+  if [ -z "$wid" ]; then
+    echo "RENDER-FAILED 118-settings-firewall-before.png (Goblins OS Settings - Security) no visible exact-title window" >&2
+    cleanup_app_windows
+    return 1
+  fi
+
+  xdotool windowactivate "$wid" 2>/dev/null || true
+  xdotool windowfocus "$wid" 2>/dev/null || true
+  local geometry
+  local width=1180
+  local height=760
+  geometry="$(xdotool getwindowgeometry --shell "$wid" 2>/dev/null || true)"
+  if [ -n "$geometry" ]; then
+    eval "$geometry"
+    width="${WIDTH:-$width}"
+    height="${HEIGHT:-$height}"
+  fi
+
+  local content_x=$((width - 360))
+  local content_y=$((height / 2))
+  xdotool mousemove --window "$wid" "$content_x" "$content_y"
+  for _ in $(seq 1 4); do
+    xdotool click 5
+    sleep 0.1
+  done
+  sleep 1.0
+  capture_existing_window "$wid" 118-settings-firewall-before.png "Goblins OS Settings firewall toggle ready"
+
+  # The Security panel is rendered at a fixed size in Xvfb. After scrolling the
+  # main pane to Network protection, click the switch and capture the honest
+  # non-systemd failure and switch reversion from the real /v1/firewall/enabled
+  # route.
+  local click_x=$((width - 132))
+  local click_y=$((height / 2 + 130))
+  xdotool mousemove --window "$wid" "$click_x" "$click_y"
+  sleep 0.2
+  xdotool click 1
+  sleep 1.2
+  capture_existing_window "$wid" 119-settings-firewall-toggle-failed.png "Goblins OS Settings firewall toggle failure"
+  cleanup_app_windows
+}
+
 capture_settings_interactions() {
   capture_settings_search_interaction
   capture_settings_search_recovery_interaction
+  capture_settings_firewall_toggle_interaction
 }
 
 capture_chrome_surface() {

@@ -188,6 +188,8 @@ const SETTINGS_INTERACTION_SCREENSHOTS: &[&str] = &[
     "101-settings-search-enter-network.png",
     "102-settings-search-no-results.png",
     "103-settings-search-cleared.png",
+    "118-settings-firewall-before.png",
+    "119-settings-firewall-toggle-failed.png",
 ];
 
 const GAMING_PROOF_SCREENSHOTS: &[&str] = &[
@@ -1129,6 +1131,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root.join("os/bootc/render-screens.sh"),
         "render-settings-search-interaction",
         "capture_settings_search_interaction",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-screens.sh"),
+        "render-settings-firewall-toggle-interaction",
+        "capture_settings_firewall_toggle_interaction",
     ));
     checks.push(contains_check(
         root.join("os/bootc/render.suffix.Dockerfile"),
@@ -8453,19 +8460,21 @@ checksum = "abc123"
     }
 
     #[test]
-    fn settings_interaction_contract_covers_search_paths() {
+    fn settings_interaction_contract_covers_search_and_firewall_paths() {
         let unique = SETTINGS_INTERACTION_SCREENSHOTS
             .iter()
             .copied()
             .collect::<HashSet<_>>();
 
-        assert_eq!(SETTINGS_INTERACTION_SCREENSHOTS.len(), 4);
+        assert_eq!(SETTINGS_INTERACTION_SCREENSHOTS.len(), 6);
         assert_eq!(unique.len(), SETTINGS_INTERACTION_SCREENSHOTS.len());
         for screenshot in [
             "100-settings-search-wifi-filter.png",
             "101-settings-search-enter-network.png",
             "102-settings-search-no-results.png",
             "103-settings-search-cleared.png",
+            "118-settings-firewall-before.png",
+            "119-settings-firewall-toggle-failed.png",
         ] {
             assert!(
                 unique.contains(screenshot),

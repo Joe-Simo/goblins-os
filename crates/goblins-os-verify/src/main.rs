@@ -8111,6 +8111,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/text-shortcuts",
         ),
         contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-fetches-text-shortcuts-route",
+            "/v1/text-shortcuts",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-posts-text-shortcuts-route",
+            "/v1/text-shortcuts",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-text-shortcuts-engine-honesty",
+            "replacement engine isn't running",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-text-shortcuts-editor-helper",
+            "text_shortcuts_with_entry",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-voice-control-route",
             "/v1/voice/control/resolve",

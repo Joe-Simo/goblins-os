@@ -118,6 +118,7 @@ struct SettingsState {
     bluetooth: Option<BluetoothStatus>,
     audio: Option<AudioStatus>,
     input: Option<InputStatus>,
+    text_shortcuts: Option<TextShortcutsStatus>,
     accessibility: Option<AccessibilityStatus>,
     firewall: Option<FirewallStatus>,
     hotspot: Option<HotspotStatus>,
@@ -201,6 +202,26 @@ struct ShortcutsStatus {
 struct ShortcutEntry {
     action: String,
     bindings: Vec<String>,
+}
+
+/// Curated Text Shortcuts table from `GET /v1/text-shortcuts`. The table is
+/// editable now; system-wide expansion waits for the IBus engine.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct TextShortcutsStatus {
+    engine_available: bool,
+    shortcuts: Vec<TextShortcutEntry>,
+    detail: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct TextShortcutEntry {
+    replace: String,
+    #[serde(rename = "with")]
+    with_text: String,
 }
 
 /// Firewall posture from `GET /v1/firewall/status` (firewalld). The Settings UI
@@ -1028,6 +1049,85 @@ fn switch_control_scanning_detail(value: &str) -> String {
         "step" => "Step scan advances only when a switch is pressed.".to_string(),
         _ => "Auto scan advances on the configured interval.".to_string(),
     }
+}
+
+fn text_shortcuts_state(status: &TextShortcutsStatus) -> (&'static str, bool) {
+    if status.engine_available {
+        ("active", true)
+    } else if status.shortcuts.is_empty() {
+        ("empty", false)
+    } else {
+        ("saved", false)
+    }
+}
+
+fn text_shortcuts_editor_detail(status: &TextShortcutsStatus) -> String {
+    if status.engine_available {
+        format!(
+            "{} {} shortcuts saved.",
+            status.detail,
+            status.shortcuts.len()
+        )
+    } else {
+        format!(
+            "{} The table is editable now and will apply when the replacement engine is running.",
+            status.detail
+        )
+    }
+}
+
+fn normalize_text_shortcuts(shortcuts: Vec<TextShortcutEntry>) -> Vec<TextShortcutEntry> {
+    let mut seen = std::collections::HashMap::new();
+    let mut order = Vec::new();
+    for entry in shortcuts {
+        let replace = entry.replace.trim().to_string();
+        let with_text = entry.with_text.trim().to_string();
+        if replace.is_empty() || with_text.is_empty() || replace == with_text {
+            continue;
+        }
+        if !seen.contains_key(&replace) {
+            order.push(replace.clone());
+        }
+        seen.insert(replace, with_text);
+    }
+    order
+        .into_iter()
+        .take(500)
+        .map(|replace| TextShortcutEntry {
+            with_text: seen.remove(&replace).unwrap_or_default(),
+            replace,
+        })
+        .collect()
+}
+
+fn text_shortcuts_with_entry(
+    current: &[TextShortcutEntry],
+    replace: &str,
+    with_text: &str,
+) -> Option<Vec<TextShortcutEntry>> {
+    let replace = replace.trim();
+    let with_text = with_text.trim();
+    if replace.is_empty() || with_text.is_empty() || replace == with_text {
+        return None;
+    }
+    let mut next = current.to_vec();
+    next.push(TextShortcutEntry {
+        replace: replace.to_string(),
+        with_text: with_text.to_string(),
+    });
+    Some(normalize_text_shortcuts(next))
+}
+
+fn text_shortcuts_without(
+    current: &[TextShortcutEntry],
+    index: usize,
+) -> Option<Vec<TextShortcutEntry>> {
+    if index >= current.len() {
+        return None;
+    }
+    let mut next = current.to_vec();
+    next.remove(index);
+    Some(normalize_text_shortcuts(next))
 }
 
 fn normalized_switch_interval_ms(value: f64) -> f64 {
@@ -2869,6 +2969,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             bluetooth: None,
             audio: None,
             input: None,
+            text_shortcuts: None,
             accessibility: None,
             firewall: None,
             hotspot: None,
@@ -2906,6 +3007,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         bluetooth: get_core_json(&config.core_url, "/v1/bluetooth/status").ok(),
         audio: get_core_json(&config.core_url, "/v1/audio/status").ok(),
         input: get_core_json(&config.core_url, "/v1/input/status").ok(),
+        text_shortcuts: get_core_json(&config.core_url, "/v1/text-shortcuts").ok(),
         accessibility: get_core_json(&config.core_url, "/v1/accessibility/status").ok(),
         firewall: get_core_json(&config.core_url, "/v1/firewall/status").ok(),
         hotspot: get_core_json(&config.core_url, "/v1/hotspot/status").ok(),
@@ -11982,6 +12084,7 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
         }
     }
 
+    append_text_shortcuts_editor(panel, state);
     append_keyboard_shortcuts(panel, state);
 }
 
@@ -12087,6 +12190,183 @@ fn input_source_action_button(
     });
 
     action
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_text_shortcuts_editor(panel: &gtk4::Box, state: &SettingsState) {
+    panel.append(&label("Text Shortcuts", &["gos-subsection-title"]));
+    let Some(status) = &state.text_shortcuts else {
+        panel.append(&system_row(
+            "Text Shortcuts",
+            "Waiting for Text Shortcuts status.",
+        ));
+        return;
+    };
+
+    let (state_label, ready) = text_shortcuts_state(status);
+    panel.append(&health_row(
+        "Text Shortcuts",
+        state_label,
+        ready,
+        &text_shortcuts_editor_detail(status),
+    ));
+
+    let core_url = config_core_url(state);
+    if status.shortcuts.is_empty() {
+        panel.append(&system_row(
+            "Saved shortcuts",
+            "No Text Shortcuts are saved yet.",
+        ));
+    } else {
+        for (index, shortcut) in status.shortcuts.iter().enumerate() {
+            panel.append(&text_shortcut_row(
+                &core_url,
+                &status.shortcuts,
+                index,
+                shortcut,
+            ));
+        }
+    }
+    panel.append(&text_shortcut_add_row(&core_url, &status.shortcuts));
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn text_shortcut_row(
+    core_url: &str,
+    shortcuts: &[TextShortcutEntry],
+    index: usize,
+    shortcut: &TextShortcutEntry,
+) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let title = format!("{} -> {}", shortcut.replace, shortcut.with_text);
+    let detail_text = settings_detail_display_copy(
+        "Saved in the Text Shortcuts table. It expands while typing only when the replacement engine is running.",
+    );
+
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-input-source-row");
+    set_accessible_label_description(&row, &title, &detail_text);
+
+    let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    copy.set_hexpand(true);
+    copy.append(&label(&title, &["gos-row-title"]));
+    let status = label(&detail_text, &["gos-row-copy"]);
+    copy.append(&status);
+    row.append(&copy);
+
+    let remove = button(
+        "Remove",
+        &["gos-permission-action", "gos-input-source-action"],
+    );
+    remove.set_tooltip_text(Some("Remove this Text Shortcut."));
+    set_accessible_label_description(&remove, "Remove Text Shortcut", &title);
+    let updated = text_shortcuts_without(shortcuts, index);
+    remove.set_sensitive(updated.is_some());
+    if let Some(updated) = updated {
+        let core_url = core_url.to_string();
+        let row_accessibility = row.clone();
+        let status = status.clone();
+        remove.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            let (detail, keep_action_available) = match set_text_shortcuts(&core_url, &updated) {
+                Ok(message) => (settings_detail_display_copy(&message), false),
+                Err(error) => {
+                    eprintln!("settings_control_change_rejected title={title:?} error={error:?}");
+                    (
+                        settings_detail_display_copy(&setting_change_rejected_detail(&error)),
+                        true,
+                    )
+                }
+            };
+            status.set_text(&detail);
+            set_accessible_label_description(&row_accessibility, &title, &detail);
+            button.set_sensitive(keep_action_available);
+        });
+    }
+    row.append(&remove);
+    row
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn text_shortcut_add_row(core_url: &str, shortcuts: &[TextShortcutEntry]) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-input-source-row");
+    set_accessible_label_description(
+        &row,
+        "Add Text Shortcut",
+        "Add a Replace and With pair to the Text Shortcuts table.",
+    );
+
+    let header = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    header.append(&label("Add Text Shortcut", &["gos-row-title"]));
+    let status = label(
+        "Add or replace a shortcut in the OS-owned table. Expansion waits for the replacement engine.",
+        &["gos-row-copy"],
+    );
+    header.append(&status);
+    row.append(&header);
+
+    let fields = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let replace_entry = gtk4::Entry::new();
+    replace_entry.add_css_class("gos-entry");
+    replace_entry.set_placeholder_text(Some("Replace"));
+    replace_entry.set_hexpand(true);
+    set_accessible_label_description(&replace_entry, "Replace", "Shortcut trigger.");
+    let with_entry = gtk4::Entry::new();
+    with_entry.add_css_class("gos-entry");
+    with_entry.set_placeholder_text(Some("With"));
+    with_entry.set_hexpand(true);
+    set_accessible_label_description(&with_entry, "With", "Replacement text.");
+    fields.append(&replace_entry);
+    fields.append(&with_entry);
+
+    let add = button("Add", &["gos-permission-action", "gos-input-source-action"]);
+    add.set_tooltip_text(Some("Add this Text Shortcut."));
+    set_accessible_label_description(
+        &add,
+        "Add Text Shortcut",
+        "Save this Replace and With pair.",
+    );
+    fields.append(&add);
+    row.append(&fields);
+
+    let current = Rc::new(RefCell::new(shortcuts.to_vec()));
+    let core_url = core_url.to_string();
+    let row_accessibility = row.clone();
+    let status_for_click = status.clone();
+    add.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        let replace = replace_entry.text().to_string();
+        let with_text = with_entry.text().to_string();
+        let current_snapshot = current.borrow().clone();
+        let detail = match text_shortcuts_with_entry(&current_snapshot, &replace, &with_text) {
+            Some(updated) => match set_text_shortcuts(&core_url, &updated) {
+                Ok(message) => {
+                    *current.borrow_mut() = updated;
+                    replace_entry.set_text("");
+                    with_entry.set_text("");
+                    settings_detail_display_copy(&message)
+                }
+                Err(error) => {
+                    eprintln!("settings_control_change_rejected title=\"Text Shortcuts\" error={error:?}");
+                    settings_detail_display_copy(&setting_change_rejected_detail(&error))
+                }
+            },
+            None => settings_detail_display_copy(
+                "Enter different, non-empty Replace and With values before saving.",
+            ),
+        };
+        status_for_click.set_text(&detail);
+        set_accessible_label_description(&row_accessibility, "Add Text Shortcut", &detail);
+        button.set_sensitive(true);
+    });
+
+    row
 }
 
 /// Read-only reference of the Goblins window-management shortcuts (macOS "Keyboard ▸
@@ -17950,11 +18230,34 @@ fn set_input_sources(base_url: &str, sources: &[InputSourceEntry]) -> Result<Str
     }
 }
 
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_text_shortcuts(base_url: &str, shortcuts: &[TextShortcutEntry]) -> Result<String, String> {
+    let body = serde_json::json!({
+        "shortcuts": shortcuts,
+    })
+    .to_string();
+    let response = http_post_json_response(base_url, "/v1/text-shortcuts", &body)
+        .map_err(|error| format!("Goblins OS could not reach Text Shortcuts: {error}."))?;
+    let outcome = text_shortcuts_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) {
+        Ok(settings_detail_display_copy(&text_shortcuts_editor_detail(
+            &outcome,
+        )))
+    } else {
+        Err(settings_detail_display_copy(&outcome.detail))
+    }
+}
+
 fn input_preference_outcome(body: &[u8]) -> Result<InputPreferenceOutcome, CoreFetchError> {
     serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
 }
 
 fn input_sources_outcome(body: &[u8]) -> Result<InputSourcesOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+fn text_shortcuts_outcome(body: &[u8]) -> Result<TextShortcutsStatus, CoreFetchError> {
     serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
 }
 
@@ -19317,6 +19620,29 @@ fn test_voice_status(available: bool) -> VoiceStatus {
             "Goblin voice is ready with local Whisper and Piper models.".to_string()
         } else {
             "Goblin voice runs on local Whisper and Piper models. Add the missing voice components."
+                .to_string()
+        },
+    }
+}
+
+#[cfg(test)]
+fn test_text_shortcuts_status(engine_available: bool) -> TextShortcutsStatus {
+    TextShortcutsStatus {
+        engine_available,
+        shortcuts: vec![
+            TextShortcutEntry {
+                replace: "omw".to_string(),
+                with_text: "on my way".to_string(),
+            },
+            TextShortcutEntry {
+                replace: "teh".to_string(),
+                with_text: "the".to_string(),
+            },
+        ],
+        detail: if engine_available {
+            "Text Shortcuts expand as you type across the desktop.".to_string()
+        } else {
+            "Text Shortcuts are saved, but the replacement engine isn't running on this session yet."
                 .to_string()
         },
     }
@@ -23143,6 +23469,37 @@ mod tests {
         assert_eq!(super::normalized_switch_dwell_ms(777.0), 800.0);
         assert_eq!(super::normalized_switch_debounce_ms(63.0), 60.0);
         assert_eq!(super::normalized_switch_debounce_ms(9000.0), 2000.0);
+    }
+
+    #[test]
+    fn text_shortcuts_editor_helpers_sanitize_and_preserve_engine_truth() {
+        let status = super::test_text_shortcuts_status(false);
+        assert_eq!(super::text_shortcuts_state(&status), ("saved", false));
+        let detail = super::text_shortcuts_editor_detail(&status);
+        assert!(detail.contains("replacement engine isn't running"));
+        assert!(detail.contains("editable now"));
+
+        let updated =
+            super::text_shortcuts_with_entry(&status.shortcuts, "  omw ", " on my way now ")
+                .unwrap();
+        assert_eq!(updated.len(), 2);
+        assert_eq!(
+            updated
+                .iter()
+                .find(|entry| entry.replace == "omw")
+                .map(|entry| entry.with_text.as_str()),
+            Some("on my way now")
+        );
+        assert!(super::text_shortcuts_with_entry(&updated, "", "value").is_none());
+        assert!(super::text_shortcuts_with_entry(&updated, "same", "same").is_none());
+
+        let removed = super::text_shortcuts_without(&updated, 1).unwrap();
+        assert_eq!(removed.len(), 1);
+        assert!(super::text_shortcuts_without(&removed, 8).is_none());
+
+        let active = super::test_text_shortcuts_status(true);
+        assert_eq!(super::text_shortcuts_state(&active), ("active", true));
+        assert!(super::text_shortcuts_editor_detail(&active).contains("2 shortcuts saved"));
     }
 
     #[test]

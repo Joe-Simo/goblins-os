@@ -165,6 +165,13 @@ impl TableLoadStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TableFingerprint {
+    Present { bytes: u64, content_hash: u64 },
+    Missing,
+    Unreadable,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TableLoadOutcome {
     table: ShortcutTable,
@@ -182,6 +189,34 @@ impl TableLoadOutcome {
 
     pub fn into_table(self) -> ShortcutTable {
         self.table
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TableLoadSnapshot {
+    outcome: TableLoadOutcome,
+    fingerprint: TableFingerprint,
+}
+
+impl TableLoadSnapshot {
+    pub fn table(&self) -> &ShortcutTable {
+        self.outcome.table()
+    }
+
+    pub fn status(&self) -> &TableLoadStatus {
+        self.outcome.status()
+    }
+
+    pub fn fingerprint(&self) -> TableFingerprint {
+        self.fingerprint
+    }
+
+    pub fn into_outcome(self) -> TableLoadOutcome {
+        self.outcome
+    }
+
+    pub fn into_parts(self) -> (TableLoadOutcome, TableFingerprint) {
+        (self.outcome, self.fingerprint)
     }
 }
 
@@ -213,29 +248,58 @@ impl TextShortcutTableStore {
     }
 
     pub fn load(&self) -> TableLoadOutcome {
+        self.load_snapshot().into_outcome()
+    }
+
+    pub fn load_snapshot(&self) -> TableLoadSnapshot {
         match std::fs::read_to_string(&self.path) {
-            Ok(raw) => match ShortcutTable::from_json(&raw) {
-                Ok(table) => TableLoadOutcome {
-                    status: TableLoadStatus::Loaded {
-                        shortcuts: table.len(),
+            Ok(raw) => {
+                let fingerprint = TableFingerprint::Present {
+                    bytes: raw.len() as u64,
+                    content_hash: stable_content_hash(raw.as_bytes()),
+                };
+                let outcome = match ShortcutTable::from_json(&raw) {
+                    Ok(table) => TableLoadOutcome {
+                        status: TableLoadStatus::Loaded {
+                            shortcuts: table.len(),
+                        },
+                        table,
                     },
-                    table,
-                },
-                Err(_) => TableLoadOutcome {
+                    Err(_) => TableLoadOutcome {
+                        table: ShortcutTable::default(),
+                        status: TableLoadStatus::InvalidJson,
+                    },
+                };
+                TableLoadSnapshot {
+                    outcome,
+                    fingerprint,
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => TableLoadSnapshot {
+                outcome: TableLoadOutcome {
                     table: ShortcutTable::default(),
-                    status: TableLoadStatus::InvalidJson,
+                    status: TableLoadStatus::Missing,
                 },
+                fingerprint: TableFingerprint::Missing,
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => TableLoadOutcome {
-                table: ShortcutTable::default(),
-                status: TableLoadStatus::Missing,
-            },
-            Err(_) => TableLoadOutcome {
-                table: ShortcutTable::default(),
-                status: TableLoadStatus::Unreadable,
+            Err(_) => TableLoadSnapshot {
+                outcome: TableLoadOutcome {
+                    table: ShortcutTable::default(),
+                    status: TableLoadStatus::Unreadable,
+                },
+                fingerprint: TableFingerprint::Unreadable,
             },
         }
     }
+}
+
+fn stable_content_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 pub fn default_text_shortcuts_table_path(config_home: impl AsRef<Path>) -> PathBuf {
@@ -279,6 +343,286 @@ fn tag_values(raw: &str, tag: &str) -> Vec<String> {
         rest = &after_open[close + close_tag.len()..];
     }
     values
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TextShortcutTableWatcher {
+    fingerprint: Option<TableFingerprint>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TableWatchOutcome {
+    Reloaded(RuntimeTableRefresh),
+    Unchanged { status: TableLoadStatus },
+}
+
+impl TableWatchOutcome {
+    pub fn status(&self) -> &TableLoadStatus {
+        match self {
+            Self::Reloaded(refresh) => refresh.status(),
+            Self::Unchanged { status } => status,
+        }
+    }
+
+    pub fn reloaded(&self) -> bool {
+        matches!(self, Self::Reloaded(_))
+    }
+
+    pub fn decision(&self) -> Option<&IbusRuntimeDecision> {
+        match self {
+            Self::Reloaded(refresh) => Some(refresh.decision()),
+            Self::Unchanged { .. } => None,
+        }
+    }
+}
+
+impl TextShortcutTableWatcher {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn fingerprint(&self) -> Option<TableFingerprint> {
+        self.fingerprint
+    }
+
+    pub fn poll(
+        &mut self,
+        runtime: &mut IbusTextShortcutsRuntime,
+        store: &TextShortcutTableStore,
+    ) -> TableWatchOutcome {
+        let snapshot = store.load_snapshot();
+        let fingerprint = snapshot.fingerprint();
+        if self.fingerprint == Some(fingerprint) {
+            return TableWatchOutcome::Unchanged {
+                status: snapshot.status().clone(),
+            };
+        }
+
+        self.fingerprint = Some(fingerprint);
+        let (outcome, _) = snapshot.into_parts();
+        let status = outcome.status().clone();
+        let decision = runtime.set_table(outcome.into_table());
+        TableWatchOutcome::Reloaded(RuntimeTableRefresh { status, decision })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TableWatchSelfTestError {
+    Io(String),
+    UnexpectedCurrentWord {
+        phase: &'static str,
+        expected: &'static str,
+        actual: String,
+    },
+    UnexpectedOutcome {
+        phase: &'static str,
+        expected: &'static str,
+        actual: TableWatchOutcome,
+    },
+    UnexpectedDecision {
+        phase: &'static str,
+        expected: IbusRuntimeDecision,
+        actual: IbusRuntimeDecision,
+    },
+}
+
+impl std::fmt::Display for TableWatchSelfTestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(message) => write!(f, "{message}"),
+            Self::UnexpectedCurrentWord {
+                phase,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "unexpected Text Shortcuts current word during {phase}: expected {expected:?}, got {actual:?}"
+            ),
+            Self::UnexpectedOutcome {
+                phase,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "unexpected Text Shortcuts table-watch outcome during {phase}: expected {expected}, got {actual:?}"
+            ),
+            Self::UnexpectedDecision {
+                phase,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "unexpected Text Shortcuts table-watch decision during {phase}: expected {expected:?}, got {actual:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TableWatchSelfTestError {}
+
+pub fn run_text_shortcuts_table_watch_self_test() -> Result<(), TableWatchSelfTestError> {
+    let path = std::env::temp_dir().join(format!(
+        "goblins-os-textshortcuts-watch-selftest-{}.json",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    write_table_for_watch_self_test(&path, r#"[{"replace":"omw","with":"on my way"}]"#)?;
+
+    let store = TextShortcutTableStore::new(&path);
+    let mut runtime = IbusTextShortcutsRuntime::default();
+    let mut watcher = TextShortcutTableWatcher::new();
+
+    expect_watch_reload_status(
+        "initial-load",
+        watcher.poll(&mut runtime, &store),
+        TableLoadStatus::Loaded { shortcuts: 1 },
+    )?;
+    let candidate = type_runtime_text_for_self_test(&mut runtime, "omw");
+    expect_watch_decision(
+        "initial-candidate",
+        candidate,
+        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+            text: "on my way".to_string(),
+            cursor_pos: 9,
+            visible: true,
+        }]),
+    )?;
+
+    expect_watch_unchanged_status(
+        "unchanged-table",
+        watcher.poll(&mut runtime, &store),
+        TableLoadStatus::Loaded { shortcuts: 1 },
+    )?;
+    expect_current_word("unchanged-keeps-current-word", &runtime, "omw")?;
+
+    write_table_for_watch_self_test(&path, r#"[{"replace":"omw","with":"on my way now"}]"#)?;
+    expect_watch_reload_decision(
+        "changed-table",
+        watcher.poll(&mut runtime, &store),
+        TableLoadStatus::Loaded { shortcuts: 1 },
+        IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText]),
+    )?;
+    expect_current_word("changed-table-clears-current-word", &runtime, "")?;
+
+    let updated_candidate = type_runtime_text_for_self_test(&mut runtime, "omw");
+    expect_watch_decision(
+        "updated-candidate",
+        updated_candidate,
+        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+            text: "on my way now".to_string(),
+            cursor_pos: 13,
+            visible: true,
+        }]),
+    )?;
+
+    write_table_for_watch_self_test(&path, "not-json")?;
+    expect_watch_reload_decision(
+        "invalid-table",
+        watcher.poll(&mut runtime, &store),
+        TableLoadStatus::InvalidJson,
+        IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText]),
+    )?;
+    expect_watch_decision(
+        "invalid-table-pass-through",
+        type_runtime_text_for_self_test(&mut runtime, "omw "),
+        IbusRuntimeDecision::pass_through(),
+    )?;
+
+    std::fs::remove_file(&path)
+        .map_err(|error| TableWatchSelfTestError::Io(format!("could not remove table: {error}")))?;
+    expect_watch_reload_status(
+        "missing-table",
+        watcher.poll(&mut runtime, &store),
+        TableLoadStatus::Missing,
+    )?;
+    Ok(())
+}
+
+fn expect_current_word(
+    phase: &'static str,
+    runtime: &IbusTextShortcutsRuntime,
+    expected: &'static str,
+) -> Result<(), TableWatchSelfTestError> {
+    if runtime.current_word() == expected {
+        Ok(())
+    } else {
+        Err(TableWatchSelfTestError::UnexpectedCurrentWord {
+            phase,
+            expected,
+            actual: runtime.current_word().to_string(),
+        })
+    }
+}
+
+fn write_table_for_watch_self_test(path: &Path, raw: &str) -> Result<(), TableWatchSelfTestError> {
+    std::fs::write(path, raw)
+        .map_err(|error| TableWatchSelfTestError::Io(format!("could not write table: {error}")))
+}
+
+fn expect_watch_reload_status(
+    phase: &'static str,
+    actual: TableWatchOutcome,
+    expected_status: TableLoadStatus,
+) -> Result<(), TableWatchSelfTestError> {
+    match actual {
+        TableWatchOutcome::Reloaded(refresh) if refresh.status == expected_status => Ok(()),
+        actual => Err(TableWatchSelfTestError::UnexpectedOutcome {
+            phase,
+            expected: "table reload with expected status",
+            actual,
+        }),
+    }
+}
+
+fn expect_watch_reload_decision(
+    phase: &'static str,
+    actual: TableWatchOutcome,
+    expected_status: TableLoadStatus,
+    expected_decision: IbusRuntimeDecision,
+) -> Result<(), TableWatchSelfTestError> {
+    match actual {
+        TableWatchOutcome::Reloaded(refresh)
+            if refresh.status == expected_status && refresh.decision == expected_decision =>
+        {
+            Ok(())
+        }
+        actual => Err(TableWatchSelfTestError::UnexpectedOutcome {
+            phase,
+            expected: "table reload with expected status and decision",
+            actual,
+        }),
+    }
+}
+
+fn expect_watch_unchanged_status(
+    phase: &'static str,
+    actual: TableWatchOutcome,
+    expected_status: TableLoadStatus,
+) -> Result<(), TableWatchSelfTestError> {
+    match actual {
+        TableWatchOutcome::Unchanged { status } if status == expected_status => Ok(()),
+        actual => Err(TableWatchSelfTestError::UnexpectedOutcome {
+            phase,
+            expected: "unchanged table with expected status",
+            actual,
+        }),
+    }
+}
+
+fn expect_watch_decision(
+    phase: &'static str,
+    actual: IbusRuntimeDecision,
+    expected: IbusRuntimeDecision,
+) -> Result<(), TableWatchSelfTestError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(TableWatchSelfTestError::UnexpectedDecision {
+            phase,
+            expected,
+            actual,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -788,11 +1132,12 @@ mod tests {
 
     use super::{
         default_text_shortcuts_table_path, ibus_runtime_decision, input_event_from_ibus_key,
-        run_text_shortcuts_keystroke_self_test, sanitize_shortcuts, ContentPurpose, EngineAction,
-        EngineState, IbusKeyEvent, IbusOperation, IbusRuntimeDecision, IbusRuntimeEvent,
-        IbusTextShortcutsRuntime, InputEvent, ShortcutTable, TableLoadStatus, TextShortcut,
-        TextShortcutTableStore, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE, IBUS_KEY_DOWN,
-        IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
+        run_text_shortcuts_keystroke_self_test, run_text_shortcuts_table_watch_self_test,
+        sanitize_shortcuts, ContentPurpose, EngineAction, EngineState, IbusKeyEvent, IbusOperation,
+        IbusRuntimeDecision, IbusRuntimeEvent, IbusTextShortcutsRuntime, InputEvent, ShortcutTable,
+        TableLoadStatus, TextShortcut, TextShortcutTableStore, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE,
+        IBUS_KEY_DOWN, IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT,
+        IBUS_KEY_TAB, IBUS_KEY_UP,
     };
 
     fn table() -> ShortcutTable {
@@ -1357,6 +1702,11 @@ mod tests {
     #[test]
     fn text_shortcuts_keystroke_self_test_covers_runtime_contract() {
         assert_eq!(run_text_shortcuts_keystroke_self_test(), Ok(()));
+    }
+
+    #[test]
+    fn text_shortcuts_table_watch_self_test_covers_reload_contract() {
+        assert_eq!(run_text_shortcuts_table_watch_self_test(), Ok(()));
     }
 
     #[test]

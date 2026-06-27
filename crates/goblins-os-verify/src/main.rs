@@ -8012,6 +8012,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-keyboard-shortcuts-binding-route",
+            "/v1/keyboard/shortcuts/binding",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-keyboard-modifier-remap-route",
+            "/v1/keyboard/modifier-remap",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/shortcuts.rs"),
+            "core-keyboard-shortcuts-allowlist",
+            "shortcut_spec_by_id",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/shortcuts.rs"),
+            "core-keyboard-shortcuts-conflict-check",
+            "shortcut_conflict",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/shortcuts.rs"),
+            "core-keyboard-caps-lock-remap-preserves-options",
+            "remap_caps_lock_options",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-migration-capabilities-route",
             "/v1/migration/capabilities",
         ),
@@ -8199,6 +8224,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-keyboard-shortcuts-list",
             "append_keyboard_shortcuts",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-shortcuts-source-gated-copy",
+            "Protected shortcut writes are source-gated",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/schemas/org.goblins.shell.extensions.wm.gschema.xml"),

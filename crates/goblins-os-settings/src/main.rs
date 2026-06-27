@@ -5983,7 +5983,11 @@ fn build_keyboard(panel: &gtk4::Box, state: &SettingsState) {
     append_keyboard_preferences(panel, state);
     panel.append(&system_row(
         "Keyboard shortcuts",
-        "Read-only until protected shortcut controls are available. Shortcut editing stays disabled for now.",
+        "Protected shortcut writes are source-gated through Goblins OS. Recording and reset controls stay disabled until qemu proves the gsettings round trip.",
+    ));
+    panel.append(&system_row(
+        "Modifier keys",
+        "Caps Lock to Control is source-gated through Goblins OS and preserves other xkb options; the dropdown stays disabled until qemu proof is green.",
     ));
     panel.append(&label("Advanced controls", &["gos-subsection-title"]));
     append_device_settings_handoff(

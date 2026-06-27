@@ -93,6 +93,7 @@ use crate::{
     service_catalog::service_catalog,
     session_gate::{session_gate_status, unlock_session},
     settings::{recovery_status, settings_system},
+    shortcuts::{set_modifier_remap, set_shortcut_binding, shortcuts_status},
     studio::{studio_file, studio_session, studio_sessions, studio_turn},
     system::{health, system_services},
     system_image::system_image_status,
@@ -253,6 +254,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/v1/hotspot/status", get(hotspot::hotspot_status))
         .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
+        .route("/v1/keyboard/shortcuts/status", get(shortcuts_status))
+        .route("/v1/keyboard/shortcuts/binding", post(set_shortcut_binding))
+        .route("/v1/keyboard/modifier-remap", post(set_modifier_remap))
         .route(
             "/v1/migration/capabilities",
             get(migration::migration_capabilities),

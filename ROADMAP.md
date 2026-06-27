@@ -224,6 +224,20 @@ apply is available, but the layout editor remains disabled. Local source gates:
 `goblins-os-verify --source-root .` → **blocked=0 (1579)**. CI/qemu still must
 prove the apply/keep/revert flow before the feature can ship.
 
+Current Keyboard continuation: shortcut rebinding and Caps Lock remap are now
+source-gated but not shipped. Core aliases `/v1/keyboard/shortcuts/status`,
+exposes `/v1/keyboard/shortcuts/binding` for allowlisted Goblins WM binding
+set/reset, and exposes `/v1/keyboard/modifier-remap` for the reversible
+Caps Lock→Control xkb option. The write path validates accelerator grammar,
+refuses conflicts with other allowlisted Goblins bindings, edits only the
+`ctrl:*`/`caps:*` xkb option token, and keeps the Settings editor disabled until
+qemu proves the live gsettings round trip. Local source gates:
+`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, the Rust 1.88 GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`,
+`git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
+`goblins-os-verify --source-root .` → **blocked=0 (1585)**.
+
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: firewall CI image/render proof is green and the
    hardware-gate image/ISO path is past the export blocker; next push/dispatch
@@ -232,8 +246,8 @@ prove the apply/keep/revert flow before the feature can ship.
    reaches the in-guest firewall toggle. That proof must show the live
    systemd/polkit oneshot success path for the firewall toggle.
    Only flip it to `shipped` if the render, live POST, and polkit oneshot path are green. Then
-   prove the IME set, Focus, per-app permission revoke, and multi-display apply interactions in CI/qemu,
-   then continue to keyboard rebinding. Do not flip any of these
+   prove the IME set, Focus, per-app permission revoke, multi-display apply, and keyboard rebinding interactions in CI/qemu.
+   Do not flip any of these
    from `in-progress` until the write path and qemu interaction proof are green.
 2. **Batch 4 engine UI pass**: build the deferred engine UIs/overlays one feature
    at a time (Voice Control, Live Captions, Switch Control, Sound Recognition,
@@ -428,7 +442,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 
 ### `in-progress` Keyboard shortcut editor + modifier remap (Caps Lock → Control)
 - [x] **Shortcuts reference shipped** (`crates/goblins-os-core/src/shortcuts.rs` + `/v1/shortcuts/status`, Settings ▸ Keyboard "Shortcuts" list): reads the 14 Goblins window-management bindings from `org.goblins.shell.extensions.wm` and shows each action with its humanized accelerator (`<Super><Shift>Left` → "Super + Shift + Left"; pure `humanize_accelerator`/`parse_gsettings_strv` unit-tested, 176 core tests), honest-gated to "unavailable" when the wm schema isn't installed. Container-verified (clippy `-D warnings`), 2 verify gates.
-- [ ] **Recordable rebinding + Caps Lock remap (deferred):** make rows recordable (gated writes to the wm + `org.gnome.desktop.wm.keybindings` schemas), a Caps Lock dropdown editing only the `ctrl:*`/`caps:*` `xkb-options` token, inline conflict detection, and per-row/global reset.
+- [x] **Rebinding + Caps Lock remap substrate source-gated (CI/qemu-pending):** `/v1/keyboard/shortcuts/binding` writes only the allowlisted Goblins WM schema keys, supports reset, validates accelerator grammar, and refuses conflicts with other Goblins bindings. `/v1/keyboard/modifier-remap` edits only the `ctrl:*`/`caps:*` token in `xkb-options` so Caps Lock can become Control or return to default while preserving unrelated layout/compose options. Settings reports the source-gated bridge but keeps record/dropdown controls disabled until qemu proof is green.
+- [ ] **Recordable UI + live round trip (deferred):** make rows recordable, add a Caps Lock dropdown, inline conflict notice, per-row/global reset, and qemu gsettings round-trip proof.
 - **Packages:** none (all three schemas ship in gsettings-desktop-schemas).
 - **gsettings:** `org.gnome.desktop.input-sources xkb-options` (Caps→Ctrl via `ctrl:nocaps`, editing **only** the `ctrl:*`/`caps:*` token, preserving `grp:`/`compose:`/`lv3:`); `org.gnome.desktop.wm.keybindings` (close/toggle-maximized/minimize/switch-applications(+backward)/switch-windows/show-desktop/toggle-fullscreen/begin-move/begin-resize); `org.gnome.settings-daemon.plugins.media-keys` (screenshot/screenshot-clip/area-screenshot/www/terminal/home/search). Reset = `gsettings reset SCHEMA KEY`. Custom-command keybindings → **read-only** v1 (handoff).
 - **Files:** `crates/goblins-os-core/src/keyboard_shortcuts.rs` (NEW — allowlisted bridge mirroring `input.rs`: status + set/reset, action allowlist + spec table, conflict detection, separate modifier-remap target), `crates/goblins-os-core/src/main.rs` (`/v1/keyboard/shortcuts/status`, `/v1/keyboard/shortcuts/binding`, `/v1/keyboard/modifier-remap`), `crates/goblins-os-settings/src/main.rs` (replace the stub at 5622-5625 with the Shortcuts subsection + Modifier Keys row), `crates/goblins-os-verify/src/main.rs` (pin the new copy + no-stub assertion), `os/dconf/db/local.d/10-goblins-os-desktop` (OPTIONAL branded baseline so reset has a Goblins default).

@@ -4885,6 +4885,36 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "shippable release media cannot track local/test-only installer payload ref",
         ),
         contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-skip-local-image-build-env",
+            "GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-skip-local-image-build-requires-registry-source",
+            "requires GOBLINS_OS_BIB_SOURCE_IMAGE",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-direct-registry-buildx-push",
+            "docker buildx build",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-direct-registry-buildx-push-flag",
+            "--push",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-skips-local-iso-image-build",
+            "GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1",
+        ),
+        absent_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-no-daemon-export-build-tag",
+            "docker build -f os/bootc/Containerfile -t localhost/goblins-os",
+        ),
+        contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
             "external-gate-requires-real-bootc-ref-for-display-proof",
             "Display-backed shipping proof requires GOBLINS_OS_BIB_SOURCE_IMAGE",

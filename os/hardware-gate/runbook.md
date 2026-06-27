@@ -77,6 +77,12 @@ and `"shippable_release": true`. If it records a Docker-local registry, discard
 that ISO for release signoff and rebuild with `GOBLINS_OS_BIB_SOURCE_IMAGE`
 pointing at the real release image.
 
+The GitHub `hardware-gate-capture` workflow uses the same release-image rule but
+pushes the bootc image directly to GHCR with `docker buildx build --push`, then
+runs `os/iso/build-iso.sh` with `GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1`. That
+avoids exporting the full bootc image into the runner's local Docker daemon
+before bootc-image-builder pulls the real registry source.
+
 ## 2) Write ISO + boot display-backed VM
 ```sh
 ARCH=x86_64

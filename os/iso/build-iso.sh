@@ -38,6 +38,11 @@
 #                      Shippable release media must use a real pullable registry
 #                      ref, because Anaconda ISO installs track this ref for
 #                      post-install bootc updates.
+#   GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD
+#                      set 1 only when GOBLINS_OS_BIB_SOURCE_IMAGE points at a
+#                      real pullable registry image that was already built. This
+#                      avoids exporting the full bootc image into the local Docker
+#                      daemon on constrained CI runners.
 #   GOBLINS_OS_SHIPPABLE_RELEASE
 #                      set 1 to fail if the BIB source image is local/test-only
 set -euo pipefail
@@ -52,6 +57,7 @@ DOCKER_REGISTRY_PORT="${GOBLINS_OS_DOCKER_REGISTRY_PORT:-5002}"
 DOCKER_REGISTRY_NAME="${GOBLINS_OS_DOCKER_REGISTRY_NAME:-goblins-os-registry}"
 BIB_STORAGE_VOLUME="${GOBLINS_OS_BIB_STORAGE_VOLUME:-goblins-os-bib-storage-$DOCKER_REGISTRY_PORT}"
 BIB_SOURCE_IMAGE_OVERRIDE="${GOBLINS_OS_BIB_SOURCE_IMAGE:-}"
+SKIP_LOCAL_IMAGE_BUILD="${GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD:-0}"
 SHIPPABLE_RELEASE="${GOBLINS_OS_SHIPPABLE_RELEASE:-0}"
 BIB_SOURCE_IMAGE_USED=""
 BIB_SOURCE_KIND=""
@@ -307,14 +313,22 @@ run_docker_builder() {
 
   require_command docker
   verify_docker_emulation_runtime
-  image_arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE" 2>/dev/null || true)"
-  if [ "$(normalize_arch "$image_arch")" != "$ARCH" ]; then
-    if [ -n "$image_arch" ]; then
-      echo "==> Rebuilding $IMAGE for $ARCH; existing image architecture is $image_arch"
-    else
-      echo "==> Building $IMAGE from os/bootc/Containerfile with Docker"
+  if [ "$SKIP_LOCAL_IMAGE_BUILD" = "1" ]; then
+    if [ -z "$BIB_SOURCE_IMAGE_OVERRIDE" ]; then
+      echo "error: GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 requires GOBLINS_OS_BIB_SOURCE_IMAGE to a real pullable registry ref." >&2
+      exit 1
     fi
-    DOCKER_BUILDKIT=1 docker build --platform "$DOCKER_PLATFORM" -t "$IMAGE" -f "$REPO_ROOT/os/bootc/Containerfile" "$REPO_ROOT"
+    echo "==> Skipping local Docker image build; bootc-image-builder will pull $BIB_SOURCE_IMAGE_OVERRIDE"
+  else
+    image_arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE" 2>/dev/null || true)"
+    if [ "$(normalize_arch "$image_arch")" != "$ARCH" ]; then
+      if [ -n "$image_arch" ]; then
+        echo "==> Rebuilding $IMAGE for $ARCH; existing image architecture is $image_arch"
+      else
+        echo "==> Building $IMAGE from os/bootc/Containerfile with Docker"
+      fi
+      DOCKER_BUILDKIT=1 docker build --platform "$DOCKER_PLATFORM" -t "$IMAGE" -f "$REPO_ROOT/os/bootc/Containerfile" "$REPO_ROOT"
+    fi
   fi
 
   if [ -n "$BIB_SOURCE_IMAGE_OVERRIDE" ]; then

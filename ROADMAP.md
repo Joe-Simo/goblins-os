@@ -86,7 +86,7 @@ implemented and locally gated, but the feature remains `in-progress` until the
 CI/qemu image pass proves the GTK render, polkit oneshot path, and live toggle.
 Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, `goblins-os-verify --source-root .` →
-**blocked=0 (1538)**, `git diff --check`, helper `bash -n`, polkit rule
+**blocked=0 (1544)**, `git diff --check`, helper `bash -n`, polkit rule
 `node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 The installed-image self-test now exercises `/v1/firewall/status` and the
@@ -120,13 +120,25 @@ the installed session it posts disable/enable to `/v1/firewall/enabled`, require
 HTTP 200 plus `/v1/firewall/status` inactive/active observations, writes the
 proof beside the screenshot run, ties it into `proof-manifest.json`, and makes
 `close-signoff.sh`/`verify-shipping-status.sh` reject runs without it. This
-source/harness gate is local-only so far; no live VM run has proved it yet.
+source/harness gate is local-only so far; no live VM run has proved it yet. The
+first hardware-gate dispatch for that live proof (`28291639868` at `f2b29ae`)
+completed the Containerfile build/lint path but failed during local Docker image
+export (`#78 exporting layers`, exit 143, runner shutdown) before the VM capture
+step, so it produced no `firewall-live-toggle-proof.json`. The hardware-gate
+workflow now builds the bootc image with `docker buildx build --push` directly to
+GHCR, then calls `os/iso/build-iso.sh` with
+`GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1` and `GOBLINS_OS_BIB_SOURCE_IMAGE` so
+bootc-image-builder pulls the registry image without exporting the full bootc
+image into the runner daemon. That unblock is source-gated only; Firewall still
+requires the next display-backed run to prove the live POST + polkit oneshot
+success path.
 `systemd-analyze verify` is not available on this macOS host.
 
 **NEXT — pick up exactly here:**
-1. **Gated writes pass**: firewall CI image/render proof is green; next prove the
-   live systemd/polkit oneshot success path for the firewall toggle by running
-   the display-backed VM capture and inspecting `firewall-live-toggle-proof.json`.
+1. **Gated writes pass**: firewall CI image/render proof is green and the
+   hardware-gate export unblock is pushed; next dispatch the display-backed VM
+   capture again and inspect `firewall-live-toggle-proof.json` to prove the live
+   systemd/polkit oneshot success path for the firewall toggle.
    Only flip it to `shipped` if the render, live POST, and polkit oneshot path are green. Then
    continue one feature at a time — IME set, Focus arm/disarm, per-app permission
    revoke, multi-display apply, and keyboard rebinding. Do not flip any of these

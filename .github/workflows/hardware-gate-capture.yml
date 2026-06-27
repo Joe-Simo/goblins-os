@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x86_64,  runner: ubuntu-24.04,     uname: x86_64 }
+          - { arch: x86_64,  runner: ubuntu-24.04,     uname: x86_64, platform: linux/amd64 }
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -59,17 +59,20 @@ jobs:
         run: |
           owner='${{ github.repository_owner }}'; owner="${owner,,}"
           echo "ref=ghcr.io/${owner}/goblins-os:${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
-      - name: Build the Goblins OS image
-        run: docker build -f os/bootc/Containerfile -t localhost/goblins-os:${{ matrix.arch }} .
-      - name: Publish the image to GHCR (pullable ref for the ISO builder)
+      - name: Build and publish the Goblins OS image to GHCR
         run: |
-          docker tag localhost/goblins-os:${{ matrix.arch }} '${{ steps.ref.outputs.ref }}'
-          docker push '${{ steps.ref.outputs.ref }}'
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --push \
+            -f os/bootc/Containerfile \
+            -t '${{ steps.ref.outputs.ref }}' \
+            .
       - name: Build the shippable installer ISO from the published ref
         run: |
           GOBLINS_OS_CONTAINER_RUNTIME=docker \
           GOBLINS_OS_ARCH=${{ matrix.arch }} \
-          GOBLINS_OS_IMAGE=localhost/goblins-os:${{ matrix.arch }} \
+          GOBLINS_OS_IMAGE='${{ steps.ref.outputs.ref }}' \
+          GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 \
           GOBLINS_OS_SHIPPABLE_RELEASE=1 \
           GOBLINS_OS_BIB_SOURCE_IMAGE='${{ steps.ref.outputs.ref }}' \
           GOBLINS_OS_BIB_AUTH_FILE="$HOME/.docker/config.json" \

@@ -5,7 +5,7 @@ goblins_os_scan_artifact_secret_batch() {
   shift
 
   [ "$#" -gt 0 ] || return 0
-  awk '
+  grep -nEH '"?(OPENAI_API_KEY|AI_GATEWAY_API_KEY|OPENAI_ACCOUNT_CLIENT_SECRET)"?[[:space:]]*[:=][[:space:]]*"?[^"<[:space:]#]|sk-proj-[A-Za-z0-9_-]{24,}|sk-[A-Za-z0-9_-]{29,}' "$@" 2>/dev/null | awk '
     function allowed(line) {
       line = tolower(line)
       return line ~ /placeholder|example|secretvalue|abcdefghijklmnopqrstuvwxyz|server-side-only-gateway-key|not set|redacted|dummy|sample|template|your[-_ ]/
@@ -30,15 +30,20 @@ goblins_os_scan_artifact_secret_batch() {
       }
       return 0
     }
+    function payload(line) {
+      sub(/^[^:]+:[0-9]+:/, "", line)
+      return line
+    }
     {
-      if (allowed($0)) {
+      line = payload($0)
+      if (allowed(line)) {
         next
       }
-      if (has_active_secret_assignment($0) || has_openai_key($0)) {
-        print FILENAME ":" FNR ":" $0
+      if (has_active_secret_assignment(line) || has_openai_key(line)) {
+        print $0
       }
     }
-  ' "$@" >> "$output"
+  ' >> "$output" || true
 }
 
 goblins_os_artifact_secret_scan() {

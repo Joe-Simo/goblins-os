@@ -38,6 +38,8 @@ jobs:
         run: |
           test "$(uname -m)" = "${{ matrix.uname }}"
           test -e /dev/kvm || { echo "no /dev/kvm on this runner"; exit 1; }
+          sudo chmod a+rw /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm || { ls -l /dev/kvm; echo "/dev/kvm is not readable/writable by the runner"; exit 1; }
       - name: Free disk and add swap
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \

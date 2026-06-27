@@ -27,15 +27,17 @@ CMAP.update({" ": ("spc", False), "-": ("minus", False), ".": ("dot", False),
              "/": ("slash", False), ":": ("semicolon", True)})
 
 def _conn():
+    last_error = "socket missing"
     for _ in range(120):
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(QMP)
             f = s.makefile("rw"); f.readline()
             f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
             return s, f
-        except (FileNotFoundError, ConnectionRefusedError):
+        except OSError as err:
+            last_error = repr(err)
             time.sleep(1)
-    raise SystemExit("QMP never came up")
+    raise SystemExit(f"QMP never came up at {QMP}; last connection error: {last_error}")
 
 S, F = _conn()
 def cmd(ex, **a):

@@ -25,12 +25,64 @@ PORT="${HTTP_PORT:-8099}"
 DATE="${RUN_DATE:?set RUN_DATE=YYYY-MM-DD (scripts cannot read the clock)}"
 RUN_DIR="$REPO/os/screenshots/hardware-gate/$ARCH/$DATE"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+HTTPD=""
+QEMU_PID=""
+
+dump_file_tail() {
+  local label="$1"
+  local path="$2"
+  if [ -s "$path" ]; then
+    echo "---- $label: $path ----"
+    tail -n 200 "$path" || true
+  else
+    echo "---- $label missing or empty: $path ----"
+  fi
+}
+
+dump_capture_logs() {
+  echo "QEMU startup diagnostics"
+  command -v "$QEMU" >/dev/null 2>&1 && "$QEMU" --version | head -n 1 || true
+  [ -e /dev/kvm ] && ls -l /dev/kvm || true
+  [ -n "${QEMU_PID:-}" ] && ps -p "$QEMU_PID" -o pid,stat,etime,command || true
+  [ -S "$WORK/qmp.sock" ] && echo "QMP socket exists: $WORK/qmp.sock" || echo "QMP socket missing: $WORK/qmp.sock"
+  dump_file_tail "qemu.log" "$WORK/qemu.log"
+  dump_file_tail "serial.log" "$WORK/serial.log"
+  dump_file_tail "httpd.log" "$WORK/httpd.log"
+}
+
+cleanup() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    dump_capture_logs
+  fi
+  [ -n "${QEMU_PID:-}" ] && kill "$QEMU_PID" 2>/dev/null || true
+  [ -n "${HTTPD:-}" ] && kill "$HTTPD" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 [ -f "$ISO" ] || { echo "missing ISO $ISO"; exit 1; }
 ISO_SHA="$(awk '{print $1; exit}' "$SHA_FILE")"
 
 # Accel: KVM on Linux, HVF on macOS.
-if [ "$(uname -s)" = "Linux" ] && [ -e /dev/kvm ]; then ACCEL=kvm; CPU=host; else ACCEL=hvf; CPU=host; fi
+case "$(uname -s)" in
+  Linux)
+    if [ ! -e /dev/kvm ] || [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+      echo "native Linux capture requires readable/writable /dev/kvm for QEMU/KVM" >&2
+      [ -e /dev/kvm ] && ls -l /dev/kvm >&2 || true
+      exit 1
+    fi
+    ACCEL=kvm
+    CPU=host
+    ;;
+  Darwin)
+    ACCEL=hvf
+    CPU=host
+    ;;
+  *)
+    echo "unsupported capture host $(uname -s): need native Linux/KVM or macOS/HVF" >&2
+    exit 1
+    ;;
+esac
 pick() { for f in "$@"; do [ -n "$f" ] && [ -f "$f" ] && { echo "$f"; return 0; }; done; return 1; }
 VARS_TEMPLATE=""
 if [ "$ARCH" = aarch64 ]; then
@@ -63,7 +115,6 @@ qemu-img create -f qcow2 "$WORK/scratch.qcow2" 16G >/dev/null
 # Serve orchestrator + receive capture signals.
 ( cd "$WORK" && cp "$HERE/in-session-orchestrator.sh" orchestrator.sh && python3 -m http.server "$PORT" --bind 0.0.0.0 >"$WORK/httpd.log" 2>&1 ) &
 HTTPD=$!
-trap 'kill $HTTPD 2>/dev/null || true' EXIT
 
 rm -f "$WORK/qmp.sock"
 "$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp 4 -m 5120 "${PFLASH[@]}" \
@@ -73,7 +124,6 @@ rm -f "$WORK/qmp.sock"
   -device virtio-gpu-pci -device qemu-xhci -device usb-tablet -device usb-kbd \
   -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &
 QEMU_PID=$!
-trap 'kill $QEMU_PID $HTTPD 2>/dev/null || true' EXIT
 
 export GOS_QMP="$WORK/qmp.sock" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT"
 # Phase the run with the QMP driver (waits for Anaconda, drives it, waits for the

@@ -34,13 +34,15 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-27)
 
-Proven code head is `7c8c76d` on `main`. The latest pass shipped the Sound
-Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
-name, added the App Exposé / Hot Corner desktop-proof hooks, and changed the
-image workflow to avoid exporting the full bootc image into the runner daemon.
-Host gates for that source: `cargo fmt --all --check`,
-`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, `git diff --check`, and
-`goblins-os-verify --source-root .` → **blocked=0 (1494)**.
+Proven code head before the current QMP-startup fix is `d9354b0` on `main`. The
+latest completed source passes shipped the Sound Recognition and Live Captions
+substrates, fixed the Fedora 44 `sushi` package name, added the App Exposé / Hot
+Corner desktop-proof hooks, changed the image workflow to avoid exporting the
+full bootc image into the runner daemon, and added nonblocking BuildKit GHA
+cache scopes for the expensive bootc image builds. Host gates for that source:
+`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `git diff --check`, and
+`goblins-os-verify --source-root .` → **blocked=0 (1553)**.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,
@@ -138,12 +140,37 @@ success path. The CI speed pass is source-gated too: `build.yml`,
 bootc image builds; the hardware gate also cancels superseded manual runs by
 ref/date. This does **not** make the installed OS faster and does **not** prove
 Firewall shipped; it only reduces repeated CI/image-build work on later runs.
+Hardware-gate run `28295478507` at `d9354b0` proved the action-based image push
+and shippable ISO build, then failed at display-backed VM startup with `QMP never
+came up` before any in-guest firewall POST ran. The current local fix prepares
+readable/writable `/dev/kvm` for the GitHub runner, makes the Linux harness
+fail before QEMU unless KVM is readable/writable, and prints `qemu.log`,
+`serial.log`, and `httpd.log` on nonzero capture exits so a failed QMP startup
+is diagnostic instead of opaque. This fix is source-gated only so far; Firewall
+remains `in-progress` until a fresh hardware-gate run produces a passing
+`firewall-live-toggle-proof.json`. The same local pass fixed release-check
+plumbing exposed while validating the change: generated artifact secret scans now
+prefilter only active secret assignments and real-length OpenAI key shapes before
+the existing fail-closed validator, the BuildKit cache checks escape GitHub
+expressions correctly under shell `eval`, and the selftest status check matches
+the current Buildx `target: selftest` workflow. Local source gates for this
+pass: scoped `git diff --check` over the changed files, `cargo fmt --all --check`,
+`bash -n` for the capture and release-check scripts, `python3 -m py_compile` for
+the capture driver, YAML parse for the edited workflows, fake-key
+positive/negative artifact secret-scan checks, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, and `goblins-os-verify --source-root .` →
+**blocked=0 (1558)**. `verify-shipping-status.sh`
+now completes locally but remains **FAIL** on the known release-proof blockers:
+the stale aarch64 BIB manifest local-ref row, missing complete aarch64/x86_64
+hardware-gate screenshot runs, and missing complete signoff rows.
 `systemd-analyze verify` is not available on this macOS host.
 
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: firewall CI image/render proof is green and the
-   hardware-gate export unblock is pushed; next dispatch the display-backed VM
-   capture again and inspect `firewall-live-toggle-proof.json` to prove the live
+   hardware-gate image/ISO path is past the export blocker; next push/dispatch
+   the QMP-startup fix, inspect the display-backed VM logs if startup still
+   fails, and inspect `firewall-live-toggle-proof.json` only if the session
+   reaches the in-guest firewall toggle. That proof must show the live
    systemd/polkit oneshot success path for the firewall toggle.
    Only flip it to `shipped` if the render, live POST, and polkit oneshot path are green. Then
    continue one feature at a time — IME set, Focus arm/disarm, per-app permission

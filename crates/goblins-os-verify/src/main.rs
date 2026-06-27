@@ -4936,6 +4936,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-kvm-runner-access-prep",
+            "sudo chmod a+rw /dev/kvm",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-kvm-runner-access-assertion",
+            "test -r /dev/kvm && test -w /dev/kvm",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
             "hardware-gate-skips-local-iso-image-build",
             "GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1",
         ),
@@ -5033,6 +5043,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-firewall-proof",
             "HONESTY GUARD: missing or failing live firewall toggle proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-prints-qemu-startup-diagnostics",
+            "QEMU startup diagnostics",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-prints-qemu-and-serial-logs",
+            "qemu.log",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-qmp-startup-error-includes-last-error",
+            "last connection error",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),

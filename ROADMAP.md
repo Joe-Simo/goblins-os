@@ -94,31 +94,36 @@ The installed-image self-test now exercises `/v1/firewall/status` and the
 the local aarch64 Docker bootc `selftest` target passes with the expected
 non-systemd honest 502 firewall-toggle degradation. The local aarch64 Docker
 `settings-interactions` render target now captures the Security firewall switch
-before click and after the real `/v1/firewall/enabled` failure/revert path. This
-does **not** replace the missing CI/qemu proof of the GTK render, polkit oneshot
-path, or live toggle. The image workflow now has a source-gated explicit
-`[image]` push marker so the CI/qemu image proof can be started when manual
-workflow dispatch is unavailable in the local tool session; unmarked pushes still
-run only the fast Rust gate, and installer ISO artifacts remain manual-only. The
-first opt-in CI run (`28289894898`) proved the aarch64 image build and packaging
-verifier, then exposed a BuildKit overlay-depth failure before the installed
-self-test script could run; the CI-only self-test/render suffixes now collapse
-their chmod/script execution into fewer layers. The collapsed local aarch64
-Docker `selftest` target passes; a fresh CI image proof is still required.
-Follow-up artifact inspection on green run `28290207130` found the standard
-`goblins-os-screenshots-*` artifacts were complete/nonblank and file-set matched,
-but did **not** include the firewall interaction captures; the workflow now
-uploads a separate `goblins-os-settings-interactions-*` artifact and needs a
-fresh proof before the firewall write pass can advance.
+before click and after the real `/v1/firewall/enabled` failure/revert path. The
+image workflow now has a source-gated explicit `[image]` push marker so the
+CI/qemu image proof can be started when manual workflow dispatch is unavailable
+in the local tool session; unmarked pushes still run only the fast Rust gate, and
+installer ISO artifacts remain manual-only. The first opt-in CI run
+(`28289894898`) proved the aarch64 image build and packaging verifier, then
+exposed a BuildKit overlay-depth failure before the installed self-test script
+could run; the CI-only self-test/render suffixes now collapse their chmod/script
+execution into fewer layers, and the collapsed local aarch64 Docker `selftest`
+target passes. CI image proof is now green for run `28290845730` at `a97f164`:
+Rust, image build, packaging verifier, installed self-test, standard design
+screenshots, Settings interaction screenshots, and desktop-proof screenshots
+passed on both `x86_64` and `aarch64`; `installer-iso` was skipped as intended.
+Inspected artifacts: `goblins-os-screenshots-*` (110 PNGs each),
+`goblins-os-settings-interactions-*` (6 PNGs each, including
+`118-settings-firewall-before.png` and `119-settings-firewall-toggle-failed.png`),
+and `goblins-os-desktop-screenshots-*` (18 PNGs each) all had matching
+cross-arch file sets and nonblank pixel samples. This proves the CI GTK render,
+installed self-test, and honest failure/revert interaction path; it does **not**
+prove the live systemd/polkit oneshot success path, so Firewall remains
+`in-progress` until live POST + polkit toggle proof is green.
 `systemd-analyze verify` is not available on this macOS host.
 
 **NEXT — pick up exactly here:**
-1. **Gated writes pass**: first run the CI/qemu interaction proof for the
-   firewall toggle; only flip it to `shipped` if the render, live POST, and
-   polkit oneshot path are green. Then continue one feature at a time — IME set,
-   Focus arm/disarm, per-app permission revoke, multi-display apply, and
-   keyboard rebinding. Do not flip any of these from `in-progress` until the
-   write path and qemu interaction proof are green.
+1. **Gated writes pass**: firewall CI image/render proof is green; next prove the
+   live systemd/polkit oneshot success path for the firewall toggle. Only flip it
+   to `shipped` if the render, live POST, and polkit oneshot path are green. Then
+   continue one feature at a time — IME set, Focus arm/disarm, per-app permission
+   revoke, multi-display apply, and keyboard rebinding. Do not flip any of these
+   from `in-progress` until the write path and qemu interaction proof are green.
 2. **Batch 4 engine UI pass**: build the deferred engine UIs/overlays one feature
    at a time (Voice Control, Live Captions, Switch Control, Sound Recognition,
    Today/Widgets, Text Shortcuts/IBus, Visual Look Up), with host-tested core

@@ -78,8 +78,8 @@ not mark Batch 5 shipped.
   Accessibility rows, Firewall, Keyboard shortcuts, Focus (substrate+gschema),
   Migration (substrate), Multi-display (read side via `displays.rs`), Personal
   Hotspot, Per-app privacy, Keychain. **Gated WRITES remain qemu-pending** for
-  firewall toggle, IME set, focus arm, and per-app revoke; multi-display apply
-  and keyboard rebind remain TODO.
+  firewall toggle, IME set, focus arm, per-app revoke, multi-display apply, and
+  keyboard rebind.
 - **Batch 4 (engines) — 7 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**
   Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today,
   Sound Recognition, Live Captions.

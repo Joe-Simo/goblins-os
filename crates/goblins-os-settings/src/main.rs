@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 use std::{
@@ -547,7 +547,7 @@ struct InputSourcesStatus {
     detail: String,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq, Debug)]
 struct InputSourceEntry {
     kind: String,
     id: String,
@@ -688,6 +688,14 @@ struct InputPreferenceOutcome {
     ok: bool,
     #[allow(dead_code)]
     target: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct InputSourcesOutcome {
+    ok: bool,
+    #[allow(dead_code)]
+    sources: Vec<InputSourceEntry>,
     text: String,
 }
 
@@ -11291,8 +11299,6 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
         "The Num Lock restore preference is not reported by this session.",
     );
 
-    // Read-only list of configured input sources (xkb layouts + IBus engines). Adding,
-    // reordering, and re-enabling Super+Space switching are the deliberate follow-up.
     let input_sources = &input.input_sources;
     panel.append(&label("Input sources", &["gos-subsection-title"]));
     if !input_sources.schema_available {
@@ -11303,15 +11309,121 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
             "No input sources are configured for this session.",
         ));
     } else {
-        for source in &input_sources.sources {
-            panel.append(&system_row(
-                &input_source_label(&source.kind, &source.id),
-                &format!("{} · {}", source.kind, source.id),
+        for (index, source) in input_sources.sources.iter().enumerate() {
+            panel.append(&input_source_row(
+                &core_url,
+                &input_sources.sources,
+                index,
+                source,
             ));
         }
     }
 
     append_keyboard_shortcuts(panel, state);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn input_source_row(
+    core_url: &str,
+    sources: &[InputSourceEntry],
+    index: usize,
+    source: &InputSourceEntry,
+) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let title = input_source_label(&source.kind, &source.id);
+    let detail_text = settings_detail_display_copy(&format!(
+        "{} · {} · source {} of {}.",
+        source.kind.to_ascii_uppercase(),
+        source.id,
+        index + 1,
+        sources.len()
+    ));
+
+    let row = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-input-source-row");
+    set_accessible_label_description(&row, &title, &detail_text);
+
+    let head = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+    let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    copy.set_hexpand(true);
+    copy.append(&label(&title, &["gos-row-title"]));
+    let status = label(&detail_text, &["gos-row-copy"]);
+    copy.append(&status);
+    head.append(&copy);
+
+    let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    actions.set_halign(gtk4::Align::End);
+    actions.set_valign(gtk4::Align::Center);
+
+    for (text, tooltip, updated) in [
+        (
+            "Move up",
+            "Move this input source earlier in the order.",
+            reordered_input_sources(sources, index, InputSourceMove::Up),
+        ),
+        (
+            "Move down",
+            "Move this input source later in the order.",
+            reordered_input_sources(sources, index, InputSourceMove::Down),
+        ),
+        (
+            "Remove",
+            "Remove this input source from the session order.",
+            input_sources_without(sources, index),
+        ),
+    ] {
+        actions.append(&input_source_action_button(
+            core_url, text, tooltip, &title, &row, &status, updated,
+        ));
+    }
+
+    head.append(&actions);
+    row.append(&head);
+    row
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn input_source_action_button(
+    core_url: &str,
+    text: &str,
+    tooltip: &str,
+    source_title: &str,
+    row: &gtk4::Box,
+    status: &gtk4::Label,
+    updated_sources: Option<Vec<InputSourceEntry>>,
+) -> gtk4::Button {
+    use gtk4::prelude::*;
+
+    let action = button(text, &["gos-permission-action", "gos-input-source-action"]);
+    action.set_tooltip_text(Some(tooltip));
+    action.set_sensitive(updated_sources.is_some());
+    set_accessible_label_description(&action, text, tooltip);
+
+    let Some(updated_sources) = updated_sources else {
+        return action;
+    };
+
+    let core_url = core_url.to_string();
+    let title = source_title.to_string();
+    let row_accessibility = row.clone();
+    let status = status.clone();
+    action.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        let detail = match set_input_sources(&core_url, &updated_sources) {
+            Ok(message) => settings_detail_display_copy(&message),
+            Err(error) => {
+                eprintln!("settings_control_change_rejected title={title:?} error={error:?}");
+                settings_detail_display_copy(&setting_change_rejected_detail(&error))
+            }
+        };
+        status.set_text(&detail);
+        set_accessible_label_description(&row_accessibility, &title, &detail);
+        button.set_sensitive(true);
+    });
+
+    action
 }
 
 /// Read-only reference of the Goblins window-management shortcuts (macOS "Keyboard ▸
@@ -12383,6 +12495,49 @@ fn input_source_label(kind: &str, id: &str) -> String {
         ("ibus", _) => format!("Input method “{id}”"),
         _ => format!("{kind}: {id}"),
     }
+}
+
+#[derive(Clone, Copy)]
+enum InputSourceMove {
+    Up,
+    Down,
+}
+
+fn reordered_input_sources(
+    sources: &[InputSourceEntry],
+    index: usize,
+    direction: InputSourceMove,
+) -> Option<Vec<InputSourceEntry>> {
+    let target = match direction {
+        InputSourceMove::Up => index.checked_sub(1)?,
+        InputSourceMove::Down => {
+            let target = index.checked_add(1)?;
+            if target >= sources.len() {
+                return None;
+            }
+            target
+        }
+    };
+    if index >= sources.len() {
+        return None;
+    }
+
+    let mut updated = sources.to_vec();
+    updated.swap(index, target);
+    Some(updated)
+}
+
+fn input_sources_without(
+    sources: &[InputSourceEntry],
+    index: usize,
+) -> Option<Vec<InputSourceEntry>> {
+    if sources.len() <= 1 || index >= sources.len() {
+        return None;
+    }
+
+    let mut updated = sources.to_vec();
+    updated.remove(index);
+    Some(updated)
 }
 
 fn input_source_summary_spec(input: Option<&InputStatus>) -> InputSummarySpec {
@@ -16902,7 +17057,28 @@ fn set_input_preference(
     }
 }
 
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_input_sources(base_url: &str, sources: &[InputSourceEntry]) -> Result<String, String> {
+    let body = serde_json::json!({
+        "sources": sources,
+    })
+    .to_string();
+    let response = http_post_json_response(base_url, "/v1/input/sources", &body)
+        .map_err(|error| format!("Goblins OS could not reach the input manager: {error}."))?;
+    let outcome = input_sources_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
 fn input_preference_outcome(body: &[u8]) -> Result<InputPreferenceOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+fn input_sources_outcome(body: &[u8]) -> Result<InputSourcesOutcome, CoreFetchError> {
     serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
 }
 
@@ -20912,6 +21088,57 @@ mod tests {
         assert!(super::input_source_label("xkb", "cz").contains("cz"));
         assert!(super::input_source_label("ibus", "table:wubi").contains("table:wubi"));
         assert_eq!(super::input_source_label("other", "x"), "other: x");
+    }
+
+    #[test]
+    fn input_source_write_helpers_reorder_and_keep_one_source() {
+        let sources = vec![
+            super::InputSourceEntry {
+                kind: "xkb".to_string(),
+                id: "us".to_string(),
+            },
+            super::InputSourceEntry {
+                kind: "ibus".to_string(),
+                id: "libpinyin".to_string(),
+            },
+            super::InputSourceEntry {
+                kind: "ibus".to_string(),
+                id: "hangul".to_string(),
+            },
+        ];
+
+        let moved_up =
+            super::reordered_input_sources(&sources, 1, super::InputSourceMove::Up).unwrap();
+        assert_eq!(moved_up[0], sources[1]);
+        assert_eq!(moved_up[1], sources[0]);
+
+        let moved_down =
+            super::reordered_input_sources(&sources, 1, super::InputSourceMove::Down).unwrap();
+        assert_eq!(moved_down[1], sources[2]);
+        assert_eq!(moved_down[2], sources[1]);
+
+        assert!(super::reordered_input_sources(&sources, 0, super::InputSourceMove::Up).is_none());
+        assert!(
+            super::reordered_input_sources(&sources, 2, super::InputSourceMove::Down).is_none()
+        );
+        assert!(super::reordered_input_sources(&sources, 9, super::InputSourceMove::Up).is_none());
+
+        let removed = super::input_sources_without(&sources, 1).unwrap();
+        assert_eq!(
+            removed,
+            vec![
+                super::InputSourceEntry {
+                    kind: "xkb".to_string(),
+                    id: "us".to_string(),
+                },
+                super::InputSourceEntry {
+                    kind: "ibus".to_string(),
+                    id: "hangul".to_string(),
+                },
+            ]
+        );
+        assert!(super::input_sources_without(&sources[0..1], 0).is_none());
+        assert!(super::input_sources_without(&sources, 9).is_none());
     }
 
     #[test]

@@ -7896,6 +7896,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "Input sources",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-input-sources-write-route",
+            "/v1/input/sources",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/input.rs"),
+            "core-input-sources-write-allowlist",
+            "normalize_input_sources",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/input.rs"),
+            "core-input-sources-gvariant-encoder",
+            "encode_input_sources",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-input-sources-write-row",
+            "input_source_action_button",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-input-sources-write-route",
+            "/v1/input/sources",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-security-firewall-status-row",
             "/v1/firewall/status",

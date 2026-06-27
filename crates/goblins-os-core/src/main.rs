@@ -79,7 +79,7 @@ use crate::{
     displays::displays_status,
     firewall::{firewall_status, set_firewall_enabled},
     hardware::hardware_status,
-    input::{input_status, set_input_preference},
+    input::{input_status, set_input_preference, set_input_sources},
     install_targets::{install_progress_status, install_target_status, prepare_install},
     installer::{complete_installer, installer_readiness},
     model_manager::{install_local_model, local_model_catalog},
@@ -194,6 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/audio/preference", post(set_sound_preference))
         .route("/v1/input/status", get(input_status))
         .route("/v1/input/preference", post(set_input_preference))
+        .route("/v1/input/sources", post(set_input_sources))
         .route("/v1/privacy/status", get(privacy_status))
         .route("/v1/privacy", post(set_privacy))
         .route("/v1/privacy/desktop", post(set_desktop_privacy))

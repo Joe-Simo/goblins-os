@@ -165,6 +165,22 @@ the stale aarch64 BIB manifest local-ref row, missing complete aarch64/x86_64
 hardware-gate screenshot runs, and missing complete signoff rows.
 `systemd-analyze verify` is not available on this macOS host.
 
+Current implementation continuation: the IME/input-source **set** substrate is
+now source-gated but not shipped. Core exposes `/v1/input/sources`, validates the
+existing configured sources with a narrow `xkb`/`ibus` allowlist, encodes the
+`a(ss)` GVariant, and honestly fails when gsettings or the schema/key is absent.
+Settings ▸ Keyboard now adds source-row Move up / Move down / Remove controls
+against that route; the last source cannot be removed, and this pass does not
+install new CJK engines, add a source picker, change IME environment defaults, or
+restore `Super+Space`. Local source gates: `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (1563)**, scoped
+`git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
+the Rust 1.88 GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
+GTK render, live source switching, menu-bar indicator, candidate window, and
+input-source interaction proof remain CI/qemu-pending.
+
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: firewall CI image/render proof is green and the
    hardware-gate image/ISO path is past the export blocker; next push/dispatch
@@ -173,7 +189,7 @@ hardware-gate screenshot runs, and missing complete signoff rows.
    reaches the in-guest firewall toggle. That proof must show the live
    systemd/polkit oneshot success path for the firewall toggle.
    Only flip it to `shipped` if the render, live POST, and polkit oneshot path are green. Then
-   continue one feature at a time — IME set, Focus arm/disarm, per-app permission
+   prove the IME set interaction in CI/qemu, then continue one feature at a time — Focus arm/disarm, per-app permission
    revoke, multi-display apply, and keyboard rebinding. Do not flip any of these
    from `in-progress` until the write path and qemu interaction proof are green.
 2. **Batch 4 engine UI pass**: build the deferred engine UIs/overlays one feature
@@ -209,7 +225,8 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 ### `in-progress` Input sources / IME switching (CJK)
 - [x] **Read substrate** (`crates/goblins-os-core/src/input.rs`): the `a(ss)` `org.gnome.desktop.input-sources sources` GVariant is parsed into ordered `InputSourceEntry` and surfaced in `/v1/input/status`. Pure parser unit-tested on the host.
 - [x] **Settings list (GTK) shipped**: Settings ▸ Keyboard now renders a read-only **Input sources** list (friendly names via a unit-tested `input_source_label`, e.g. xkb `us` → "English (US)", ibus `libpinyin` → "Pinyin (Chinese)", honest raw-id fallback), with honest unavailable/empty rows. Compile- + `clippy -D warnings`-clean in the native container; 93 settings host tests; verify gate added.
-- [ ] **Deferred (risk-gated):** install the IBus CJK engines (`ibus-libpinyin`/`-anthy`/`-hangul`/`-gtk4`), the Containerfile IME-env relaxation, the add/reorder **set**-API + UI controls, and re-enabling `Super+Space` switching — the last reverses an intentional boot/launcher decision, so it lands deliberately, not blind.
+- [x] **Set/reorder/remove substrate source-gated (CI/qemu-pending):** core exposes `/v1/input/sources`, validates only `xkb`/`ibus` source entries, encodes the `a(ss)` GVariant, and returns honest failure when gsettings or `org.gnome.desktop.input-sources sources` is absent. Settings ▸ Keyboard adds Move up / Move down / Remove row controls for existing configured sources only; the last source cannot be removed. Host tests cover `a(ss)` encode/decode, allowlist, reorder/remove, and the last-source rule; native GTK clippy passes in the Rust 1.88 container; verify gate added. **Not shipped** until CI/qemu proves render + interaction + live source switching.
+- [ ] **Deferred (risk-gated):** install the IBus CJK engines (`ibus-libpinyin`/`-anthy`/`-hangul`/`-gtk4`), the Containerfile IME-env relaxation, an **Add input source…** sheet that lists only installed engines, the menu-bar active-source indicator, and re-enabling `Super+Space` switching — the last reverses an intentional boot/launcher decision, so it lands deliberately, not blind.
 - **Packages:** `ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, `ibus-gtk4`, `ibus-setup` (CJK engines verified fc44).
 - **dconf/gsettings:** `org.gnome.desktop.input-sources` `sources` (`a(ss)`), `mru-sources`, `per-window`, `xkb-options`, `show-all-sources`; **revert** the `switch-input-source`/`-backward` emptying in `10-goblins-os-desktop:50-51` — bind `['<Super>space']` **only when >1 source**, and resolve `Super+Space` ownership with the launcher.
 - **Files:** `os/bootc/Containerfile` (install 5 ibus packages; relax the IME-disabling env at lines 307-311 so `GTK_IM_MODULE`=ibus and IBus autostarts), `os/dconf/db/local.d/10-goblins-os-desktop`, `crates/goblins-os-core/src/input.rs` (`INPUT_SOURCES_SCHEMA` + `a(ss)` encode/decode, list/add/remove/reorder/set-current, `ibus list-engine` probe), `crates/goblins-os-core/src/main.rs` (extend existing `/v1/input/*` payloads), `crates/goblins-os-settings/src/main.rs` (real ordered-source list replacing the placeholder `input_source_summary_spec`), `os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js` (active-source abbreviation indicator when >1 source).

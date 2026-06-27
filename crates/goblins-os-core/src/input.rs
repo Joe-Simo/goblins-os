@@ -60,7 +60,7 @@ pub struct TouchpadInputStatus {
 /// `org.gnome.desktop.input-sources sources` — e.g. `("xkb", "us")` or
 /// `("ibus", "libpinyin")`. The read substrate for IME/CJK; add/reorder + the
 /// `Super+Space` switching are the deferred (boot/keybinding-sensitive) follow-up.
-#[derive(Serialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq, Debug)]
 pub struct InputSourceEntry {
     kind: String,
     id: String,
@@ -77,6 +77,11 @@ pub struct InputSourcesStatus {
 pub struct SetInputPreferenceRequest {
     target: InputPreferenceTarget,
     value: Value,
+}
+
+#[derive(Deserialize)]
+pub struct SetInputSourcesRequest {
+    sources: Vec<InputSourceEntry>,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -101,6 +106,13 @@ enum InputPreferenceTarget {
 pub struct InputPreferenceOutcome {
     ok: bool,
     target: &'static str,
+    text: String,
+}
+
+#[derive(Serialize)]
+pub struct InputSourcesOutcome {
+    ok: bool,
+    sources: Vec<InputSourceEntry>,
     text: String,
 }
 
@@ -144,6 +156,12 @@ pub async fn set_input_preference(
     Json(request): Json<SetInputPreferenceRequest>,
 ) -> (StatusCode, Json<InputPreferenceOutcome>) {
     set_input_preference_outcome(request)
+}
+
+pub async fn set_input_sources(
+    Json(request): Json<SetInputSourcesRequest>,
+) -> (StatusCode, Json<InputSourcesOutcome>) {
+    set_input_sources_outcome(request)
 }
 
 fn build_input_status() -> InputStatus {
@@ -362,6 +380,148 @@ fn set_input_preference_outcome(
             }),
         ),
     }
+}
+
+fn set_input_sources_outcome(
+    request: SetInputSourcesRequest,
+) -> (StatusCode, Json<InputSourcesOutcome>) {
+    let sources = match normalize_input_sources(request.sources) {
+        Ok(sources) => sources,
+        Err(text) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(InputSourcesOutcome {
+                    ok: false,
+                    sources: Vec::new(),
+                    text,
+                }),
+            );
+        }
+    };
+
+    if gsettings(&["list-schemas"]).is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(InputSourcesOutcome {
+                ok: false,
+                sources,
+                text: "Desktop preferences are not ready, so input sources cannot be changed in this session.".to_string(),
+            }),
+        );
+    }
+
+    let schema = schema_snapshot(true, INPUT_SOURCES_SCHEMA);
+    if !schema.available || !schema.has_key("sources") {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(InputSourcesOutcome {
+                ok: false,
+                sources,
+                text: "Input sources are not ready because the desktop session does not report the input source list.".to_string(),
+            }),
+        );
+    }
+
+    let encoded = encode_input_sources(&sources);
+    match gsettings(&["set", INPUT_SOURCES_SCHEMA, "sources", &encoded]) {
+        Ok(_) => {
+            let count = sources.len();
+            (
+                StatusCode::OK,
+                Json(InputSourcesOutcome {
+                    ok: true,
+                    sources,
+                    text: if count == 1 {
+                        "Input sources were updated. 1 source is configured.".to_string()
+                    } else {
+                        format!("Input sources were updated. {count} sources are configured.")
+                    },
+                }),
+            )
+        }
+        Err(GSettingsError::Missing) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(InputSourcesOutcome {
+                ok: false,
+                sources,
+                text: "Desktop preferences are not ready, so input sources cannot be changed in this session.".to_string(),
+            }),
+        ),
+        Err(GSettingsError::Failed(detail)) => (
+            StatusCode::BAD_GATEWAY,
+            Json(InputSourcesOutcome {
+                ok: false,
+                sources,
+                text: if detail.is_empty() {
+                    "Input sources could not be saved by the desktop session.".to_string()
+                } else {
+                    format!("Input sources could not be saved: {detail}")
+                },
+            }),
+        ),
+    }
+}
+
+fn normalize_input_sources(
+    sources: Vec<InputSourceEntry>,
+) -> Result<Vec<InputSourceEntry>, String> {
+    if sources.is_empty() {
+        return Err("At least one input source must remain configured.".to_string());
+    }
+    if sources.len() > 12 {
+        return Err("Input sources are limited to 12 entries.".to_string());
+    }
+
+    let mut normalized = Vec::with_capacity(sources.len());
+    for source in sources {
+        let kind = source.kind.trim().to_ascii_lowercase();
+        let id = source.id.trim().to_string();
+        if kind != "xkb" && kind != "ibus" {
+            return Err(format!(
+                "Input source kind '{kind}' is not supported by Goblins OS."
+            ));
+        }
+        if !input_source_id_is_safe(&id) {
+            return Err(
+                "Input source ids must be 1-80 ASCII letters, numbers, '.', '-', '_', '+', ':', or '@'."
+                    .to_string(),
+            );
+        }
+        let entry = InputSourceEntry { kind, id };
+        if normalized.iter().any(|candidate| candidate == &entry) {
+            return Err("Input sources cannot contain duplicates.".to_string());
+        }
+        normalized.push(entry);
+    }
+
+    Ok(normalized)
+}
+
+fn input_source_id_is_safe(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 80
+        && id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+' | b':' | b'@')
+        })
+}
+
+fn encode_input_sources(sources: &[InputSourceEntry]) -> String {
+    let entries = sources
+        .iter()
+        .map(|source| {
+            format!(
+                "('{}', '{}')",
+                escape_gvariant_string(&source.kind),
+                escape_gvariant_string(&source.id)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{entries}]")
+}
+
+fn escape_gvariant_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 impl SchemaSnapshot {
@@ -687,8 +847,9 @@ fn gsettings_error_detail(stderr: &str, stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_preference_value, input_target_spec, parse_gsettings_bool, parse_gsettings_f64,
-        parse_gsettings_u32, parse_preference_value, InputPreferenceTarget, InputPreferenceValue,
+        encode_input_sources, encode_preference_value, input_target_spec, normalize_input_sources,
+        parse_gsettings_bool, parse_gsettings_f64, parse_gsettings_u32, parse_preference_value,
+        InputPreferenceTarget, InputPreferenceValue, InputSourceEntry,
     };
     use serde_json::json;
 
@@ -728,7 +889,7 @@ mod tests {
 
     #[test]
     fn parses_input_sources_a_ss_gvariant() {
-        use super::{parse_input_sources, InputSourceEntry};
+        use super::parse_input_sources;
         let parsed = parse_input_sources("[('xkb', 'us'), ('ibus', 'libpinyin')]");
         assert_eq!(
             parsed,
@@ -761,6 +922,69 @@ mod tests {
         assert_eq!(
             encode_preference_value(&InputPreferenceValue::F64(-0.25)),
             "-0.25"
+        );
+    }
+
+    #[test]
+    fn normalizes_input_sources_for_gsettings_writes() {
+        let sources = normalize_input_sources(vec![
+            InputSourceEntry {
+                kind: " XKB ".into(),
+                id: " us ".into(),
+            },
+            InputSourceEntry {
+                kind: "ibus".into(),
+                id: "table:wubi".into(),
+            },
+        ])
+        .expect("valid sources");
+        assert_eq!(
+            sources,
+            vec![
+                InputSourceEntry {
+                    kind: "xkb".into(),
+                    id: "us".into()
+                },
+                InputSourceEntry {
+                    kind: "ibus".into(),
+                    id: "table:wubi".into()
+                },
+            ]
+        );
+        assert!(normalize_input_sources(Vec::new()).is_err());
+        assert!(normalize_input_sources(vec![InputSourceEntry {
+            kind: "xkb".into(),
+            id: "us;rm".into(),
+        }])
+        .is_err());
+        assert!(normalize_input_sources(vec![
+            InputSourceEntry {
+                kind: "xkb".into(),
+                id: "us".into(),
+            },
+            InputSourceEntry {
+                kind: "xkb".into(),
+                id: "us".into(),
+            },
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn encodes_input_sources_as_a_ss_gvariant() {
+        let sources = vec![
+            InputSourceEntry {
+                kind: "xkb".into(),
+                id: "us".into(),
+            },
+            InputSourceEntry {
+                kind: "ibus".into(),
+                id: "libpinyin".into(),
+            },
+        ];
+        assert_eq!(
+            encode_input_sources(&sources),
+            "[('xkb', 'us'), ('ibus', 'libpinyin')]"
         );
     }
 }

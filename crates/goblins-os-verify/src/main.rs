@@ -7639,6 +7639,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "org.goblins.os.a11y.switch-control",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-today-route",
+            "/v1/today/status",
+        ),
+        contains_check(
+            root.join("os/glib-schemas/org.goblins.os.today.gschema.xml"),
+            "today-gschema-present",
+            "org.goblins.os.today",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-privacy-app-permissions",
             "App permissions",

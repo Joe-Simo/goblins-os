@@ -38,6 +38,7 @@ mod switch_control;
 mod system;
 mod system_image;
 mod text_shortcuts;
+mod today;
 mod vision;
 mod voice;
 mod voice_control;
@@ -206,6 +207,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/v1/vision/status", get(vision::vision_status))
         .route("/v1/ai/visual-lookup", post(vision::visual_lookup))
+        .route("/v1/today/status", get(today::today_status))
+        .route("/v1/today/layout", post(today::set_today_layout))
         .route(
             "/v1/accessibility/switch-control/status",
             get(switch_control::switch_control_status),

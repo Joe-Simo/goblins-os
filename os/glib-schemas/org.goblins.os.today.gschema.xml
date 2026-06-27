@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.goblins.os.today" path="/org/goblins/os/today/">
+    <key name="enabled-widgets" type="as">
+      <default>['date', 'world-clock', 'weather', 'calendar', 'brief']</default>
+      <summary>Enabled Today widgets, in order</summary>
+      <description>The ordered list of glance widgets shown in the Today panel.</description>
+    </key>
+    <key name="brief-enabled" type="b">
+      <default>true</default>
+      <summary>Show the on-device daily brief</summary>
+      <description>Whether the Today panel includes the on-device-AI daily brief (gated on the resident model).</description>
+    </key>
+    <key name="open-on-edge-swipe" type="b">
+      <default>true</default>
+      <summary>Open Today on a right-edge swipe</summary>
+      <description>Whether a swipe from the right screen edge opens the Today panel.</description>
+    </key>
+  </schema>
+</schemalist>

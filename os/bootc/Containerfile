@@ -86,6 +86,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       pipewire-alsa \
       pipewire-pulseaudio \
       pipewire-utils \
+      firewalld \
       polkit \
       wireplumber \
       xdg-desktop-portal \
@@ -135,6 +136,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       seahorse \
       tesseract \
       tesseract-langpack-eng \
+      firewalld \
       wl-clipboard \
       mesa-vulkan-drivers \
       vulkan-tools \
@@ -169,6 +171,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v lsusb \
     && command -v gnome-software \
     && command -v orca \
+    && command -v firewall-cmd \
     && command -v snapper \
     && command -v xdg-open \
     && command -v fc-match \
@@ -195,7 +198,7 @@ RUN useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/s
     && install -d -m 0700 -o goblins-os -g goblins-os /var/lib/goblins-os/secrets/openai \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.local/bin \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.config \
-    && install -d /etc/dconf/db/local.d /etc/goblins-os/model-manifests /etc/xdg/autostart /usr/lib/bootc/install /usr/lib/systemd/system /usr/lib/systemd/user /usr/libexec/goblins-os /usr/share/applications /usr/share/goblins-os/brand /usr/share/gnome-session/sessions /usr/share/wayland-sessions /usr/share/gnome-shell/modes
+    && install -d /etc/dconf/db/local.d /etc/goblins-os/model-manifests /etc/polkit-1/rules.d /etc/xdg/autostart /usr/lib/bootc/install /usr/lib/systemd/system /usr/lib/systemd/user /usr/libexec/goblins-os /usr/share/applications /usr/share/goblins-os/brand /usr/share/gnome-session/sessions /usr/share/wayland-sessions /usr/share/gnome-shell/modes
 
 # Human desktop login user. Goblins OS authenticates people through the in-session
 # OpenAI identity gate, so the machine auto-enters the OS session as this user;
@@ -231,6 +234,8 @@ COPY os/systemd/goblins-os-core.service /usr/lib/systemd/system/goblins-os-core.
 COPY os/systemd/goblins-os-resident.service /usr/lib/systemd/system/goblins-os-resident.service
 COPY os/systemd/goblins-os-model-cache.service /usr/lib/systemd/system/goblins-os-model-cache.service
 COPY os/systemd-system/ /usr/lib/systemd/system/
+COPY --chmod=0755 os/bootc/goblins-os-firewall /usr/libexec/goblins-os/goblins-os-firewall
+COPY os/bootc/60-goblins-os-firewall.rules /etc/polkit-1/rules.d/60-goblins-os-firewall.rules
 COPY os/session/goblins-os-session /usr/libexec/goblins-os/goblins-os-session
 COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.desktop
 COPY os/gnome-session/goblins-os.session /usr/share/gnome-session/sessions/goblins-os.session
@@ -309,6 +314,10 @@ RUN glib-compile-schemas /usr/share/glib-2.0/schemas
 RUN sed -i 's/#51a2da/#0b0b0f/g' /usr/share/anaconda/pixmaps/fedora.css 2>/dev/null || true
 
 RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
+    && test -x /usr/libexec/goblins-os/goblins-os-firewall \
+    && test -f /usr/lib/systemd/system/goblins-os-firewall@.service \
+    && test -f /etc/polkit-1/rules.d/60-goblins-os-firewall.rules \
+    && grep -Fq 'unit.match(/^goblins-os-firewall@(enable|disable)\.service$/)' /etc/polkit-1/rules.d/60-goblins-os-firewall.rules \
     && install -d -o goblin -g goblin /var/home/goblin/.local/share/nautilus/scripts \
     && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Build an app to open this" "/var/home/goblin/.local/share/nautilus/scripts/Build an app to open this" \
     && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Ask Goblin about this" "/var/home/goblin/.local/share/nautilus/scripts/Ask Goblin about this" \
@@ -329,6 +338,7 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && chown -R goblins-os:goblins-os /var/lib/goblins-os/.local /var/lib/goblins-os/.config /var/lib/goblins-os/installer /var/lib/goblins-os/session /var/lib/goblins-os/policy \
     && dconf update \
     && systemctl enable NetworkManager.service \
+    && systemctl enable firewalld.service \
     && systemctl enable gdm.service \
     && systemctl enable goblins-os-model-cache.service \
     && systemctl enable goblins-os-core.service \

@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+case "${1:-}" in
+  enable)
+    exec /usr/bin/systemctl enable --now firewalld.service
+    ;;
+  disable)
+    exec /usr/bin/systemctl disable --now firewalld.service
+    ;;
+  *)
+    printf '%s\n' "usage: goblins-os-firewall enable|disable" >&2
+    exit 64
+    ;;
+esac

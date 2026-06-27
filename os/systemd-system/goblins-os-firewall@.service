@@ -1,0 +1,21 @@
+[Unit]
+Description=Goblins OS firewall %i
+Documentation=man:firewalld(1)
+After=dbus.service firewalld.service
+ConditionPathExists=/usr/libexec/goblins-os/goblins-os-firewall
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/goblins-os/goblins-os-firewall %i
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/systemd/system
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

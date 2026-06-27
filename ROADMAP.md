@@ -81,11 +81,23 @@ not mark Batch 5 shipped.
   Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today,
   Sound Recognition, Live Captions.
 
+**Current local feature pass:** Firewall toggle substrate + Settings binding are
+implemented and locally gated, but the feature remains `in-progress` until the
+CI/qemu image pass proves the GTK render, polkit oneshot path, and live toggle.
+Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `goblins-os-verify --source-root .` →
+**blocked=0 (1506)**, `git diff --check`, helper `bash -n`, polkit rule
+`node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
+`systemd-analyze verify` is not available on this macOS host.
+
 **NEXT — pick up exactly here:**
-1. **Gated writes pass**: implement and prove the deferred writes one feature at a
-   time — firewall toggle, IME set, Focus arm/disarm, per-app permission revoke,
-   multi-display apply, and keyboard rebinding. Do not flip any of these from
-   `in-progress` until the write path and qemu interaction proof are green.
+1. **Gated writes pass**: first run the CI/qemu interaction proof for the
+   firewall toggle; only flip it to `shipped` if the render, live POST, and
+   polkit oneshot path are green. Then continue one feature at a time — IME set,
+   Focus arm/disarm, per-app permission revoke, multi-display apply, and
+   keyboard rebinding. Do not flip any of these from `in-progress` until the
+   write path and qemu interaction proof are green.
 2. **Batch 4 engine UI pass**: build the deferred engine UIs/overlays one feature
    at a time (Voice Control, Live Captions, Switch Control, Sound Recognition,
    Today/Widgets, Text Shortcuts/IBus, Visual Look Up), with host-tested core
@@ -183,9 +195,9 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 ### `in-progress` Firewall toggle + status (firewalld) in Settings ▸ Security
 - [x] **Status read** (`crates/goblins-os-core/src/firewall.rs` + `/v1/firewall/status`): honest read-only posture via `firewall-cmd --state` (running requires success AND "running" text — pure, unit-tested), honest-gated to "unavailable" when firewalld isn't installed.
 - [x] **Settings row (GTK) shipped**: Settings ▸ Security ▸ Protection now shows a live **Firewall** row (on / off / unavailable) fed by the status endpoint, alongside the boot-image + keyring rows. Compile- + `clippy -D warnings`-clean in the native container; verify gate added.
-- [ ] **Gated On/Off toggle (deferred, deliberate):** needs a scoped polkit rule for the single firewalld unit (never a blind `systemctl`); keep the default zone as shipped (firewalld can interfere with NetworkManager/netavark).
+- [x] **Gated On/Off toggle substrate + Settings binding (CI/qemu interaction proof pending):** core writes only by starting `goblins-os-firewall@enable/disable.service`, with a root helper that touches only `firewalld.service`, a scoped polkit rule for the `goblins-os` service user, image-time helper/unit/rule assertions, and a GTK switch that disables/reverts honestly when the bridge or live write fails. Feature remains `in-progress` until qemu render + live toggle proof are green.
 - **Packages:** `firewalld` (verified canonical name; minimal/bootc images can omit it).
-- **Files:** `crates/goblins-os-core/src/firewall.rs` (NEW — status + toggle, mirror `bluetooth.rs`), `crates/goblins-os-core/src/main.rs` (`mod firewall` + `GET /v1/firewall/status`, `POST /v1/firewall/enabled`), `crates/goblins-os-settings/src/main.rs` (`FirewallStatus` + `build_security` row + `set_firewall_enabled` mirroring `set_bluetooth_power`), `os/bootc/Containerfile` (`firewalld` + `systemctl enable firewalld.service`), `os/bootc/` (NEW privileged oneshot `goblins-os-firewall@.service` + a **scoped** polkit rule).
+- **Files:** `crates/goblins-os-core/src/firewall.rs` (status + toggle, mirror `bluetooth.rs`), `crates/goblins-os-core/src/main.rs` (`GET /v1/firewall/status`, `POST /v1/firewall/enabled`), `crates/goblins-os-settings/src/main.rs` (`FirewallStatus` + `build_security` row + `set_firewall_enabled` mirroring `set_bluetooth_power`), `os/bootc/Containerfile` (`firewalld` + `systemctl enable firewalld.service`), `os/bootc/goblins-os-firewall` + `os/systemd-system/goblins-os-firewall@.service` + `os/bootc/60-goblins-os-firewall.rules` (privileged helper/oneshot plus **scoped** polkit rule).
 - **APIs:** read path `firewall-cmd --state`/`--get-default-zone` + `systemctl is-active/is-enabled` (all unprivileged for the active session); write path via the oneshot helper.
 - **Goblins-grade:** "Network protection" subsection in `build_security`; status pill on/off/checking, detail "The firewall blocks unwanted incoming connections. Zone: <default-zone>."; `gtk4::Switch` `gos-switch`, insensitive during in-flight POST, revert on failure; neutral plain-text tone, no new colors.
 - **Honest gating (verified blocker):** core runs `User=goblins-os` + `NoNewPrivileges` + `ProtectSystem=strict`; firewalld write polkit default is `auth_admin_keep` → a direct `firewall-cmd` write hits a non-interactive denial. **Ship status read NOW**; for the toggle, the proper path is the root oneshot triggered over the system bus, gated by a polkit rule scoped to `unit==goblins-os-firewall@*.service`. Until that rule lands, render the toggle **disabled**: "Turning the firewall on or off is managed by the system." POST outcome reflects the real exit code (BAD_GATEWAY on failure). `firewall-cmd` absent → "Firewall service is not ready on this device."

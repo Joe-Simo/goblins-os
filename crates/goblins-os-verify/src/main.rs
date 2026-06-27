@@ -7633,6 +7633,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/firewall/status",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-firewall-enabled-route",
+            "/v1/firewall/enabled",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/firewall.rs"),
+            "core-firewall-uses-scoped-systemd-template",
+            "goblins-os-firewall@enable.service",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/firewall.rs"),
+            "core-firewall-honest-managed-by-system-copy",
+            "Turning the firewall on or off is managed by the system.",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-accessibility-accommodation-rows",
             "Typing assistance",
@@ -7646,6 +7661,51 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-security-firewall-status-row",
             "/v1/firewall/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-security-firewall-enabled-switch",
+            "/v1/firewall/enabled",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-packages-firewalld",
+            "firewalld",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-rpm-asserts-firewalld",
+            "firewalld \\\n      wl-clipboard",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-command-asserts-firewall-cmd",
+            "command -v firewall-cmd",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-installs-firewall-helper",
+            "goblins-os-firewall /usr/libexec/goblins-os/goblins-os-firewall",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-controls-only-firewalld",
+            "systemctl enable --now firewalld.service",
+        ),
+        contains_check(
+            root.join("os/systemd-system/goblins-os-firewall@.service"),
+            "systemd-firewall-oneshot-helper",
+            "ExecStart=/usr/libexec/goblins-os/goblins-os-firewall %i",
+        ),
+        contains_check(
+            root.join("os/bootc/60-goblins-os-firewall.rules"),
+            "polkit-firewall-rule-scopes-unit-instances",
+            "goblins-os-firewall@(enable|disable)",
+        ),
+        contains_check(
+            root.join("os/bootc/60-goblins-os-firewall.rules"),
+            "polkit-firewall-rule-scopes-service-user",
+            "subject.user !== \"goblins-os\"",
         ),
         contains_check(
             root.join("crates/goblins-os-markup/src/main.rs"),

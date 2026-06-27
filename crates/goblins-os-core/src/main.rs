@@ -77,6 +77,7 @@ use crate::{
     boot_lock::boot_lock_status,
     codex::{codex_login_start, codex_login_url, codex_status},
     displays::displays_status,
+    firewall::{firewall_status, set_firewall_enabled},
     hardware::hardware_status,
     input::{input_status, set_input_preference},
     install_targets::{install_progress_status, install_target_status, prepare_install},
@@ -225,7 +226,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/v1/ocr/status", get(ocr::ocr_status))
         .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
-        .route("/v1/firewall/status", get(firewall::firewall_status))
+        .route("/v1/firewall/status", get(firewall_status))
+        .route("/v1/firewall/enabled", post(set_firewall_enabled))
         .route("/v1/focus/status", get(focus::focus_status))
         .route("/v1/keychain/status", get(keychain::keychain_status))
         .route(

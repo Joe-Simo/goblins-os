@@ -181,8 +181,9 @@ struct ShortcutEntry {
     bindings: Vec<String>,
 }
 
-/// Read-only firewall posture from `GET /v1/firewall/status` (firewalld). The Settings
-/// UI mirrors it honestly; the gated On/Off toggle stays a deliberate future capability.
+/// Firewall posture from `GET /v1/firewall/status` (firewalld). The Settings UI
+/// mirrors status and only enables the On/Off switch when core reports the
+/// scoped Goblins OS firewall bridge is installed.
 #[cfg_attr(
     not(all(target_os = "linux", feature = "native-desktop")),
     allow(dead_code)
@@ -191,7 +192,9 @@ struct ShortcutEntry {
 struct FirewallStatus {
     available: bool,
     active: bool,
+    manageable: bool,
     detail: String,
+    management_detail: String,
 }
 
 /// Read-only Personal Hotspot posture from `GET /v1/hotspot/status` (NetworkManager).
@@ -669,6 +672,14 @@ struct BluetoothPowerOutcome {
     ok: bool,
     #[allow(dead_code)]
     powered: bool,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct FirewallToggleOutcome {
+    ok: bool,
+    #[allow(dead_code)]
+    enabled: bool,
     text: String,
 }
 
@@ -4897,6 +4908,15 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
     }
     panel.append(&health_summary_group(rows));
 
+    panel.append(&label("Network protection", &["gos-subsection-title"]));
+    match &state.firewall {
+        Some(firewall) => append_firewall_control(panel, state, firewall),
+        None => panel.append(&system_row(
+            "Firewall",
+            "Waiting for firewall status from Goblins OS.",
+        )),
+    }
+
     panel.append(&label("Secrets storage", &["gos-subsection-title"]));
     match state.system.as_ref() {
         Some(_) => panel.append(&system_row(
@@ -4914,6 +4934,98 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
         "Session lock",
         "The Goblins OS session gate keeps the desktop locked until you unlock it. Sign-in and password policy are owned by the system and are not adjustable here.",
     ));
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_firewall_control(panel: &gtk4::Box, state: &SettingsState, firewall: &FirewallStatus) {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 14);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-switch-row");
+
+    let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
+    copy.set_hexpand(true);
+    let title = label(firewall_toggle_label(firewall.active), &["gos-row-title"]);
+    let detail_text = firewall_toggle_detail(firewall);
+    let detail = label(&detail_text, &["gos-row-copy"]);
+    copy.append(&title);
+    copy.append(&detail);
+    row.append(&copy);
+
+    let toggle = gtk4::Switch::new();
+    toggle.add_css_class("gos-switch");
+    toggle.set_active(firewall.active);
+    toggle.set_sensitive(firewall.available && firewall.manageable);
+    toggle.set_valign(gtk4::Align::Center);
+    toggle.set_tooltip_text(Some("Firewall"));
+    set_accessible_label_description(&toggle, "Firewall", &detail_text);
+    row.append(&toggle);
+    panel.append(&row);
+
+    let feedback = label(&firewall.management_detail, &["gos-row-copy"]);
+    panel.append(&feedback);
+
+    if !firewall.available || !firewall.manageable {
+        return;
+    }
+
+    let core_url = config_core_url(state);
+    let current_enabled = Rc::new(Cell::new(firewall.active));
+    let updating_switch = Rc::new(Cell::new(false));
+    {
+        let title = title.clone();
+        let detail = detail.clone();
+        let feedback = feedback.clone();
+        let current_enabled = current_enabled.clone();
+        let updating_switch = updating_switch.clone();
+        toggle.connect_active_notify(move |toggle| {
+            if updating_switch.get() {
+                return;
+            }
+            let next_enabled = toggle.is_active();
+            if next_enabled == current_enabled.get() {
+                return;
+            }
+
+            toggle.set_sensitive(false);
+            match set_firewall_enabled(&core_url, next_enabled) {
+                Ok(message) => {
+                    current_enabled.set(next_enabled);
+                    title.set_text(firewall_toggle_label(next_enabled));
+                    detail.set_text(&message);
+                    feedback.set_text(&message);
+                    toggle.update_property(&[gtk4::accessible::Property::Description(&message)]);
+                }
+                Err(message) => {
+                    feedback.set_text(&message);
+                    updating_switch.set(true);
+                    toggle.set_active(current_enabled.get());
+                    updating_switch.set(false);
+                }
+            }
+            toggle.set_sensitive(true);
+        });
+    }
+}
+
+fn firewall_toggle_label(active: bool) -> &'static str {
+    if active {
+        "Firewall on"
+    } else {
+        "Firewall off"
+    }
+}
+
+fn firewall_toggle_detail(firewall: &FirewallStatus) -> String {
+    if !firewall.available {
+        return firewall.detail.clone();
+    }
+    if firewall.manageable {
+        firewall.detail.clone()
+    } else {
+        format!("{} {}", firewall.detail, firewall.management_detail)
+    }
 }
 
 /// Desktop & Dock — honest read-only status for the dock, window controls, and
@@ -16475,6 +16587,24 @@ fn set_bluetooth_power(base_url: &str, powered: bool) -> Result<String, String> 
 }
 
 fn bluetooth_power_outcome(body: &[u8]) -> Result<BluetoothPowerOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_firewall_enabled(base_url: &str, enabled: bool) -> Result<String, String> {
+    let body = serde_json::json!({ "enabled": enabled }).to_string();
+    let response = http_post_json_response(base_url, "/v1/firewall/enabled", &body)
+        .map_err(|error| format!("Goblins OS could not reach the firewall manager: {error}."))?;
+    let outcome = firewall_toggle_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn firewall_toggle_outcome(body: &[u8]) -> Result<FirewallToggleOutcome, CoreFetchError> {
     serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
 }
 

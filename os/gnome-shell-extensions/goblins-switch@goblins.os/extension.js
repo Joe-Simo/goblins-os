@@ -161,6 +161,28 @@ export default class GoblinsSwitchControl extends Extension {
         this._scanTargets = [];
     }
 
+    // Stable hook used by render-desktop.sh for real-pixel proof captures.
+    showPointScanDemo() {
+        if (!this._settings)
+            return;
+        this._settings.set_string('mode', 'point');
+        this._settings.set_string('scanning', 'step');
+        this._settings.set_boolean('enabled', true);
+        this._stopTick();
+        this._panel?.show();
+        this._panel?.grab_key_focus();
+        this._pointColumn = 6;
+        this._pointRow = 4;
+        this._enterPointScan('Point scan is active. Selection stays paused until pointer injection is verified.');
+    }
+
+    hide() {
+        if (this._settings)
+            this._settings.set_boolean('enabled', false);
+        else
+            this._stopScanner();
+    }
+
     _buildActors() {
         this._panel = new St.BoxLayout({
             style_class: 'goblins-switch-panel',

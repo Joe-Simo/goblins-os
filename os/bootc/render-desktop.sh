@@ -281,6 +281,15 @@ render_scheme() {
   sleep 0.9
   shoot "56-wm-hud-$suffix.png"
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
+  sleep 0.3
+
+  # Switch Control proof: the extension is installed in the live shell, remains
+  # disabled by default, and can render the point-scan overlay without enabling
+  # unproved pointer injection.
+  shell_eval "globalThis.goblinsSwitchControl.showPointScanDemo(); 'switch-control-point';" || return 1
+  sleep 0.9
+  shoot "57-switch-control-point-$suffix.png"
+  shell_eval "globalThis.goblinsSwitchControl.hide(); 'switch-control-hidden';" || true
 
   pkill -f "/usr/libexec/goblins-os/goblins-os-shell" 2>/dev/null || true
   pkill -f "/usr/libexec/goblins-os/goblins-os-settings" 2>/dev/null || true

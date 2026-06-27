@@ -366,6 +366,19 @@ image compile remains the schema proof. CI/qemu must still prove the Settings
 render, installed schema/write behavior, live extension load, AT-SPI target
 walk, overlay pixels, and gated selection/input before Switch Control can ship.
 
+Current Switch Control continuation: the desktop render harness now has a
+source-gated live-shell proof hook for the point-scan overlay. `render-desktop.sh`
+calls `globalThis.goblinsSwitchControl.showPointScanDemo()`, captures
+`57-switch-control-point-$suffix.png` in light and dark, and disables the
+feature again after capture; the hook does not enable pointer injection or claim
+selection success. Local source gates for this pass:
+`node --check os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js`,
+`bash -n os/bootc/render-desktop.sh os/hardware-gate/verify-shipping-status.sh`,
+`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `git diff --check`, and
+`goblins-os-verify --source-root .` → **blocked=0 (1769)**. The actual
+screenshot artifacts are still CI/qemu-pending.
+
 Current Text Shortcuts continuation: the Settings table editor is now
 source-gated but not shipped. Settings ▸ Keyboard reads `/v1/text-shortcuts`,
 shows the engine readiness honestly, lists saved Replace → With entries, can
@@ -950,6 +963,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **Status + schema substrate shipped** (`crates/goblins-os-core/src/switch_control.rs` + `/v1/accessibility/switch-control/status`, NEW `org.goblins.os.a11y.switch-control` gschema via the existing `os/glib-schemas/` plumbing — off by default): reads enabled/mode/scanning/timings with the same normalization the engine will trust (`normalize_mode`/`normalize_scanning`/`clamp_interval` 300–5000 / `clamp_ms`), honest-gated when the schema is absent. Pure normalizers unit-tested (193 core tests); `glib-compile-schemas` clean; clippy/fmt clean; route + schema verify gates.
 - [x] **Preference bridge + Settings subsection source-gated (CI/qemu-pending):** core exposes `/v1/accessibility/switch-control/preference`, writes only the allowlisted `org.goblins.os.a11y.switch-control` keys, validates mode/scanning, clamps timing values, and returns honest saved-but-not-scanning copy until the scanner engine is active. Settings ▸ Accessibility renders status, master toggle, mode/style choices, and timing sliders through that route. No Shell extension, AT-SPI walk, highlight overlay, switch input, or selection injection is claimed yet.
 - [x] **Shell scanner scaffold source-gated (CI/qemu-pending):** `goblins-switch@goblins.os` is installed in the Goblins shell mode, seeded off through dconf, reads the system Switch Control schema, exposes item/point scan state, attempts AT-SPI discovery, renders the highlight ring/crosshair overlay, supports auto/step advance, and Escape disables the feature. AT-SPI runtime behavior, overlay pixels, switch input, and pointer injection remain qemu-pending; point selection explicitly stays paused until that proof exists.
+- [x] **Desktop render hook source-gated (CI/qemu-pending):** `render-desktop.sh` now invokes the live shell extension hook and captures `57-switch-control-point-$suffix.png` in light/dark so CI can prove overlay pixels. The hook forces point-scan display only and leaves pointer injection/selection proof deferred.
 - [ ] **Scanning engine + overlay/input proof (deferred, XL/highest-risk):** the `goblins-switch@goblins.os` extension (item/point scan state machine, AT-SPI tree walk, Clutter highlight ring/crosshair, gated input injection, hard Escape→disable, never on by default, session-only) plus qemu proof of highlighting, fallback, and selection behavior.
 - **Packages:** `at-spi2-core` (already in the image at Containerfile L44 — no new RPM; gnome-shell/libei present too).
 - **gsettings/dconf:** NEW `org.goblins.os.a11y.switch-control` (enabled, mode item|point, scanning auto|step, auto/interface-interval-ms, loops-before-pause, dwell-ms, switch-debounce-ms, point-precision, audio-cues, select/next/pause-key) shipped as a compiled gschema + dconf-seeded off. Reuse existing `…a11y.applications screen-keyboard-enabled` for the on-screen keyboard under scan.

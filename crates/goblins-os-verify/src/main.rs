@@ -1340,6 +1340,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "56-wm-hud-$suffix.png",
     ));
     checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-switch-control-point",
+        "57-switch-control-point-$suffix.png",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-switch-control-hook",
+        "showPointScanDemo",
+    ));
+    checks.push(contains_check(
         root.join("os/bootc/render-desktop.suffix.Dockerfile"),
         "desktop-render-target",
         "desktop-screenshots",
@@ -1448,6 +1458,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
         "goblins-switch-qemu-input-honesty",
         "Point selection needs live qemu proof before pointer injection is enabled.",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-render-hook",
+        "showPointScanDemo",
     ));
     checks.push(contains_check(
         root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/stylesheet.css"),
@@ -8878,6 +8893,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
             "switch-control-shell-overlay",
             "goblins-switch-highlight",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "switch-control-desktop-render-proof-hook",
+            "57-switch-control-point-$suffix.png",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),

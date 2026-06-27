@@ -20,6 +20,7 @@ const BINARIES: &[&str] = &[
     "goblins-os-settings",
     "goblins-os-shell",
     "goblins-os-verify",
+    "goblins-os-visual-lookup",
 ];
 
 const SYSTEMD_UNITS: &[&str] = &[
@@ -8154,6 +8155,61 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-visual-lookup-route",
             "/v1/ai/visual-lookup",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-ai/src/lib.rs"),
+            "ai-registry-has-visual-lookup-action",
+            "id: \"identify-in-image\"",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-builds-visual-lookup-native-feature",
+            "goblins-os-visual-lookup/native-desktop",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-visual-lookup/src/main.rs"),
+            "visual-lookup-helper-checks-status-before-capture",
+            "vision_status(&config.core_host)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-visual-lookup/src/main.rs"),
+            "visual-lookup-helper-uses-interactive-portal",
+            "portal_screenshot(true)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-visual-lookup/src/main.rs"),
+            "visual-lookup-helper-portal-interactive-true",
+            ".interactive(interactive)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-visual-lookup/src/main.rs"),
+            "visual-lookup-helper-posts-to-core-route",
+            "/v1/ai/visual-lookup",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-visual-lookup/src/main.rs"),
+            "visual-lookup-helper-deletes-private-capture",
+            "fs::remove_file(&path)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-visual-lookup/src/main.rs"),
+            "visual-lookup-helper-private-file-mode",
+            "Permissions::from_mode(0o600)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-visual-lookup/src/main.rs"),
+            "visual-lookup-helper-private-dir-mode",
+            "Permissions::from_mode(0o700)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-fetches-vision-status",
+            "/v1/vision/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-models-vision-gpt-oss-text-only-gate",
+            "GPT-OSS is text-only",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),

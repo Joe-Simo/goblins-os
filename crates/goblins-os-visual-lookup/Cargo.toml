@@ -1,0 +1,32 @@
+[package]
+name = "goblins-os-visual-lookup"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+native-desktop = ["dep:gtk4", "goblins-os-ui/native-desktop"]
+
+[dependencies]
+# xdg-desktop-portal Screenshot is the sanctioned, consent-gated region capture
+# path on modern GNOME/Wayland. Visual Look Up uses interactive=true so the user
+# chooses the region; no pixels are captured silently.
+ashpd = { version = "0.13", default-features = false, features = [
+  "screenshot",
+  "tokio",
+] }
+goblins-os-ui = { path = "../goblins-os-ui" }
+percent-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = [
+  "rt",
+  "net",
+  "time",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk4 = { version = "0.9", optional = true }

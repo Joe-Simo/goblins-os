@@ -106,6 +106,7 @@ struct SettingsState {
     policy: Option<PolicyStatus>,
     openai_key: Option<OpenAiKeyStatus>,
     privacy: Option<PrivacyStatus>,
+    vision: Option<VisionStatus>,
     voice: Option<VoiceStatus>,
     codex: Option<CodexStatus>,
     appearance: Option<AppearanceStatus>,
@@ -809,6 +810,17 @@ struct CodexLoginUrl {
     auth_url: Option<String>,
 }
 
+/// Visual Look Up capability from Goblins OS. GPT-OSS is text-only, so this row
+/// stays separate from the resident text engine and only becomes ready when a
+/// local loopback VLM is configured.
+#[derive(Clone, Deserialize)]
+struct VisionStatus {
+    #[allow(dead_code)]
+    source: String,
+    runtime_configured: bool,
+    detail: String,
+}
+
 /// Local-voice capability from Goblins OS, mirrored read-only in Settings.
 #[derive(Clone, Deserialize)]
 struct VoiceStatus {
@@ -1490,6 +1502,9 @@ const SETTINGS_SEARCH_ITEMS: &[SettingsSearchItem] = &[
             "screenshot",
             "screen context",
             "file context",
+            "visual look up",
+            "vision",
+            "identify image",
         ],
     },
     SettingsSearchItem {
@@ -2521,7 +2536,7 @@ impl SettingsPanel {
             Self::Security => "Secret boundaries, the credential keyring, boot-image integrity, and secrets storage.",
             Self::Wellbeing => "Screen time, break reminders, and attention health settings.",
             Self::Models => {
-                "Goblin actions, GPT-OSS, Codex, OpenAI API key, local models, and voice engine."
+                "Goblin actions, GPT-OSS, Codex, OpenAI API key, local models, vision, and voice engines."
             }
             Self::Policy => "Consumer/business/enterprise policy profile and permission grants.",
             Self::Storage => "Model cache, OS state directories, mounted storage, and free space.",
@@ -2644,6 +2659,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             policy: None,
             openai_key: None,
             privacy: None,
+            vision: None,
             voice: None,
             codex: None,
             appearance: None,
@@ -2677,6 +2693,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         policy: get_core_json(&config.core_url, "/v1/policy/status").ok(),
         openai_key: get_core_json(&config.core_url, "/v1/models/openai-key").ok(),
         privacy: get_core_json(&config.core_url, "/v1/privacy/status").ok(),
+        vision: get_core_json(&config.core_url, "/v1/vision/status").ok(),
         voice: get_core_json(&config.core_url, "/v1/voice/status").ok(),
         codex: get_core_json(&config.core_url, "/v1/codex/status").ok(),
         appearance: get_core_json(&config.core_url, "/v1/appearance/status").ok(),
@@ -8573,6 +8590,7 @@ fn append_goblins_ai_settings(panel: &gtk4::Box, state: &SettingsState) {
         "change-safe-setting",
         "ask-selected-text",
         "summarize-screen",
+        "identify-in-image",
         "ask-file-or-folder",
         "answer-notification",
         "troubleshoot-network-audio-display-storage",
@@ -8857,6 +8875,7 @@ fn append_models_summary(panel: &gtk4::Box, state: &SettingsState) {
         ),
         local_model_summary_spec(state.local_models.as_ref()),
         openai_access_summary_spec(state.openai_key.as_ref(), state.codex.as_ref()),
+        vision_model_summary_spec(state.vision.as_ref()),
         voice_model_summary_spec(state.voice.as_ref()),
     ]
     .into_iter()
@@ -10015,6 +10034,37 @@ fn openai_access_summary_spec(
         false,
         "Waiting for Codex and API-key status.",
     )
+}
+
+fn vision_model_summary_spec(vision: Option<&VisionStatus>) -> ModelSummarySpec {
+    match vision {
+        Some(vision) => model_summary_spec(
+            "Vision",
+            if vision.runtime_configured {
+                "ready"
+            } else {
+                "add model"
+            },
+            vision.runtime_configured,
+            if vision.runtime_configured {
+                format!(
+                    "{} Visual Look Up identifies selected regions through a local loopback vision model.",
+                    vision.detail
+                )
+            } else {
+                format!(
+                    "{} GPT-OSS is text-only, so image identification needs a separate local VLM.",
+                    vision.detail
+                )
+            },
+        ),
+        None => model_summary_spec(
+            "Vision",
+            "waiting",
+            false,
+            "Waiting for Visual Look Up capability.",
+        ),
+    }
 }
 
 fn voice_model_summary_spec(voice: Option<&VoiceStatus>) -> ModelSummarySpec {
@@ -18561,6 +18611,19 @@ fn test_codex_status(installed: bool, authenticated: bool) -> CodexStatus {
 }
 
 #[cfg(test)]
+fn test_vision_status(runtime_configured: bool) -> VisionStatus {
+    VisionStatus {
+        source: "goblins-os-core".to_string(),
+        runtime_configured,
+        detail: if runtime_configured {
+            "Visual Look Up is ready. Capture a region to identify it.".to_string()
+        } else {
+            "Visual Look Up needs a local vision model. Add one to identify images.".to_string()
+        },
+    }
+}
+
+#[cfg(test)]
 fn test_resident_status(
     process_state: &str,
     selected_engine: &str,
@@ -22250,6 +22313,7 @@ mod tests {
         let resident = super::test_resident_status("active", "local-gpt-oss", Some(4));
         let catalog = super::test_local_model_catalog(Some(414));
         let codex = super::test_codex_status(true, false);
+        let vision = super::test_vision_status(false);
         let voice = super::test_voice_status(true);
 
         let engine = super::active_engine_summary_spec(
@@ -22288,6 +22352,13 @@ mod tests {
         assert_eq!(access.state, "sign in");
         assert!(!access.ready);
         assert!(access.detail.contains("not signed in"));
+
+        let vision = super::vision_model_summary_spec(Some(&vision));
+        assert_eq!(vision.state, "add model");
+        assert!(!vision.ready);
+        assert!(vision.detail.contains("Visual Look Up"));
+        assert!(vision.detail.contains("GPT-OSS is text-only"));
+        assert!(vision.detail.contains("local VLM"));
 
         let voice = super::voice_model_summary_spec(Some(&voice));
         assert_eq!(voice.state, "ready");

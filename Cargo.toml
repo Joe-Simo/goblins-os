@@ -17,6 +17,7 @@ members = [
   "crates/goblins-os-shell",
   "crates/goblins-os-ui",
   "crates/goblins-os-verify",
+  "crates/goblins-os-visual-lookup",
 ]
 resolver = "2"
 

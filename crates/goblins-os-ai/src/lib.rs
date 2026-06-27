@@ -17,6 +17,7 @@ pub enum AiActionKind {
     LaunchItem,
     Write,
     Summarize,
+    Identify,
     Troubleshoot,
     BuildApp,
 }
@@ -229,6 +230,18 @@ pub const ACTIONS: &[AiAction] = &[
         enabled_without_engine: false,
     },
     AiAction {
+        id: "identify-in-image",
+        title: "Identify an image",
+        detail: "Capture a user-selected region and identify it only through a local loopback vision model.",
+        kind: AiActionKind::Identify,
+        contexts: SCREEN_CONTEXTS,
+        permission: AiPermission::ScreenContext,
+        confirmation: AiConfirmation::PermissionAndConfirmation,
+        entrypoints: &[AiEntrypoint::Screenshot, AiEntrypoint::KeyboardShortcut],
+        route_hint: "vision.visual-lookup",
+        enabled_without_engine: false,
+    },
+    AiAction {
         id: "ask-file-or-folder",
         title: "Ask about a file or folder",
         detail: "Read only the chosen file or folder path and keep the action audit-visible.",
@@ -341,6 +354,7 @@ mod tests {
         assert!(action_by_id("build-app").is_some());
         assert!(action_by_id("write-with-goblins").is_some());
         assert!(action_by_id("summarize-screen").is_some());
+        assert!(action_by_id("identify-in-image").is_some());
         assert!(action_by_id("voice-control").is_some());
     }
 
@@ -350,6 +364,7 @@ mod tests {
             "change-safe-setting",
             "write-with-goblins",
             "summarize-screen",
+            "identify-in-image",
             "ask-file-or-folder",
             "answer-notification",
             "build-app",

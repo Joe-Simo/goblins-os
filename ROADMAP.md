@@ -283,10 +283,32 @@ CI/qemu still must prove the shell extension render, menu/shortcut control,
 system-audio capture, transcription stream, and overlay behavior before Live
 Captions can ship.
 
+Current Visual Look Up continuation: the region-capture card surface is now
+source-gated but not shipped. The new `goblins-os-visual-lookup` crate checks
+`/v1/vision/status` before any capture, requires a loopback local core URL, uses
+the interactive xdg-desktop-portal screenshot flow for a user-selected region,
+stores the captured file only in a 0700 runtime dir as a 0600 file, posts the
+local path to `/v1/ai/visual-lookup`, deletes the temporary image afterward,
+and renders a Goblins-branded GTK identification card with honest model-missing
+and "Best guess" copy. Settings ▸ Goblin & Models now has a Vision row that
+states GPT-OSS is text-only and a separate local VLM is required, and the shared
+AI action registry exposes `identify-in-image`. No RPM, default keybinding, or
+desktop file is claimed in this pass; the proposed `<Shift><Super>4` binding
+collides with the shipped GNOME screenshot UI binding and needs CI/qemu proof
+before enabling a replacement. Local source gates: `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (1615)**,
+`git diff --check`, targeted visual-lookup/AI/settings tests, and the Rust 1.88
+GTK container
+`cargo clippy -p goblins-os-visual-lookup --features goblins-os-visual-lookup/native-desktop -- -D warnings`.
+CI/qemu still must prove the portal region capture, GTK card render,
+launcher/menu entry, and final non-conflicting shortcut before Visual Look Up
+can ship.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. Next is
-   Visual Look Up, then Today/Widgets, Sound Recognition, Switch Control, and
+   Today/Widgets, then Sound Recognition, Switch Control, and
    Text Shortcuts/IBus. Use host-tested pure logic first, keep every live/render
    surface `in-progress` until CI/qemu proof is green, and do not add
    `whisper-cpp` as a CLI dependency until the actual Fedora 44 `whisper-cli`
@@ -609,9 +631,9 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 
 ### `in-progress` Visual Look Up (identify the subject in any image)
 - [x] **VLM relay substrate shipped** (`crates/goblins-os-core/src/vision.rs` + `/v1/vision/status` + `/v1/ai/visual-lookup`): capability gate + the on-device identify relay (base64 image → loopback runtime `/api/generate` → identification card), modeled on `voice.rs`/`resident.rs`. **Loopback-only** (`is_loopback_url` — `127.0.0.1`/`localhost`/`[::1]`, no exfil), zero new packages, honest-gated to "add a vision model" until a runtime is configured. Pure `is_loopback_url`/`extract_json_object`/`parse_identification` (JSON-or-honest-fallback) unit-tested (191 core tests); clippy/fmt clean; route gate.
-- [ ] **Region-capture card surface (deferred):** the `goblins-os-visual-lookup` crate (ashpd interactive `Screenshot` region select → POST → branded identification card), the `<Shift><Super>4` binding, and the AI & Models Vision row.
+- [x] **Region-capture card surface source-gated (CI/qemu-pending):** the `goblins-os-visual-lookup` crate checks `/v1/vision/status` before capture, uses the ashpd interactive `Screenshot` portal for user-selected regions, copies pixels into a 0700 runtime dir as a 0600 file, POSTs the local path to `/v1/ai/visual-lookup`, deletes the temp image, and renders a branded identification card with honest "Best guess"/model-missing copy. Settings ▸ Goblin & Models now has a Vision row and the shared AI action registry exposes `identify-in-image`. The GTK card/portal render remains CI/qemu-pending.
 - **Packages:** **none** (the safest decision: `llama-cpp` is in Fedora 44 but `ollama` is COPR-only, and neither bundles a model — ship the capability gated and let users add a runtime+model, matching the `model_manager`/voice thesis; zero new `rpm -q` lines = zero image-build risk).
-- **dconf:** append `goblins-visual-lookup` (command `/usr/libexec/goblins-os/goblins-os-visual-lookup`, binding `<Shift><Super>4` — Cmd-Shift-4 muscle memory, verified free). **No new schema** — env overrides `GOBLINS_OS_VISION_{DIR,RUNTIME_URL,MODEL}` (loopback http only); reuses the existing `screen-context` policy control as the gate.
+- **dconf:** no new binding in the source-gated pass. The old `<Shift><Super>4` proposal collides with the shipped GNOME screenshot UI binding in `10-goblins-os-desktop`, so pick/prove a non-conflicting shortcut in CI/qemu before enabling Visual Look Up by default. **No new schema** — env overrides `GOBLINS_OS_VISION_{DIR,RUNTIME_URL,MODEL}` (loopback http only); reuses the existing `screen-context` policy control as the gate.
 - **Files:** `crates/goblins-os-core/src/vision.rs` (NEW — VLM capability + identify, modeled on `voice.rs` + the `resident.rs` Ollama relay; `VisionStatus` + `identify(image_path, hint)` POSTing base64 to the loopback runtime's `/api/generate` with `images[]` and a Visual-Look-Up system prompt → `{name,category,confidence,description,follow_ups}`), `crates/goblins-os-core/src/main.rs` (`GET /v1/vision/status`, `POST /v1/ai/visual-lookup`), `crates/goblins-os-ai/src/lib.rs` (one `AiAction` `identify-in-image`), `crates/goblins-os-visual-lookup/` (NEW crate — the branded capture+card surface: ashpd `Screenshot::request().interactive(true)` region select, 0700/0600 private capture, POST to core, render the card; reuses the screenshot-context portal/permission code), `os/dconf/db/local.d/10-goblins-os-desktop`, `os/bootc/Containerfile` (COPY the binary; **no** model/runtime packages), `os/applications` (optional .desktop), `crates/goblins-os-settings/src/main.rs` (AI & Models Vision row), `crates/goblins-os-verify/src/main.rs` (copy/keybinding pins — no Apple/Siri terms).
 - **APIs:** portal `Screenshot` with `.interactive(true)` (sanctioned Wayland region capture; GNOME 42+ blocks external `org.gnome.Shell.Screenshot`); the loopback-only relay (Ollama `/api/generate` `images:[base64]`, or llama.cpp `--mmproj`), strictly `127.0.0.1`/`localhost`/`::1` reusing `resident.rs` `local_http_url`; `ureq` with bounded timeouts (vision turns are slower — honor `GOBLINS_OS_RESIDENT_TIMEOUT_SECS`).
 - **Goblins-grade:** an identification **card** (overlay radius 22, shared vibrancy): subject name `GOS_TYPE_TITLE_2`, description `GOS_TYPE_BODY`, a category glyph chip (leaf/paw/landmark/artwork/tag) tinted from the **one** accent (never a second hue); confidence as **plain honest text** ("Likely a…"/"Best guess…"), not a colored badge; follow-ups ("Search the web", "Ask Goblin about this", "Copy name") on a 38px rung; **PNG** glyphs only; copy "Goblin identified…", never "Siri"/"Apple".

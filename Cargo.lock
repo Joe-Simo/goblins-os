@@ -800,6 +800,19 @@ name = "goblins-os-verify"
 version = "0.1.0"
 
 [[package]]
+name = "goblins-os-visual-lookup"
+version = "0.1.0"
+dependencies = [
+ "ashpd",
+ "goblins-os-ui",
+ "gtk4",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "graphene-rs"
 version = "0.20.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"

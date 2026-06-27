@@ -32,6 +32,60 @@
 
 ---
 
+## ⏩ Session status — RESUME HERE (updated 2026-06-27)
+
+A long build pass landed **25 commits** (head `f6b24fd`), all on `main`, each its own
+feature, every one host-verified: `cargo test --workspace` (195 core tests),
+per-crate `cargo clippy -- -D warnings`, GTK crates compile + clippy-clean + rustfmt-1.88
+in the **local Linux container loop**, shell JS via `node --check`, gschemas via
+`glib-compile-schemas`, and `goblins-os-verify --source-root .` → **blocked=0 (1465)**.
+Nothing was pushed blind.
+
+**Reusable capabilities now in place** (use these — don't reinvent):
+- **GTK container loop** — `git archive HEAD | tar -x -C /tmp/gob-build`, then a
+  `rust:1.88` + `libgtk-4-dev` container (cached `target/` + a `gob-cargo-registry`
+  volume) runs `cargo clippy -p <crate> --features <crate>/native-desktop -- -D warnings`.
+  Per run: `apt-get update` before install; format `goblins-os-markup` with the
+  **container's** rustfmt 1.88, never host. (See memory `goblins-gtk-container-build-loop`.)
+- **System-gschema plumbing** — drop a `*.gschema.xml` in `os/glib-schemas/`; the
+  Containerfile already COPYs that dir to `/usr/share/glib-2.0/schemas/` and runs
+  `glib-compile-schemas`. (Used by Focus, Switch Control, Today.)
+- **Shell-JS path** — `node --check` for syntax, `glib-compile-schemas --dry-run` for
+  the extension schema, dconf conflict grep — then push (render is qemu-only).
+- **Web-verify** — `WebSearch`/`WebFetch` confirm Fedora-44 package names + D-Bus
+  shapes before any Containerfile/D-Bus change (did seahorse + the PermissionStore).
+
+**Done so far (19 of 26 features advanced):**
+- **Batch 1 (Bucket A) — complete:** Live Text/OCR (core+handoff+markup Copy Text),
+  Color picker. *(IME read+list also shipped.)*
+- **Batch 2 (shell) — complete:** App Exposé, Hot Corners, Snap Assist.
+- **Batch 3 (Settings surfaces) — all 9 have a shipped read/status/UI surface:**
+  Accessibility rows, Firewall, Keyboard shortcuts, Focus (substrate+gschema),
+  Migration (substrate), Multi-display (read side via `displays.rs`), Personal
+  Hotspot, Per-app privacy, Keychain. **Gated WRITES remain deferred** (firewall
+  toggle, IME set, focus arm, per-app revoke, multi-display apply, keyboard rebind).
+- **Batch 4 (engines) — 5 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**
+  Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today.
+
+**NEXT — pick up exactly here:**
+1. **Sound Recognition** substrate (`crates/goblins-os-core/src/sound_recognition.rs`
+   + `/v1/sound-recognition/status`) — capability gate (classifier model) + the
+   sound-category registry, honest-gated. Pure registry/normalizer + tests. *(Batch 4)*
+2. **Live Captions** substrate (`live_captions.rs` + `/v1/live-captions/status`) —
+   STT-model capability gate + caption config (font size/position), honest-gated.
+   *(Batch 4 — last engine substrate.)*
+3. Then the **CI/qemu UI pass**: run the `build` image workflow to render + validate
+   every deferred GTK/shell surface (Batch 2 extensions, all Batch-3 Settings rows,
+   the engine UIs), turning `in-progress` → `shipped` per item.
+4. **Batch 5 (Bucket D) LAST, qemu-gated:** FileVault-at-install, btrfs `/home` +
+   snapshots — never blind-edit PAM/root-fs (use `authselect`); do under the hardware gate.
+
+Each substrate follows the proven shape: **pure unit-tested core + honest capability
+gating + no fake success**, GTK/engine deferred and marked in its ROADMAP entry. One
+commit per feature; update its status here + add `goblins-os-verify` gates in lockstep.
+
+---
+
 ## Bucket A — Quick & safe (package / config)
 
 Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly host-testable logic with a thin CI/qemu render.

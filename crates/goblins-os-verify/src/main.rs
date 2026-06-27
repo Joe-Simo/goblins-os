@@ -8205,6 +8205,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "bootc-runs-textshortcuts-content-purpose-self-test",
             "goblins-textshortcuts-engine --content-purpose-self-test",
         ),
+        container_contains_check(
+            root,
+            "bootc-runs-textshortcuts-stdio-self-test",
+            "goblins-textshortcuts-engine --stdio-self-test",
+        ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts.xml"),
             "textshortcuts-component-engine-name",
@@ -8387,6 +8392,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-stdio-protocol-request",
+            "pub enum RuntimeProtocolRequest",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-stdio-protocol-operation",
+            "pub enum RuntimeProtocolOperation",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-stdio-runtime-loop",
+            "pub fn run_text_shortcuts_stdio_runtime",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-stdio-self-test-contract",
+            "pub fn run_text_shortcuts_stdio_self_test",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-stdio-json-kebab-contract",
+            "rename_all = \"kebab-case\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-runtime-event-router",
             "pub enum IbusRuntimeEvent",
         ),
@@ -8444,6 +8474,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
             "textshortcuts-engine-content-purpose-self-test-cli",
             "--content-purpose-self-test",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
+            "textshortcuts-engine-stdio-cli",
+            "--stdio",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/main.rs"),
+            "textshortcuts-engine-stdio-self-test-cli",
+            "--stdio-self-test",
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),

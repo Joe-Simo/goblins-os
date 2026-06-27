@@ -5,6 +5,7 @@
 //! tracking, replacement commit decisions, and hard refusal in sensitive text
 //! fields.
 
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -952,6 +953,372 @@ pub fn ibus_runtime_decision(action: EngineAction) -> IbusRuntimeDecision {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum RuntimeProtocolRequest {
+    Key {
+        keyval: u32,
+        unicode: Option<String>,
+        pressed: bool,
+        command_modifier_active: bool,
+    },
+    FocusIn {
+        purpose: RuntimeProtocolPurpose,
+    },
+    ContentPurposeChanged {
+        purpose: RuntimeProtocolPurpose,
+    },
+    FocusOut,
+    Reset,
+    TableChanged {
+        shortcuts: Vec<TextShortcut>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(untagged)]
+pub enum RuntimeProtocolPurpose {
+    IbusInputPurpose(u32),
+    Name(String),
+}
+
+impl RuntimeProtocolPurpose {
+    fn into_content_purpose(self) -> ContentPurpose {
+        match self {
+            Self::IbusInputPurpose(value) => content_purpose_from_ibus_input_purpose(value),
+            Self::Name(value) => content_purpose_from_ibus_input_purpose_name(&value),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RuntimeProtocolResponse {
+    pub handled: bool,
+    pub operations: Vec<RuntimeProtocolOperation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum RuntimeProtocolOperation {
+    UpdatePreeditText {
+        text: String,
+        cursor_pos: u32,
+        visible: bool,
+    },
+    HidePreeditText,
+    DeleteSurroundingText {
+        offset: i32,
+        n_chars: u32,
+    },
+    CommitText {
+        text: String,
+    },
+}
+
+impl RuntimeProtocolResponse {
+    fn from_decision(decision: IbusRuntimeDecision) -> Self {
+        Self {
+            handled: decision.key_handled(),
+            operations: decision
+                .operations()
+                .iter()
+                .map(RuntimeProtocolOperation::from)
+                .collect(),
+            error: None,
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            handled: false,
+            operations: Vec::new(),
+            error: Some(message.into()),
+        }
+    }
+}
+
+impl From<&IbusOperation> for RuntimeProtocolOperation {
+    fn from(operation: &IbusOperation) -> Self {
+        match operation {
+            IbusOperation::UpdatePreeditText {
+                text,
+                cursor_pos,
+                visible,
+            } => Self::UpdatePreeditText {
+                text: text.clone(),
+                cursor_pos: *cursor_pos,
+                visible: *visible,
+            },
+            IbusOperation::HidePreeditText => Self::HidePreeditText,
+            IbusOperation::DeleteSurroundingText { offset, n_chars } => {
+                Self::DeleteSurroundingText {
+                    offset: *offset,
+                    n_chars: *n_chars,
+                }
+            }
+            IbusOperation::CommitText(text) => Self::CommitText { text: text.clone() },
+        }
+    }
+}
+
+pub fn handle_runtime_protocol_request(
+    runtime: &mut IbusTextShortcutsRuntime,
+    request: RuntimeProtocolRequest,
+) -> RuntimeProtocolResponse {
+    match runtime_protocol_request_event(request) {
+        Ok(event) => RuntimeProtocolResponse::from_decision(runtime.handle_event(event)),
+        Err(message) => RuntimeProtocolResponse::error(message),
+    }
+}
+
+pub fn handle_runtime_protocol_line(
+    runtime: &mut IbusTextShortcutsRuntime,
+    line: &str,
+) -> RuntimeProtocolResponse {
+    match serde_json::from_str::<RuntimeProtocolRequest>(line) {
+        Ok(request) => handle_runtime_protocol_request(runtime, request),
+        Err(error) => RuntimeProtocolResponse::error(format!("invalid runtime request: {error}")),
+    }
+}
+
+pub fn run_text_shortcuts_stdio_runtime<R: BufRead, W: Write>(
+    mut runtime: IbusTextShortcutsRuntime,
+    reader: R,
+    mut writer: W,
+) -> Result<(), RuntimeProtocolIoError> {
+    for line in reader.lines() {
+        let line = line.map_err(|error| {
+            RuntimeProtocolIoError::Io(format!("could not read stdin: {error}"))
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = handle_runtime_protocol_line(&mut runtime, &line);
+        serde_json::to_writer(&mut writer, &response).map_err(|error| {
+            RuntimeProtocolIoError::Encode(format!("could not encode runtime response: {error}"))
+        })?;
+        writer.write_all(b"\n").map_err(|error| {
+            RuntimeProtocolIoError::Io(format!("could not write stdout: {error}"))
+        })?;
+        writer.flush().map_err(|error| {
+            RuntimeProtocolIoError::Io(format!("could not flush stdout: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
+fn runtime_protocol_request_event(
+    request: RuntimeProtocolRequest,
+) -> Result<IbusRuntimeEvent, String> {
+    match request {
+        RuntimeProtocolRequest::Key {
+            keyval,
+            unicode,
+            pressed,
+            command_modifier_active,
+        } => Ok(IbusRuntimeEvent::Key(IbusKeyEvent::new(
+            keyval,
+            runtime_protocol_char(unicode)?,
+            pressed,
+            command_modifier_active,
+        ))),
+        RuntimeProtocolRequest::FocusIn { purpose } => {
+            Ok(IbusRuntimeEvent::FocusIn(purpose.into_content_purpose()))
+        }
+        RuntimeProtocolRequest::ContentPurposeChanged { purpose } => Ok(
+            IbusRuntimeEvent::ContentPurposeChanged(purpose.into_content_purpose()),
+        ),
+        RuntimeProtocolRequest::FocusOut => Ok(IbusRuntimeEvent::FocusOut),
+        RuntimeProtocolRequest::Reset => Ok(IbusRuntimeEvent::Reset),
+        RuntimeProtocolRequest::TableChanged { shortcuts } => Ok(IbusRuntimeEvent::TableChanged(
+            ShortcutTable::from_shortcuts(shortcuts),
+        )),
+    }
+}
+
+fn runtime_protocol_char(value: Option<String>) -> Result<Option<char>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let mut chars = value.chars();
+    let Some(character) = chars.next() else {
+        return Ok(None);
+    };
+    if chars.next().is_some() {
+        return Err("runtime key unicode must be empty or a single scalar value".to_string());
+    }
+    Ok(Some(character))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RuntimeProtocolIoError {
+    Io(String),
+    Encode(String),
+}
+
+impl std::fmt::Display for RuntimeProtocolIoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(message) | Self::Encode(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeProtocolIoError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RuntimeProtocolSelfTestError {
+    Io(RuntimeProtocolIoError),
+    Utf8(String),
+    Decode(String),
+    UnexpectedResponseCount {
+        expected: usize,
+        actual: usize,
+    },
+    UnexpectedResponse {
+        phase: &'static str,
+        expected: Box<RuntimeProtocolResponse>,
+        actual: Box<RuntimeProtocolResponse>,
+    },
+}
+
+impl std::fmt::Display for RuntimeProtocolSelfTestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "{error}"),
+            Self::Utf8(message) | Self::Decode(message) => write!(f, "{message}"),
+            Self::UnexpectedResponseCount { expected, actual } => write!(
+                f,
+                "unexpected Text Shortcuts stdio response count: expected {expected}, got {actual}"
+            ),
+            Self::UnexpectedResponse {
+                phase,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "unexpected Text Shortcuts stdio response during {phase}: expected {expected:?}, got {actual:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeProtocolSelfTestError {}
+
+pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTestError> {
+    let requests = [
+        r#"{"type":"table-changed","shortcuts":[{"replace":"omw","with":"on my way"}]}"#,
+        r#"{"type":"key","keyval":111,"unicode":"o","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":109,"unicode":"m","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":119,"unicode":"w","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":32,"unicode":" ","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"focus-in","purpose":9}"#,
+        r#"{"type":"key","keyval":111,"unicode":"o","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":109,"unicode":"m","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":119,"unicode":"w","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":32,"unicode":" ","pressed":true,"command_modifier_active":false}"#,
+    ]
+    .join("\n");
+    let input = format!("{requests}\n");
+    let mut output = Vec::new();
+    run_text_shortcuts_stdio_runtime(
+        IbusTextShortcutsRuntime::default(),
+        std::io::Cursor::new(input),
+        &mut output,
+    )
+    .map_err(RuntimeProtocolSelfTestError::Io)?;
+
+    let raw = String::from_utf8(output)
+        .map_err(|error| RuntimeProtocolSelfTestError::Utf8(format!("{error}")))?;
+    let responses = raw
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<RuntimeProtocolResponse>(line).map_err(|error| {
+                RuntimeProtocolSelfTestError::Decode(format!(
+                    "could not decode runtime response: {error}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if responses.len() != 10 {
+        return Err(RuntimeProtocolSelfTestError::UnexpectedResponseCount {
+            expected: 10,
+            actual: responses.len(),
+        });
+    }
+    expect_protocol_response(
+        "initial-table-change",
+        &responses[0],
+        RuntimeProtocolResponse {
+            handled: false,
+            operations: Vec::new(),
+            error: None,
+        },
+    )?;
+    expect_protocol_response(
+        "candidate-preedit",
+        &responses[3],
+        RuntimeProtocolResponse {
+            handled: false,
+            operations: vec![RuntimeProtocolOperation::UpdatePreeditText {
+                text: "on my way".to_string(),
+                cursor_pos: 9,
+                visible: true,
+            }],
+            error: None,
+        },
+    )?;
+    expect_protocol_response(
+        "boundary-commit",
+        &responses[4],
+        RuntimeProtocolResponse {
+            handled: true,
+            operations: vec![
+                RuntimeProtocolOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                },
+                RuntimeProtocolOperation::CommitText {
+                    text: "on my way ".to_string(),
+                },
+                RuntimeProtocolOperation::HidePreeditText,
+            ],
+            error: None,
+        },
+    )?;
+    expect_protocol_response(
+        "pin-pass-through",
+        &responses[9],
+        RuntimeProtocolResponse {
+            handled: false,
+            operations: Vec::new(),
+            error: None,
+        },
+    )
+}
+
+fn expect_protocol_response(
+    phase: &'static str,
+    actual: &RuntimeProtocolResponse,
+    expected: RuntimeProtocolResponse,
+) -> Result<(), RuntimeProtocolSelfTestError> {
+    if *actual == expected {
+        Ok(())
+    } else {
+        Err(RuntimeProtocolSelfTestError::UnexpectedResponse {
+            phase,
+            expected: Box::new(expected),
+            actual: Box::new(actual.clone()),
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IbusTextShortcutsRuntime {
     state: EngineState,
@@ -1272,8 +1639,9 @@ mod tests {
 
     use super::{
         content_purpose_from_ibus_input_purpose, content_purpose_from_ibus_input_purpose_name,
-        default_text_shortcuts_table_path, ibus_runtime_decision, input_event_from_ibus_key,
-        run_text_shortcuts_content_purpose_self_test, run_text_shortcuts_keystroke_self_test,
+        default_text_shortcuts_table_path, handle_runtime_protocol_line, ibus_runtime_decision,
+        input_event_from_ibus_key, run_text_shortcuts_content_purpose_self_test,
+        run_text_shortcuts_keystroke_self_test, run_text_shortcuts_stdio_self_test,
         run_text_shortcuts_table_watch_self_test, sanitize_shortcuts, ContentPurpose, EngineAction,
         EngineState, IbusKeyEvent, IbusOperation, IbusRuntimeDecision, IbusRuntimeEvent,
         IbusTextShortcutsRuntime, InputEvent, ShortcutTable, TableLoadStatus, TextShortcut,
@@ -1882,6 +2250,28 @@ mod tests {
     #[test]
     fn text_shortcuts_content_purpose_self_test_covers_hidden_input_contract() {
         assert_eq!(run_text_shortcuts_content_purpose_self_test(), Ok(()));
+    }
+
+    #[test]
+    fn text_shortcuts_stdio_self_test_covers_protocol_contract() {
+        assert_eq!(run_text_shortcuts_stdio_self_test(), Ok(()));
+    }
+
+    #[test]
+    fn runtime_protocol_rejects_multi_scalar_unicode_without_state_change() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        let response = handle_runtime_protocol_line(
+            &mut runtime,
+            r#"{"type":"key","keyval":111,"unicode":"om","pressed":true,"command_modifier_active":false}"#,
+        );
+        assert_eq!(response.handled, false);
+        assert!(response.operations.is_empty());
+        assert!(response
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("single scalar"));
+        assert_eq!(runtime.current_word(), "");
     }
 
     #[test]

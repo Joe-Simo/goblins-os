@@ -36,6 +36,7 @@ mod shortcuts;
 mod studio;
 mod system;
 mod system_image;
+mod text_shortcuts;
 mod voice;
 
 use std::net::SocketAddr;
@@ -197,6 +198,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/firewall/status", get(firewall::firewall_status))
         .route("/v1/focus/status", get(focus::focus_status))
         .route("/v1/keychain/status", get(keychain::keychain_status))
+        .route(
+            "/v1/text-shortcuts",
+            get(text_shortcuts::text_shortcuts_status).post(text_shortcuts::set_text_shortcuts),
+        )
+        .route(
+            "/v1/text-shortcuts/preview",
+            get(text_shortcuts::preview_text_shortcut),
+        )
         .route(
             "/v1/app-privacy/status",
             get(app_permissions::app_privacy_status),

@@ -7614,6 +7614,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/app-privacy/status",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-text-shortcuts-route",
+            "/v1/text-shortcuts",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-privacy-app-permissions",
             "App permissions",

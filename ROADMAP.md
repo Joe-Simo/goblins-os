@@ -86,7 +86,7 @@ implemented and locally gated, but the feature remains `in-progress` until the
 CI/qemu image pass proves the GTK render, polkit oneshot path, and live toggle.
 Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, `goblins-os-verify --source-root .` →
-**blocked=0 (1510)**, `git diff --check`, helper `bash -n`, polkit rule
+**blocked=0 (1513)**, `git diff --check`, helper `bash -n`, polkit rule
 `node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 The installed-image self-test now exercises `/v1/firewall/status` and the
@@ -96,8 +96,11 @@ non-systemd honest 502 firewall-toggle degradation. The local aarch64 Docker
 `settings-interactions` render target now captures the Security firewall switch
 before click and after the real `/v1/firewall/enabled` failure/revert path. This
 does **not** replace the missing CI/qemu proof of the GTK render, polkit oneshot
-path, or live toggle. `systemd-analyze verify` is not available on this macOS
-host.
+path, or live toggle. The image workflow now has a source-gated explicit
+`[image]` push marker so the CI/qemu image proof can be started when manual
+workflow dispatch is unavailable in the local tool session; unmarked pushes still
+run only the fast Rust gate, and installer ISO artifacts remain manual-only.
+`systemd-analyze verify` is not available on this macOS host.
 
 **NEXT — pick up exactly here:**
 1. **Gated writes pass**: first run the CI/qemu interaction proof for the

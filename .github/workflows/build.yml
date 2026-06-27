@@ -28,8 +28,9 @@ on:
     - cron: '0 6 * * 1'
 
 # Cost control: a newer push to the same ref cancels the in-flight run instead of
-# paying for both. The expensive image/installer-iso jobs are gated to manual
-# dispatch (see their `if:`), so a normal push only pays for the fast Rust gate.
+# paying for both. The expensive image job is gated to manual dispatch, the weekly
+# upstream-drift schedule, or an explicit `[image]` commit-message marker; a normal
+# push only pays for the fast Rust gate. The installer ISO remains manual-only.
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
@@ -83,9 +84,10 @@ jobs:
   # 2. Build the bootc OS image, enforce the packaging contract, and render the
   #    design-proof screenshots (uploaded as an artifact for review).
   image:
-    # Expensive (full image build + render). Runs on manual dispatch AND the weekly
-    # schedule (the upstream-drift gate) — the per-push fast gate is the `rust` job.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # Expensive (full image build + render). Runs on manual dispatch, the weekly
+    # schedule (the upstream-drift gate), or an explicit `[image]` push marker —
+    # the unmarked per-push fast gate is the `rust` job.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[image]'))
     strategy:
       fail-fast: false
       matrix:

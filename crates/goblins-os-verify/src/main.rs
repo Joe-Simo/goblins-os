@@ -1173,6 +1173,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "image-workflow-no-daemon-run",
         "docker run --rm goblins-os:${{ matrix.arch }}",
     ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-explicit-push-marker",
+        "contains(github.event.head_commit.message, '[image]')",
+    ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-push-marker-guard",
+        "github.event_name == 'push' && contains(github.event.head_commit.message, '[image]')",
+    ));
     checks.extend(settings_render_screenshot_checks(root));
     checks.extend(settings_interaction_screenshot_checks(root));
     checks.push(file_check(root, "os/bootc/render-desktop.sh"));

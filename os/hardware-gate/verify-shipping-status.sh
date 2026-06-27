@@ -487,6 +487,7 @@ check "rust job checks release" "rg -q 'cargo build --release --workspace' \"$WO
 check "image job has verify" "rg -q 'goblins-os-verify' \"$WORKFLOW\""
 check "image job checks blocked=0" "rg -q 'blocked=0' \"$WORKFLOW\""
 check "image job has selftest" "rg -q 'goblins-os:selftest' \"$WORKFLOW\""
+check "image job has explicit push marker trigger" "rg -Fq \"contains(github.event.head_commit.message, '[image]')\" \"$WORKFLOW\" && rg -Fq \"github.event_name == 'push' && contains(github.event.head_commit.message, '[image]')\" \"$WORKFLOW\""
 check "installer-iso job exists" "rg -q '^  installer-iso:' \"$WORKFLOW\""
 check "installer-iso job generates release evidence" "rg -q -- '--release-evidence /out' \"$WORKFLOW\" && rg -q 'rpm-packages.command' \"$WORKFLOW\""
 check "installer-iso job scans generated evidence for secrets" "rg -q 'goblins_os_artifact_secret_scan' \"$WORKFLOW\""

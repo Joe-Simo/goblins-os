@@ -15,6 +15,7 @@ members = [
   "crates/goblins-os-screenshot-context",
   "crates/goblins-os-settings",
   "crates/goblins-os-shell",
+  "crates/goblins-os-today",
   "crates/goblins-os-ui",
   "crates/goblins-os-verify",
   "crates/goblins-os-visual-lookup",

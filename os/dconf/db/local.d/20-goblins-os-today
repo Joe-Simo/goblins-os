@@ -1,0 +1,4 @@
+[org/goblins/os/today]
+enabled-widgets=['date', 'world-clock', 'weather', 'calendar', 'brief']
+brief-enabled=true
+open-on-edge-swipe=true

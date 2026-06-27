@@ -19,6 +19,7 @@ const BINARIES: &[&str] = &[
     "goblins-os-screenshot-context",
     "goblins-os-settings",
     "goblins-os-shell",
+    "goblins-os-today",
     "goblins-os-verify",
     "goblins-os-visual-lookup",
 ];
@@ -50,6 +51,7 @@ const APPLICATIONS: &[&str] = &[
     "org.goblins.OS.Recovery.desktop",
     "org.goblins.OS.Settings.desktop",
     "org.goblins.OS.Shell.desktop",
+    "org.goblins.OS.Today.desktop",
 ];
 
 const AUTOSTART: &[&str] = &["org.goblins.OS.Installer.desktop"];
@@ -57,6 +59,7 @@ const AUTOSTART: &[&str] = &["org.goblins.OS.Installer.desktop"];
 const DCONF_FILES: &[&str] = &[
     "00-goblins-os-first-run",
     "10-goblins-os-desktop",
+    "20-goblins-os-today",
     "30-captions",
     "40-sound-recognition",
 ];
@@ -103,6 +106,7 @@ const NATIVE_DESIGN_APPS: &[&str] = &[
     "goblins-os-login",
     "goblins-os-settings",
     "goblins-os-shell",
+    "goblins-os-today",
 ];
 
 const SETTINGS_RENDER_SCREENSHOTS: &[&str] = &[
@@ -8230,6 +8234,46 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/glib-schemas/org.goblins.os.today.gschema.xml"),
             "today-gschema-present",
             "org.goblins.os.today",
+        ),
+        contains_check(
+            root.join("os/dconf/db/local.d/20-goblins-os-today"),
+            "today-dconf-seeds-default-widget-layout",
+            "enabled-widgets=['date', 'world-clock', 'weather', 'calendar', 'brief']",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-builds-today-native-feature",
+            "goblins-os-today/native-desktop",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-today/src/main.rs"),
+            "today-panel-fetches-core-status",
+            "/v1/today/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-today/src/main.rs"),
+            "today-panel-documents-gnome-layer-shell-gate",
+            "GNOME Wayland is unsupported",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-today/src/main.rs"),
+            "today-panel-weather-honest-empty-state",
+            "Weather stays empty until location services and a weather source are available.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-today/src/main.rs"),
+            "today-panel-calendar-honest-empty-state",
+            "Connect a calendar account before Today can show upcoming events.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-today/src/main.rs"),
+            "today-panel-brief-honest-empty-state",
+            "Add a local model before Today can create an on-device daily brief.",
+        ),
+        contains_check(
+            root.join("os/applications/org.goblins.OS.Today.desktop"),
+            "today-desktop-launches-owned-binary",
+            "Exec=/usr/libexec/goblins-os/goblins-os-today",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),

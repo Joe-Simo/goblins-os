@@ -305,14 +305,35 @@ CI/qemu still must prove the portal region capture, GTK card render,
 launcher/menu entry, and final non-conflicting shortcut before Visual Look Up
 can ship.
 
+Current Today/Widgets continuation: the GTK Today panel surface is now
+source-gated but not shipped. The new `goblins-os-today` crate reads
+`/v1/today/status` over a loopback-only core URL, normalizes the widget layout,
+renders local Date and Clock cards from real local values, and renders Weather,
+Calendar, and Daily Brief as honest empty states until location services, a
+calendar account, and a local model are actually available. The image build now
+builds/copies the binary, the app has a desktop launcher, and
+`20-goblins-os-today` seeds the default widget order. Verifier coverage pins the
+binary, desktop launcher, dconf seed, native feature, core route fetch, shared UI
+theming, and honest empty-state copy. Web verification found Fedora 44 has
+`gtk4-layer-shell-devel`, but upstream documents GTK4 layer shell as unsupported
+on GNOME Wayland, so this pass intentionally adds no new RPMs and does not claim
+right-edge layer-shell anchoring. Local source gates: `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (1631)**,
+`git diff --check`, targeted `cargo test -p goblins-os-today`, and the Rust 1.88
+GTK container
+`cargo clippy -p goblins-os-today --features goblins-os-today/native-desktop -- -D warnings`.
+CI/qemu still must prove the GTK render, GNOME Shell/menu-bar date entry,
+edge-open behavior, and any future live weather/calendar/brief integrations
+before Today/Widgets can ship.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. Next is
-   Today/Widgets, then Sound Recognition, Switch Control, and
-   Text Shortcuts/IBus. Use host-tested pure logic first, keep every live/render
-   surface `in-progress` until CI/qemu proof is green, and do not add
-   `whisper-cpp` as a CLI dependency until the actual Fedora 44 `whisper-cli`
-   provider is proven.
+   Sound Recognition, then Switch Control, and Text Shortcuts/IBus. Use
+   host-tested pure logic first, keep every live/render surface `in-progress`
+   until CI/qemu proof is green, and do not add `whisper-cpp` as a CLI
+   dependency until the actual Fedora 44 `whisper-cli` provider is proven.
 2. **Deferred gated writes proof pass:** firewall CI image/render proof is green
    and the hardware-gate image/ISO path is past the export blocker; later
    push/dispatch the QMP-startup fix, inspect the display-backed VM logs if
@@ -607,11 +628,11 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 
 ### `in-progress` Desktop Widgets + Today view
 - [x] **Widget registry + layout substrate shipped** (`crates/goblins-os-core/src/today.rs` + `/v1/today/status` + `/v1/today/layout`, NEW `org.goblins.os.today` gschema via `os/glib-schemas/`): the glance-widget registry (each with its honest capability requirement — weather→location, brief→on-device model, calendar→account) and the layout model with pure `normalize_layout` (known-only, dedupe, preserve order) + `parse_gsettings_strv`, unit-tested (195 core tests). Honest-gated to a default layout when the schema is absent. `glib-compile-schemas` clean; clippy/fmt clean; route + schema verify gates.
-- [ ] **Layer-shell Today panel (deferred, XL):** the `goblins-os-today` GTK crate (`gtk4-layer-shell` right-edge panel, glass material, the live widgets — world-clock tz math, libgweather4/geoclue2 weather, EDS agenda, on-device daily brief), the `gtk4-layer-shell`/`libgweather4`/`geoclue2` packages, the menu-bar date button + edge-swipe.
-- **Packages:** `gtk4-layer-shell` (`1.3.0-1`, **main** Fedora repo — first layer-shell use in the repo), `libgweather4` (`4.6.0-1.fc44`), `geoclue2`.
+- [x] **Today panel surface source-gated (CI/qemu-pending):** the `goblins-os-today` GTK crate reads `/v1/today/status`, renders local Date/Clock cards with real local values, and renders Weather/Calendar/Daily Brief as honest empty states until location services, a calendar account, and a local model are actually available. The app uses shared Goblins UI theming, has a desktop launcher, a dconf seed for the default widget order, and is copied into the image. Web verification found `gtk4-layer-shell-devel` in Fedora 44, but upstream documents GTK4 layer shell is unsupported on GNOME Wayland; this source-gated pass therefore does **not** add layer-shell packages or claim right-edge shell anchoring. Menu-bar date button, edge-swipe, live weather/calendar/brief data, and render proof remain CI/qemu-pending.
+- **Packages:** **none in the source-gated GTK pass**. Do not add `gtk4-layer-shell` to the GNOME path until a GNOME-supported shell/portal strategy is proven. Future live weather/calendar work still needs exact Fedora 44 verification before adding `libgweather4`, `geoclue2`, or EDS packages.
 - **gsettings/dconf:** READ `color-scheme`/`clock-format`/`clock-show-weekday`/`clock-show-seconds`; `org.gnome.GWeather4` units + default-location; `org.gnome.system.location enabled` (honest-gate auto-location/weather). OWN a compiled `org.goblins.os.today` (layout `a(sy)`, enabled-widgets, brief-enabled, weather-location, open-on-edge-swipe, reduce-translucency-respected) + a `20-goblins-os-today` seed.
-- **Files:** `crates/goblins-os-today/{Cargo.toml,src/main.rs,src/widgets/*}` (NEW crate mirroring `goblins-os-control-center`; `gtk4-layer-shell 0.7` optional behind native-desktop; layer-shell anchoring + Today header + widget VBox in a ScrolledWindow + Edit-Widgets toggle; each widget returns a `gos-card` box with an honest empty state), workspace `Cargo.toml`, `os/bootc/Containerfile` (features + `gtk4-layer-shell-devel` build-dep + runtime `rpm -q` + COPY binary + glib-compile-schemas **after** the gschema COPY), `os/dconf/schemas/org.goblins.os.today.gschema.xml`, `os/dconf/db/local.d/20-goblins-os-today`, `…/goblins-menubar@goblins.os/extension.js` (date/clock button + edge-swipe → spawn the binary), `os/applications/org.goblins.OS.Today.desktop`.
-- **APIs:** `gtk4-layer-shell` (`set_layer(Overlay)`, `set_anchor(Right/Top/Bottom)`, exclusive zone OFF, `KeyboardMode::OnDemand`); libgweather4 (prefer a gsettings-CLI read of the location for host-testability); geoclue2 D-Bus **only** when location enabled; EDS e-cal for the agenda; the core AI bridge for the daily-brief; `GtkGestureSwipe` + `is_gtk_enable_animations()`.
+- **Files:** `crates/goblins-os-today/{Cargo.toml,src/main.rs}` (NEW crate mirroring `goblins-os-control-center`; Today header + widget VBox, each widget returns a Goblins card with an honest empty state), workspace `Cargo.toml`, `os/bootc/Containerfile` (features + COPY binary + glib-compile-schemas **after** the gschema COPY), `os/glib-schemas/org.goblins.os.today.gschema.xml`, `os/dconf/db/local.d/20-goblins-os-today`, `…/goblins-menubar@goblins.os/extension.js` (future date/clock button + edge-swipe → spawn the binary), `os/applications/org.goblins.OS.Today.desktop`.
+- **APIs:** GTK4 application window on the shared Goblins UI tokens; future shell/edge behavior belongs in the GNOME Shell extension path, not GTK layer shell, unless a GNOME-supported API is proven. Later live widgets use libgweather4 (prefer a gsettings-CLI read of the location for host-testability), geoclue2 D-Bus **only** when location enabled, EDS e-cal for the agenda, and the core AI bridge for the daily brief.
 - **Goblins-grade:** mirror the control-center glass panel — `gos_material_thick` vibrancy, overlay radius 22, border+shadow; header long date `GOS_TYPE_TITLE_1` + weekday eyebrow + `themed_brand_mark(16)`; `gos-card` widget tiles (radius 12, 10px gaps); slide-in `MOTION_OVERLAY_MS` spring gated on animations; 360-380px right-anchored full-height column with a ScrolledWindow body.
 - **Honest gating:** weather — location off/geoclue/network absent → "Turn on Location to see weather" deep-link (no fabricated forecast); agenda — no EDS account → "No calendars connected…"; daily brief — gated on the on-device resident (reuse `ResidentStatus`); model not loaded → "On-device brief unavailable…", **no cloud fallback**; world clock always works (pure-Rust tz math); reduced-translucency/high-contrast → opaque `gos_surface`, no spring.
 - **Verifiable:** host — world-clock tz math, layout model (id+size order, add/remove/reorder), brief prompt assembly, weather-unit formatting, dconf layout parse. CI/qemu — layer-shell anchoring/slide-in, GTK render, menubar button + edge-swipe, geoclue/libgweather live data, EDS agenda (light+dark screenshots).

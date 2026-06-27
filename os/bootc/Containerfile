@@ -15,7 +15,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-markup/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop"
+RUN cargo build --release --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-markup/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop goblins-os-today/native-desktop"
 RUN install -d /tmp/goblins-sounds/GoblinsOS/stereo \
     && sox -n -r 48000 -c 2 /tmp/goblins-sounds/GoblinsOS/stereo/system-ready.wav synth 0.32 sine 329.63 sine 493.88 fade t 0.02 0.32 0.12 gain -18 \
     && sox -n -r 48000 -c 2 /tmp/goblins-sounds/GoblinsOS/stereo/desktop-login.wav synth 0.28 sine 392 sine 587.33 fade t 0.02 0.28 0.10 gain -19 \
@@ -228,6 +228,7 @@ COPY --from=rust-build /src/target/release/goblins-os-resident /usr/libexec/gobl
 COPY --from=rust-build /src/target/release/goblins-os-screenshot-context /usr/libexec/goblins-os/goblins-os-screenshot-context
 COPY --from=rust-build /src/target/release/goblins-os-settings /usr/libexec/goblins-os/goblins-os-settings
 COPY --from=rust-build /src/target/release/goblins-os-shell /usr/libexec/goblins-os/goblins-os-shell
+COPY --from=rust-build /src/target/release/goblins-os-today /usr/libexec/goblins-os/goblins-os-today
 COPY --from=rust-build /src/target/release/goblins-os-verify /usr/libexec/goblins-os/goblins-os-verify
 COPY --from=rust-build /src/target/release/goblins-os-visual-lookup /usr/libexec/goblins-os/goblins-os-visual-lookup
 

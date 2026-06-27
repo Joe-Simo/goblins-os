@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Today
+Comment=Goblins OS glance widgets and daily context
+Exec=/usr/libexec/goblins-os/goblins-os-today
+Icon=/usr/share/goblins-os/brand/icons/settings.svg
+Categories=Utility;System;
+Keywords=Today;Widgets;Calendar;Weather;Clock;Brief;Goblins OS;
+NoDisplay=false
+StartupNotify=true
+StartupWMClass=org.goblins.OS.Today

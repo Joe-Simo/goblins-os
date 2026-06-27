@@ -788,6 +788,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "goblins-os-today"
+version = "0.1.0"
+dependencies = [
+ "goblins-os-ui",
+ "gtk4",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goblins-os-ui"
 version = "0.1.0"
 dependencies = [

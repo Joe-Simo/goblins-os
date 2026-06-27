@@ -55,7 +55,7 @@ Nothing was pushed blind.
 - **Web-verify** — `WebSearch`/`WebFetch` confirm Fedora-44 package names + D-Bus
   shapes before any Containerfile/D-Bus change (did seahorse + the PermissionStore).
 
-**Done so far (19 of 26 features advanced):**
+**Done so far (21 of 26 features advanced):**
 - **Batch 1 (Bucket A) — complete:** Live Text/OCR (core+handoff+markup Copy Text),
   Color picker. *(IME read+list also shipped.)*
 - **Batch 2 (shell) — complete:** App Exposé, Hot Corners, Snap Assist.
@@ -64,20 +64,15 @@ Nothing was pushed blind.
   Migration (substrate), Multi-display (read side via `displays.rs`), Personal
   Hotspot, Per-app privacy, Keychain. **Gated WRITES remain deferred** (firewall
   toggle, IME set, focus arm, per-app revoke, multi-display apply, keyboard rebind).
-- **Batch 4 (engines) — 5 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**
-  Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today.
+- **Batch 4 (engines) — 7 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**
+  Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today,
+  Sound Recognition, Live Captions.
 
 **NEXT — pick up exactly here:**
-1. **Sound Recognition** substrate (`crates/goblins-os-core/src/sound_recognition.rs`
-   + `/v1/sound-recognition/status`) — capability gate (classifier model) + the
-   sound-category registry, honest-gated. Pure registry/normalizer + tests. *(Batch 4)*
-2. **Live Captions** substrate (`live_captions.rs` + `/v1/live-captions/status`) —
-   STT-model capability gate + caption config (font size/position), honest-gated.
-   *(Batch 4 — last engine substrate.)*
-3. Then the **CI/qemu UI pass**: run the `build` image workflow to render + validate
+1. **CI/qemu UI pass**: run the `build` image workflow to render + validate
    every deferred GTK/shell surface (Batch 2 extensions, all Batch-3 Settings rows,
    the engine UIs), turning `in-progress` → `shipped` per item.
-4. **Batch 5 (Bucket D) LAST, qemu-gated:** FileVault-at-install, btrfs `/home` +
+2. **Batch 5 (Bucket D) LAST, qemu-gated:** FileVault-at-install, btrfs `/home` +
    snapshots — never blind-edit PAM/root-fs (use `authselect`); do under the hardware gate.
 
 Each substrate follows the proven shape: **pure unit-tested core + honest capability
@@ -315,7 +310,8 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - **Verifiable:** host — phrase normalization, exact/fuzzy match, no-match→dictation branch, readiness/policy mapping, outcome serde; registry tests. CI/qemu — `arecord` capture, transcription, keybinding, Settings card, the HUD.
 - **Effort:** L · **Risk:** MED. Executing actions by voice is a privilege surface — dispatch only through the gated handlers; deterministic match first, LLM proposes only, every match echoes "Heard: X → Action Y." Not boot/login-critical. v2 shell overlay deferred.
 
-### `TODO` Live Captions (real-time on-device caption overlay)
+### `in-progress` Live Captions (real-time on-device caption overlay)
+- [x] **Status/config substrate shipped** (`crates/goblins-os-core/src/live_captions.rs` + `/v1/live-captions/status`, NEW `org.goblins.shell.extensions.captions` gschema via `os/glib-schemas/`, dconf-seeded off): STT runtime/model/PipeWire/capture capability gates, caption config normalizers (source, text size, position, auto-hide, keep-onscreen), Whisper argv builder, and VAD/RMS segment helpers are pure + host-tested. The shell overlay/SSE stream and live capture remain CI/qemu-pending.
 - [ ] A tasteful floating, auto-hiding caption overlay of system (and optionally microphone) audio, with a menu-bar toggle + global shortcut, on-device only.
 - **Packages:** `whisper-cpp` (`1.8.1-2.fc44`; provides `whisper-cli`). **Do NOT** depend on `whisper-stream` (SDL2, often unpackaged, mic-via-SDL — wrong tool).
 - **gsettings/dconf:** NEW `org.goblins.shell.extensions.captions` (enabled, toggle-captions `['<Super><Alt>c']`, source system|microphone|both, auto-hide, keep-onscreen, text-size, position) + a `30-captions` seed shipping installed-but-off (`enabled=false`).

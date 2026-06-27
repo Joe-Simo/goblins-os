@@ -1,0 +1,10 @@
+# Live Captions defaults — local captions are explicit opt-in and ship disabled.
+# The status/config substrate lands first; the shell overlay and stream are qemu-gated.
+
+[org/goblins/shell/extensions/captions]
+enabled=false
+source='system'
+auto-hide=true
+keep-onscreen=true
+text-size='medium'
+position='bottom'

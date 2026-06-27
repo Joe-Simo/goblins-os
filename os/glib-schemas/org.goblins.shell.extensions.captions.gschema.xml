@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.goblins.shell.extensions.captions" path="/org/goblins/shell/extensions/captions/">
+    <key name="enabled" type="b">
+      <default>false</default>
+      <summary>Live Captions enabled</summary>
+      <description>Whether the local caption stream and overlay may run. Off by default.</description>
+    </key>
+    <key name="source" type="s">
+      <choices>
+        <choice value="system"/>
+        <choice value="microphone"/>
+        <choice value="both"/>
+      </choices>
+      <default>'system'</default>
+      <summary>Caption audio source</summary>
+      <description>The audio source to caption when Live Captions is enabled.</description>
+    </key>
+    <key name="auto-hide" type="b">
+      <default>true</default>
+      <summary>Auto-hide when idle</summary>
+      <description>Whether the overlay fades away after recent captions settle.</description>
+    </key>
+    <key name="keep-onscreen" type="b">
+      <default>true</default>
+      <summary>Keep captions onscreen</summary>
+      <description>Whether the overlay should stay inside the current monitor work area.</description>
+    </key>
+    <key name="text-size" type="s">
+      <choices>
+        <choice value="small"/>
+        <choice value="medium"/>
+        <choice value="large"/>
+      </choices>
+      <default>'medium'</default>
+      <summary>Caption text size</summary>
+      <description>The caption text scale used by the overlay.</description>
+    </key>
+    <key name="position" type="s">
+      <choices>
+        <choice value="bottom"/>
+        <choice value="top"/>
+        <choice value="floating"/>
+      </choices>
+      <default>'bottom'</default>
+      <summary>Caption overlay position</summary>
+      <description>Where Live Captions should place the overlay.</description>
+    </key>
+  </schema>
+</schemalist>

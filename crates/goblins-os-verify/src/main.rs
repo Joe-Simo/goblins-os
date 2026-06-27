@@ -56,6 +56,7 @@ const AUTOSTART: &[&str] = &["org.goblins.OS.Installer.desktop"];
 const DCONF_FILES: &[&str] = &[
     "00-goblins-os-first-run",
     "10-goblins-os-desktop",
+    "30-captions",
     "40-sound-recognition",
 ];
 
@@ -64,6 +65,7 @@ const GLIB_SCHEMA_FILES: &[&str] = &[
     "org.goblins.os.a11y.switch-control.gschema.xml",
     "org.goblins.os.focus.gschema.xml",
     "org.goblins.os.today.gschema.xml",
+    "org.goblins.shell.extensions.captions.gschema.xml",
 ];
 
 const GNOME_SHELL_EXTENSION_FILES: &[&str] = &[
@@ -1417,6 +1419,7 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         root,
         "etc/dconf/db/local.d/10-goblins-os-desktop",
     ));
+    checks.push(file_check(root, "etc/dconf/db/local.d/30-captions"));
     checks.push(file_check(
         root,
         "etc/dconf/db/local.d/40-sound-recognition",
@@ -7701,6 +7704,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/dconf/db/local.d/40-sound-recognition"),
             "sound-recognition-defaults-all-off",
+            "enabled=false",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-live-captions-route",
+            "/v1/live-captions/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/live_captions.rs"),
+            "live-captions-model-gate",
+            "Add a speech model to turn on Live Captions",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/live_captions.rs"),
+            "live-captions-whisper-argv-builder",
+            "whisper_caption_args",
+        ),
+        contains_check(
+            root.join("os/glib-schemas/org.goblins.shell.extensions.captions.gschema.xml"),
+            "live-captions-gschema-present",
+            "org.goblins.shell.extensions.captions",
+        ),
+        contains_check(
+            root.join("os/dconf/db/local.d/30-captions"),
+            "live-captions-defaults-off",
             "enabled=false",
         ),
         contains_check(

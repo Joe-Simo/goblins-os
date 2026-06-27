@@ -19,6 +19,7 @@ mod input;
 mod install_targets;
 mod installer;
 mod keychain;
+mod live_captions;
 mod migration;
 mod model_manager;
 mod network;
@@ -198,6 +199,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/voice/status", get(voice_status))
         .route("/v1/voice/converse", post(voice_converse))
         .route("/v1/voice/dictate", post(voice_dictate))
+        .route(
+            "/v1/live-captions/status",
+            get(live_captions::live_captions_status),
+        )
         .route(
             "/v1/voice/control/vocabulary",
             get(voice_control::voice_control_vocabulary),

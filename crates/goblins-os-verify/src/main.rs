@@ -8287,6 +8287,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-pipeline",
+            "pub struct IbusTextShortcutsRuntime",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-pipeline-normalizes-keys",
+            "input_event_from_ibus_key(event)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-pipeline-honors-content-purpose",
+            "set_content_purpose",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-pipeline-reuses-operation-adapter",
+            "ibus_runtime_decision(action)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-runtime-uses-delete-surrounding-text",
             "IbusOperation::DeleteSurroundingText",
         ),

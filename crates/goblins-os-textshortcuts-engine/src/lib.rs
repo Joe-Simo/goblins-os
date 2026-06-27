@@ -333,6 +333,66 @@ pub fn ibus_runtime_decision(action: EngineAction) -> IbusRuntimeDecision {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IbusTextShortcutsRuntime {
+    state: EngineState,
+    table: ShortcutTable,
+    content_purpose: ContentPurpose,
+}
+
+impl IbusTextShortcutsRuntime {
+    pub fn new(table: ShortcutTable) -> Self {
+        Self {
+            state: EngineState::default(),
+            table,
+            content_purpose: ContentPurpose::Normal,
+        }
+    }
+
+    pub fn set_table(&mut self, table: ShortcutTable) -> IbusRuntimeDecision {
+        self.table = table;
+        self.clear_state()
+    }
+
+    pub fn set_content_purpose(&mut self, purpose: ContentPurpose) -> IbusRuntimeDecision {
+        self.content_purpose = purpose;
+        if purpose.permits_replacement() {
+            IbusRuntimeDecision::pass_through()
+        } else {
+            self.clear_state()
+        }
+    }
+
+    pub fn content_purpose(&self) -> ContentPurpose {
+        self.content_purpose
+    }
+
+    pub fn current_word(&self) -> &str {
+        self.state.current_word()
+    }
+
+    pub fn handle_key(&mut self, event: IbusKeyEvent) -> IbusRuntimeDecision {
+        let input = input_event_from_ibus_key(event);
+        let action = self
+            .state
+            .handle_event(self.content_purpose, input, &self.table);
+        ibus_runtime_decision(action)
+    }
+
+    fn clear_state(&mut self) -> IbusRuntimeDecision {
+        let action = self
+            .state
+            .handle_event(self.content_purpose, InputEvent::Reset, &self.table);
+        ibus_runtime_decision(action)
+    }
+}
+
+impl Default for IbusTextShortcutsRuntime {
+    fn default() -> Self {
+        Self::new(ShortcutTable::default())
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EngineState {
     current_word: String,
@@ -432,9 +492,10 @@ pub fn is_boundary_char(value: char) -> bool {
 mod tests {
     use super::{
         ibus_runtime_decision, input_event_from_ibus_key, sanitize_shortcuts, ContentPurpose,
-        EngineAction, EngineState, IbusKeyEvent, IbusOperation, IbusRuntimeDecision, InputEvent,
-        ShortcutTable, TextShortcut, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE, IBUS_KEY_DOWN,
-        IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
+        EngineAction, EngineState, IbusKeyEvent, IbusOperation, IbusRuntimeDecision,
+        IbusTextShortcutsRuntime, InputEvent, ShortcutTable, TextShortcut, IBUS_KEY_BACKSPACE,
+        IBUS_KEY_DELETE, IBUS_KEY_DOWN, IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN,
+        IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
     };
 
     fn table() -> ShortcutTable {
@@ -454,6 +515,18 @@ mod tests {
             );
         }
         action
+    }
+
+    fn ibus_char(value: char) -> IbusKeyEvent {
+        IbusKeyEvent::new(value as u32, Some(value), true, false)
+    }
+
+    fn type_ibus_chars(runtime: &mut IbusTextShortcutsRuntime, value: &str) -> IbusRuntimeDecision {
+        let mut decision = IbusRuntimeDecision::pass_through();
+        for character in value.chars() {
+            decision = runtime.handle_key(ibus_char(character));
+        }
+        decision
     }
 
     #[test]
@@ -730,6 +803,99 @@ mod tests {
         assert_eq!(
             decision,
             IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+        );
+    }
+
+    #[test]
+    fn ibus_runtime_pipeline_shows_candidate_then_commits_replacement() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        let candidate = type_ibus_chars(&mut runtime, "omw");
+        assert_eq!(
+            candidate,
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+                text: "on my way".to_string(),
+                cursor_pos: 9,
+                visible: true,
+            }])
+        );
+        assert!(!candidate.key_handled());
+        assert_eq!(runtime.current_word(), "omw");
+
+        let committed = runtime.handle_key(ibus_char(' '));
+        assert_eq!(
+            committed,
+            IbusRuntimeDecision::handled(vec![
+                IbusOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                },
+                IbusOperation::CommitText("on my way ".to_string()),
+                IbusOperation::HidePreeditText,
+            ])
+        );
+        assert_eq!(runtime.current_word(), "");
+    }
+
+    #[test]
+    fn ibus_runtime_pipeline_passes_unknown_words_and_releases() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "hello"),
+            IbusRuntimeDecision::pass_through()
+        );
+        assert_eq!(runtime.current_word(), "hello");
+        assert_eq!(
+            runtime.handle_key(IbusKeyEvent::new('o' as u32, Some('o'), false, false)),
+            IbusRuntimeDecision::pass_through()
+        );
+        assert_eq!(runtime.current_word(), "hello");
+        assert_eq!(
+            runtime.handle_key(ibus_char(' ')),
+            IbusRuntimeDecision::pass_through()
+        );
+        assert_eq!(runtime.current_word(), "");
+    }
+
+    #[test]
+    fn ibus_runtime_pipeline_clears_on_sensitive_content_purpose() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+                text: "on my way".to_string(),
+                cursor_pos: 9,
+                visible: true,
+            }])
+        );
+
+        assert_eq!(
+            runtime.set_content_purpose(ContentPurpose::Password),
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+        );
+        assert_eq!(runtime.content_purpose(), ContentPurpose::Password);
+        assert_eq!(runtime.current_word(), "");
+        assert_eq!(
+            runtime.handle_key(ibus_char(' ')),
+            IbusRuntimeDecision::pass_through()
+        );
+    }
+
+    #[test]
+    fn ibus_runtime_pipeline_command_modifier_resets_without_commit() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert!(matches!(
+            type_ibus_chars(&mut runtime, "omw").operations(),
+            [IbusOperation::UpdatePreeditText { .. }]
+        ));
+
+        assert_eq!(
+            runtime.handle_key(IbusKeyEvent::new('c' as u32, Some('c'), true, true)),
+            IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+        );
+        assert_eq!(runtime.current_word(), "");
+        assert_eq!(
+            runtime.handle_key(ibus_char(' ')),
+            IbusRuntimeDecision::pass_through()
         );
     }
 }

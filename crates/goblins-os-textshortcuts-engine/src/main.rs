@@ -3,8 +3,8 @@ use std::fs;
 use std::process::ExitCode;
 
 use goblins_os_textshortcuts_engine::{
-    ibus_runtime_decision, validate_ibus_component_xml, ContentPurpose, EngineAction, EngineState,
-    IbusOperation, InputEvent, ShortcutTable, TextShortcut,
+    validate_ibus_component_xml, IbusKeyEvent, IbusOperation, IbusRuntimeDecision,
+    IbusTextShortcutsRuntime, ShortcutTable, TextShortcut,
 };
 use serde::Serialize;
 
@@ -91,41 +91,45 @@ fn print_preview(trigger: &str, table: &ShortcutTable) -> Result<(), String> {
 
 fn self_test() -> Result<(), String> {
     let table = ShortcutTable::from_shortcuts(vec![TextShortcut::new("omw", "on my way")]);
-    let mut state = EngineState::default();
+    let mut runtime = IbusTextShortcutsRuntime::new(table);
+    let mut candidate = IbusRuntimeDecision::pass_through();
     for character in "omw".chars() {
-        state.handle_event(
-            ContentPurpose::Normal,
-            InputEvent::Character(character),
-            &table,
-        );
+        candidate = runtime.handle_key(IbusKeyEvent::new(
+            character as u32,
+            Some(character),
+            true,
+            false,
+        ));
     }
-    let action = state.handle_event(ContentPurpose::Normal, InputEvent::Boundary(' '), &table);
-    match action.clone() {
-        EngineAction::CommitReplacement {
-            delete_previous_chars: 3,
-            text,
-        } if text == "on my way " => {
-            let decision = ibus_runtime_decision(action);
-            if decision.key_handled()
-                && decision.operations()
-                    == [
-                        IbusOperation::DeleteSurroundingText {
-                            offset: -3,
-                            n_chars: 3,
-                        },
-                        IbusOperation::CommitText("on my way ".to_string()),
-                        IbusOperation::HidePreeditText,
-                    ]
-            {
-                Ok(())
-            } else {
-                Err(format!(
-                    "unexpected Text Shortcuts runtime decision: {decision:?}"
-                ))
-            }
-        }
-        other => Err(format!(
-            "unexpected Text Shortcuts self-test action: {other:?}"
-        )),
+    if candidate.key_handled()
+        || candidate.operations()
+            != [IbusOperation::UpdatePreeditText {
+                text: "on my way".to_string(),
+                cursor_pos: 9,
+                visible: true,
+            }]
+    {
+        return Err(format!(
+            "unexpected Text Shortcuts candidate decision: {candidate:?}"
+        ));
+    }
+
+    let decision = runtime.handle_key(IbusKeyEvent::new(' ' as u32, Some(' '), true, false));
+    if decision.key_handled()
+        && decision.operations()
+            == [
+                IbusOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                },
+                IbusOperation::CommitText("on my way ".to_string()),
+                IbusOperation::HidePreeditText,
+            ]
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "unexpected Text Shortcuts runtime decision: {decision:?}"
+        ))
     }
 }

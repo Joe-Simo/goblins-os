@@ -215,6 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/v1/voice/control/resolve",
             post(voice_control::resolve_voice_command),
         )
+        .route("/v1/voice/control", post(voice_control::voice_control))
         .route("/v1/vision/status", get(vision::vision_status))
         .route("/v1/ai/visual-lookup", post(vision::visual_lookup))
         .route("/v1/today/status", get(today::today_status))

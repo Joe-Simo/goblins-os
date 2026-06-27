@@ -39,6 +39,7 @@ paths = [
   "os/systemd-user/",
   "os/themes/",
   "os/tmpfiles/",
+  "os/voice/",
   "SHIP.md",
   "LICENSE",
   "TRADEMARKS.md",

@@ -4174,6 +4174,11 @@ fn acquisition_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/release/source-tree-manifest.toml"),
+            "source-manifest-classifies-voice-helpers",
+            "os/voice/",
+        ),
+        contains_check(
+            root.join("os/release/source-tree-manifest.toml"),
             "source-manifest-classifies-local-agent-state",
             ".claude/",
         ),
@@ -8104,6 +8109,46 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-voice-control-route",
             "/v1/voice/control/resolve",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-voice-control-dispatch-route",
+            "/v1/voice/control",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice_control.rs"),
+            "core-voice-control-dispatches-through-safe-settings",
+            "dispatch_voice_safe_setting_change",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice_control.rs"),
+            "core-voice-control-no-match-dictation-fallback",
+            "fall_through_to_dictation: true",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-ai/src/lib.rs"),
+            "ai-registry-has-voice-control-action",
+            "id: \"voice-control\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-ai/src/lib.rs"),
+            "ai-registry-has-voice-entrypoint",
+            "AiEntrypoint::Voice",
+        ),
+        contains_check(
+            root.join("os/voice/goblins-os-voice-control"),
+            "voice-control-helper-calls-core-route",
+            "/v1/voice/control",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-copies-voice-control-helper",
+            "goblins-os-voice-control",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-voice-control-source-gated-copy",
+            "Voice Control is source-gated",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),

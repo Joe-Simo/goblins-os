@@ -238,21 +238,49 @@ qemu proves the live gsettings round trip. Local source gates:
 `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
 `goblins-os-verify --source-root .` → **blocked=0 (1585)**.
 
+Current Voice Control continuation: the push-to-talk dispatch route is now
+source-gated but not shipped. Core exposes `/v1/voice/control`, can capture
+through the existing dictation path or accept an injected transcript, resolves
+only exact curated phrases, falls through to dictation when nothing matches, and
+dispatches matched commands only through the existing
+`open_settings_panel`/`change_safe_setting` policy + confirmation helpers. The
+shared AI registry now has a `voice-control` action and `Voice` entrypoint, the
+session helper is copied into the image, and Settings reports the source-gated
+Voice Control status without a dead toggle. Fedora 44 package probing found
+`whisper-cpp`/`whisper-cpp-devel` as `1.8.1-2.fc44`, but repoquery listed only
+libraries/headers and no provider for `whisper-cli`, so this pass intentionally
+does **not** add a new RPM or keybinding. The requested `<Super><Alt>c` binding
+also collides with the shipped Color Picker binding. Local source gates:
+`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `goblins-os-verify --source-root .` →
+**blocked=0 (1594)**, `git diff --check`,
+`bash -n os/voice/goblins-os-voice-control os/hardware-gate/verify-shipping-status.sh`,
+targeted `cargo check -p goblins-os-core -p goblins-os-ai`, targeted
+`cargo test -p goblins-os-core voice_control -- --nocapture`, and the Rust 1.88
+GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
+CI/qemu must still prove live capture/transcription, Settings render, helper
+launch/type behavior, confirmation UI, and HUD before this feature can ship.
+
 **NEXT — pick up exactly here:**
-1. **Gated writes pass**: firewall CI image/render proof is green and the
-   hardware-gate image/ISO path is past the export blocker; next push/dispatch
-   the QMP-startup fix, inspect the display-backed VM logs if startup still
-   fails, and inspect `firewall-live-toggle-proof.json` only if the session
-   reaches the in-guest firewall toggle. That proof must show the live
-   systemd/polkit oneshot success path for the firewall toggle.
-   Only flip it to `shipped` if the render, live POST, and polkit oneshot path are green. Then
-   prove the IME set, Focus, per-app permission revoke, multi-display apply, and keyboard rebinding interactions in CI/qemu.
-   Do not flip any of these
-   from `in-progress` until the write path and qemu interaction proof are green.
-2. **Batch 4 engine UI pass**: build the deferred engine UIs/overlays one feature
-   at a time (Voice Control, Live Captions, Switch Control, Sound Recognition,
-   Today/Widgets, Text Shortcuts/IBus, Visual Look Up), with host-tested core
-   logic first and CI/qemu render or live-engine proof before status changes.
+1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
+   continue the deferred engine UIs/overlays one feature at a time. Next is Live
+   Captions overlay/stream source work, then Visual Look Up, Today/Widgets,
+   Sound Recognition, Switch Control, and Text Shortcuts/IBus. Use host-tested
+   pure logic first, keep every live/render surface `in-progress` until CI/qemu
+   proof is green, and do not add `whisper-cpp` as a CLI dependency until the
+   actual Fedora 44 `whisper-cli` provider is proven.
+2. **Deferred gated writes proof pass:** firewall CI image/render proof is green
+   and the hardware-gate image/ISO path is past the export blocker; later
+   push/dispatch the QMP-startup fix, inspect the display-backed VM logs if
+   startup still fails, and inspect `firewall-live-toggle-proof.json` only if
+   the session reaches the in-guest firewall toggle. That proof must show the
+   live systemd/polkit oneshot success path for the firewall toggle. Only flip
+   it to `shipped` if the render, live POST, and polkit oneshot path are green.
+   Then prove the IME set, Focus, per-app permission revoke, multi-display
+   apply, keyboard rebinding, and Voice Control interactions in CI/qemu. Do not
+   flip any of these from `in-progress` until the write path and qemu interaction
+   proof are green.
 3. **Batch 5 (Bucket D) LAST, qemu-gated:** FileVault-at-install, btrfs `/home` +
    snapshots — never blind-edit PAM/root-fs (use `authselect`); do under the hardware gate.
 
@@ -486,9 +514,10 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 
 ### `in-progress` Voice Control (spoken command → action)
 - [x] **Command-vocabulary substrate shipped** (`crates/goblins-os-core/src/voice_control.rs` + `/v1/voice/control/vocabulary` + `/v1/voice/control/resolve`): the curated phrase→action vocabulary, with pure `normalize_phrase` (lowercase/punctuation/whitespace) and deterministic `match_command` (exact-only — **never guesses**; no match → `fall_through_to_dictation`), echoing "Heard: X → Action Y". Resolve-only (never executes). `engine_available` honest-gated on whisper presence (`GOBLINS_OS_WHISPER_BIN` override). 188 core tests (incl. a test forbidding the Apple-assistant name); clippy/fmt clean; route gate.
-- [ ] **Capture → transcribe → dispatch engine (deferred, L):** the `goblins-os-voice-control` helper (push-to-talk via `arecord`, whisper transcription), dispatch **through** the gated `change_safe_setting`/`open_settings_panel` handlers (deterministic first, LLM proposes only), the `whisper-cpp` package + dconf binding, the Accessibility card + push-to-talk HUD.
-- **Packages:** `whisper-cpp` (`1.8.1-2.fc44`, main repo; confirm the exact `/usr/bin` name with `rpm -ql` — the CLI renamed `main`→`whisper-cli`; `voice.rs` already defaults to `whisper-cli` with a `GOBLINS_OS_WHISPER_BIN` override + honest gate, so a mismatch degrades, not breaks).
-- **dconf:** append `goblins-voice-control` (command `/usr/libexec/goblins-os/goblins-os-voice-control`, binding `<Super><Alt>c`) next to `goblins-dictate`. **No new schema** — reuses the core bridge + the **existing per-action policy controls**; push-to-talk, so no always-listening key.
+- [x] **Push-to-talk dispatch route source-gated (CI/qemu-pending):** `/v1/voice/control` captures through the existing dictation path or accepts a transcript, resolves exact curated phrases, falls through to dictation when nothing matches, and dispatches matched commands only through the existing gated Settings/safe-setting helpers. The shared registry now has `voice-control` + `AiEntrypoint::Voice`; Settings shows a source-gated Voice Control row; `os/voice/goblins-os-voice-control` launches returned Settings routes or types no-match dictation text. It does **not** claim live capture proof, a HUD, or a shortcut yet.
+- [ ] **Live capture/keybinding/HUD proof (deferred, L):** prove microphone capture and transcription in CI/qemu, add the non-conflicting keybinding, and build the push-to-talk HUD + confirmation surface. The helper exists, but the feature remains `in-progress`.
+- **Packages:** Fedora 44 package probing found `whisper-cpp`/`whisper-cpp-devel` (`1.8.1-2.fc44`) but repoquery listed only libraries/headers and no provider for `*/whisper-cli`; do **not** add an RPM until the actual CLI provider is proven. `voice.rs` still defaults to `whisper-cli` with a `GOBLINS_OS_WHISPER_BIN` override, so a missing runtime degrades honestly.
+- **dconf:** no new binding in the source-gated pass. The old `<Super><Alt>c` proposal collides with the shipped Color Picker binding (and Live Captions also proposed it), so pick/prove a non-conflicting shortcut before enabling Voice Control by default. **No new schema** — reuses the core bridge + the **existing per-action policy controls**; push-to-talk, so no always-listening key.
 - **Files:** `crates/goblins-os-core/src/voice.rs` (`voice_control()`: capture → transcribe → resolve intent → dispatch to an `AiAction`; `VoiceControlOutcome{ok,transcript,matched_action_id,action_title,executed,needs_confirmation,text}`), `crates/goblins-os-ai/src/lib.rs` (one `AiAction` id `voice-control` + `AiEntrypoint::Voice` + a phrase→action table; bump `REGISTRY_VERSION`), `crates/goblins-os-core/src/main.rs` (`/v1/voice/control`), `os/voice/goblins-os-voice-control` (NEW helper mirroring `goblins-os-dictate`), `os/bootc/Containerfile`, `os/dconf/db/local.d/10-goblins-os-desktop`, `crates/goblins-os-core/src/ai.rs` (readiness + action-history audit), `crates/goblins-os-settings/src/main.rs` (Accessibility Voice Control card), `crates/goblins-os-verify/src/main.rs`.
 - **APIs:** axum; whisper.cpp CLI; `arecord`/`aplay` over PipeWire (already packaged); the action registry as the command surface; `resident_generate()` for LLM-assisted intent fallback (**proposes only**, never auto-executes a state change); dispatch **through** the existing `change_safe_setting`/`open_settings_panel` + policy/confirmation handlers (never around them).
 - **Goblins-grade:** a push-to-talk HUD (overlay radius 22, `native_css` material, `MOTION_OVERLAY_MS` fade) showing the live transcript (`GOS_TYPE_BODY`) + matched action title (`GOS_TYPE_TITLE_3`) — macOS's "show what I heard"; neutral status tone "Heard: turn on dark mode → Change a safe setting"; PermissionAndConfirmation actions still surface the explicit confirm card; "Goblin" wake word, never the Apple assistant name (a `voice.rs` test forbids it).
@@ -499,7 +528,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 ### `in-progress` Live Captions (real-time on-device caption overlay)
 - [x] **Status/config substrate shipped** (`crates/goblins-os-core/src/live_captions.rs` + `/v1/live-captions/status`, NEW `org.goblins.shell.extensions.captions` gschema via `os/glib-schemas/`, dconf-seeded off): STT runtime/model/PipeWire/capture capability gates, caption config normalizers (source, text size, position, auto-hide, keep-onscreen), Whisper argv builder, and VAD/RMS segment helpers are pure + host-tested. The shell overlay/SSE stream and live capture remain CI/qemu-pending.
 - [ ] A tasteful floating, auto-hiding caption overlay of system (and optionally microphone) audio, with a menu-bar toggle + global shortcut, on-device only.
-- **Packages:** `whisper-cpp` (`1.8.1-2.fc44`; provides `whisper-cli`). **Do NOT** depend on `whisper-stream` (SDL2, often unpackaged, mic-via-SDL — wrong tool).
+- **Packages:** `whisper-cpp`/`whisper-cpp-devel` exist in Fedora 44 as `1.8.1-2.fc44`, but the current repoquery proof did **not** find a `whisper-cli` binary provider; do not add an RPM or `command -v whisper-cli` gate until the CLI provider is proven. **Do NOT** depend on `whisper-stream` (SDL2, often unpackaged, mic-via-SDL — wrong tool).
 - **gsettings/dconf:** NEW `org.goblins.shell.extensions.captions` (enabled, toggle-captions `['<Super><Alt>c']`, source system|microphone|both, auto-hide, keep-onscreen, text-size, position) + a `30-captions` seed shipping installed-but-off (`enabled=false`).
 - **Files:** `os/gnome-shell-extensions/goblins-captions@goblins.os/{metadata.json,extension.js,stylesheet.css,schemas/…captions.gschema.xml}` (NEW — overlay St actor + menu-bar QuickToggle + capture/transcribe driver), `os/dconf/db/local.d/30-captions`, `os/bootc/Containerfile` (`whisper-cpp` + `command -v whisper-cli`), `crates/goblins-os-core/src/captions.rs` (NEW — the **privileged** pw-record monitor-capture + whisper-cli loop + `/v1/captions/*`, mirroring `voice.rs`), `crates/goblins-os-core/src/main.rs` (`/v1/captions/status` + an SSE caption route), `crates/goblins-os-core/src/accelerators.rs` (allowlist the toggle key), `crates/goblins-os-settings/src/main.rs` (Accessibility "Live Captions" row), `os/gnome-shell-modes/goblins-os.json` (enable the uuid).
 - **APIs:** `Main.layoutManager.addChrome` + St.BoxLayout/Label (the exact goblins-wm overlay idiom); QuickSettings SystemIndicator/QuickToggle; core **HTTP+SSE** stream so the privileged capture stays in core, not the shell; core: `pw-record` on the default-sink **monitor**, VAD/RMS segment, `whisper-cli -m <model> -otxt`; `wpctl`/`pw-cli` to resolve the monitor id.

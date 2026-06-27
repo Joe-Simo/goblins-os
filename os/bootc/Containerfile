@@ -241,6 +241,7 @@ COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.deskto
 COPY os/gnome-session/goblins-os.session /usr/share/gnome-session/sessions/goblins-os.session
 COPY os/gnome-shell-modes/goblins-os.json /usr/share/gnome-shell/modes/goblins-os.json
 COPY --chmod=0755 os/voice/goblins-os-dictate /usr/libexec/goblins-os/goblins-os-dictate
+COPY --chmod=0755 os/voice/goblins-os-voice-control /usr/libexec/goblins-os/goblins-os-voice-control
 COPY os/systemd-user/ /usr/lib/systemd/user/
 COPY os/applications/ /usr/share/applications/
 # Goblins-owned system GSettings schemas (e.g. Focus modes). Compiled below with

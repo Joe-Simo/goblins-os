@@ -820,6 +820,10 @@ struct VoiceStatus {
     wake_phrases: Vec<String>,
     #[serde(default)]
     wake_listening: Option<VoiceCapability>,
+    #[serde(default)]
+    speech_to_text: Option<VoiceCapability>,
+    #[serde(default)]
+    capture: Option<VoiceCapability>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -870,6 +874,36 @@ fn voice_settings_detail(voice: &VoiceStatus) -> String {
         voice.wake_phrases(),
         voice.detail,
         listener
+    )
+}
+
+fn voice_control_settings_detail(voice: &VoiceStatus) -> String {
+    let stt_ready = voice
+        .speech_to_text
+        .as_ref()
+        .is_some_and(|capability| capability.ready);
+    let capture_ready = voice
+        .capture
+        .as_ref()
+        .is_some_and(|capability| capability.ready);
+
+    if stt_ready && capture_ready {
+        return "Voice Control is source-gated: push-to-talk transcripts resolve exact Goblins commands, and protected changes still require confirmation."
+            .to_string();
+    }
+
+    let stt_detail = voice
+        .speech_to_text
+        .as_ref()
+        .map(|capability| capability.detail.as_str())
+        .unwrap_or("Local speech-to-text status is not ready.");
+    let capture_detail = voice
+        .capture
+        .as_ref()
+        .map(|capability| capability.detail.as_str())
+        .unwrap_or("Microphone capture status is not ready.");
+    format!(
+        "Voice Control is source-gated and push-to-talk only. Add local speech-to-text and microphone capture before it can run. {stt_detail} {capture_detail}"
     )
 }
 
@@ -8854,8 +8888,18 @@ fn append_voice_settings(panel: &gtk4::Box, state: &SettingsState) {
             };
             let detail = voice_settings_detail(voice);
             panel.append(&system_row(&title, &detail));
+            panel.append(&system_row(
+                "Voice Control",
+                &voice_control_settings_detail(voice),
+            ));
         }
-        None => panel.append(&system_row("Voice", "Waiting for voice capability.")),
+        None => {
+            panel.append(&system_row("Voice", "Waiting for voice capability."));
+            panel.append(&system_row(
+                "Voice Control",
+                "Waiting for local speech-to-text and microphone capability.",
+            ));
+        }
     }
 }
 
@@ -18555,6 +18599,22 @@ fn test_voice_status(available: bool) -> VoiceStatus {
         wake_listening: Some(VoiceCapability {
             ready: false,
             detail: "Press the voice button, then say Goblin. Background wake listening is not ready until the local wake-word listener is available.".to_string(),
+        }),
+        speech_to_text: Some(VoiceCapability {
+            ready: available,
+            detail: if available {
+                "Speech-to-text ready with a local model.".to_string()
+            } else {
+                "Local Whisper runtime not found.".to_string()
+            },
+        }),
+        capture: Some(VoiceCapability {
+            ready: available,
+            detail: if available {
+                "Microphone capture is available.".to_string()
+            } else {
+                "Microphone capture is not ready.".to_string()
+            },
         }),
         detail: if available {
             "Goblin voice is ready with local Whisper and Piper models.".to_string()

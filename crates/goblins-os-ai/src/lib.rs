@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const REGISTRY_VERSION: &str = "2026-06-22.ai-native-os-actions.v2";
+pub const REGISTRY_VERSION: &str = "2026-06-27.ai-native-os-actions.v3";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -98,6 +98,7 @@ pub enum AiEntrypoint {
     Notifications,
     Troubleshooting,
     AppBuilder,
+    Voice,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -123,6 +124,7 @@ const FILE_CONTEXTS: &[AiContextKind] = &[AiContextKind::FileSystem];
 const NOTIFICATION_CONTEXTS: &[AiContextKind] =
     &[AiContextKind::Notifications, AiContextKind::SystemStatus];
 const APP_BUILDER_CONTEXTS: &[AiContextKind] = &[AiContextKind::AppBuilder, AiContextKind::Global];
+const VOICE_CONTEXTS: &[AiContextKind] = &[AiContextKind::Global, AiContextKind::Settings];
 
 const GLOBAL_ENTRYPOINTS: &[AiEntrypoint] = &[
     AiEntrypoint::KeyboardShortcut,
@@ -169,9 +171,21 @@ pub const ACTIONS: &[AiAction] = &[
         contexts: SETTINGS_CONTEXTS,
         permission: AiPermission::SettingsControl,
         confirmation: AiConfirmation::PermissionAndConfirmation,
-        entrypoints: &[AiEntrypoint::Settings, AiEntrypoint::ControlCenter],
+        entrypoints: &[AiEntrypoint::Settings, AiEntrypoint::ControlCenter, AiEntrypoint::Voice],
         route_hint: "settings.confirmed-change",
         enabled_without_engine: false,
+    },
+    AiAction {
+        id: "voice-control",
+        title: "Voice Control",
+        detail: "Turn a push-to-talk transcript into a deterministic Goblins OS command; state changes still use the existing confirmation path.",
+        kind: AiActionKind::ChangeSetting,
+        contexts: VOICE_CONTEXTS,
+        permission: AiPermission::SettingsControl,
+        confirmation: AiConfirmation::PermissionAndConfirmation,
+        entrypoints: &[AiEntrypoint::Voice, AiEntrypoint::KeyboardShortcut],
+        route_hint: "voice.control",
+        enabled_without_engine: true,
     },
     AiAction {
         id: "ask-selected-text",
@@ -327,6 +341,7 @@ mod tests {
         assert!(action_by_id("build-app").is_some());
         assert!(action_by_id("write-with-goblins").is_some());
         assert!(action_by_id("summarize-screen").is_some());
+        assert!(action_by_id("voice-control").is_some());
     }
 
     #[test]
@@ -338,6 +353,7 @@ mod tests {
             "ask-file-or-folder",
             "answer-notification",
             "build-app",
+            "voice-control",
         ] {
             let action = action_by_id(id).unwrap();
             assert_ne!(action.confirmation, AiConfirmation::None);

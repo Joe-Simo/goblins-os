@@ -134,6 +134,10 @@ fn run_dictate() -> Result<String, String> {
     Ok(transcript)
 }
 
+pub(crate) fn capture_voice_command_transcript() -> Result<String, String> {
+    run_dictate()
+}
+
 fn build_status() -> VoiceStatus {
     let stt = stt_capability();
     let tts = tts_capability();

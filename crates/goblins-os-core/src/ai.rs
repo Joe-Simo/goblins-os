@@ -233,6 +233,18 @@ pub struct SafeSettingChangeSummary {
     effect: &'static str,
 }
 
+pub(crate) struct VoiceOpenSettingsDispatch {
+    pub(crate) text: String,
+    pub(crate) launch_argument: Option<String>,
+    pub(crate) panel_title: Option<&'static str>,
+}
+
+pub(crate) struct VoiceSafeSettingDispatch {
+    pub(crate) text: String,
+    pub(crate) applied: bool,
+    pub(crate) needs_confirmation: bool,
+}
+
 #[derive(Serialize)]
 pub struct SelectedTextContextSummary {
     app: Option<String>,
@@ -898,6 +910,124 @@ pub(crate) fn audit_ai_action(action_id: &str, entrypoint: Option<&str>, outcome
     let _ = append_ai_action_history(action_id, entrypoint, outcome);
 }
 
+pub(crate) fn dispatch_voice_open_settings(query: &str) -> (StatusCode, VoiceOpenSettingsDispatch) {
+    let query = sanitized_context_value(query, 240);
+    if query.is_empty() {
+        audit_open_settings_panel(AiActionOutcome::Blocked);
+        return (
+            StatusCode::BAD_REQUEST,
+            VoiceOpenSettingsDispatch {
+                text: "Describe the setting or system area you want to open.".to_string(),
+                launch_argument: None,
+                panel_title: None,
+            },
+        );
+    }
+
+    match resident_assistant_policy_for_settings_open() {
+        Ok(()) => {}
+        Err((status, text, outcome)) => {
+            audit_open_settings_panel(outcome);
+            return (
+                status,
+                VoiceOpenSettingsDispatch {
+                    text,
+                    launch_argument: None,
+                    panel_title: None,
+                },
+            );
+        }
+    }
+
+    let panel = resolve_open_settings_panel(&query, Some("voice"));
+    audit_open_settings_panel(AiActionOutcome::Succeeded);
+    (
+        StatusCode::OK,
+        VoiceOpenSettingsDispatch {
+            text: format!(
+                "Open Settings > {}. Route: {}.",
+                panel.title, panel.launch_argument
+            ),
+            launch_argument: Some(panel.launch_argument),
+            panel_title: Some(panel.title),
+        },
+    )
+}
+
+pub(crate) fn dispatch_voice_safe_setting_change(
+    setting_id: &str,
+    value: Value,
+    confirmed: bool,
+) -> (StatusCode, VoiceSafeSettingDispatch) {
+    let change = match safe_setting_change_summary(setting_id, &value) {
+        Ok(change) => change,
+        Err(text) => {
+            audit_ai_action(
+                "change-safe-setting",
+                Some("voice"),
+                AiActionOutcome::Blocked,
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                VoiceSafeSettingDispatch {
+                    text,
+                    applied: false,
+                    needs_confirmation: false,
+                },
+            );
+        }
+    };
+
+    match settings_control_policy() {
+        Ok(()) => {}
+        Err((status, text, outcome)) => {
+            audit_ai_action("change-safe-setting", Some("voice"), outcome);
+            return (
+                status,
+                VoiceSafeSettingDispatch {
+                    text,
+                    applied: false,
+                    needs_confirmation: false,
+                },
+            );
+        }
+    }
+
+    if !confirmed {
+        audit_ai_action(
+            "change-safe-setting",
+            Some("voice"),
+            AiActionOutcome::ConfirmationRequired,
+        );
+        return (
+            StatusCode::PRECONDITION_REQUIRED,
+            VoiceSafeSettingDispatch {
+                text: format!(
+                    "Review and confirm before applying {}. Requested value: {}. Effect: {}.",
+                    change.title, change.requested_value, change.effect
+                ),
+                applied: false,
+                needs_confirmation: true,
+            },
+        );
+    }
+
+    let (status, text) = apply_safe_setting_change(&change);
+    audit_ai_action(
+        "change-safe-setting",
+        Some("voice"),
+        safe_setting_change_audit_outcome(status),
+    );
+    (
+        status,
+        VoiceSafeSettingDispatch {
+            text,
+            applied: status.is_success(),
+            needs_confirmation: false,
+        },
+    )
+}
+
 pub(crate) fn build_ai_action_catalog() -> AiActionCatalog {
     let engine_ready = resident_engine_ready();
     let engine = active_engine_label();
@@ -1104,6 +1234,24 @@ fn notification_context_policy() -> Result<(), (StatusCode, String, AiActionOutc
         PolicyControlState::PermissionGated => Err((
             StatusCode::FORBIDDEN,
             "Allow notification context in Privacy & Permissions before Goblins AI can inspect a selected notification.".to_string(),
+            AiActionOutcome::PermissionGated,
+        )),
+    }
+}
+
+fn resident_assistant_policy_for_settings_open() -> Result<(), (StatusCode, String, AiActionOutcome)>
+{
+    match policy_state_for_control("resident-assistant") {
+        PolicyControlState::Allowed => Ok(()),
+        PolicyControlState::Denied => Err((
+            StatusCode::FORBIDDEN,
+            "Opening Settings from Goblins AI is blocked by the active Goblins OS policy profile."
+                .to_string(),
+            AiActionOutcome::Denied,
+        )),
+        PolicyControlState::PermissionGated => Err((
+            StatusCode::FORBIDDEN,
+            "Allow the Goblins AI assistant in Privacy & Permissions before it can route Settings requests.".to_string(),
             AiActionOutcome::PermissionGated,
         )),
     }
@@ -2172,6 +2320,7 @@ fn entrypoint_id(entrypoint: AiEntrypoint) -> &'static str {
         AiEntrypoint::Notifications => "notifications",
         AiEntrypoint::Troubleshooting => "troubleshooting",
         AiEntrypoint::AppBuilder => "app-builder",
+        AiEntrypoint::Voice => "voice",
     }
 }
 

@@ -1,0 +1,48 @@
+#!/usr/bin/sh
+# Goblins OS Voice Control — push-to-talk spoken commands.
+#
+# The helper owns session-side effects only after core has handled capture,
+# deterministic command resolution, policy, and confirmation state. If no command
+# matches, core marks the transcript as dictation fallback and this helper types it
+# into the focused field. It never executes a guessed command.
+set -eu
+
+CORE_URL="${GOBLINS_OS_CORE_URL:-http://127.0.0.1:8787}"
+
+resp="$(curl -fsS -m 45 -X POST -H 'Content-Type: application/json' -d '{}' "${CORE_URL}/v1/voice/control" 2>/dev/null || true)"
+[ -n "$resp" ] || exit 0
+
+json_field() {
+    field_name="$1"
+    printf '%s' "$resp" | python3 -c 'import json, sys
+field_name = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+value = data.get(field_name)
+if isinstance(value, str):
+    sys.stdout.write(value)
+elif isinstance(value, bool):
+    sys.stdout.write("true" if value else "false")
+' "$field_name" 2>/dev/null || true
+}
+
+launch_argument="$(json_field launch_argument)"
+if [ -n "$launch_argument" ]; then
+    case "$launch_argument" in
+        --panel=*)
+            /usr/libexec/goblins-os/goblins-os-settings "$launch_argument" >/dev/null 2>&1 &
+            exit 0
+            ;;
+    esac
+fi
+
+fall_through="$(json_field fall_through_to_dictation)"
+if [ "$fall_through" = "true" ]; then
+    transcript="$(json_field transcript)"
+    [ -n "$transcript" ] || exit 0
+    exec wtype -- "$transcript"
+fi
+
+exit 0

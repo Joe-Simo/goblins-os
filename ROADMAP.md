@@ -111,8 +111,9 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - **Verifiable:** host — target arms, specs, normalizers, type-check (extend `bounds_are_stable`). CI/qemu — row layout + real gsettings writes.
 - **Effort:** L · **Risk:** LOW (runtime reads, no rpm install). No boot/login surface.
 
-### `TODO` Firewall toggle + status (firewalld) in Settings ▸ Security
-- [ ] One honest status row + one gated On/Off toggle (macOS Network ▸ Firewall altitude — **not** a rule editor).
+### `in-progress` Firewall toggle + status (firewalld) in Settings ▸ Security
+- [x] **Status read shipped** (`crates/goblins-os-core/src/firewall.rs` + `/v1/firewall/status`): honest read-only posture via `firewall-cmd --state` (running requires success AND "running" text — pure, unit-tested), honest-gated to "unavailable" when firewalld isn't installed. 172 core tests.
+- [ ] **Gated On/Off toggle (deferred, deliberate):** needs a scoped polkit rule for the single firewalld unit (never a blind `systemctl`) + the Settings ▸ Security row; keep the default zone as shipped (firewalld can interfere with NetworkManager/netavark).
 - **Packages:** `firewalld` (verified canonical name; minimal/bootc images can omit it).
 - **Files:** `crates/goblins-os-core/src/firewall.rs` (NEW — status + toggle, mirror `bluetooth.rs`), `crates/goblins-os-core/src/main.rs` (`mod firewall` + `GET /v1/firewall/status`, `POST /v1/firewall/enabled`), `crates/goblins-os-settings/src/main.rs` (`FirewallStatus` + `build_security` row + `set_firewall_enabled` mirroring `set_bluetooth_power`), `os/bootc/Containerfile` (`firewalld` + `systemctl enable firewalld.service`), `os/bootc/` (NEW privileged oneshot `goblins-os-firewall@.service` + a **scoped** polkit rule).
 - **APIs:** read path `firewall-cmd --state`/`--get-default-zone` + `systemctl is-active/is-enabled` (all unprivileged for the active session); write path via the oneshot helper.

@@ -8534,6 +8534,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "\"ready\": False",
         ),
         contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-table-bridge",
+            "class ShortcutTableBridge",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-table-config-path",
+            "TEXT_SHORTCUTS_CONFIG_FILE = \"text-shortcuts.json\"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-sanitizes-table",
+            "def _sanitize_shortcuts",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-sends-table-changed",
+            "\"type\": \"table-changed\"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-polls-table-before-input",
+            "def _send_table_changed_if_needed",
+        ),
+        contains_check(
             root.join("os/release/source-tree-manifest.toml"),
             "source-manifest-includes-textshortcuts-assets",
             "os/goblins-os-textshortcuts/",

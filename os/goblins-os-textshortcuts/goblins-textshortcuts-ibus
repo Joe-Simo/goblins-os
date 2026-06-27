@@ -10,11 +10,13 @@ Rust child is absent, exits, or returns invalid JSON.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import select
 import subprocess
 import sys
+import tempfile
 from typing import Any, Callable
 
 
@@ -24,6 +26,9 @@ RUNTIME_PATH = "/usr/libexec/goblins-os/goblins-textshortcuts-engine"
 RESPONSE_TIMEOUT_SECONDS = 0.35
 CAPABILITY_TIMEOUT_SECONDS = 3.0
 ADAPTER_PATH = "/usr/libexec/goblins-os/goblins-textshortcuts-ibus"
+TEXT_SHORTCUTS_CONFIG_DIR = "goblins-os"
+TEXT_SHORTCUTS_CONFIG_FILE = "text-shortcuts.json"
+MAX_SHORTCUTS = 500
 
 
 def _runtime_binary() -> str:
@@ -72,6 +77,75 @@ def capability_payload(runtime_self_test_argv: list[str] | None = None) -> dict[
         "runtime_ready_claim": False,
         "detail": detail,
     }
+
+
+def _table_path() -> str | None:
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    if not config_home:
+        home = os.environ.get("HOME")
+        if not home:
+            return None
+        config_home = os.path.join(home, ".config")
+    if not config_home:
+        return None
+    return os.path.join(
+        config_home,
+        TEXT_SHORTCUTS_CONFIG_DIR,
+        TEXT_SHORTCUTS_CONFIG_FILE,
+    )
+
+
+def _sanitize_shortcuts(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    order: list[str] = []
+    replacements: dict[str, str] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        replace = str(entry.get("replace", "")).strip()
+        with_text = str(entry.get("with", "")).strip()
+        if not replace or not with_text or replace == with_text:
+            continue
+        if replace not in replacements:
+            order.append(replace)
+        replacements[replace] = with_text
+    return [
+        {"replace": replace, "with": replacements[replace]}
+        for replace in order[:MAX_SHORTCUTS]
+    ]
+
+
+def _table_snapshot(path: str | None = None) -> tuple[str, list[dict[str, str]]]:
+    table_path = path or _table_path()
+    if table_path is None:
+        return ("no-config-home", [])
+    try:
+        with open(table_path, "rb") as table_file:
+            raw_bytes = table_file.read()
+    except FileNotFoundError:
+        return ("missing", [])
+    except OSError:
+        return ("unreadable", [])
+    fingerprint = hashlib.sha256(raw_bytes).hexdigest()
+    try:
+        raw_shortcuts = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return (fingerprint, [])
+    return (fingerprint, _sanitize_shortcuts(raw_shortcuts))
+
+
+class ShortcutTableBridge:
+    def __init__(self, path: str | None = None) -> None:
+        self._path = path
+        self._fingerprint: str | None = None
+
+    def maybe_changed_request(self) -> dict[str, Any] | None:
+        fingerprint, shortcuts = _table_snapshot(self._path)
+        if fingerprint == self._fingerprint:
+            return None
+        self._fingerprint = fingerprint
+        return {"type": "table-changed", "shortcuts": shortcuts}
 
 
 class RuntimeBridge:
@@ -186,6 +260,18 @@ def _content_purpose_request(event_type: str, purpose: int) -> dict[str, Any]:
     return {"type": event_type, "purpose": int(purpose)}
 
 
+def _send_table_changed_if_needed(
+    table_bridge: ShortcutTableBridge,
+    runtime_bridge: RuntimeBridge,
+    target: Any,
+    text_factory: Callable[[str], Any],
+) -> None:
+    request = table_bridge.maybe_changed_request()
+    if request is None:
+        return
+    _apply_response_operations(target, runtime_bridge.send(request), text_factory)
+
+
 def _apply_response_operations(
     target: Any,
     response: dict[str, Any],
@@ -298,6 +384,42 @@ def _run_self_test() -> None:
     assert payload["runtime_ready_claim"] is False
     assert payload["component"] == ADAPTER_PATH
 
+    assert _sanitize_shortcuts(
+        [
+            {"replace": "  omw ", "with": " on my way "},
+            {"replace": "same", "with": "same"},
+            {"replace": "", "with": "drop"},
+            {"replace": "drop", "with": ""},
+            {"replace": "omw", "with": "on my way now"},
+            "not an entry",
+        ]
+    ) == [{"replace": "omw", "with": "on my way now"}]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        table_path = os.path.join(tmpdir, "text-shortcuts.json")
+        table_bridge = ShortcutTableBridge(table_path)
+        assert table_bridge.maybe_changed_request() == {
+            "type": "table-changed",
+            "shortcuts": [],
+        }
+        assert table_bridge.maybe_changed_request() is None
+        with open(table_path, "w", encoding="utf-8") as table_file:
+            json.dump(
+                [
+                    {"replace": "omw", "with": "on my way"},
+                    {"replace": "teh", "with": "the"},
+                ],
+                table_file,
+            )
+        assert table_bridge.maybe_changed_request() == {
+            "type": "table-changed",
+            "shortcuts": [
+                {"replace": "omw", "with": "on my way"},
+                {"replace": "teh", "with": "the"},
+            ],
+        }
+        assert table_bridge.maybe_changed_request() is None
+
 
 def _run_ibus() -> int:
     import gi
@@ -311,8 +433,15 @@ def _run_ibus() -> int:
         def __init__(self) -> None:
             super().__init__()
             self._bridge = RuntimeBridge()
+            self._table = ShortcutTableBridge()
 
         def do_focus_in(self) -> None:
+            _send_table_changed_if_needed(
+                self._table,
+                self._bridge,
+                self,
+                IBus.Text.new_from_string,
+            )
             self._bridge.send(_content_purpose_request("focus-in", self._purpose()))
 
         def do_focus_out(self) -> None:
@@ -327,6 +456,12 @@ def _run_ibus() -> int:
 
         def do_process_key_event(self, keyval: int, keycode: int, state: int) -> bool:
             del keycode
+            _send_table_changed_if_needed(
+                self._table,
+                self._bridge,
+                self,
+                IBus.Text.new_from_string,
+            )
             response = self._bridge.send(_key_request(keyval, state, IBus))
             _apply_response_operations(
                 self,

@@ -1,0 +1,12 @@
+# Sound Recognition defaults — continuous microphone recognition is explicit opt-in.
+# The substrate ships the schema and honest status route; the session listener and
+# Settings surface remain CI/qemu-gated follow-ups.
+
+[org/goblins/sound-recognition]
+enabled=false
+sounds=@as []
+sensitivity='medium'
+min-confidence=0.70
+alert-sound=false
+alert-flash=false
+notify-in-lock-screen=false

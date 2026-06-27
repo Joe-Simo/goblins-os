@@ -53,7 +53,18 @@ const APPLICATIONS: &[&str] = &[
 
 const AUTOSTART: &[&str] = &["org.goblins.OS.Installer.desktop"];
 
-const DCONF_FILES: &[&str] = &["00-goblins-os-first-run", "10-goblins-os-desktop"];
+const DCONF_FILES: &[&str] = &[
+    "00-goblins-os-first-run",
+    "10-goblins-os-desktop",
+    "40-sound-recognition",
+];
+
+const GLIB_SCHEMA_FILES: &[&str] = &[
+    "org.goblins.SoundRecognition.gschema.xml",
+    "org.goblins.os.a11y.switch-control.gschema.xml",
+    "org.goblins.os.focus.gschema.xml",
+    "org.goblins.os.today.gschema.xml",
+];
 
 const GNOME_SHELL_EXTENSION_FILES: &[&str] = &[
     "goblins-wm@goblins.os/metadata.json",
@@ -507,6 +518,9 @@ fn source_checks(root: &Path) -> Vec<Check> {
 
     for dconf in DCONF_FILES {
         checks.push(file_check(root, &format!("os/dconf/db/local.d/{dconf}")));
+    }
+    for schema in GLIB_SCHEMA_FILES {
+        checks.push(file_check(root, &format!("os/glib-schemas/{schema}")));
     }
     for extension_file in GNOME_SHELL_EXTENSION_FILES {
         checks.push(file_check(
@@ -1403,6 +1417,16 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         root,
         "etc/dconf/db/local.d/10-goblins-os-desktop",
     ));
+    checks.push(file_check(
+        root,
+        "etc/dconf/db/local.d/40-sound-recognition",
+    ));
+    for schema in GLIB_SCHEMA_FILES {
+        checks.push(file_check(
+            root,
+            &format!("usr/share/glib-2.0/schemas/{schema}"),
+        ));
+    }
     checks.push(file_check(root, "etc/gtk-4.0/gtk.css"));
     checks.push(file_check(root, "usr/share/sounds/GoblinsOS/index.theme"));
     for script in NAUTILUS_SCRIPTS {
@@ -1565,6 +1589,12 @@ fn install_files(source: &Path, binaries: &Path) -> Vec<(PathBuf, String)> {
         files.push((
             source.join(format!("os/dconf/db/local.d/{dconf}")),
             format!("etc/dconf/db/local.d/{dconf}"),
+        ));
+    }
+    for schema in GLIB_SCHEMA_FILES {
+        files.push((
+            source.join(format!("os/glib-schemas/{schema}")),
+            format!("usr/share/glib-2.0/schemas/{schema}"),
         ));
     }
     for extension_file in GNOME_SHELL_EXTENSION_FILES {
@@ -7649,6 +7679,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "org.goblins.os.today",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-sound-recognition-route",
+            "/v1/sound-recognition/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-reliability-honesty",
+            "Do not rely on it in emergencies or high-risk situations.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-model-gate",
+            "No recognition model in",
+        ),
+        contains_check(
+            root.join("os/glib-schemas/org.goblins.SoundRecognition.gschema.xml"),
+            "sound-recognition-gschema-present",
+            "org.goblins.SoundRecognition",
+        ),
+        contains_check(
+            root.join("os/dconf/db/local.d/40-sound-recognition"),
+            "sound-recognition-defaults-all-off",
+            "enabled=false",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-privacy-app-permissions",
             "App permissions",
@@ -8043,9 +8098,10 @@ mod tests {
         cargo_lock_packages, contains_realish_openai_key, desktop_field, install_files,
         is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
         source_manifest_classifies_top_level, stable_id, write_release_evidence, CheckState,
-        APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES, GNOME_SHELL_EXTENSION_FILES,
-        ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS, SETTINGS_INTERACTION_SCREENSHOTS,
-        SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS, SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
+        APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES, GLIB_SCHEMA_FILES,
+        GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS,
+        SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS,
+        SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
     };
     use std::collections::HashSet;
     use std::fs;
@@ -8238,7 +8294,7 @@ checksum = "abc123"
 
         // One destination per binary, unit, app, autostart entry, plus the
         // session launcher, wayland session, gnome session, bootc config, env,
-        // empty secret template, dconf defaults, GDM autologin config,
+        // empty secret template, dconf defaults, GLib schemas, GDM autologin config,
         // AccountsService default-session profile, custom gnome-shell mode,
         // bundled shell-extension files, and first-class theme/action assets.
         let expected = BINARIES.len()
@@ -8249,6 +8305,7 @@ checksum = "abc123"
             + AUTOSTART.len()
             + 9
             + DCONF_FILES.len()
+            + GLIB_SCHEMA_FILES.len()
             + GNOME_SHELL_EXTENSION_FILES.len()
             + ICON_THEME_FILES.len()
             + 2

@@ -33,6 +33,7 @@ mod service_catalog;
 mod session_gate;
 mod settings;
 mod shortcuts;
+mod sound_recognition;
 mod studio;
 mod switch_control;
 mod system;
@@ -209,6 +210,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/ai/visual-lookup", post(vision::visual_lookup))
         .route("/v1/today/status", get(today::today_status))
         .route("/v1/today/layout", post(today::set_today_layout))
+        .route(
+            "/v1/sound-recognition/status",
+            get(sound_recognition::sound_recognition_status),
+        )
         .route(
             "/v1/accessibility/switch-control/status",
             get(switch_control::switch_control_status),

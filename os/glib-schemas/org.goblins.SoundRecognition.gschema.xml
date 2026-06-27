@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.goblins.SoundRecognition" path="/org/goblins/sound-recognition/">
+    <key name="enabled" type="b">
+      <default>false</default>
+      <summary>Sound Recognition enabled</summary>
+      <description>Whether the session-user sound recognition listener is allowed to capture microphone audio. Off by default.</description>
+    </key>
+    <key name="sounds" type="as">
+      <default>[]</default>
+      <summary>Enabled sound categories</summary>
+      <description>The allowlisted sound category ids to listen for.</description>
+    </key>
+    <key name="sensitivity" type="s">
+      <choices>
+        <choice value="low"/>
+        <choice value="medium"/>
+        <choice value="high"/>
+      </choices>
+      <default>'medium'</default>
+      <summary>Sound Recognition sensitivity</summary>
+      <description>Classifier sensitivity used by the session listener.</description>
+    </key>
+    <key name="min-confidence" type="d">
+      <range min="0.30" max="0.95"/>
+      <default>0.70</default>
+      <summary>Minimum classifier confidence</summary>
+      <description>Minimum confidence required before a recognized sound can alert.</description>
+    </key>
+    <key name="alert-sound" type="b">
+      <default>false</default>
+      <summary>Play an alert sound</summary>
+      <description>Whether recognized sounds should play a local alert sound. Off by default.</description>
+    </key>
+    <key name="alert-flash" type="b">
+      <default>false</default>
+      <summary>Flash the screen on alert</summary>
+      <description>Whether recognized sounds should also drive the visual bell flash path. Off by default.</description>
+    </key>
+    <key name="notify-in-lock-screen" type="b">
+      <default>false</default>
+      <summary>Show alerts on the lock screen</summary>
+      <description>Whether Sound Recognition notifications may appear while the session is locked. Off by default.</description>
+    </key>
+  </schema>
+</schemalist>

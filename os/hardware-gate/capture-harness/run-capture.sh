@@ -133,6 +133,7 @@ python3 "$HERE/drive-capture.py"
 FIREWALL_PROOF="$RUN_DIR/firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_PROOF="$RUN_DIR/text-shortcuts-session-enable-proof.json"
 TEXT_SHORTCUTS_LIVE_PROOF="$RUN_DIR/text-shortcuts-live-keystroke-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_PROOF="$RUN_DIR/text-shortcuts-candidate-metadata-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
@@ -179,6 +180,17 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   echo "HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof at $TEXT_SHORTCUTS_LIVE_PROOF"
   exit 4
 fi
+if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF" \
+  || ! grep -Fq '"surface": "goblins-os-shell-text-shortcuts-candidate-proof"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF" \
+  || ! grep -Fq '"candidate_replacement": "on my way"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF" \
+  || ! grep -Fq '"candidate_accept_on": "word-boundary"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF" \
+  || ! grep -Fq '"candidate_dismiss_key": "Escape"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF" \
+  || ! grep -Fq '"rendered_bubble_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF" \
+  || ! grep -Fq '"live_overlay_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF" \
+  || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF"; then
+  echo "HONESTY GUARD: missing or failing Text Shortcuts candidate metadata proof at $TEXT_SHORTCUTS_CANDIDATE_PROOF"
+  exit 4
+fi
 
 # HONESTY GUARD: refuse to write a signoff for a run whose surfaces aren't all
 # distinct. GNOME 42+ returns AccessDenied to scripted screenshots (org.gnome.
@@ -209,6 +221,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "firewall_live_toggle_proof":"firewall-live-toggle-proof.json",
           "text_shortcuts_session_enable_proof":"text-shortcuts-session-enable-proof.json",
           "text_shortcuts_live_keystroke_proof":"text-shortcuts-live-keystroke-proof.json",
+          "text_shortcuts_candidate_metadata_proof":"text-shortcuts-candidate-metadata-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY

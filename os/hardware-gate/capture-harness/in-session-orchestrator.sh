@@ -20,6 +20,7 @@ sig(){ curl -s "http://$H/ready/$1" >/dev/null 2>&1; sleep 5; }
 proof_firewall(){ curl -s "http://$H/proof/firewall-live-toggle?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts(){ curl -s "http://$H/proof/text-shortcuts-session-enable?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_live(){ curl -s "http://$H/proof/text-shortcuts-live-keystroke?$1" >/dev/null 2>&1 || true; }
+proof_text_shortcuts_candidate(){ curl -s "http://$H/proof/text-shortcuts-candidate-metadata?$1" >/dev/null 2>&1 || true; }
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -269,6 +270,32 @@ text_shortcuts_live_keystroke_proof(){
   proof_text_shortcuts_live "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-proof&input_driver=wtype&active_engine=goblins-textshortcuts&normal_trigger=omw.&normal_expected=onmyway.&normal_actual=onmyway.&passthrough_input=hello.&passthrough_expected=hello.&passthrough_actual=hello.&passthrough_unchanged=true&dismiss_trigger=omw&dismiss_key=Escape&dismiss_expected=omw&dismiss_actual=omw&dismiss_no_commit=true&password_expected=omw.&password_actual=omw.&password_refusal=true&runtime_ready_claim=false"
   return 0
 }
+text_shortcuts_candidate_metadata_proof(){
+  local candidate_file=/tmp/gate-text-shortcuts-candidate.txt
+  local candidate_pid
+
+  rm -f "$candidate_file"
+  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$candidate_file" "$B/goblins-os-shell" --text-shortcuts-proof candidate >/tmp/gate-text-shortcuts-candidate.log 2>&1 &
+  candidate_pid=$!
+  sleep 4
+  kill "$candidate_pid" 2>/dev/null || true
+  wait "$candidate_pid" 2>/dev/null || true
+
+  if [ ! -s "$candidate_file" ]; then
+    proof_text_shortcuts_candidate "status=fail&stage=candidate-file&surface=goblins-os-shell-text-shortcuts-candidate-proof"
+    return 1
+  fi
+  if ! grep -Fxq "replacement=on my way" "$candidate_file" \
+    || ! grep -Fxq "accept_on=word-boundary" "$candidate_file" \
+    || ! grep -Fxq "dismiss_key=Escape" "$candidate_file" \
+    || ! grep -Fxq "rendered_bubble_ready_claim=false" "$candidate_file"; then
+    proof_text_shortcuts_candidate "status=fail&stage=candidate-metadata&surface=goblins-os-shell-text-shortcuts-candidate-proof&rendered_bubble_ready_claim=missing"
+    return 1
+  fi
+
+  proof_text_shortcuts_candidate "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-candidate-proof&candidate_replacement=on%20my%20way&candidate_accept_on=word-boundary&candidate_dismiss_key=Escape&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
+  return 0
+}
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication
 # is single-instance, so relaunching the same binary (e.g. the installer with a new
@@ -285,6 +312,7 @@ pkill -f goblins-os-login 2>/dev/null; pkill -f goblins-os-installer 2>/dev/null
 firewall_live_toggle_proof || true
 text_shortcuts_session_enable_proof || true
 text_shortcuts_live_keystroke_proof || true
+text_shortcuts_candidate_metadata_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
 FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device

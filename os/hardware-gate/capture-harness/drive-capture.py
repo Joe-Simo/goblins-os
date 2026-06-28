@@ -23,11 +23,13 @@ REQUIRED_PROOFS = (
     "firewall-live-toggle",
     "text-shortcuts-session-enable",
     "text-shortcuts-live-keystroke",
+    "text-shortcuts-candidate-metadata",
 )
 PROOF_FILENAMES = {
     "firewall-live-toggle": "firewall-live-toggle-proof.json",
     "text-shortcuts-session-enable": "text-shortcuts-session-enable-proof.json",
     "text-shortcuts-live-keystroke": "text-shortcuts-live-keystroke-proof.json",
+    "text-shortcuts-candidate-metadata": "text-shortcuts-candidate-metadata-proof.json",
 }
 
 CMAP = {c: (c, False) for c in "abcdefghijklmnopqrstuvwxyz0123456789"}

@@ -71,6 +71,7 @@ SCREENSHOT_REQUIRED=(
 FIREWALL_LIVE_TOGGLE_PROOF="firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_SESSION_ENABLE_PROOF="text-shortcuts-session-enable-proof.json"
 TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF="text-shortcuts-live-keystroke-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof.json"
 GAMING_SCREENSHOT_STATUS="not checked"
 INSTALL_STORAGE_STATUS="not checked"
 RELEASE_EVIDENCE_STATUS="not checked"
@@ -78,6 +79,7 @@ MOTION_INTERACTIONS_STATUS="not checked"
 FIREWALL_TOGGLE_STATUS="not checked"
 TEXT_SHORTCUTS_SESSION_STATUS="not checked"
 TEXT_SHORTCUTS_KEYSTROKE_STATUS="not checked"
+TEXT_SHORTCUTS_CANDIDATE_STATUS="not checked"
 RUNTIME_ENGINE_MODE="${RUNTIME_ENGINE_MODE:-}"
 RUNTIME_ENGINE_SOURCE="${RUNTIME_ENGINE_SOURCE:-}"
 RUNTIME_ENGINE_CONFIG="${RUNTIME_ENGINE_CONFIG:-}"
@@ -262,7 +264,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"screenshot_run_dir"[[:space:]]*:[[:space:]]*"'"$SCREENSHOT_DIR"'"' "$manifest" \
     && rg -q '"firewall_live_toggle_proof"[[:space:]]*:[[:space:]]*"'"$FIREWALL_LIVE_TOGGLE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_session_enable_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"'"' "$manifest" \
-    && rg -q '"text_shortcuts_live_keystroke_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"'"' "$manifest"
+    && rg -q '"text_shortcuts_live_keystroke_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"'"' "$manifest" \
+    && rg -q '"text_shortcuts_candidate_metadata_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -327,6 +330,21 @@ text_shortcuts_live_keystroke_proof_passes() {
     && rg -q '"password_expected"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
     && rg -q '"password_actual"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
     && rg -q '"password_refusal"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+}
+
+text_shortcuts_candidate_metadata_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-os-shell-text-shortcuts-candidate-proof"' "$proof" \
+    && rg -q '"candidate_replacement"[[:space:]]*:[[:space:]]*"on my way"' "$proof" \
+    && rg -q '"candidate_accept_on"[[:space:]]*:[[:space:]]*"word-boundary"' "$proof" \
+    && rg -q '"candidate_dismiss_key"[[:space:]]*:[[:space:]]*"Escape"' "$proof" \
+    && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
 }
 
@@ -518,7 +536,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! screenshot_manifest_matches_iso "$SCREENSHOT_DIR/proof-manifest.json"; then
     fail "Screenshot proof manifest missing or not tied to this architecture ISO: $SCREENSHOT_DIR/proof-manifest.json"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, and text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF."
+    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, and text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF."
     exit 1
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
@@ -536,16 +554,23 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Expected wtype-driven normal Entry expansion omw. -> onmyway., unknown-word pass-through hello. -> hello., Escape dismiss without replacement commit, and password Entry refusal omw. -> omw. with the Goblins IBus engine active."
     exit 1
   fi
+  if ! text_shortcuts_candidate_metadata_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"; then
+    fail "Text Shortcuts candidate metadata proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"
+    fail "Expected the candidate proof surface to record replacement=on my way, accept_on=word-boundary, dismiss_key=Escape, and rendered_bubble_ready_claim=false without claiming a live overlay."
+    exit 1
+  fi
   log "All required screenshot proof PNGs and proof manifest passed."
   log "Firewall live toggle proof passed."
   log "Text Shortcuts session-enable proof passed."
   log "Text Shortcuts live keystroke proof passed."
+  log "Text Shortcuts candidate metadata proof passed."
   GAMING_SCREENSHOT_STATUS="yes (screenshots ${GAMING_SCREENSHOTS[*]} present)"
   INSTALL_STORAGE_STATUS="yes (screenshots ${INSTALL_STORAGE_SCREENSHOTS[*]} present)"
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
   FIREWALL_TOGGLE_STATUS="yes ($FIREWALL_LIVE_TOGGLE_PROOF: disable=200/inactive, enable=200/active)"
   TEXT_SHORTCUTS_SESSION_STATUS="yes ($TEXT_SHORTCUTS_SESSION_ENABLE_PROOF: service/source/engine active; runtime expansion still gated false)"
   TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes ($TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF: normal expansion, pass-through, Escape dismiss, and password refusal via wtype)"
+  TEXT_SHORTCUTS_CANDIDATE_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF: candidate metadata present; rendered bubble still gated false)"
 else
   warn "SCREENSHOT_DIR not set; proof screenshot presence check skipped."
 fi
@@ -654,6 +679,7 @@ cat >> "$OUT" <<EOF2
 - Firewall live toggle checked: ${FIREWALL_TOGGLE_STATUS}
 - Text Shortcuts session enablement checked: ${TEXT_SHORTCUTS_SESSION_STATUS}
 - Text Shortcuts live keystrokes checked: ${TEXT_SHORTCUTS_KEYSTROKE_STATUS}
+- Text Shortcuts candidate metadata checked: ${TEXT_SHORTCUTS_CANDIDATE_STATUS}
 - Gaming readiness checked: ${GAMING_SCREENSHOT_STATUS}
 - Install storage/bootloader/dual-boot checked: ${INSTALL_STORAGE_STATUS}
 - Current project completion status: ${PROJECT_COMPLETION_STATUS}

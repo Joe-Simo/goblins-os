@@ -1011,6 +1011,25 @@ python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus --runtime-self-te
 `goblins-os-verify --source-root .` -> **blocked=0 (1949)**. This is still
 CI/qemu-pending and does **not** mark Text Shortcuts shipped.
 
+Current Text Shortcuts candidate-metadata hardware-proof continuation: the
+display-backed capture/signoff harness now requires
+`text-shortcuts-candidate-metadata-proof.json` beside the existing live
+keystroke proof. The in-session orchestrator launches
+`goblins-os-shell --text-shortcuts-proof candidate`, records
+`candidate_replacement=on my way`, `candidate_accept_on=word-boundary`,
+`candidate_dismiss_key=Escape`, `rendered_bubble_ready_claim=false`,
+`live_overlay_claim=false`, and `runtime_ready_claim=false`, and
+`run-capture.sh`, `close-signoff.sh`, `verify-shipping-status.sh`, the runbook,
+and `goblins-os-verify` reject missing or overclaimed candidate metadata. Local
+gates: `bash -n os/hardware-gate/capture-harness/in-session-orchestrator.sh
+os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh
+os/hardware-gate/verify-shipping-status.sh`, `python3 -m py_compile
+os/hardware-gate/capture-harness/drive-capture.py`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
+`goblins-os-verify --source-root .` -> **blocked=0 (1965)**. This is still
+CI/qemu-pending and does **not** prove a live IBus overlay, focused-field
+callback, Wayland text-input-v3 bubble, or mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining

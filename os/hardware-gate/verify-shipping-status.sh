@@ -47,6 +47,7 @@ REQ_SCREENSHOTS=(
 FIREWALL_LIVE_TOGGLE_PROOF="firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_SESSION_ENABLE_PROOF="text-shortcuts-session-enable-proof.json"
 TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF="text-shortcuts-live-keystroke-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof.json"
 
 check() {
   local label="$1"
@@ -208,6 +209,7 @@ screenshot_run_is_complete() {
   firewall_live_toggle_proof_passes "$run_dir/$FIREWALL_LIVE_TOGGLE_PROOF" || return 1
   text_shortcuts_session_enable_proof_passes "$run_dir/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF" || return 1
   text_shortcuts_live_keystroke_proof_passes "$run_dir/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF" || return 1
+  text_shortcuts_candidate_metadata_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF" || return 1
   return 0
 }
 
@@ -254,7 +256,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"screenshot_run_dir"[[:space:]]*:[[:space:]]*"'"$run_dir"'"' "$manifest" \
     && rg -q '"firewall_live_toggle_proof"[[:space:]]*:[[:space:]]*"'"$FIREWALL_LIVE_TOGGLE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_session_enable_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"'"' "$manifest" \
-    && rg -q '"text_shortcuts_live_keystroke_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"'"' "$manifest"
+    && rg -q '"text_shortcuts_live_keystroke_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"'"' "$manifest" \
+    && rg -q '"text_shortcuts_candidate_metadata_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -322,6 +325,21 @@ text_shortcuts_live_keystroke_proof_passes() {
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
 }
 
+text_shortcuts_candidate_metadata_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-os-shell-text-shortcuts-candidate-proof"' "$proof" \
+    && rg -q '"candidate_replacement"[[:space:]]*:[[:space:]]*"on my way"' "$proof" \
+    && rg -q '"candidate_accept_on"[[:space:]]*:[[:space:]]*"word-boundary"' "$proof" \
+    && rg -q '"candidate_dismiss_key"[[:space:]]*:[[:space:]]*"Escape"' "$proof" \
+    && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+}
+
 print_missing_screenshot_paths() {
   local run_dir="$1"
   local missing=0
@@ -346,6 +364,10 @@ print_missing_screenshot_paths() {
   fi
   if ! text_shortcuts_live_keystroke_proof_passes "$run_dir/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"; then
     echo "  $run_dir/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"
+    missing=1
+  fi
+  if ! text_shortcuts_candidate_metadata_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"; then
+    echo "  $run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"
     missing=1
   fi
   return "$missing"
@@ -446,6 +468,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF (missing or Text Shortcuts live keystroke proof failed)"
     missing=1
   fi
+  if text_shortcuts_candidate_metadata_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"; then
+    echo "[PASS] $TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"
+  else
+    echo "[FAIL] $TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF (missing or Text Shortcuts candidate metadata proof failed)"
+    missing=1
+  fi
   return "$missing"
 }
 
@@ -491,6 +519,7 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$FIREWALL_LIVE_TOGGLE_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF
 EOF
 }
 
@@ -543,6 +572,7 @@ signoff_block_required_proof_is_complete() {
   signoff_block_contains "$block" "^- Firewall live toggle checked: yes" || return 1
   signoff_block_contains "$block" "^- Text Shortcuts session enablement checked: yes" || return 1
   signoff_block_contains "$block" "^- Text Shortcuts live keystrokes checked: yes" || return 1
+  signoff_block_contains "$block" "^- Text Shortcuts candidate metadata checked: yes" || return 1
   signoff_block_contains "$block" "^- Gaming readiness checked: yes" || return 1
   signoff_block_contains "$block" "^- Install storage/bootloader/dual-boot checked: yes" || return 1
   return 0
@@ -772,10 +802,13 @@ check "capture harness proves Text Shortcuts session plumbing without runtime cl
 check "capture driver persists Text Shortcuts session proof" "rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-session-enable' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts session-enable proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts live keystrokes through focused GTK fields" "rg -q '/proof/text-shortcuts-live-keystroke' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof normal' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof password' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof dismiss' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof passthrough' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wtype -- \"omw\\.\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wtype -- \"hello\\.\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wtype -P Escape -p Escape' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'password_refusal=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismiss_no_commit=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'passthrough_unchanged=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts live keystroke proof" "rg -q 'text-shortcuts-live-keystroke-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-live-keystroke' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof' os/hardware-gate/capture-harness/run-capture.sh"
+check "capture harness proves Text Shortcuts candidate metadata without live overlay claim" "rg -q '/proof/text-shortcuts-candidate-metadata' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'replacement=on my way' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'accept_on=word-boundary' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismiss_key=Escape' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "capture driver persists Text Shortcuts candidate metadata proof" "rg -q 'text-shortcuts-candidate-metadata-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-metadata' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate metadata proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness prints qemu diagnostics on startup failure" "rg -q 'QEMU startup diagnostics' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'qemu.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'serial.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'last connection error' os/hardware-gate/capture-harness/drive-capture.py"
 check "hardware gate requires live firewall proof in signoff" "rg -q 'firewall_live_toggle_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Firewall live toggle checked' os/hardware-gate/close-signoff.sh && rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts session proof in signoff" "rg -q 'text_shortcuts_session_enable_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts session enablement checked' os/hardware-gate/close-signoff.sh && rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts live keystroke proof in signoff" "rg -q 'text_shortcuts_live_keystroke_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts live keystrokes checked' os/hardware-gate/close-signoff.sh && rg -q 'text-shortcuts-live-keystroke-proof.json' os/hardware-gate/runbook.md"
+check "hardware gate requires Text Shortcuts candidate metadata proof in signoff" "rg -q 'text_shortcuts_candidate_metadata_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate metadata checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-metadata-proof.json' os/hardware-gate/runbook.md"
 check "core AI safe setting route requires policy and confirmation" "rg -Fq 'policy_state_for_control(\"settings-control\")' crates/goblins-os-core/src/ai.rs && rg -q 'StatusCode::PRECONDITION_REQUIRED' crates/goblins-os-core/src/ai.rs && rg -Fq 'audit_ai_action(\"change-safe-setting\"' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route has narrow allowlist" "rg -q 'appearance.color-scheme, accessibility.reduce-motion, or notifications.show-banners' crates/goblins-os-core/src/ai.rs && rg -q 'safe_setting_change_rejects_arbitrary_settings_and_wrong_values' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route reuses settings wrappers" "rg -q 'apply_ai_color_scheme' crates/goblins-os-core/src/appearance.rs && rg -q 'apply_ai_reduce_motion' crates/goblins-os-core/src/accessibility.rs && rg -q 'apply_ai_notification_banners' crates/goblins-os-core/src/notifications.rs"

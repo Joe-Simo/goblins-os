@@ -91,6 +91,10 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       NetworkManager-wifi \
       nm-connection-editor \
       dnsmasq \
+      ntfs-3g \
+      exfatprogs \
+      udisks2 \
+      rsync \
       pipewire \
       pipewire-alsa \
       pipewire-pulseaudio \
@@ -159,6 +163,10 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       tesseract-langpack-eng \
       firewalld \
       dnsmasq \
+      ntfs-3g \
+      exfatprogs \
+      udisks2 \
+      rsync \
       wl-clipboard \
       ibus \
       ibus-libpinyin \
@@ -203,6 +211,12 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v orca \
     && command -v firewall-cmd \
     && command -v dnsmasq \
+    && command -v ntfs-3g \
+    && command -v mount.ntfs-3g \
+    && command -v fsck.exfat \
+    && command -v udisksctl \
+    && command -v rsync \
+    && test -f /usr/lib/systemd/system/udisks2.service \
     && command -v ibus \
     && command -v ibus-daemon \
     && command -v python3 \

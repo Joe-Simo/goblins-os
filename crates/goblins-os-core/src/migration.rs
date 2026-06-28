@@ -1,24 +1,50 @@
-//! Migration Assistant substrate (read-only source capability + category model).
+//! Migration Assistant substrate (source capability + additive copy planning).
 //!
 //! The macOS "Migration Assistant" altitude: bring a previous home over on first
 //! boot. This module ships the host-testable foundation — which source filesystems
 //! Goblins OS can actually read (so a drive it can't read is shown disabled, never
 //! silently skipped), the category model, and the allowlisted preference keys the
-//! import is permitted to write. The udisks/rsync
-//! copy job and the installer page are the deliberate CI/qemu follow-up; nothing
-//! here mounts, copies, or writes — it is pure capability reporting.
+//! import is permitted to write. The copy-plan route builds the exact rsync argv
+//! and ledger paths without mounting or copying; udisks execution, process
+//! streaming, and the installer page are the deliberate CI/qemu follow-up.
 
-use axum::Json;
-use serde::Serialize;
+use std::path::{Component, Path};
+
+use axum::{http::StatusCode, Json};
+use serde::{Deserialize, Serialize};
 
 /// A migratable data category and the source-relative directories it covers.
-const CATEGORIES: &[(&str, &[&str])] = &[
-    ("Documents & Desktop", &["Documents", "Desktop"]),
-    ("Pictures", &["Pictures"]),
-    ("Music", &["Music"]),
-    ("Videos", &["Videos"]),
-    ("Downloads", &["Downloads"]),
-    ("App configuration", &[".config", ".local/share"]),
+const CATEGORIES: &[MigrationCategorySpec] = &[
+    MigrationCategorySpec {
+        id: "documents-desktop",
+        name: "Documents & Desktop",
+        sources: &["Documents", "Desktop"],
+    },
+    MigrationCategorySpec {
+        id: "pictures",
+        name: "Pictures",
+        sources: &["Pictures"],
+    },
+    MigrationCategorySpec {
+        id: "music",
+        name: "Music",
+        sources: &["Music"],
+    },
+    MigrationCategorySpec {
+        id: "videos",
+        name: "Videos",
+        sources: &["Videos"],
+    },
+    MigrationCategorySpec {
+        id: "downloads",
+        name: "Downloads",
+        sources: &["Downloads"],
+    },
+    MigrationCategorySpec {
+        id: "app-config",
+        name: "App configuration",
+        sources: &[".config", ".local/share"],
+    },
 ];
 
 /// The ONLY desktop preferences the import may write, through the existing
@@ -30,6 +56,15 @@ const ALLOWLISTED_PREFERENCES: &[&str] = &[
     "background-picture-uri",
 ];
 
+const MIGRATION_LEDGER_DIR: &str = ".local/share/goblins-os/migration";
+
+#[derive(Clone, Copy)]
+struct MigrationCategorySpec {
+    id: &'static str,
+    name: &'static str,
+    sources: &'static [&'static str],
+}
+
 #[derive(Serialize)]
 pub struct FilesystemSupport {
     family: &'static str,
@@ -40,6 +75,7 @@ pub struct FilesystemSupport {
 
 #[derive(Serialize)]
 pub struct MigrationCategory {
+    id: &'static str,
     name: &'static str,
     sources: Vec<&'static str>,
 }
@@ -53,22 +89,82 @@ pub struct MigrationCapabilities {
     detail: String,
 }
 
+#[derive(Deserialize)]
+pub struct MigrationCopyPlanRequest {
+    source_root: String,
+    destination_home: String,
+    categories: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct MigrationCopyPlanOutcome {
+    ok: bool,
+    text: String,
+    plan: Option<MigrationCopyPlan>,
+}
+
+#[derive(Serialize)]
+pub struct MigrationCopyPlan {
+    source_root: String,
+    destination_home: String,
+    jobs: Vec<MigrationCopyJob>,
+    rsync_argv: Vec<String>,
+    copied_ledger: String,
+    skipped_ledger: String,
+    allowlisted_preferences: Vec<&'static str>,
+    executes_live_copy: bool,
+}
+
+#[derive(Serialize)]
+pub struct MigrationCopyJob {
+    category_id: &'static str,
+    category_name: &'static str,
+    source_paths: Vec<String>,
+    destination: String,
+}
+
 pub async fn migration_capabilities() -> Json<MigrationCapabilities> {
     Json(build_migration_capabilities())
+}
+
+pub async fn migration_copy_plan(
+    Json(request): Json<MigrationCopyPlanRequest>,
+) -> (StatusCode, Json<MigrationCopyPlanOutcome>) {
+    match build_migration_copy_plan(request) {
+        Ok(plan) => (
+            StatusCode::OK,
+            Json(MigrationCopyPlanOutcome {
+                ok: true,
+                text: "Migration copy plan is ready. No files were copied by this planning step."
+                    .to_string(),
+                plan: Some(plan),
+            }),
+        ),
+        Err(text) => (
+            StatusCode::BAD_REQUEST,
+            Json(MigrationCopyPlanOutcome {
+                ok: false,
+                text,
+                plan: None,
+            }),
+        ),
+    }
 }
 
 fn build_migration_capabilities() -> MigrationCapabilities {
     let ntfs = driver_present("ntfs-3g") || driver_present("mount.ntfs-3g");
     let exfat = driver_present("exfatprogs")
         || driver_present("mount.exfat")
-        || driver_present("exfatfsck");
+        || driver_present("exfatfsck")
+        || driver_present("fsck.exfat");
     let filesystems = filesystem_table(ntfs, exfat);
 
     let categories = CATEGORIES
         .iter()
-        .map(|(name, sources)| MigrationCategory {
-            name,
-            sources: sources.to_vec(),
+        .map(|category| MigrationCategory {
+            id: category.id,
+            name: category.name,
+            sources: category.sources.to_vec(),
         })
         .collect();
 
@@ -79,6 +175,168 @@ fn build_migration_capabilities() -> MigrationCapabilities {
         allowlisted_preferences: ALLOWLISTED_PREFERENCES.to_vec(),
         detail: "Goblins OS can bring data over from the source filesystems marked readable. The copy step is read-only on the source and additive into your new home.".to_string(),
     }
+}
+
+fn build_migration_copy_plan(
+    request: MigrationCopyPlanRequest,
+) -> Result<MigrationCopyPlan, String> {
+    let source_root = normalize_absolute_dir(&request.source_root, "source root")?;
+    let destination_home = normalize_absolute_dir(&request.destination_home, "destination home")?;
+    if source_root == destination_home {
+        return Err("Migration source and destination must be different directories.".to_string());
+    }
+    if destination_home.starts_with(&format!("{source_root}/")) {
+        return Err("Migration destination cannot be inside the selected source.".to_string());
+    }
+
+    let categories = selected_categories(&request.categories)?;
+    let jobs = migration_copy_jobs(&source_root, &destination_home, &categories);
+    let copied_ledger = join_absolute(&destination_home, MIGRATION_LEDGER_DIR, "copied.tsv");
+    let skipped_ledger = join_absolute(&destination_home, MIGRATION_LEDGER_DIR, "skipped.tsv");
+    let rsync_argv = migration_rsync_argv(&jobs, &destination_home, &copied_ledger);
+
+    Ok(MigrationCopyPlan {
+        source_root,
+        destination_home,
+        jobs,
+        rsync_argv,
+        copied_ledger,
+        skipped_ledger,
+        allowlisted_preferences: ALLOWLISTED_PREFERENCES.to_vec(),
+        executes_live_copy: false,
+    })
+}
+
+fn selected_categories(ids: &[String]) -> Result<Vec<MigrationCategorySpec>, String> {
+    if ids.is_empty() {
+        return Err("Choose at least one migration category.".to_string());
+    }
+    let mut selected = Vec::with_capacity(ids.len());
+    for id in ids {
+        let id = id.trim();
+        let Some(category) = CATEGORIES.iter().find(|category| category.id == id) else {
+            return Err(format!(
+                "Migration category '{id}' is not supported by Goblins OS."
+            ));
+        };
+        if selected
+            .iter()
+            .any(|candidate: &MigrationCategorySpec| candidate.id == category.id)
+        {
+            return Err("Migration categories cannot contain duplicates.".to_string());
+        }
+        selected.push(*category);
+    }
+    Ok(selected)
+}
+
+fn migration_copy_jobs(
+    source_root: &str,
+    destination_home: &str,
+    categories: &[MigrationCategorySpec],
+) -> Vec<MigrationCopyJob> {
+    categories
+        .iter()
+        .map(|category| MigrationCopyJob {
+            category_id: category.id,
+            category_name: category.name,
+            source_paths: category
+                .sources
+                .iter()
+                .map(|source| join_absolute(source_root, source, ""))
+                .collect(),
+            destination: ensure_trailing_slash(destination_home),
+        })
+        .collect()
+}
+
+fn migration_rsync_argv(
+    jobs: &[MigrationCopyJob],
+    destination_home: &str,
+    copied_ledger: &str,
+) -> Vec<String> {
+    let mut argv = vec![
+        "rsync".to_string(),
+        "-aHAX".to_string(),
+        "--no-owner".to_string(),
+        "--no-group".to_string(),
+        "--ignore-existing".to_string(),
+        "--ignore-missing-args".to_string(),
+        "--safe-links".to_string(),
+        "--protect-args".to_string(),
+        "--human-readable".to_string(),
+        "--info=progress2".to_string(),
+        "--itemize-changes".to_string(),
+        "--out-format=%i\t%n%L".to_string(),
+        format!("--log-file={copied_ledger}"),
+        "--exclude=.cache/".to_string(),
+        "--exclude=.local/share/Trash/".to_string(),
+    ];
+    for job in jobs {
+        argv.extend(
+            job.source_paths
+                .iter()
+                .map(|path| ensure_trailing_slash(path)),
+        );
+    }
+    argv.push(ensure_trailing_slash(destination_home));
+    argv
+}
+
+fn normalize_absolute_dir(raw: &str, label: &str) -> Result<String, String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(format!("Migration {label} is required."));
+    }
+    if value.contains('\0') || value.contains('\n') {
+        return Err(format!(
+            "Migration {label} contains unsupported characters."
+        ));
+    }
+    let path = Path::new(value);
+    if !path.is_absolute() {
+        return Err(format!("Migration {label} must be an absolute path."));
+    }
+    if path.parent().is_none() {
+        return Err(format!("Migration {label} cannot be the filesystem root."));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!("Migration {label} cannot contain '..' components."));
+    }
+    Ok(trim_trailing_slashes(value))
+}
+
+fn trim_trailing_slashes(value: &str) -> String {
+    let trimmed = value.trim_end_matches('/');
+    if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn ensure_trailing_slash(value: &str) -> String {
+    if value.ends_with('/') {
+        value.to_string()
+    } else {
+        format!("{value}/")
+    }
+}
+
+fn join_absolute(root: &str, relative: &str, leaf: &str) -> String {
+    let mut out = trim_trailing_slashes(root);
+    for part in relative.split('/').filter(|part| !part.is_empty()) {
+        out.push('/');
+        out.push_str(part);
+    }
+    if !leaf.is_empty() {
+        out.push('/');
+        out.push_str(leaf);
+    }
+    out
 }
 
 /// Which source filesystem families Goblins OS can read. Kernel filesystems are
@@ -135,7 +393,10 @@ fn driver_present(binary: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::filesystem_table;
+    use super::{
+        build_migration_capabilities, build_migration_copy_plan, filesystem_table,
+        MigrationCopyPlanRequest,
+    };
 
     #[test]
     fn filesystem_table_gates_on_drivers() {
@@ -172,5 +433,85 @@ mod tests {
                 .unwrap()
                 .readable
         );
+    }
+
+    #[test]
+    fn capabilities_include_stable_category_ids_and_allowlisted_preferences() {
+        let capabilities = build_migration_capabilities();
+        assert!(capabilities
+            .categories
+            .iter()
+            .any(|category| category.id == "documents-desktop"
+                && category.sources == vec!["Documents", "Desktop"]));
+        assert!(capabilities
+            .allowlisted_preferences
+            .contains(&"color-scheme"));
+        assert!(!capabilities
+            .allowlisted_preferences
+            .iter()
+            .any(|key| key.contains("dconf")));
+    }
+
+    #[test]
+    fn migration_copy_plan_builds_additive_rsync_argv_and_ledgers() {
+        let plan = build_migration_copy_plan(MigrationCopyPlanRequest {
+            source_root: "/run/media/goblin/Old Home".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            categories: vec!["documents-desktop".to_string(), "pictures".to_string()],
+        })
+        .expect("valid migration plan");
+
+        assert!(!plan.executes_live_copy);
+        assert_eq!(plan.jobs.len(), 2);
+        assert_eq!(
+            plan.jobs[0].source_paths,
+            vec![
+                "/run/media/goblin/Old Home/Documents".to_string(),
+                "/run/media/goblin/Old Home/Desktop".to_string(),
+            ]
+        );
+        assert!(plan.rsync_argv.contains(&"--info=progress2".to_string()));
+        assert!(plan.rsync_argv.contains(&"--ignore-existing".to_string()));
+        assert!(plan.rsync_argv.contains(&"--safe-links".to_string()));
+        assert!(plan
+            .rsync_argv
+            .contains(&"/run/media/goblin/Old Home/Documents/".to_string()));
+        assert_eq!(plan.rsync_argv.last().unwrap(), "/var/home/goblin/");
+        assert_eq!(
+            plan.copied_ledger,
+            "/var/home/goblin/.local/share/goblins-os/migration/copied.tsv"
+        );
+        assert_eq!(
+            plan.skipped_ledger,
+            "/var/home/goblin/.local/share/goblins-os/migration/skipped.tsv"
+        );
+    }
+
+    #[test]
+    fn migration_copy_plan_rejects_unsafe_or_unknown_inputs() {
+        assert!(build_migration_copy_plan(MigrationCopyPlanRequest {
+            source_root: "relative".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            categories: vec!["documents-desktop".to_string()],
+        })
+        .is_err());
+        assert!(build_migration_copy_plan(MigrationCopyPlanRequest {
+            source_root: "/run/media/goblin/old".to_string(),
+            destination_home: "/run/media/goblin/old/nested".to_string(),
+            categories: vec!["documents-desktop".to_string()],
+        })
+        .is_err());
+        assert!(build_migration_copy_plan(MigrationCopyPlanRequest {
+            source_root: "/run/media/goblin/old".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            categories: vec!["unknown".to_string()],
+        })
+        .is_err());
+        assert!(build_migration_copy_plan(MigrationCopyPlanRequest {
+            source_root: "/run/media/goblin/old".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            categories: vec!["pictures".to_string(), "pictures".to_string()],
+        })
+        .is_err());
     }
 }

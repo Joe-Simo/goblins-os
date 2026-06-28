@@ -212,6 +212,22 @@ inside the container to avoid macOS bind-mount deadlock), `cargo fmt --all --che
 Center/menu-bar surfaces, per-app breakthroughs, and live qemu write proof remain
 deferred.
 
+Current Migration continuation: the package prerequisites and copy-plan substrate
+are now source-gated but not shipped. Fedora 44 package metadata and a clean
+Fedora 44 install probe confirm `ntfs-3g`, `exfatprogs`, `udisks2`, and `rsync`;
+the bootc image installs and `rpm -q`/`command -v` asserts them plus the
+`udisks2.service` unit. Core exposes `/v1/migration/copy-plan`, validating an
+absolute mounted source, destination home, and selected category ids, then
+returning the exact additive `rsync` argv (`--info=progress2`,
+`--ignore-existing`, `--safe-links`) plus copied/skipped ledger paths and the
+allowlisted preference keys. This route does **not** mount, copy, or import
+settings (`executes_live_copy=false`). Local proof: `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (1937)**, `git diff --check`,
+and `bash -n os/hardware-gate/verify-shipping-status.sh`. First-boot UI,
+read-only udisks mounting, live rsync progress/ledger parsing, and preference
+import remain CI/qemu-pending.
+
 Current Personal Hotspot continuation: the Settings binding is now source-gated
 but not shipped. Core still owns `/v1/hotspot/enabled`, policy gating,
 NetworkManager AP creation, `dnsmasq` shared-mode gating, single-radio Wi-Fi
@@ -1134,8 +1150,9 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 
 ### `in-progress` Migration Assistant (import a previous home / desktop settings)
 - [x] **Capability substrate shipped** (`crates/goblins-os-core/src/migration.rs` + `/v1/migration/capabilities`): the filesystem-reader capability table (ext4/btrfs/xfs/FAT32 = kernel; NTFS/exFAT gated on `ntfs-3g`/`exfatprogs` being present; APFS/HFS+ never readable — so an unreadable drive is shown disabled, never silently skipped), the migration category model, and the allowlisted preference keys the import may write. Pure `filesystem_table` unit-tested (177 core tests); clippy/fmt clean; verify gate added.
-- [ ] **First-boot page + copy job (deferred, CI/qemu):** the installer "Bring your stuff over" branch, source-drive scan (reuse the `install_targets` sysfs scan), read-only `udisksctl` mount, `rsync --info=progress2` copy with the Copied/Skipped ledger, and the allowlisted dconf→gsettings preference import — plus adding `ntfs-3g`/`exfatprogs`/`udisks2` to the Containerfile (web-verify the exact fc44 names + add `rpm -q` checks first).
-- **Packages:** `ntfs-3g` (`2026.2.25-1.fc44`), `exfatprogs` (`1.4.2-2.fc44`), `udisks2` (`2.11.1-2.fc44`) — verified.
+- [x] **Package + copy-plan substrate source-gated (CI/qemu-pending):** Fedora 44 package metadata and a clean Fedora 44 install probe confirm `ntfs-3g`, `exfatprogs`, `udisks2`, and `rsync`; the bootc image installs and `rpm -q`/`command -v` asserts all four plus the `udisks2.service` unit. Core exposes `/v1/migration/copy-plan`, validates absolute source/destination/category inputs, rejects duplicate/unknown categories and destination-inside-source plans, and returns the exact additive `rsync` argv (`--info=progress2`, `--ignore-existing`, `--safe-links`), copied/skipped ledger paths, and allowlisted preference keys with `executes_live_copy=false`. No mount/copy/import is performed by this source-gated route.
+- [ ] **First-boot page + live copy job (deferred, CI/qemu):** the installer "Bring your stuff over" branch, source-drive scan (reuse the `install_targets` sysfs scan), read-only `udisksctl` mount, running the planned `rsync` copy with a Copied/Skipped ledger, and the allowlisted dconf→gsettings preference import.
+- **Packages:** `ntfs-3g` (`2026.2.25-1.fc44`), `exfatprogs` (`1.4.2-2.fc44`), `udisks2` (`2.11.1-2.fc44`), `rsync` (`3.4.1-7.fc44`) — verified.
 - **gsettings/dconf:** write only an **allowlisted** key set through the existing appearance/accessibility bridges (`color-scheme`/`text-scaling-factor`/`enable-animations`; `background picture-uri*` only if a wallpaper file actually copied; optional pointer-feel). Read source prefs read-only via `dconf dump /` against the mounted profile — **never** blind-load a foreign dconf binary into the live profile.
 - **Files:** `crates/goblins-os-installer/src/main.rs` (`build_migrate_page` + `populate_migrate_progress`; reuse `setup_choice`/`select_one`, the install-progress poll loop, `http_request`), `crates/goblins-os-core/src/migration.rs` (NEW — source scan, category sizing, rsync copy job with progress, allowlisted preference mapping), `crates/goblins-os-core/src/main.rs` (`/v1/migration/{sources,plan,start,progress}`), `crates/goblins-os-core/src/install_targets.rs` (reuse the sysfs block-device scan in reverse for source detection), `os/bootc/Containerfile`.
 - **APIs:** sysfs `/sys/block/*/removable` + `/proc/self/mountinfo` (already implemented); `udisksctl` read-only mount (fallback `mount -o ro`); `ntfs-3g`/`exfatprogs` for Windows/cross-platform drives (ext4/btrfs/xfs by the kernel); `rsync --archive --info=progress2` (parse % for the bar); `dconf` read + the gsettings bridge for the write side.

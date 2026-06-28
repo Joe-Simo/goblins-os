@@ -8397,7 +8397,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/bootc/Containerfile"),
             "bootc-rpm-asserts-firewalld",
-            "firewalld \\\n      dnsmasq \\\n      wl-clipboard",
+            "firewalld \\\n      dnsmasq \\\n      ntfs-3g \\\n      exfatprogs \\\n      udisks2 \\\n      rsync \\\n      wl-clipboard",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),
@@ -8615,6 +8615,61 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-migration-capabilities-route",
             "/v1/migration/capabilities",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-migration-copy-plan-route",
+            "/v1/migration/copy-plan",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-copy-plan-builder",
+            "build_migration_copy_plan",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-rsync-progress-contract",
+            "--info=progress2",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-additive-copy-contract",
+            "--ignore-existing",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-no-live-copy-claim",
+            "executes_live_copy: false",
+        ),
+        container_package_lockstep_check(root, "migration-ntfs-3g-packaged", "ntfs-3g"),
+        container_package_lockstep_check(root, "migration-exfatprogs-packaged", "exfatprogs"),
+        container_package_lockstep_check(root, "migration-udisks2-packaged", "udisks2"),
+        container_package_lockstep_check(root, "migration-rsync-packaged", "rsync"),
+        container_contains_check(
+            root,
+            "migration-command-asserts-ntfs-3g",
+            "command -v ntfs-3g",
+        ),
+        container_contains_check(
+            root,
+            "migration-command-asserts-mount-ntfs-3g",
+            "command -v mount.ntfs-3g",
+        ),
+        container_contains_check(
+            root,
+            "migration-command-asserts-fsck-exfat",
+            "command -v fsck.exfat",
+        ),
+        container_contains_check(
+            root,
+            "migration-command-asserts-udisksctl",
+            "command -v udisksctl",
+        ),
+        container_contains_check(root, "migration-command-asserts-rsync", "command -v rsync"),
+        container_contains_check(
+            root,
+            "migration-udisks2-service-asserted",
+            "/usr/lib/systemd/system/udisks2.service",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),

@@ -271,6 +271,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/focus/activate", post(focus::activate_focus))
         .route("/v1/focus/deactivate", post(focus::deactivate_focus))
         .route("/v1/focus/tick", post(focus::focus_tick))
+        .route("/v1/focus/mode", post(focus::set_focus_mode))
+        .route("/v1/focus/schedule", post(focus::set_focus_schedule))
         .route("/v1/keychain/status", get(keychain::keychain_status))
         .route(
             "/v1/keychain/collections",

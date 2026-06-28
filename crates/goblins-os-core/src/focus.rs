@@ -5,9 +5,8 @@
 //! key (`show-banners`, owned by `notifications.rs`). This module ships the
 //! host-testable foundation — the schedule evaluator (incl. midnight-wrap), the
 //! mode/schedule JSON model stored in `org.goblins.os.focus`, and an honest-gated
-//! status route, and the first arm/disarm/tick write path. Per-app breakthrough
-//! allowlists, the schedule timer unit, and the Settings/Control-Center/menu-bar
-//! surfaces are the deliberate follow-up.
+//! status route, the first arm/disarm/tick write path, and narrow mode/schedule
+//! CRUD. Per-app breakthrough application remains the deliberate follow-up.
 
 use std::process::{Command, Stdio};
 
@@ -22,8 +21,10 @@ pub struct FocusMode {
     name: String,
 }
 
-#[derive(Clone, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct FocusSchedule {
+    #[serde(default)]
+    id: String,
     mode: String,
     /// Minutes from midnight (local).
     start: u32,
@@ -56,6 +57,33 @@ pub struct FocusActionOutcome {
     text: String,
 }
 
+#[derive(Deserialize)]
+pub struct SetFocusModeRequest {
+    id: String,
+    name: Option<String>,
+    #[serde(default)]
+    delete: bool,
+}
+
+#[derive(Deserialize)]
+pub struct SetFocusScheduleRequest {
+    id: String,
+    mode: Option<String>,
+    start: Option<u32>,
+    end: Option<u32>,
+    weekdays: Option<Vec<u8>>,
+    #[serde(default)]
+    delete: bool,
+}
+
+#[derive(Serialize)]
+pub struct FocusConfigOutcome {
+    ok: bool,
+    text: String,
+    modes: Vec<FocusMode>,
+    schedules: Vec<FocusSchedule>,
+}
+
 pub async fn focus_status() -> Json<FocusStatus> {
     Json(build_focus_status())
 }
@@ -72,6 +100,18 @@ pub async fn deactivate_focus() -> (StatusCode, Json<FocusActionOutcome>) {
 
 pub async fn focus_tick() -> (StatusCode, Json<FocusActionOutcome>) {
     focus_tick_outcome()
+}
+
+pub async fn set_focus_mode(
+    Json(request): Json<SetFocusModeRequest>,
+) -> (StatusCode, Json<FocusConfigOutcome>) {
+    set_focus_mode_outcome(request)
+}
+
+pub async fn set_focus_schedule(
+    Json(request): Json<SetFocusScheduleRequest>,
+) -> (StatusCode, Json<FocusConfigOutcome>) {
+    set_focus_schedule_outcome(request)
 }
 
 fn build_focus_status() -> FocusStatus {
@@ -301,6 +341,176 @@ fn focus_tick_outcome() -> (StatusCode, Json<FocusActionOutcome>) {
     }
 }
 
+fn set_focus_mode_outcome(request: SetFocusModeRequest) -> (StatusCode, Json<FocusConfigOutcome>) {
+    let schema = match focus_config_schema_or_error() {
+        Ok(schema) => schema,
+        Err(outcome) => return outcome,
+    };
+    let modes = match read_focus_modes(&schema) {
+        Ok(modes) => modes,
+        Err(text) => {
+            return focus_config_outcome(
+                StatusCode::SERVICE_UNAVAILABLE,
+                false,
+                text,
+                vec![],
+                vec![],
+            )
+        }
+    };
+    let schedules = match read_focus_schedules(&schema) {
+        Ok(schedules) => schedules,
+        Err(text) => {
+            return focus_config_outcome(
+                StatusCode::SERVICE_UNAVAILABLE,
+                false,
+                text,
+                modes,
+                vec![],
+            )
+        }
+    };
+
+    if request.delete {
+        let mode_id = request.id.trim();
+        if !focus_mode_id_is_safe(mode_id) {
+            return focus_config_outcome(
+                StatusCode::BAD_REQUEST,
+                false,
+                "Focus mode ids must be 1-64 ASCII letters, numbers, '.', '-', '_', or ':'.",
+                modes,
+                schedules,
+            );
+        }
+        let active_mode = setting_string(&schema, "active-mode").unwrap_or_default();
+        let updated_modes =
+            match delete_focus_mode(modes.clone(), &schedules, mode_id, &active_mode) {
+                Ok(updated_modes) => updated_modes,
+                Err((status, text)) => {
+                    return focus_config_outcome(status, false, text, modes, schedules);
+                }
+            };
+        if let Err(text) = set_focus_json(&schema, "modes", &updated_modes) {
+            return focus_config_outcome(StatusCode::BAD_GATEWAY, false, text, modes, schedules);
+        }
+        return focus_config_outcome(
+            StatusCode::OK,
+            true,
+            format!("Focus mode '{mode_id}' was deleted."),
+            updated_modes,
+            schedules,
+        );
+    }
+
+    let mode = match normalize_focus_mode_request(&request) {
+        Ok(mode) => mode,
+        Err(text) => {
+            return focus_config_outcome(StatusCode::BAD_REQUEST, false, text, modes, schedules);
+        }
+    };
+    let updated_modes = match upsert_focus_mode(modes.clone(), mode.clone()) {
+        Ok(updated_modes) => updated_modes,
+        Err(text) => {
+            return focus_config_outcome(StatusCode::BAD_REQUEST, false, text, modes, schedules);
+        }
+    };
+    if let Err(text) = set_focus_json(&schema, "modes", &updated_modes) {
+        return focus_config_outcome(StatusCode::BAD_GATEWAY, false, text, modes, schedules);
+    }
+    focus_config_outcome(
+        StatusCode::OK,
+        true,
+        format!("Focus mode '{}' was saved.", mode.id),
+        updated_modes,
+        schedules,
+    )
+}
+
+fn set_focus_schedule_outcome(
+    request: SetFocusScheduleRequest,
+) -> (StatusCode, Json<FocusConfigOutcome>) {
+    let schema = match focus_config_schema_or_error() {
+        Ok(schema) => schema,
+        Err(outcome) => return outcome,
+    };
+    let modes = match read_focus_modes(&schema) {
+        Ok(modes) => modes,
+        Err(text) => {
+            return focus_config_outcome(
+                StatusCode::SERVICE_UNAVAILABLE,
+                false,
+                text,
+                vec![],
+                vec![],
+            )
+        }
+    };
+    let schedules = match read_focus_schedules(&schema) {
+        Ok(schedules) => schedules,
+        Err(text) => {
+            return focus_config_outcome(
+                StatusCode::SERVICE_UNAVAILABLE,
+                false,
+                text,
+                modes,
+                vec![],
+            )
+        }
+    };
+
+    if request.delete {
+        let schedule_id = request.id.trim();
+        if !focus_schedule_id_is_safe(schedule_id) {
+            return focus_config_outcome(
+                StatusCode::BAD_REQUEST,
+                false,
+                "Focus schedule ids must be 1-64 ASCII letters, numbers, '.', '-', '_', or ':'.",
+                modes,
+                schedules,
+            );
+        }
+        let updated_schedules = match delete_focus_schedule(schedules.clone(), schedule_id) {
+            Ok(updated_schedules) => updated_schedules,
+            Err((status, text)) => {
+                return focus_config_outcome(status, false, text, modes, schedules);
+            }
+        };
+        if let Err(text) = set_focus_json(&schema, "schedules", &updated_schedules) {
+            return focus_config_outcome(StatusCode::BAD_GATEWAY, false, text, modes, schedules);
+        }
+        return focus_config_outcome(
+            StatusCode::OK,
+            true,
+            format!("Focus schedule '{schedule_id}' was deleted."),
+            modes,
+            updated_schedules,
+        );
+    }
+
+    let schedule = match normalize_focus_schedule_request(&request, &modes) {
+        Ok(schedule) => schedule,
+        Err(text) => {
+            return focus_config_outcome(StatusCode::BAD_REQUEST, false, text, modes, schedules);
+        }
+    };
+    let updated_schedules = match upsert_focus_schedule(schedules.clone(), schedule.clone()) {
+        Ok(updated_schedules) => updated_schedules,
+        Err(text) => {
+            return focus_config_outcome(StatusCode::BAD_REQUEST, false, text, modes, schedules);
+        }
+    };
+    if let Err(text) = set_focus_json(&schema, "schedules", &updated_schedules) {
+        return focus_config_outcome(StatusCode::BAD_GATEWAY, false, text, modes, schedules);
+    }
+    focus_config_outcome(
+        StatusCode::OK,
+        true,
+        format!("Focus schedule '{}' was saved.", schedule.id),
+        modes,
+        updated_schedules,
+    )
+}
+
 /// Is a schedule active at the given local weekday (1=Mon..7=Sun) and minute of
 /// day? Handles overnight schedules where `end < start` (e.g. 22:00–07:00). A
 /// zero-length window (`start == end`) is never active. Pure + unit-tested.
@@ -376,7 +586,17 @@ fn parse_focus_modes(raw: &str) -> Result<Vec<FocusMode>, String> {
 fn parse_focus_schedules(raw: &str) -> Result<Vec<FocusSchedule>, String> {
     let schedules: Vec<FocusSchedule> = serde_json::from_str(raw)
         .map_err(|_| "Focus schedules could not be decoded from settings.".to_string())?;
+    let mut schedule_ids = Vec::new();
     for schedule in &schedules {
+        if !schedule.id.is_empty() {
+            if !focus_schedule_id_is_safe(&schedule.id) {
+                return Err("A configured Focus schedule has an invalid id.".to_string());
+            }
+            if schedule_ids.iter().any(|id| id == &schedule.id) {
+                return Err(format!("Focus schedule '{}' is duplicated.", schedule.id));
+            }
+            schedule_ids.push(schedule.id.clone());
+        }
         if !focus_mode_id_is_safe(&schedule.mode) {
             return Err("A configured Focus schedule references an invalid mode id.".to_string());
         }
@@ -395,12 +615,176 @@ fn parse_focus_schedules(raw: &str) -> Result<Vec<FocusSchedule>, String> {
     Ok(schedules)
 }
 
+fn normalize_focus_mode_request(request: &SetFocusModeRequest) -> Result<FocusMode, String> {
+    let id = request.id.trim().to_string();
+    if !focus_mode_id_is_safe(&id) {
+        return Err(
+            "Focus mode ids must be 1-64 ASCII letters, numbers, '.', '-', '_', or ':'."
+                .to_string(),
+        );
+    }
+    let name = request
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "Focus mode names must be 1-80 visible characters.".to_string())?
+        .to_string();
+    if !focus_mode_name_is_safe(&name) {
+        return Err("Focus mode names must be 1-80 visible characters.".to_string());
+    }
+    Ok(FocusMode { id, name })
+}
+
+fn upsert_focus_mode(mut modes: Vec<FocusMode>, mode: FocusMode) -> Result<Vec<FocusMode>, String> {
+    if let Some(existing) = modes.iter_mut().find(|existing| existing.id == mode.id) {
+        existing.name = mode.name;
+    } else {
+        if modes.len() >= 20 {
+            return Err("Focus supports up to 20 configured modes.".to_string());
+        }
+        modes.push(mode);
+    }
+    Ok(modes)
+}
+
+fn delete_focus_mode(
+    modes: Vec<FocusMode>,
+    schedules: &[FocusSchedule],
+    id: &str,
+    active_mode: &str,
+) -> Result<Vec<FocusMode>, (StatusCode, String)> {
+    if active_mode == id {
+        return Err((
+            StatusCode::CONFLICT,
+            "Turn Focus off before deleting the active mode.".to_string(),
+        ));
+    }
+    if schedules.iter().any(|schedule| schedule.mode == id) {
+        return Err((
+            StatusCode::CONFLICT,
+            "Delete schedules that use this Focus mode before deleting the mode.".to_string(),
+        ));
+    }
+    let original_len = modes.len();
+    let updated: Vec<FocusMode> = modes.into_iter().filter(|mode| mode.id != id).collect();
+    if updated.len() == original_len {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("Focus mode '{id}' is not configured."),
+        ));
+    }
+    Ok(updated)
+}
+
+fn normalize_focus_schedule_request(
+    request: &SetFocusScheduleRequest,
+    modes: &[FocusMode],
+) -> Result<FocusSchedule, String> {
+    let id = request.id.trim().to_string();
+    if !focus_schedule_id_is_safe(&id) {
+        return Err(
+            "Focus schedule ids must be 1-64 ASCII letters, numbers, '.', '-', '_', or ':'."
+                .to_string(),
+        );
+    }
+    let mode = request
+        .mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+        .ok_or_else(|| "Focus schedules must be saved with a configured mode.".to_string())?
+        .to_string();
+    if !focus_mode_id_is_safe(&mode) || !modes.iter().any(|candidate| candidate.id == mode) {
+        return Err("Focus schedules must be saved with a configured mode.".to_string());
+    }
+    let start = request
+        .start
+        .ok_or_else(|| "Focus schedules need a start minute.".to_string())?;
+    let end = request
+        .end
+        .ok_or_else(|| "Focus schedules need an end minute.".to_string())?;
+    if start > 1439 || end > 1439 {
+        return Err("Focus schedules must use minutes within a local day.".to_string());
+    }
+    if start == end {
+        return Err("Focus schedules need a non-empty time window.".to_string());
+    }
+    let weekdays = normalized_weekdays(
+        request
+            .weekdays
+            .clone()
+            .ok_or_else(|| "Focus schedules must use ISO weekdays 1 through 7.".to_string())?,
+    )?;
+
+    Ok(FocusSchedule {
+        id,
+        mode,
+        start,
+        end,
+        weekdays,
+    })
+}
+
+fn upsert_focus_schedule(
+    mut schedules: Vec<FocusSchedule>,
+    schedule: FocusSchedule,
+) -> Result<Vec<FocusSchedule>, String> {
+    if let Some(existing) = schedules
+        .iter_mut()
+        .find(|existing| existing.id == schedule.id)
+    {
+        *existing = schedule;
+    } else {
+        if schedules.len() >= 64 {
+            return Err("Focus supports up to 64 schedules.".to_string());
+        }
+        schedules.push(schedule);
+    }
+    Ok(schedules)
+}
+
+fn delete_focus_schedule(
+    schedules: Vec<FocusSchedule>,
+    id: &str,
+) -> Result<Vec<FocusSchedule>, (StatusCode, String)> {
+    let original_len = schedules.len();
+    let updated: Vec<FocusSchedule> = schedules
+        .into_iter()
+        .filter(|schedule| schedule.id != id)
+        .collect();
+    if updated.len() == original_len {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("Focus schedule '{id}' is not configured."),
+        ));
+    }
+    Ok(updated)
+}
+
+fn normalized_weekdays(mut weekdays: Vec<u8>) -> Result<Vec<u8>, String> {
+    weekdays.sort_unstable();
+    weekdays.dedup();
+    if weekdays.is_empty() || weekdays.iter().any(|weekday| !(1..=7).contains(weekday)) {
+        return Err("Focus schedules must use ISO weekdays 1 through 7.".to_string());
+    }
+    Ok(weekdays)
+}
+
 fn focus_mode_id_is_safe(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':'))
+}
+
+fn focus_schedule_id_is_safe(id: &str) -> bool {
+    focus_mode_id_is_safe(id)
+}
+
+fn focus_mode_name_is_safe(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 80 && !name.chars().any(char::is_control)
 }
 
 fn focus_schema_ready(schema: &SchemaSnapshot) -> bool {
@@ -442,6 +826,34 @@ fn focus_schema_or_error() -> Result<SchemaSnapshot, (StatusCode, Json<FocusActi
     Ok(schema)
 }
 
+fn focus_config_schema_or_error() -> Result<SchemaSnapshot, (StatusCode, Json<FocusConfigOutcome>)>
+{
+    if gsettings(&["list-schemas"]).is_err() {
+        return Err(focus_config_outcome(
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            "Desktop preferences are not ready, so Focus modes and schedules cannot be changed in this session.",
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
+    let schema = schema_snapshot(true, FOCUS_SCHEMA);
+    if !focus_schema_ready(&schema) {
+        return Err(focus_config_outcome(
+            StatusCode::SERVICE_UNAVAILABLE,
+            false,
+            if schema.available {
+                "Focus is unavailable here because the installed Goblins Focus schema is incomplete."
+            } else {
+                "Focus is unavailable here (the Goblins Focus schema is not installed)."
+            },
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
+    Ok(schema)
+}
+
 fn focus_outcome(
     status: StatusCode,
     ok: bool,
@@ -456,6 +868,46 @@ fn focus_outcome(
             text: text.into(),
         }),
     )
+}
+
+fn focus_config_outcome(
+    status: StatusCode,
+    ok: bool,
+    text: impl Into<String>,
+    modes: Vec<FocusMode>,
+    schedules: Vec<FocusSchedule>,
+) -> (StatusCode, Json<FocusConfigOutcome>) {
+    (
+        status,
+        Json(FocusConfigOutcome {
+            ok,
+            text: text.into(),
+            modes,
+            schedules,
+        }),
+    )
+}
+
+fn read_focus_modes(schema: &SchemaSnapshot) -> Result<Vec<FocusMode>, String> {
+    setting_string(schema, "modes")
+        .ok_or_else(|| "Focus modes are not reported by this session.".to_string())
+        .and_then(|raw| parse_focus_modes(&raw))
+}
+
+fn read_focus_schedules(schema: &SchemaSnapshot) -> Result<Vec<FocusSchedule>, String> {
+    setting_string(schema, "schedules")
+        .ok_or_else(|| "Focus schedules are not reported by this session.".to_string())
+        .and_then(|raw| parse_focus_schedules(&raw))
+}
+
+fn set_focus_json<T: Serialize>(
+    schema: &SchemaSnapshot,
+    key: &str,
+    value: &T,
+) -> Result<(), String> {
+    let encoded = serde_json::to_string(value)
+        .map_err(|_| format!("Focus could not encode {key} as JSON."))?;
+    set_focus_string(schema, key, &encoded)
 }
 
 /// Local (timezone-aware) weekday + minute-of-day via `date`, so schedule
@@ -617,10 +1069,14 @@ fn gsettings(args: &[&str]) -> Result<String, ()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_gsettings_string, focus_mode_id_is_safe, focus_tick_decision, parse_focus_modes,
-        parse_focus_schedules, parse_gsettings_bool, parse_local_now, parse_optional_bool,
-        schedule_active, unquote_gsettings_string, FocusTickDecision,
+        delete_focus_mode, delete_focus_schedule, encode_gsettings_string, focus_mode_id_is_safe,
+        focus_tick_decision, normalize_focus_mode_request, normalize_focus_schedule_request,
+        parse_focus_modes, parse_focus_schedules, parse_gsettings_bool, parse_local_now,
+        parse_optional_bool, schedule_active, unquote_gsettings_string, upsert_focus_mode,
+        upsert_focus_schedule, FocusMode, FocusSchedule, FocusTickDecision, SetFocusModeRequest,
+        SetFocusScheduleRequest,
     };
+    use axum::http::StatusCode;
 
     #[test]
     fn schedule_active_matches_weekday_and_window() {
@@ -677,9 +1133,15 @@ mod tests {
         assert!(parse_focus_modes(r#"[{"id":"bad/id","name":"Bad"}]"#).is_err());
 
         assert!(parse_focus_schedules(
-            r#"[{"mode":"work","start":540,"end":1020,"weekdays":[1,2,3,4,5]}]"#
+            r#"[{"id":"weekday","mode":"work","start":540,"end":1020,"weekdays":[1,2,3,4,5]}]"#
         )
         .is_ok());
+        assert!(
+            parse_focus_schedules(
+                r#"[{"id":"weekday","mode":"work","start":540,"end":1020,"weekdays":[1]},{"id":"weekday","mode":"deep","start":600,"end":700,"weekdays":[2]}]"#
+            )
+            .is_err()
+        );
         assert!(
             parse_focus_schedules(r#"[{"mode":"work","start":1440,"end":1,"weekdays":[1]}]"#)
                 .is_err()
@@ -721,5 +1183,129 @@ mod tests {
         assert_eq!(parse_optional_bool(""), None);
         assert_eq!(encode_gsettings_string("work"), "'work'");
         assert_eq!(encode_gsettings_string("it\\'s"), "'it\\\\\\'s'");
+    }
+
+    #[test]
+    fn focus_mode_crud_validates_names_and_references() {
+        let work = normalize_focus_mode_request(&SetFocusModeRequest {
+            id: "work".to_string(),
+            name: Some(" Work ".to_string()),
+            delete: false,
+        })
+        .unwrap();
+        assert_eq!(work.name, "Work");
+        let modes = upsert_focus_mode(Vec::new(), work).unwrap();
+        assert_eq!(modes.len(), 1);
+
+        let renamed = normalize_focus_mode_request(&SetFocusModeRequest {
+            id: "work".to_string(),
+            name: Some("Deep Work".to_string()),
+            delete: false,
+        })
+        .unwrap();
+        let modes = upsert_focus_mode(modes, renamed).unwrap();
+        assert_eq!(modes[0].name, "Deep Work");
+
+        assert!(normalize_focus_mode_request(&SetFocusModeRequest {
+            id: "bad/id".to_string(),
+            name: Some("Bad".to_string()),
+            delete: false,
+        })
+        .is_err());
+        assert!(normalize_focus_mode_request(&SetFocusModeRequest {
+            id: "empty-name".to_string(),
+            name: Some(" ".to_string()),
+            delete: false,
+        })
+        .is_err());
+
+        let schedules = vec![FocusSchedule {
+            id: "weekday".to_string(),
+            mode: "work".to_string(),
+            start: 540,
+            end: 1020,
+            weekdays: vec![1, 2, 3, 4, 5],
+        }];
+        let Err((status, text)) = delete_focus_mode(modes.clone(), &schedules, "work", "") else {
+            panic!("deleting a scheduled mode should fail");
+        };
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(text.contains("Delete schedules"));
+
+        let Err((status, _)) = delete_focus_mode(modes.clone(), &[], "work", "work") else {
+            panic!("deleting an active mode should fail");
+        };
+        assert_eq!(status, StatusCode::CONFLICT);
+
+        let modes = delete_focus_mode(modes, &[], "work", "").unwrap();
+        assert!(modes.is_empty());
+    }
+
+    #[test]
+    fn focus_schedule_crud_requires_configured_modes_and_normalizes_weekdays() {
+        let modes = vec![FocusMode {
+            id: "work".to_string(),
+            name: "Work".to_string(),
+        }];
+        let schedule = normalize_focus_schedule_request(
+            &SetFocusScheduleRequest {
+                id: "weekday".to_string(),
+                mode: Some("work".to_string()),
+                start: Some(540),
+                end: Some(1020),
+                weekdays: Some(vec![5, 1, 1, 3]),
+                delete: false,
+            },
+            &modes,
+        )
+        .unwrap();
+        assert_eq!(schedule.weekdays, vec![1, 3, 5]);
+
+        let schedules = upsert_focus_schedule(Vec::new(), schedule).unwrap();
+        assert_eq!(schedules.len(), 1);
+
+        let replacement = normalize_focus_schedule_request(
+            &SetFocusScheduleRequest {
+                id: "weekday".to_string(),
+                mode: Some("work".to_string()),
+                start: Some(600),
+                end: Some(900),
+                weekdays: Some(vec![2]),
+                delete: false,
+            },
+            &modes,
+        )
+        .unwrap();
+        let schedules = upsert_focus_schedule(schedules, replacement).unwrap();
+        assert_eq!(schedules.len(), 1);
+        assert_eq!(schedules[0].start, 600);
+
+        assert!(normalize_focus_schedule_request(
+            &SetFocusScheduleRequest {
+                id: "unknown-mode".to_string(),
+                mode: Some("personal".to_string()),
+                start: Some(1),
+                end: Some(2),
+                weekdays: Some(vec![1]),
+                delete: false,
+            },
+            &modes,
+        )
+        .is_err());
+        assert!(normalize_focus_schedule_request(
+            &SetFocusScheduleRequest {
+                id: "empty-window".to_string(),
+                mode: Some("work".to_string()),
+                start: Some(60),
+                end: Some(60),
+                weekdays: Some(vec![1]),
+                delete: false,
+            },
+            &modes,
+        )
+        .is_err());
+
+        let schedules = delete_focus_schedule(schedules, "weekday").unwrap();
+        assert!(schedules.is_empty());
     }
 }

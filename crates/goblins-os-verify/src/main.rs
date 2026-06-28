@@ -9073,6 +9073,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/focus/tick",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-focus-mode-route",
+            "/v1/focus/mode",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-focus-schedule-route",
+            "/v1/focus/schedule",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/focus.rs"),
+            "core-focus-mode-crud-validates-references",
+            "Delete schedules that use this Focus mode before deleting the mode.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/focus.rs"),
+            "core-focus-schedule-crud-requires-configured-mode",
+            "Focus schedules must be saved with a configured mode.",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-fetches-focus-status-route",
             "/v1/focus/status",

@@ -9004,6 +9004,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-migration-start-route",
+            "/v1/migration/start",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-migration-progress-route",
+            "/v1/migration/progress",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-migration-copy-plan-route",
             "/v1/migration/copy-plan",
         ),
@@ -9021,6 +9031,61 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/migration.rs"),
             "core-migration-sources-builder",
             "build_migration_sources",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-start-response-builder",
+            "build_migration_start_response",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-start-plans-without-copying",
+            "Migration copy job is planned. No files were copied by this start substrate.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-start-blocks-live-execution",
+            "Live migration copy execution is CI/qemu-gated; this source substrate did not run rsync.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-start-precondition-required",
+            "StatusCode::PRECONDITION_REQUIRED",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-progress-state-store",
+            "OnceLock<Mutex<MigrationCopyProgress>>",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-progress-log-refresh",
+            "refresh_migration_copy_progress_from_logs",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-progress-log-path",
+            "progress.log",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-progress-rsync-parser",
+            "parse_rsync_progress_line",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-progress-ledger-parser",
+            "parse_migration_ledger_counts",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-progress-skipped-ledger-counter",
+            "count_migration_skipped_ledger_entries",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-progress-no-live-copy-claim",
+            "executes_live_copy: false",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),

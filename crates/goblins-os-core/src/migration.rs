@@ -12,6 +12,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Component, Path, PathBuf},
+    sync::{Mutex, OnceLock},
 };
 
 use crate::install_targets::{scan_migration_source_partitions, MigrationSourcePartitionProbe};
@@ -63,6 +64,8 @@ const ALLOWLISTED_PREFERENCES: &[&str] = &[
 
 const MIGRATION_LEDGER_DIR: &str = ".local/share/goblins-os/migration";
 const MAX_ESTIMATE_ENTRIES: u64 = 250_000;
+const MIGRATION_COPY_EXECUTION_BLOCKED: &str =
+    "Live migration copy execution is CI/qemu-gated; this source substrate did not run rsync.";
 
 #[derive(Clone, Copy)]
 struct MigrationCategorySpec {
@@ -146,6 +149,14 @@ pub struct MigrationEstimateRequest {
     categories: Vec<String>,
 }
 
+#[derive(Deserialize)]
+pub struct MigrationStartRequest {
+    source_root: String,
+    destination_home: String,
+    categories: Vec<String>,
+    execute: Option<bool>,
+}
+
 #[derive(Serialize)]
 pub struct MigrationCopyPlanOutcome {
     ok: bool,
@@ -161,11 +172,21 @@ pub struct MigrationEstimateOutcome {
 }
 
 #[derive(Serialize)]
+pub struct MigrationStartOutcome {
+    ok: bool,
+    text: String,
+    state: MigrationCopyState,
+    plan: Option<MigrationCopyPlan>,
+    progress: MigrationCopyProgress,
+}
+
+#[derive(Serialize)]
 pub struct MigrationCopyPlan {
     source_root: String,
     destination_home: String,
     jobs: Vec<MigrationCopyJob>,
     rsync_argv: Vec<String>,
+    progress_log: String,
     copied_ledger: String,
     skipped_ledger: String,
     allowlisted_preferences: Vec<&'static str>,
@@ -182,6 +203,48 @@ pub struct MigrationEstimate {
     skipped_paths: Vec<String>,
     truncated: bool,
     executes_live_copy: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MigrationCopyState {
+    Idle,
+    Planned,
+    Blocked,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Serialize)]
+pub struct MigrationCopyProgress {
+    state: MigrationCopyState,
+    percent: Option<u8>,
+    phase: String,
+    copied_entries: u64,
+    skipped_entries: u64,
+    last_rsync_line: Option<String>,
+    progress_log: Option<String>,
+    copied_ledger: Option<String>,
+    skipped_ledger: Option<String>,
+    executes_live_copy: bool,
+}
+
+impl MigrationCopyProgress {
+    fn idle() -> Self {
+        Self {
+            state: MigrationCopyState::Idle,
+            percent: None,
+            phase: "No migration copy has been started.".to_string(),
+            copied_entries: 0,
+            skipped_entries: 0,
+            last_rsync_line: None,
+            progress_log: None,
+            copied_ledger: None,
+            skipped_ledger: None,
+            executes_live_copy: false,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -270,6 +333,254 @@ pub async fn migration_estimate(
             }),
         ),
     }
+}
+
+pub async fn migration_start(
+    Json(request): Json<MigrationStartRequest>,
+) -> (StatusCode, Json<MigrationStartOutcome>) {
+    let (status, outcome) = build_migration_start_response(request);
+    (status, Json(outcome))
+}
+
+pub async fn migration_progress() -> Json<MigrationCopyProgress> {
+    Json(refresh_migration_copy_progress_from_logs(
+        current_migration_copy_progress(),
+    ))
+}
+
+fn current_migration_copy_progress() -> MigrationCopyProgress {
+    migration_copy_progress()
+        .lock()
+        .map(|progress| progress.clone())
+        .unwrap_or_else(|_| MigrationCopyProgress::idle())
+}
+
+fn set_migration_copy_progress(progress: MigrationCopyProgress) {
+    if let Ok(mut current) = migration_copy_progress().lock() {
+        *current = progress;
+    }
+}
+
+fn migration_copy_progress() -> &'static Mutex<MigrationCopyProgress> {
+    static PROGRESS: OnceLock<Mutex<MigrationCopyProgress>> = OnceLock::new();
+    PROGRESS.get_or_init(|| Mutex::new(MigrationCopyProgress::idle()))
+}
+
+fn build_migration_start_response(
+    request: MigrationStartRequest,
+) -> (StatusCode, MigrationStartOutcome) {
+    match build_migration_copy_plan(MigrationCopyPlanRequest {
+        source_root: request.source_root,
+        destination_home: request.destination_home,
+        categories: request.categories,
+    }) {
+        Ok(plan) => {
+            let execute = request.execute.unwrap_or(false);
+            let state = if execute {
+                MigrationCopyState::Blocked
+            } else {
+                MigrationCopyState::Planned
+            };
+            let text = if execute {
+                MIGRATION_COPY_EXECUTION_BLOCKED.to_string()
+            } else {
+                "Migration copy job is planned. No files were copied by this start substrate."
+                    .to_string()
+            };
+            let progress = migration_progress_from_plan(state, &plan, &text);
+            set_migration_copy_progress(progress.clone());
+            (
+                if execute {
+                    StatusCode::PRECONDITION_REQUIRED
+                } else {
+                    StatusCode::OK
+                },
+                MigrationStartOutcome {
+                    ok: !execute,
+                    text,
+                    state,
+                    plan: Some(plan),
+                    progress,
+                },
+            )
+        }
+        Err(text) => {
+            let progress = MigrationCopyProgress {
+                state: MigrationCopyState::Blocked,
+                percent: None,
+                phase: text.clone(),
+                ..MigrationCopyProgress::idle()
+            };
+            set_migration_copy_progress(progress.clone());
+            (
+                StatusCode::BAD_REQUEST,
+                MigrationStartOutcome {
+                    ok: false,
+                    text,
+                    state: MigrationCopyState::Blocked,
+                    plan: None,
+                    progress,
+                },
+            )
+        }
+    }
+}
+
+fn migration_progress_from_plan(
+    state: MigrationCopyState,
+    plan: &MigrationCopyPlan,
+    phase: &str,
+) -> MigrationCopyProgress {
+    MigrationCopyProgress {
+        state,
+        percent: None,
+        phase: phase.to_string(),
+        copied_entries: 0,
+        skipped_entries: 0,
+        last_rsync_line: None,
+        progress_log: Some(plan.progress_log.clone()),
+        copied_ledger: Some(plan.copied_ledger.clone()),
+        skipped_ledger: Some(plan.skipped_ledger.clone()),
+        executes_live_copy: false,
+    }
+}
+
+fn migration_progress_from_rsync_lines(
+    lines: &[&str],
+    copied_ledger_lines: &[&str],
+    skipped_ledger_lines: &[&str],
+) -> MigrationCopyProgress {
+    let mut progress = MigrationCopyProgress {
+        state: MigrationCopyState::Running,
+        phase: "Migration copy is running.".to_string(),
+        ..MigrationCopyProgress::idle()
+    };
+    for line in lines {
+        if let Some(parsed) = parse_rsync_progress_line(line) {
+            progress.percent = Some(parsed.percent);
+            progress.last_rsync_line = Some(parsed.line);
+        }
+    }
+    let (copied_entries, itemized_skipped_entries) =
+        parse_migration_ledger_counts(copied_ledger_lines);
+    progress.copied_entries = copied_entries;
+    progress.skipped_entries =
+        itemized_skipped_entries + count_migration_skipped_ledger_entries(skipped_ledger_lines);
+    progress
+}
+
+fn refresh_migration_copy_progress_from_logs(
+    progress: MigrationCopyProgress,
+) -> MigrationCopyProgress {
+    let Some(progress_log) = progress.progress_log.as_deref() else {
+        return progress;
+    };
+    let Ok(log_text) = fs::read_to_string(progress_log) else {
+        return progress;
+    };
+    let log_lines = log_text.lines().collect::<Vec<_>>();
+    let copied_ledger_text = progress
+        .copied_ledger
+        .as_deref()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .unwrap_or_default();
+    let copied_ledger_lines = copied_ledger_text.lines().collect::<Vec<_>>();
+    let skipped_ledger_text = progress
+        .skipped_ledger
+        .as_deref()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .unwrap_or_default();
+    let skipped_ledger_lines = skipped_ledger_text.lines().collect::<Vec<_>>();
+    let mut refreshed = migration_progress_from_rsync_lines(
+        &log_lines,
+        &copied_ledger_lines,
+        &skipped_ledger_lines,
+    );
+    refreshed.progress_log = progress.progress_log;
+    refreshed.copied_ledger = progress.copied_ledger;
+    refreshed.skipped_ledger = progress.skipped_ledger;
+    if log_lines
+        .iter()
+        .any(|line| line.trim() == "GOBLINS_OS_MIGRATION_EXIT=0")
+    {
+        refreshed = migration_progress_from_exit(true, refreshed);
+    } else if log_lines
+        .iter()
+        .any(|line| line.trim().starts_with("GOBLINS_OS_MIGRATION_EXIT="))
+    {
+        refreshed = migration_progress_from_exit(false, refreshed);
+    }
+    refreshed
+}
+
+fn migration_progress_from_exit(
+    succeeded: bool,
+    mut progress: MigrationCopyProgress,
+) -> MigrationCopyProgress {
+    progress.state = if succeeded {
+        MigrationCopyState::Succeeded
+    } else {
+        MigrationCopyState::Failed
+    };
+    progress.phase = if succeeded {
+        "Migration copy finished. Review the copied and skipped ledgers.".to_string()
+    } else {
+        "Migration copy stopped before completion. Review the copied and skipped ledgers."
+            .to_string()
+    };
+    progress
+}
+
+struct ParsedRsyncProgress {
+    percent: u8,
+    line: String,
+}
+
+fn parse_rsync_progress_line(line: &str) -> Option<ParsedRsyncProgress> {
+    let trimmed = line.trim();
+    let percent_end = trimmed.find('%')?;
+    let percent_start = trimmed[..percent_end]
+        .char_indices()
+        .rev()
+        .find_map(|(index, ch)| (!ch.is_ascii_digit()).then_some(index + ch.len_utf8()))
+        .unwrap_or(0);
+    let raw_percent = trimmed[percent_start..percent_end].trim();
+    if raw_percent.is_empty() {
+        return None;
+    }
+    let percent = raw_percent.parse::<u8>().ok()?.min(100);
+    Some(ParsedRsyncProgress {
+        percent,
+        line: trimmed.to_string(),
+    })
+}
+
+fn parse_migration_ledger_counts(lines: &[&str]) -> (u64, u64) {
+    lines.iter().fold((0, 0), |(copied, skipped), line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return (copied, skipped);
+        }
+        if trimmed.starts_with("*deleting")
+            || trimmed.starts_with(".d")
+            || trimmed.starts_with(".f")
+            || trimmed.starts_with("cd")
+        {
+            (copied, skipped + 1)
+        } else if trimmed.starts_with('>')
+            || trimmed.starts_with('<')
+            || trimmed.starts_with('c')
+            || trimmed.starts_with('h')
+        {
+            (copied + 1, skipped)
+        } else {
+            (copied, skipped + 1)
+        }
+    })
+}
+
+fn count_migration_skipped_ledger_entries(lines: &[&str]) -> u64 {
+    lines.iter().filter(|line| !line.trim().is_empty()).count() as u64
 }
 
 fn build_migration_sources() -> MigrationSources {
@@ -531,6 +842,7 @@ fn build_migration_copy_plan(
 
     let categories = selected_categories(&request.categories)?;
     let jobs = migration_copy_jobs(&source_root, &destination_home, &categories);
+    let progress_log = join_absolute(&destination_home, MIGRATION_LEDGER_DIR, "progress.log");
     let copied_ledger = join_absolute(&destination_home, MIGRATION_LEDGER_DIR, "copied.tsv");
     let skipped_ledger = join_absolute(&destination_home, MIGRATION_LEDGER_DIR, "skipped.tsv");
     let rsync_argv = migration_rsync_argv(&jobs, &destination_home, &copied_ledger);
@@ -540,6 +852,7 @@ fn build_migration_copy_plan(
         destination_home,
         jobs,
         rsync_argv,
+        progress_log,
         copied_ledger,
         skipped_ledger,
         allowlisted_preferences: ALLOWLISTED_PREFERENCES.to_vec(),
@@ -890,10 +1203,15 @@ fn driver_present(binary: &str) -> bool {
 mod tests {
     use super::{
         build_migration_capabilities, build_migration_copy_plan, build_migration_estimate,
-        build_migration_sources_from_probes, filesystem_table, partition_mounts_from_mountinfo,
-        MigrationCopyPlanRequest, MigrationEstimateRequest,
+        build_migration_sources_from_probes, build_migration_start_response, filesystem_table,
+        migration_progress_from_exit, migration_progress_from_rsync_lines,
+        parse_migration_ledger_counts, parse_rsync_progress_line, partition_mounts_from_mountinfo,
+        refresh_migration_copy_progress_from_logs, MigrationCopyPlanRequest, MigrationCopyProgress,
+        MigrationCopyState, MigrationEstimateRequest, MigrationStartRequest,
+        MIGRATION_COPY_EXECUTION_BLOCKED,
     };
     use crate::install_targets::scan_migration_source_partitions_in;
+    use axum::http::StatusCode;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -1073,6 +1391,10 @@ mod tests {
             .contains(&"/run/media/goblin/Old Home/Documents/".to_string()));
         assert_eq!(plan.rsync_argv.last().unwrap(), "/var/home/goblin/");
         assert_eq!(
+            plan.progress_log,
+            "/var/home/goblin/.local/share/goblins-os/migration/progress.log"
+        );
+        assert_eq!(
             plan.copied_ledger,
             "/var/home/goblin/.local/share/goblins-os/migration/copied.tsv"
         );
@@ -1080,6 +1402,137 @@ mod tests {
             plan.skipped_ledger,
             "/var/home/goblin/.local/share/goblins-os/migration/skipped.tsv"
         );
+    }
+
+    #[test]
+    fn migration_start_plans_copy_without_executing() {
+        let (status, outcome) = build_migration_start_response(MigrationStartRequest {
+            source_root: "/run/media/goblin/Old Home".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            categories: vec!["documents-desktop".to_string()],
+            execute: Some(false),
+        });
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(outcome.ok);
+        assert_eq!(outcome.state, MigrationCopyState::Planned);
+        assert!(outcome.plan.is_some());
+        assert!(!outcome.progress.executes_live_copy);
+        assert_eq!(
+            outcome.progress.copied_ledger.as_deref(),
+            Some("/var/home/goblin/.local/share/goblins-os/migration/copied.tsv")
+        );
+        assert!(outcome
+            .text
+            .contains("No files were copied by this start substrate"));
+    }
+
+    #[test]
+    fn migration_start_execute_true_is_blocked_without_copying() {
+        let (status, outcome) = build_migration_start_response(MigrationStartRequest {
+            source_root: "/run/media/goblin/Old Home".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            categories: vec!["pictures".to_string()],
+            execute: Some(true),
+        });
+
+        assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+        assert!(!outcome.ok);
+        assert_eq!(outcome.state, MigrationCopyState::Blocked);
+        assert!(outcome.plan.is_some());
+        assert_eq!(outcome.text, MIGRATION_COPY_EXECUTION_BLOCKED);
+        assert!(!outcome.progress.executes_live_copy);
+    }
+
+    #[test]
+    fn migration_progress_parses_rsync_progress_without_copying() {
+        let parsed = parse_rsync_progress_line(
+            "     12,345,678  42%   32.10MB/s    0:00:02 (xfr#7, to-chk=3/12)",
+        )
+        .expect("progress line");
+        assert_eq!(parsed.percent, 42);
+        assert!(parsed.line.contains("to-chk=3/12"));
+
+        let progress = migration_progress_from_rsync_lines(
+            &[
+                "         10,000   1%    1.00MB/s    0:00:01 (xfr#1, to-chk=9/10)",
+                "     12,345,678  42%   32.10MB/s    0:00:02 (xfr#7, to-chk=3/12)",
+            ],
+            &[
+                ">f+++++++++\tDocuments/report.txt",
+                ".f..t......\tPictures/kept.jpg",
+            ],
+            &["Pictures/unreadable.raw"],
+        );
+        assert_eq!(progress.state, MigrationCopyState::Running);
+        assert_eq!(progress.percent, Some(42));
+        assert_eq!(progress.copied_entries, 1);
+        assert_eq!(progress.skipped_entries, 2);
+        assert!(!progress.executes_live_copy);
+    }
+
+    #[test]
+    fn migration_progress_terminal_states_keep_ledgers_visible() {
+        let progress = migration_progress_from_rsync_lines(
+            &["     99,000  99%   10.00MB/s    0:00:01 (xfr#9, to-chk=1/10)"],
+            &[">f+++++++++\tDocuments/report.txt"],
+            &[],
+        );
+
+        let succeeded = migration_progress_from_exit(true, progress.clone());
+        assert_eq!(succeeded.state, MigrationCopyState::Succeeded);
+        assert!(succeeded.phase.contains("finished"));
+        assert!(!succeeded.executes_live_copy);
+
+        let failed = migration_progress_from_exit(false, progress);
+        assert_eq!(failed.state, MigrationCopyState::Failed);
+        assert!(failed.phase.contains("stopped before completion"));
+        assert!(!failed.executes_live_copy);
+    }
+
+    #[test]
+    fn migration_progress_refreshes_from_planned_logs_without_copying() {
+        let root = temp_migration_root("progress-log");
+        let log = root.join("progress.log");
+        let copied = root.join("copied.tsv");
+        let skipped = root.join("skipped.tsv");
+        write_file(
+            &log,
+            b"     12,345,678  42%   32.10MB/s    0:00:02 (xfr#7, to-chk=3/12)\nGOBLINS_OS_MIGRATION_EXIT=0\n",
+        );
+        write_file(
+            &copied,
+            b">f+++++++++\tDocuments/report.txt\n.f..t......\tPictures/kept.jpg\n",
+        );
+        write_file(&skipped, b"Pictures/unreadable.raw\n");
+
+        let progress = refresh_migration_copy_progress_from_logs(MigrationCopyProgress {
+            state: MigrationCopyState::Planned,
+            progress_log: Some(log.display().to_string()),
+            copied_ledger: Some(copied.display().to_string()),
+            skipped_ledger: Some(skipped.display().to_string()),
+            ..MigrationCopyProgress::idle()
+        });
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(progress.state, MigrationCopyState::Succeeded);
+        assert_eq!(progress.percent, Some(42));
+        assert_eq!(progress.copied_entries, 1);
+        assert_eq!(progress.skipped_entries, 2);
+        assert!(!progress.executes_live_copy);
+    }
+
+    #[test]
+    fn migration_ledger_counts_expected_skips_without_error_state() {
+        let (copied, skipped) = parse_migration_ledger_counts(&[
+            ">f+++++++++\tDocuments/report.txt",
+            "cd+++++++++\tPictures/",
+            ".f..t......\tPictures/kept.jpg",
+            "*deleting   .cache/stale",
+        ]);
+
+        assert_eq!(copied, 1);
+        assert_eq!(skipped, 3);
     }
 
     #[test]

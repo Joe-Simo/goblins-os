@@ -5343,6 +5343,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-keyboard-shortcuts-roundtrip-proof",
+            "keyboard-shortcuts-roundtrip-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-candidate-no-live-overlay-claim",
             "live_overlay_claim=false",
         ),
@@ -5388,6 +5393,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-keyboard-shortcuts-roundtrip-proof",
+            "/proof/keyboard-shortcuts-roundtrip",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-uses-firewall-toggle-route",
             "/v1/firewall/enabled",
         ),
@@ -5395,6 +5405,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-uses-textshortcuts-status-route",
             "/v1/text-shortcuts",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-uses-keyboard-shortcut-binding-route",
+            "/v1/keyboard/shortcuts/binding",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-uses-keyboard-modifier-remap-route",
+            "/v1/keyboard/modifier-remap",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5487,6 +5507,31 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "rendered_bubble_ready_claim=false",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-keyboard-roundtrip-sets-window-hud",
+            "shortcut_action=window-hud",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-keyboard-roundtrip-uses-test-binding",
+            "shortcut_binding=%3CSuper%3E%3CShift%3EH",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-keyboard-roundtrip-reads-back-shortcut",
+            "shortcut_gsettings_readback=true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-keyboard-roundtrip-remaps-caps",
+            "modifier_gsettings_readback=ctrl:nocaps",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-keyboard-roundtrip-restores-defaults",
+            "roundtrip_restored=true",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-requires-proof-signals",
             "require_proofs",
@@ -5522,6 +5567,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "text-shortcuts-candidate-bubble-frame-proof.json",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-keyboard-shortcuts-roundtrip-proof-json",
+            "keyboard-shortcuts-roundtrip-proof.json",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-firewall-proof",
             "HONESTY GUARD: missing or failing live firewall toggle proof",
@@ -5550,6 +5600,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-bubble-frame-proof",
             "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-frame proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-keyboard-shortcuts-roundtrip-proof",
+            "HONESTY GUARD: missing or failing Keyboard shortcuts roundtrip proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -5585,6 +5640,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-passthrough-proof",
             "\"passthrough_unchanged\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-keyboard-shortcut-readback",
+            "\"shortcut_gsettings_readback\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-keyboard-modifier-readback",
+            "\"modifier_gsettings_readback\": \"ctrl:nocaps\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-keyboard-roundtrip-restored",
+            "\"roundtrip_restored\": \"true\"",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -5640,6 +5710,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-textshortcuts-candidate-bubble-frame-proof",
             "text_shortcuts_candidate_bubble_frame_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-keyboard-shortcuts-roundtrip-proof",
+            "keyboard_shortcuts_roundtrip_proof",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -6008,6 +6083,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-keyboard-shortcuts-roundtrip-proof",
+            "keyboard_shortcuts_roundtrip_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-firewall-proof-filename",
             "firewall-live-toggle-proof.json",
         ),
@@ -6030,6 +6110,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-textshortcuts-candidate-bubble-frame-proof-filename",
             "text-shortcuts-candidate-bubble-frame-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-keyboard-shortcuts-roundtrip-proof-filename",
+            "keyboard-shortcuts-roundtrip-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6243,6 +6328,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-keyboard-shortcuts-roundtrip-proof",
+            "keyboard_shortcuts_roundtrip_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-firewall-live-toggle-proof",
             "Firewall live toggle checked",
         ),
@@ -6270,6 +6360,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-textshortcuts-candidate-bubble-frame-proof",
             "Text Shortcuts candidate bubble frame checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-keyboard-shortcuts-roundtrip-proof",
+            "Keyboard shortcuts roundtrip checked",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),

@@ -50,6 +50,7 @@ TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF="text-shortcuts-live-keystroke-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof.json"
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
+KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="keyboard-shortcuts-roundtrip-proof.json"
 
 check() {
   local label="$1"
@@ -269,7 +270,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_live_keystroke_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_metadata_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest" \
-    && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest"
+    && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest" \
+    && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -393,6 +395,28 @@ text_shortcuts_candidate_bubble_frame_proof_passes() {
     && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
     && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+}
+
+keyboard_shortcuts_roundtrip_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"shortcut_route"[[:space:]]*:[[:space:]]*"/v1/keyboard/shortcuts/binding"' "$proof" \
+    && rg -q '"modifier_route"[[:space:]]*:[[:space:]]*"/v1/keyboard/modifier-remap"' "$proof" \
+    && rg -q '"shortcut_action"[[:space:]]*:[[:space:]]*"window-hud"' "$proof" \
+    && rg -q '"shortcut_binding"[[:space:]]*:[[:space:]]*"<Super><Shift>H"' "$proof" \
+    && rg -q '"shortcut_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"shortcut_gsettings_readback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"shortcut_reset_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"shortcut_reset_binding"[[:space:]]*:[[:space:]]*"<Super>w"' "$proof" \
+    && rg -q '"modifier_target"[[:space:]]*:[[:space:]]*"caps-lock"' "$proof" \
+    && rg -q '"modifier_value"[[:space:]]*:[[:space:]]*"control"' "$proof" \
+    && rg -q '"modifier_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"modifier_gsettings_readback"[[:space:]]*:[[:space:]]*"ctrl:nocaps"' "$proof" \
+    && rg -q '"modifier_reset_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"modifier_restore"[[:space:]]*:[[:space:]]*"default"' "$proof" \
+    && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
 print_missing_screenshot_paths() {
@@ -549,6 +573,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF (missing or Text Shortcuts candidate-bubble-frame proof failed)"
     missing=1
   fi
+  if keyboard_shortcuts_roundtrip_proof_passes "$run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"; then
+    echo "[PASS] $KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"
+  else
+    echo "[FAIL] $KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF (missing or Keyboard shortcuts roundtrip proof failed)"
+    missing=1
+  fi
   return "$missing"
 }
 
@@ -597,6 +627,7 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF
 EOF
 }
 
@@ -652,6 +683,7 @@ signoff_block_required_proof_is_complete() {
   signoff_block_contains "$block" "^- Text Shortcuts candidate metadata checked: yes" || return 1
   signoff_block_contains "$block" "^- Text Shortcuts overlay intent checked: yes" || return 1
   signoff_block_contains "$block" "^- Text Shortcuts candidate bubble frame checked: yes" || return 1
+  signoff_block_contains "$block" "^- Keyboard shortcuts roundtrip checked: yes" || return 1
   signoff_block_contains "$block" "^- Gaming readiness checked: yes" || return 1
   signoff_block_contains "$block" "^- Install storage/bootloader/dual-boot checked: yes" || return 1
   return 0
@@ -868,6 +900,7 @@ check "settings input sources expose reorder and remove write controls" "rg -q '
 check "IME CJK engine packages are source-gated" "rg -q 'ibus-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/libpinyin.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/anthy.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/hangul.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so' os/bootc/Containerfile && rg -q 'CJK engine packages' crates/goblins-os-settings/src/main.rs"
 check "core keyboard rebinding exposes allowlisted write routes" "rg -q '/v1/keyboard/shortcuts/binding' crates/goblins-os-core/src/main.rs && rg -q '/v1/keyboard/modifier-remap' crates/goblins-os-core/src/main.rs && rg -q 'shortcut_conflict' crates/goblins-os-core/src/shortcuts.rs && rg -q 'remap_caps_lock_options' crates/goblins-os-core/src/shortcuts.rs"
 check "settings keyboard reports source-gated shortcut bridge" "rg -q 'Protected shortcut writes are source-gated' crates/goblins-os-settings/src/main.rs && rg -q 'Caps Lock to Control is source-gated' crates/goblins-os-settings/src/main.rs"
+check "hardware gate requires Keyboard shortcuts roundtrip proof" "rg -q 'keyboard-shortcuts-roundtrip-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/keyboard-shortcuts-roundtrip' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/keyboard/shortcuts/binding' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/keyboard/modifier-remap' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'shortcut_binding=%3CSuper%3E%3CShift%3EH' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'shortcut_gsettings_readback=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'modifier_gsettings_readback=ctrl:nocaps' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'roundtrip_restored=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'Keyboard shortcuts roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "Migration source scan is source-gated" "rg -q '/v1/migration/sources' crates/goblins-os-core/src/main.rs && rg -q 'build_migration_sources' crates/goblins-os-core/src/migration.rs && rg -q 'scan_migration_source_partitions_in' crates/goblins-os-core/src/install_targets.rs && rg -q 'migration_filesystem_readability' crates/goblins-os-core/src/migration.rs && rg -q 'migration_sources_classify_sysfs_partitions_without_mounting' crates/goblins-os-core/src/migration.rs && rg -q '/proc/self/mountinfo' crates/goblins-os-core/src/migration.rs && rg -q 'scan_errors' crates/goblins-os-core/src/migration.rs && rg -q 'partial' crates/goblins-os-core/src/migration.rs && rg -Fq \"Goblins can't read this disk's format (APFS).\" crates/goblins-os-core/src/migration.rs && rg -q 'executes_live_mount: false' crates/goblins-os-core/src/migration.rs && rg -q 'executes_live_copy: false' crates/goblins-os-core/src/migration.rs && rg -Fq 'Migration source scan is ready. No disks were mounted and no files were copied by this source scan.' crates/goblins-os-core/src/migration.rs"
 check "Migration copy plan and packages are source-gated" "rg -q '/v1/migration/copy-plan' crates/goblins-os-core/src/main.rs && rg -q 'build_migration_copy_plan' crates/goblins-os-core/src/migration.rs && rg -q -- '--info=progress2' crates/goblins-os-core/src/migration.rs && rg -q -- '--ignore-existing' crates/goblins-os-core/src/migration.rs && rg -q 'executes_live_copy: false' crates/goblins-os-core/src/migration.rs && rg -q 'ntfs-3g' os/bootc/Containerfile && rg -q 'exfatprogs' os/bootc/Containerfile && rg -q 'udisks2' os/bootc/Containerfile && rg -q 'rsync' os/bootc/Containerfile && rg -q 'command -v ntfs-3g' os/bootc/Containerfile && rg -q 'command -v mount.ntfs-3g' os/bootc/Containerfile && rg -q 'command -v fsck.exfat' os/bootc/Containerfile && rg -q 'command -v udisksctl' os/bootc/Containerfile && rg -q 'command -v rsync' os/bootc/Containerfile && rg -q '/usr/lib/systemd/system/udisks2.service' os/bootc/Containerfile"
 check "Migration category sizing is source-gated" "rg -q '/v1/migration/estimate' crates/goblins-os-core/src/main.rs && rg -q 'build_migration_estimate' crates/goblins-os-core/src/migration.rs && rg -q 'file_type.is_symlink()' crates/goblins-os-core/src/migration.rs && rg -q 'No files were mounted or copied by this sizing step.' crates/goblins-os-core/src/migration.rs && rg -q 'executes_live_copy: false' crates/goblins-os-core/src/migration.rs"

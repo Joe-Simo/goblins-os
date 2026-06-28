@@ -136,6 +136,7 @@ TEXT_SHORTCUTS_LIVE_PROOF="$RUN_DIR/text-shortcuts-live-keystroke-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_PROOF="$RUN_DIR/text-shortcuts-candidate-metadata-proof.json"
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="$RUN_DIR/text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-frame-proof.json"
+KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="$RUN_DIR/keyboard-shortcuts-roundtrip-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
@@ -228,6 +229,25 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" 
   echo "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-frame proof at $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"
   exit 4
 fi
+if ! grep -Fq '"status": "pass"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"shortcut_route": "/v1/keyboard/shortcuts/binding"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"modifier_route": "/v1/keyboard/modifier-remap"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"shortcut_action": "window-hud"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"shortcut_binding": "<Super><Shift>H"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"shortcut_http": "200"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"shortcut_gsettings_readback": "true"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"shortcut_reset_http": "200"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"shortcut_reset_binding": "<Super>w"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"modifier_target": "caps-lock"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"modifier_value": "control"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"modifier_http": "200"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"modifier_gsettings_readback": "ctrl:nocaps"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"modifier_reset_http": "200"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"modifier_restore": "default"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"roundtrip_restored": "true"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"; then
+  echo "HONESTY GUARD: missing or failing Keyboard shortcuts roundtrip proof at $KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"
+  exit 4
+fi
 
 # HONESTY GUARD: refuse to write a signoff for a run whose surfaces aren't all
 # distinct. GNOME 42+ returns AccessDenied to scripted screenshots (org.gnome.
@@ -261,6 +281,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "text_shortcuts_candidate_metadata_proof":"text-shortcuts-candidate-metadata-proof.json",
           "text_shortcuts_overlay_intent_proof":"text-shortcuts-overlay-intent-proof.json",
           "text_shortcuts_candidate_bubble_frame_proof":"text-shortcuts-candidate-bubble-frame-proof.json",
+          "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY

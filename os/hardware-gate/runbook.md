@@ -145,7 +145,8 @@ the release media that was booted:
   "text_shortcuts_live_keystroke_proof": "text-shortcuts-live-keystroke-proof.json",
   "text_shortcuts_candidate_metadata_proof": "text-shortcuts-candidate-metadata-proof.json",
   "text_shortcuts_overlay_intent_proof": "text-shortcuts-overlay-intent-proof.json",
-  "text_shortcuts_candidate_bubble_frame_proof": "text-shortcuts-candidate-bubble-frame-proof.json"
+  "text_shortcuts_candidate_bubble_frame_proof": "text-shortcuts-candidate-bubble-frame-proof.json",
+  "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json"
 }
 ```
 
@@ -199,6 +200,14 @@ contract, Inter font, sensitive-field refusal, and
 `runtime_ready_claim=false`. This still does not prove a live rendered accept
 bubble; it keeps the frame contract from drifting before qemu-rendered IBus
 overlay proof exists.
+
+The keyboard-shortcuts gate is `keyboard-shortcuts-roundtrip-proof.json`. It
+posts to `/v1/keyboard/shortcuts/binding` to set the owned `window-hud` shortcut
+to `<Super><Shift>H`, verifies the GNOME setting read-back, resets it to the
+Goblins default `<Super>w`, posts to `/v1/keyboard/modifier-remap` to map Caps
+Lock to Control, verifies `ctrl:nocaps`, then restores the default modifier
+behavior. This is a live qemu write proof for the already allowlisted bridge; it
+does not mark the Keyboard Settings UI render shipped on its own.
 
 Capture exactly at minimum these names:
 1. `01-installer.png` — ISO boot + installer launch
@@ -279,6 +288,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Text Shortcuts candidate metadata result, including `text-shortcuts-candidate-metadata-proof.json`
 - Text Shortcuts overlay intent result, including `text-shortcuts-overlay-intent-proof.json`
 - Text Shortcuts candidate bubble frame result, including `text-shortcuts-candidate-bubble-frame-proof.json`
+- Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - install destination, formatting/root filesystem, bootloader/EFI, and dual-boot preservation result
 - for custom formatting, encryption, separate `/home`, LUKS/LVM, TPM2 LUKS, ext4, or btrfs, show an advanced storage summary before writes
 - if dual boot is tested, show the Open advanced storage action or Install Goblins OS Beside Another OS desktop entry, Custom/manual storage or Reclaim Space, the free-space/dedicated-disk target, the backup/free-space preparation note, and the untouched existing OS/recovery/EFI partitions

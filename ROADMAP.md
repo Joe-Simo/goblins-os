@@ -441,15 +441,21 @@ Current Keyboard continuation: shortcut rebinding and Caps Lock remap are now
 source-gated but not shipped. Core aliases `/v1/keyboard/shortcuts/status`,
 exposes `/v1/keyboard/shortcuts/binding` for allowlisted Goblins WM binding
 set/reset, and exposes `/v1/keyboard/modifier-remap` for the reversible
-Caps Lock→Control xkb option. The write path validates accelerator grammar,
+Caps Lock to Control xkb option. The write path validates accelerator grammar,
 refuses conflicts with other allowlisted Goblins bindings, edits only the
 `ctrl:*`/`caps:*` xkb option token, and keeps the Settings editor disabled until
-qemu proves the live gsettings round trip. Local source gates:
-`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
-`cargo test --workspace`, the Rust 1.88 GTK container
-`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`,
-`git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
-`goblins-os-verify --source-root .` → **blocked=0 (1585)**.
+qemu proves the live gsettings round trip. The current hardware-gate
+continuation requires `keyboard-shortcuts-roundtrip-proof.json`: inside the
+installed session the harness posts `/v1/keyboard/shortcuts/binding` to set
+`window-hud` to `<Super><Shift>H`, verifies GNOME gsettings read-back, resets to
+`<Super>w`, posts `/v1/keyboard/modifier-remap` to map Caps Lock to Control,
+verifies `ctrl:nocaps`, then restores the default modifier state before signoff.
+This is source-gated proof plumbing only; live qemu execution and rendered
+recordable UI remain pending. Local source gates for the current proof-hook pass:
+`python3 -m py_compile` for the capture driver, `bash -n` for the capture and
+shipping scripts, scoped `git diff --check`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
+`goblins-os-verify --source-root .` → **blocked=0 (2165)**.
 
 Current Voice Control continuation: the push-to-talk dispatch route is now
 source-gated but not shipped. Core exposes `/v1/voice/control`, can capture
@@ -1508,7 +1514,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 ### `in-progress` Keyboard shortcut editor + modifier remap (Caps Lock → Control)
 - [x] **Shortcuts reference shipped** (`crates/goblins-os-core/src/shortcuts.rs` + `/v1/shortcuts/status`, Settings ▸ Keyboard "Shortcuts" list): reads the 14 Goblins window-management bindings from `org.goblins.shell.extensions.wm` and shows each action with its humanized accelerator (`<Super><Shift>Left` → "Super + Shift + Left"; pure `humanize_accelerator`/`parse_gsettings_strv` unit-tested, 176 core tests), honest-gated to "unavailable" when the wm schema isn't installed. Container-verified (clippy `-D warnings`), 2 verify gates.
 - [x] **Rebinding + Caps Lock remap substrate source-gated (CI/qemu-pending):** `/v1/keyboard/shortcuts/binding` writes only the allowlisted Goblins WM schema keys, supports reset, validates accelerator grammar, and refuses conflicts with other Goblins bindings. `/v1/keyboard/modifier-remap` edits only the `ctrl:*`/`caps:*` token in `xkb-options` so Caps Lock can become Control or return to default while preserving unrelated layout/compose options. Settings reports the source-gated bridge but keeps record/dropdown controls disabled until qemu proof is green.
-- [ ] **Recordable UI + live round trip (deferred):** make rows recordable, add a Caps Lock dropdown, inline conflict notice, per-row/global reset, and qemu gsettings round-trip proof.
+- [x] **Live roundtrip hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `keyboard-shortcuts-roundtrip-proof.json`, posts the live shortcut and modifier routes, verifies gsettings read-back for `<Super><Shift>H` and `ctrl:nocaps`, resets the shortcut to `<Super>w`, restores Caps Lock to default, links the proof in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. No live qemu run has produced the proof yet.
+- [ ] **Recordable UI + reviewed live round trip (deferred):** make rows recordable, add a Caps Lock dropdown, inline conflict notice, per-row/global reset, and review the qemu gsettings round-trip proof before marking the UI shipped.
 - **Packages:** none (all three schemas ship in gsettings-desktop-schemas).
 - **gsettings:** `org.gnome.desktop.input-sources xkb-options` (Caps→Ctrl via `ctrl:nocaps`, editing **only** the `ctrl:*`/`caps:*` token, preserving `grp:`/`compose:`/`lv3:`); `org.gnome.desktop.wm.keybindings` (close/toggle-maximized/minimize/switch-applications(+backward)/switch-windows/show-desktop/toggle-fullscreen/begin-move/begin-resize); `org.gnome.settings-daemon.plugins.media-keys` (screenshot/screenshot-clip/area-screenshot/www/terminal/home/search). Reset = `gsettings reset SCHEMA KEY`. Custom-command keybindings → **read-only** v1 (handoff).
 - **Files:** `crates/goblins-os-core/src/keyboard_shortcuts.rs` (NEW — allowlisted bridge mirroring `input.rs`: status + set/reset, action allowlist + spec table, conflict detection, separate modifier-remap target), `crates/goblins-os-core/src/main.rs` (`/v1/keyboard/shortcuts/status`, `/v1/keyboard/shortcuts/binding`, `/v1/keyboard/modifier-remap`), `crates/goblins-os-settings/src/main.rs` (replace the stub at 5622-5625 with the Shortcuts subsection + Modifier Keys row), `crates/goblins-os-verify/src/main.rs` (pin the new copy + no-stub assertion), `os/dconf/db/local.d/10-goblins-os-desktop` (OPTIONAL branded baseline so reset has a Goblins default).

@@ -23,6 +23,7 @@ proof_text_shortcuts_live(){ curl -s "http://$H/proof/text-shortcuts-live-keystr
 proof_text_shortcuts_candidate(){ curl -s "http://$H/proof/text-shortcuts-candidate-metadata?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-overlay-intent?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-frame?$1" >/dev/null 2>&1 || true; }
+proof_keyboard_shortcuts_roundtrip(){ curl -s "http://$H/proof/keyboard-shortcuts-roundtrip?$1" >/dev/null 2>&1 || true; }
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -386,6 +387,66 @@ text_shortcuts_candidate_bubble_frame_proof(){
   proof_text_shortcuts_candidate_bubble_frame "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-accept-bubble-frame&adapter_self_test=pass&show_frame_count=2&hide_frame_count=2&dismissed_frame=true&committed_frame=true&replacement=on%20my%20way&accept_on=word-boundary&accept_keys=Space,Return&dismiss_key=Escape&style_class=gos-text-shortcuts-candidate&text_style_class=gos-text-shortcuts-candidate-text&hint_style_class=gos-text-shortcuts-candidate-hint&font_family=Inter&sensitive_field_refusal=true&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
   return 0
 }
+keyboard_shortcuts_roundtrip_proof(){
+  local shortcut_set_file=/tmp/gate-keyboard-shortcut-set.json
+  local shortcut_reset_file=/tmp/gate-keyboard-shortcut-reset.json
+  local modifier_set_file=/tmp/gate-keyboard-modifier-set.json
+  local modifier_reset_file=/tmp/gate-keyboard-modifier-reset.json
+  local shortcut_code shortcut_ok shortcut_after_set reset_code reset_ok shortcut_after_reset
+  local modifier_code modifier_ok xkb_after_set modifier_reset_code modifier_reset_ok xkb_after_reset
+
+  for _ in $(seq 1 60); do
+    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+
+  shortcut_code=$(curl -s -o "$shortcut_set_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"action":"window-hud","bindings":["<Super><Shift>H"]}' \
+    "$LIVE_URL/v1/keyboard/shortcuts/binding" || true)
+  shortcut_ok=$(json_field "$shortcut_set_file" ok)
+  shortcut_after_set="$(gsettings get org.goblins.shell.extensions.wm window-hud 2>/dev/null || true)"
+  if [ "$shortcut_code" != "200" ] || [ "$shortcut_ok" != "true" ] || ! printf '%s\n' "$shortcut_after_set" | grep -Fq "'<Super><Shift>H'"; then
+    proof_keyboard_shortcuts_roundtrip "status=fail&stage=shortcut-set&route=/v1/keyboard/shortcuts/binding&shortcut_http=${shortcut_code:-000}&shortcut_ok=${shortcut_ok:-missing}&shortcut_action=window-hud&shortcut_binding=%3CSuper%3E%3CShift%3EH"
+    return 1
+  fi
+
+  reset_code=$(curl -s -o "$shortcut_reset_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"action":"window-hud","reset":true}' \
+    "$LIVE_URL/v1/keyboard/shortcuts/binding" || true)
+  reset_ok=$(json_field "$shortcut_reset_file" ok)
+  shortcut_after_reset="$(gsettings get org.goblins.shell.extensions.wm window-hud 2>/dev/null || true)"
+  if [ "$reset_code" != "200" ] || [ "$reset_ok" != "true" ] || ! printf '%s\n' "$shortcut_after_reset" | grep -Fq "'<Super>w'" || printf '%s\n' "$shortcut_after_reset" | grep -Fq "'<Super><Shift>H'"; then
+    proof_keyboard_shortcuts_roundtrip "status=fail&stage=shortcut-reset&route=/v1/keyboard/shortcuts/binding&reset_http=${reset_code:-000}&reset_ok=${reset_ok:-missing}&shortcut_action=window-hud&default_binding=%3CSuper%3Ew"
+    return 1
+  fi
+
+  modifier_code=$(curl -s -o "$modifier_set_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"target":"caps-lock","value":"control"}' \
+    "$LIVE_URL/v1/keyboard/modifier-remap" || true)
+  modifier_ok=$(json_field "$modifier_set_file" ok)
+  xkb_after_set="$(gsettings get org.gnome.desktop.input-sources xkb-options 2>/dev/null || true)"
+  if [ "$modifier_code" != "200" ] || [ "$modifier_ok" != "true" ] || ! printf '%s\n' "$xkb_after_set" | grep -Fq "'ctrl:nocaps'"; then
+    proof_keyboard_shortcuts_roundtrip "status=fail&stage=modifier-set&route=/v1/keyboard/modifier-remap&modifier_http=${modifier_code:-000}&modifier_ok=${modifier_ok:-missing}&modifier_target=caps-lock&modifier_value=control"
+    return 1
+  fi
+
+  modifier_reset_code=$(curl -s -o "$modifier_reset_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"target":"caps-lock","value":"default"}' \
+    "$LIVE_URL/v1/keyboard/modifier-remap" || true)
+  modifier_reset_ok=$(json_field "$modifier_reset_file" ok)
+  xkb_after_reset="$(gsettings get org.gnome.desktop.input-sources xkb-options 2>/dev/null || true)"
+  if [ "$modifier_reset_code" != "200" ] || [ "$modifier_reset_ok" != "true" ] || printf '%s\n' "$xkb_after_reset" | grep -Fq "'ctrl:nocaps'"; then
+    proof_keyboard_shortcuts_roundtrip "status=fail&stage=modifier-reset&route=/v1/keyboard/modifier-remap&modifier_reset_http=${modifier_reset_code:-000}&modifier_reset_ok=${modifier_reset_ok:-missing}&modifier_target=caps-lock&modifier_restore=default"
+    return 1
+  fi
+
+  proof_keyboard_shortcuts_roundtrip "status=pass&shortcut_route=/v1/keyboard/shortcuts/binding&modifier_route=/v1/keyboard/modifier-remap&shortcut_action=window-hud&shortcut_binding=%3CSuper%3E%3CShift%3EH&shortcut_http=200&shortcut_gsettings_readback=true&shortcut_reset_http=200&shortcut_reset_binding=%3CSuper%3Ew&modifier_target=caps-lock&modifier_value=control&modifier_http=200&modifier_gsettings_readback=ctrl:nocaps&modifier_reset_http=200&modifier_restore=default&roundtrip_restored=true"
+  return 0
+}
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication
 # is single-instance, so relaunching the same binary (e.g. the installer with a new
@@ -405,6 +466,7 @@ text_shortcuts_live_keystroke_proof || true
 text_shortcuts_candidate_metadata_proof || true
 text_shortcuts_overlay_intent_proof || true
 text_shortcuts_candidate_bubble_frame_proof || true
+keyboard_shortcuts_roundtrip_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
 FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device

@@ -430,6 +430,16 @@ capture_settings_interactions() {
   capture_settings_firewall_toggle_interaction
 }
 
+seed_focus_render_state() {
+  gsettings set org.goblins.os.focus modes '[{"id":"work","name":"Deep Work"}]'
+  gsettings set org.goblins.os.focus active-mode work
+}
+
+clear_focus_render_state() {
+  gsettings set org.goblins.os.focus active-mode '' 2>/dev/null || true
+  gsettings set org.goblins.os.focus modes '[]' 2>/dev/null || true
+}
+
 capture_chrome_surface() {
   seed_first_boot_profile cloud-openai
   curl -s -X POST http://127.0.0.1:8787/v1/session/unlock \
@@ -447,6 +457,11 @@ capture_chrome_surface() {
   export GOBLINS_OS_RENDER_HOLD_WINDOW=1
   capture goblins-os-control-center "Goblins OS Control Center" 37-control-center.png
   unset GOBLINS_OS_RENDER_HOLD_WINDOW
+  seed_focus_render_state
+  export GOBLINS_OS_RENDER_HOLD_WINDOW=1
+  capture goblins-os-control-center "Goblins OS Control Center" 37b-control-center-focus.png
+  unset GOBLINS_OS_RENDER_HOLD_WINDOW
+  clear_focus_render_state
 
   export GOBLINS_OS_THEME=dark
   export GOBLINS_OS_RENDER_HOLD_WINDOW=1
@@ -457,6 +472,11 @@ capture_chrome_surface() {
   export GOBLINS_OS_RENDER_HOLD_WINDOW=1
   capture goblins-os-control-center "Goblins OS Control Center" 39-control-center-dark.png
   unset GOBLINS_OS_RENDER_HOLD_WINDOW
+  seed_focus_render_state
+  export GOBLINS_OS_RENDER_HOLD_WINDOW=1
+  capture goblins-os-control-center "Goblins OS Control Center" 39b-control-center-focus-dark.png
+  unset GOBLINS_OS_RENDER_HOLD_WINDOW
+  clear_focus_render_state
   unset GOBLINS_OS_THEME
 }
 
@@ -621,6 +641,11 @@ unset GOBLINS_OS_RENDER_HOLD_WINDOW
 export GOBLINS_OS_RENDER_HOLD_WINDOW=1
 capture goblins-os-control-center "Goblins OS Control Center" 37-control-center.png
 unset GOBLINS_OS_RENDER_HOLD_WINDOW
+seed_focus_render_state
+export GOBLINS_OS_RENDER_HOLD_WINDOW=1
+capture goblins-os-control-center "Goblins OS Control Center" 37b-control-center-focus.png
+unset GOBLINS_OS_RENDER_HOLD_WINDOW
+clear_focus_render_state
 
 # The Today panel reads the installed core route and renders real local Date/Clock
 # values plus honest empty states for weather, calendar, and the daily brief.
@@ -676,6 +701,11 @@ unset GOBLINS_OS_RENDER_HOLD_WINDOW
 export GOBLINS_OS_RENDER_HOLD_WINDOW=1
 capture goblins-os-control-center "Goblins OS Control Center" 39-control-center-dark.png
 unset GOBLINS_OS_RENDER_HOLD_WINDOW
+seed_focus_render_state
+export GOBLINS_OS_RENDER_HOLD_WINDOW=1
+capture goblins-os-control-center "Goblins OS Control Center" 39b-control-center-focus-dark.png
+unset GOBLINS_OS_RENDER_HOLD_WINDOW
+clear_focus_render_state
 unset GOBLINS_OS_THEME
 
 kill "$XVFB_PID" "$CORE_PID" "$RES_PID" 2>/dev/null || true

@@ -1189,6 +1189,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-screens.sh"),
+        "render-chrome-focused-control-center-focus-light-proof",
+        "37b-control-center-focus.png",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-screens.sh"),
+        "render-chrome-focused-control-center-focus-dark-proof",
+        "39b-control-center-focus-dark.png",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-screens.sh"),
         "render-settings-scope-function",
         "capture_settings_surface",
     ));
@@ -9756,6 +9766,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-control-center/src/main.rs"),
             "control-center-focus-tile-source-gated",
             "focus_tile_copy",
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "control-center-focus-render-light-hook",
+            "37b-control-center-focus.png",
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "control-center-focus-render-dark-hook",
+            "39b-control-center-focus-dark.png",
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "control-center-focus-render-seeds-mode",
+            r#"[{"id":"work","name":"Deep Work"}]"#,
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "control-center-focus-render-seeds-active-mode",
+            "gsettings set org.goblins.os.focus active-mode work",
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "control-center-focus-render-restores-off",
+            "gsettings set org.goblins.os.focus active-mode ''",
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "control-center-focus-render-restores-modes",
+            "gsettings set org.goblins.os.focus modes '[]'",
         ),
         file_check(root, "os/focus/goblins-os-focus-tick"),
         file_check(root, "os/systemd-user/org.goblins.OS.FocusTick.service"),

@@ -137,6 +137,7 @@ TEXT_SHORTCUTS_CANDIDATE_PROOF="$RUN_DIR/text-shortcuts-candidate-metadata-proof
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="$RUN_DIR/text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-frame-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="$RUN_DIR/keyboard-shortcuts-roundtrip-proof.json"
+INPUT_SOURCES_ROUNDTRIP_PROOF="$RUN_DIR/input-sources-roundtrip-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
@@ -248,6 +249,24 @@ if ! grep -Fq '"status": "pass"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
   echo "HONESTY GUARD: missing or failing Keyboard shortcuts roundtrip proof at $KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"
   exit 4
 fi
+if ! grep -Fq '"status": "pass"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"source_route": "/v1/input/sources"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"switch_route": "/v1/input/switch-next"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"test_sources": "xkb-us,xkb-gb"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"set_http": "200"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"set_ok": "true"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"sources_gsettings_readback": "true"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"current_before_switch": "0"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"switch_http": "200"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"switch_ok": "true"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"switch_switched": "true"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"current_after_switch": "1"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"restore_sources": "true"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"restore_current": "true"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"roundtrip_restored": "true"' "$INPUT_SOURCES_ROUNDTRIP_PROOF"; then
+  echo "HONESTY GUARD: missing or failing Input sources roundtrip proof at $INPUT_SOURCES_ROUNDTRIP_PROOF"
+  exit 4
+fi
 
 # HONESTY GUARD: refuse to write a signoff for a run whose surfaces aren't all
 # distinct. GNOME 42+ returns AccessDenied to scripted screenshots (org.gnome.
@@ -282,6 +301,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "text_shortcuts_overlay_intent_proof":"text-shortcuts-overlay-intent-proof.json",
           "text_shortcuts_candidate_bubble_frame_proof":"text-shortcuts-candidate-bubble-frame-proof.json",
           "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
+          "input_sources_roundtrip_proof":"input-sources-roundtrip-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY

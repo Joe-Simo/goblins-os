@@ -24,6 +24,7 @@ proof_text_shortcuts_candidate(){ curl -s "http://$H/proof/text-shortcuts-candid
 proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-overlay-intent?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-frame?$1" >/dev/null 2>&1 || true; }
 proof_keyboard_shortcuts_roundtrip(){ curl -s "http://$H/proof/keyboard-shortcuts-roundtrip?$1" >/dev/null 2>&1 || true; }
+proof_input_sources_roundtrip(){ curl -s "http://$H/proof/input-sources-roundtrip?$1" >/dev/null 2>&1 || true; }
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -447,6 +448,87 @@ keyboard_shortcuts_roundtrip_proof(){
   proof_keyboard_shortcuts_roundtrip "status=pass&shortcut_route=/v1/keyboard/shortcuts/binding&modifier_route=/v1/keyboard/modifier-remap&shortcut_action=window-hud&shortcut_binding=%3CSuper%3E%3CShift%3EH&shortcut_http=200&shortcut_gsettings_readback=true&shortcut_reset_http=200&shortcut_reset_binding=%3CSuper%3Ew&modifier_target=caps-lock&modifier_value=control&modifier_http=200&modifier_gsettings_readback=ctrl:nocaps&modifier_reset_http=200&modifier_restore=default&roundtrip_restored=true"
   return 0
 }
+restore_input_sources_state(){
+  local original_sources="$1"
+  local original_current="$2"
+
+  [ -n "$original_sources" ] && gsettings set org.gnome.desktop.input-sources sources "$original_sources" >/dev/null 2>&1 || true
+  [ -n "$original_current" ] && gsettings set org.gnome.desktop.input-sources current "$original_current" >/dev/null 2>&1 || true
+}
+input_sources_roundtrip_proof(){
+  local set_file=/tmp/gate-input-sources-set.json
+  local switch_file=/tmp/gate-input-sources-switch.json
+  local original_sources original_current original_current_value sources_after_set current_after_seed
+  local set_code set_ok switch_code switch_ok switch_switched current_after_switch current_after_switch_value
+  local sources_after_restore current_after_restore current_after_restore_value restore_sources_ok restore_current_ok
+
+  for _ in $(seq 1 60); do
+    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+
+  original_sources="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
+  original_current="$(gsettings get org.gnome.desktop.input-sources current 2>/dev/null || true)"
+  original_current_value="$(printf '%s\n' "$original_current" | awk '{print $NF}' | tr -d "'")"
+  if [ -z "$original_sources" ] || ! printf '%s\n' "$original_sources" | grep -Fq "(" || ! printf '%s\n' "$original_current_value" | grep -Eq '^[0-9]+$'; then
+    proof_input_sources_roundtrip "status=fail&stage=baseline&source_route=/v1/input/sources&switch_route=/v1/input/switch-next&original_sources_reported=false"
+    return 1
+  fi
+
+  set_code=$(curl -s -o "$set_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"sources":[{"kind":"xkb","id":"us"},{"kind":"xkb","id":"gb"}]}' \
+    "$LIVE_URL/v1/input/sources" || true)
+  set_ok=$(json_field "$set_file" ok)
+  sources_after_set="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
+  if [ "$set_code" != "200" ] || [ "$set_ok" != "true" ] \
+    || ! printf '%s\n' "$sources_after_set" | grep -Fq "('xkb', 'us')" \
+    || ! printf '%s\n' "$sources_after_set" | grep -Fq "('xkb', 'gb')"; then
+    restore_input_sources_state "$original_sources" "$original_current_value"
+    proof_input_sources_roundtrip "status=fail&stage=set&source_route=/v1/input/sources&set_http=${set_code:-000}&set_ok=${set_ok:-missing}&test_sources=xkb-us,xkb-gb"
+    return 1
+  fi
+
+  if ! gsettings set org.gnome.desktop.input-sources current 0 >/dev/null 2>&1; then
+    restore_input_sources_state "$original_sources" "$original_current_value"
+    proof_input_sources_roundtrip "status=fail&stage=current-seed&source_route=/v1/input/sources&switch_route=/v1/input/switch-next&current_before_switch=missing"
+    return 1
+  fi
+  current_after_seed="$(gsettings get org.gnome.desktop.input-sources current 2>/dev/null | awk '{print $NF}' | tr -d "'" || true)"
+  if [ "$current_after_seed" != "0" ]; then
+    restore_input_sources_state "$original_sources" "$original_current_value"
+    proof_input_sources_roundtrip "status=fail&stage=current-seed-readback&source_route=/v1/input/sources&switch_route=/v1/input/switch-next&current_before_switch=${current_after_seed:-missing}"
+    return 1
+  fi
+
+  switch_code=$(curl -s -o "$switch_file" -w '%{http_code}' -X POST \
+    "$LIVE_URL/v1/input/switch-next" || true)
+  switch_ok=$(json_field "$switch_file" ok)
+  switch_switched=$(json_field "$switch_file" switched)
+  current_after_switch="$(gsettings get org.gnome.desktop.input-sources current 2>/dev/null || true)"
+  current_after_switch_value="$(printf '%s\n' "$current_after_switch" | awk '{print $NF}' | tr -d "'")"
+  if [ "$switch_code" != "200" ] || [ "$switch_ok" != "true" ] || [ "$switch_switched" != "true" ] || [ "$current_after_switch_value" != "1" ]; then
+    restore_input_sources_state "$original_sources" "$original_current_value"
+    proof_input_sources_roundtrip "status=fail&stage=switch&source_route=/v1/input/sources&switch_route=/v1/input/switch-next&switch_http=${switch_code:-000}&switch_ok=${switch_ok:-missing}&switch_switched=${switch_switched:-missing}&current_after_switch=${current_after_switch_value:-missing}"
+    return 1
+  fi
+
+  restore_input_sources_state "$original_sources" "$original_current_value"
+  sources_after_restore="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
+  current_after_restore="$(gsettings get org.gnome.desktop.input-sources current 2>/dev/null || true)"
+  current_after_restore_value="$(printf '%s\n' "$current_after_restore" | awk '{print $NF}' | tr -d "'")"
+  restore_sources_ok=false
+  restore_current_ok=false
+  [ "$sources_after_restore" = "$original_sources" ] && restore_sources_ok=true
+  [ "$current_after_restore_value" = "$original_current_value" ] && restore_current_ok=true
+  if [ "$restore_sources_ok" != "true" ] || [ "$restore_current_ok" != "true" ]; then
+    proof_input_sources_roundtrip "status=fail&stage=restore&source_route=/v1/input/sources&switch_route=/v1/input/switch-next&restore_sources=$restore_sources_ok&restore_current=$restore_current_ok&roundtrip_restored=false"
+    return 1
+  fi
+
+  proof_input_sources_roundtrip "status=pass&source_route=/v1/input/sources&switch_route=/v1/input/switch-next&test_sources=xkb-us,xkb-gb&set_http=200&set_ok=true&sources_gsettings_readback=true&current_before_switch=0&switch_http=200&switch_ok=true&switch_switched=true&current_after_switch=1&restore_sources=true&restore_current=true&roundtrip_restored=true"
+  return 0
+}
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication
 # is single-instance, so relaunching the same binary (e.g. the installer with a new
@@ -467,6 +549,7 @@ text_shortcuts_candidate_metadata_proof || true
 text_shortcuts_overlay_intent_proof || true
 text_shortcuts_candidate_bubble_frame_proof || true
 keyboard_shortcuts_roundtrip_proof || true
+input_sources_roundtrip_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
 FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device

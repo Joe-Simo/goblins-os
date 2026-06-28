@@ -146,7 +146,8 @@ the release media that was booted:
   "text_shortcuts_candidate_metadata_proof": "text-shortcuts-candidate-metadata-proof.json",
   "text_shortcuts_overlay_intent_proof": "text-shortcuts-overlay-intent-proof.json",
   "text_shortcuts_candidate_bubble_frame_proof": "text-shortcuts-candidate-bubble-frame-proof.json",
-  "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json"
+  "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json",
+  "input_sources_roundtrip_proof": "input-sources-roundtrip-proof.json"
 }
 ```
 
@@ -208,6 +209,16 @@ Goblins default `<Super>w`, posts to `/v1/keyboard/modifier-remap` to map Caps
 Lock to Control, verifies `ctrl:nocaps`, then restores the default modifier
 behavior. This is a live qemu write proof for the already allowlisted bridge; it
 does not mark the Keyboard Settings UI render shipped on its own.
+
+The input-sources gate is `input-sources-roundtrip-proof.json`. It saves the
+current `org.gnome.desktop.input-sources` source list and current index, posts
+to `/v1/input/sources` with the deterministic `xkb/us` plus `xkb/gb` list,
+verifies gsettings read-back, seeds current index `0`, posts
+`/v1/input/switch-next`, verifies the current index becomes `1`, then restores
+the original source list and current index before signoff. This proves the
+existing IME/input-source write and switch bridges in qemu without depending on
+a CJK engine being active and without marking the Settings input-source UI
+render shipped.
 
 Capture exactly at minimum these names:
 1. `01-installer.png` — ISO boot + installer launch
@@ -289,6 +300,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Text Shortcuts overlay intent result, including `text-shortcuts-overlay-intent-proof.json`
 - Text Shortcuts candidate bubble frame result, including `text-shortcuts-candidate-bubble-frame-proof.json`
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
+- Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
 - install destination, formatting/root filesystem, bootloader/EFI, and dual-boot preservation result
 - for custom formatting, encryption, separate `/home`, LUKS/LVM, TPM2 LUKS, ext4, or btrfs, show an advanced storage summary before writes
 - if dual boot is tested, show the Open advanced storage action or Install Goblins OS Beside Another OS desktop entry, Custom/manual storage or Reclaim Space, the free-space/dedicated-disk target, the backup/free-space preparation note, and the untouched existing OS/recovery/EFI partitions

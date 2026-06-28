@@ -51,6 +51,7 @@ TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="keyboard-shortcuts-roundtrip-proof.json"
+INPUT_SOURCES_ROUNDTRIP_PROOF="input-sources-roundtrip-proof.json"
 
 check() {
   local label="$1"
@@ -271,7 +272,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_candidate_metadata_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest" \
-    && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest"
+    && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
+    && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -416,6 +418,27 @@ keyboard_shortcuts_roundtrip_proof_passes() {
     && rg -q '"modifier_gsettings_readback"[[:space:]]*:[[:space:]]*"ctrl:nocaps"' "$proof" \
     && rg -q '"modifier_reset_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
     && rg -q '"modifier_restore"[[:space:]]*:[[:space:]]*"default"' "$proof" \
+    && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof"
+}
+
+input_sources_roundtrip_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"source_route"[[:space:]]*:[[:space:]]*"/v1/input/sources"' "$proof" \
+    && rg -q '"switch_route"[[:space:]]*:[[:space:]]*"/v1/input/switch-next"' "$proof" \
+    && rg -q '"test_sources"[[:space:]]*:[[:space:]]*"xkb-us,xkb-gb"' "$proof" \
+    && rg -q '"set_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"set_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"sources_gsettings_readback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"current_before_switch"[[:space:]]*:[[:space:]]*"0"' "$proof" \
+    && rg -q '"switch_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"switch_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"switch_switched"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"current_after_switch"[[:space:]]*:[[:space:]]*"1"' "$proof" \
+    && rg -q '"restore_sources"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"restore_current"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
@@ -579,6 +602,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF (missing or Keyboard shortcuts roundtrip proof failed)"
     missing=1
   fi
+  if input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF"; then
+    echo "[PASS] $INPUT_SOURCES_ROUNDTRIP_PROOF"
+  else
+    echo "[FAIL] $INPUT_SOURCES_ROUNDTRIP_PROOF (missing or Input sources roundtrip proof failed)"
+    missing=1
+  fi
   return "$missing"
 }
 
@@ -628,6 +657,7 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$INPUT_SOURCES_ROUNDTRIP_PROOF
 EOF
 }
 
@@ -684,6 +714,7 @@ signoff_block_required_proof_is_complete() {
   signoff_block_contains "$block" "^- Text Shortcuts overlay intent checked: yes" || return 1
   signoff_block_contains "$block" "^- Text Shortcuts candidate bubble frame checked: yes" || return 1
   signoff_block_contains "$block" "^- Keyboard shortcuts roundtrip checked: yes" || return 1
+  signoff_block_contains "$block" "^- Input sources roundtrip checked: yes" || return 1
   signoff_block_contains "$block" "^- Gaming readiness checked: yes" || return 1
   signoff_block_contains "$block" "^- Install storage/bootloader/dual-boot checked: yes" || return 1
   return 0
@@ -897,6 +928,7 @@ check "core AI system status route uses policy and audit" "rg -q 'system_trouble
 check "installed self-test checks system status route" "rg -q '/v1/ai/system-status' os/bootc/run-selftest.sh && rg -q 'Summarize current system state' os/bootc/run-selftest.sh"
 check "core input sources expose narrow write route and encoder" "rg -q '/v1/input/sources' crates/goblins-os-core/src/main.rs && rg -q 'normalize_input_sources' crates/goblins-os-core/src/input.rs && rg -q 'encode_input_sources' crates/goblins-os-core/src/input.rs"
 check "settings input sources expose reorder and remove write controls" "rg -q 'input_source_action_button' crates/goblins-os-settings/src/main.rs && rg -q 'reordered_input_sources' crates/goblins-os-settings/src/main.rs && rg -q 'input_sources_without' crates/goblins-os-settings/src/main.rs && rg -q '/v1/input/sources' crates/goblins-os-settings/src/main.rs"
+check "hardware gate requires Input sources roundtrip proof" "rg -q 'input-sources-roundtrip-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/input-sources-roundtrip' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/input/sources' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/input/switch-next' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'test_sources=xkb-us,xkb-gb' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sources_gsettings_readback=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'switch_switched=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'restore_sources=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'Input sources roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "IME CJK engine packages are source-gated" "rg -q 'ibus-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/libpinyin.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/anthy.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/hangul.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so' os/bootc/Containerfile && rg -q 'CJK engine packages' crates/goblins-os-settings/src/main.rs"
 check "core keyboard rebinding exposes allowlisted write routes" "rg -q '/v1/keyboard/shortcuts/binding' crates/goblins-os-core/src/main.rs && rg -q '/v1/keyboard/modifier-remap' crates/goblins-os-core/src/main.rs && rg -q 'shortcut_conflict' crates/goblins-os-core/src/shortcuts.rs && rg -q 'remap_caps_lock_options' crates/goblins-os-core/src/shortcuts.rs"
 check "settings keyboard reports source-gated shortcut bridge" "rg -q 'Protected shortcut writes are source-gated' crates/goblins-os-settings/src/main.rs && rg -q 'Caps Lock to Control is source-gated' crates/goblins-os-settings/src/main.rs"

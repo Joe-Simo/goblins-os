@@ -5348,6 +5348,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-input-sources-roundtrip-proof",
+            "input-sources-roundtrip-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-candidate-no-live-overlay-claim",
             "live_overlay_claim=false",
         ),
@@ -5398,6 +5403,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-input-sources-roundtrip-proof",
+            "/proof/input-sources-roundtrip",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-uses-firewall-toggle-route",
             "/v1/firewall/enabled",
         ),
@@ -5415,6 +5425,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-uses-keyboard-modifier-remap-route",
             "/v1/keyboard/modifier-remap",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-uses-input-sources-route",
+            "/v1/input/sources",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-uses-input-switch-next-route",
+            "/v1/input/switch-next",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5532,6 +5552,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "roundtrip_restored=true",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-input-sources-roundtrip-uses-test-sources",
+            "test_sources=xkb-us,xkb-gb",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-input-sources-roundtrip-reads-back-sources",
+            "sources_gsettings_readback=true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-input-sources-roundtrip-switches-current",
+            "switch_switched=true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-input-sources-roundtrip-restores-defaults",
+            "restore_sources=true",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-requires-proof-signals",
             "require_proofs",
@@ -5572,6 +5612,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "keyboard-shortcuts-roundtrip-proof.json",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-input-sources-roundtrip-proof-json",
+            "input-sources-roundtrip-proof.json",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-firewall-proof",
             "HONESTY GUARD: missing or failing live firewall toggle proof",
@@ -5605,6 +5650,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-keyboard-shortcuts-roundtrip-proof",
             "HONESTY GUARD: missing or failing Keyboard shortcuts roundtrip proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-input-sources-roundtrip-proof",
+            "HONESTY GUARD: missing or failing Input sources roundtrip proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -5655,6 +5705,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-keyboard-roundtrip-restored",
             "\"roundtrip_restored\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-input-sources-readback",
+            "\"sources_gsettings_readback\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-input-sources-switch",
+            "\"switch_switched\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-input-sources-restored",
+            "\"restore_sources\": \"true\"",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -5715,6 +5780,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-keyboard-shortcuts-roundtrip-proof",
             "keyboard_shortcuts_roundtrip_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-input-sources-roundtrip-proof",
+            "input_sources_roundtrip_proof",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -6088,6 +6158,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-input-sources-roundtrip-proof",
+            "input_sources_roundtrip_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-firewall-proof-filename",
             "firewall-live-toggle-proof.json",
         ),
@@ -6115,6 +6190,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-keyboard-shortcuts-roundtrip-proof-filename",
             "keyboard-shortcuts-roundtrip-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-input-sources-roundtrip-proof-filename",
+            "input-sources-roundtrip-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6333,6 +6413,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-input-sources-roundtrip-proof",
+            "input_sources_roundtrip_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-firewall-live-toggle-proof",
             "Firewall live toggle checked",
         ),
@@ -6365,6 +6450,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-keyboard-shortcuts-roundtrip-proof",
             "Keyboard shortcuts roundtrip checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-input-sources-roundtrip-proof",
+            "Input sources roundtrip checked",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),

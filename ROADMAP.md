@@ -69,10 +69,10 @@ not mark Batch 5 shipped.
 - **Web-verify** — `WebSearch`/`WebFetch` confirm Fedora-44 package names + D-Bus
   shapes before any Containerfile/D-Bus change (did seahorse + the PermissionStore).
 
-**Done so far (22 of 26 features advanced):**
+**Done so far (23 of 26 features advanced):**
 - **Batch 1 (Bucket A) — complete:** Live Text/OCR (core+handoff+markup Copy Text),
   Color picker. *(IME read+list also shipped; Preview viewer package/default
-  app wiring is source-gated.)*
+  app wiring and Fingerprint package/status substrate are source-gated.)*
 - **Batch 2 (shell) — shipped with CI/qemu render proof:** App Exposé, Hot
   Corners, Snap Assist.
 - **Batch 3 (Settings surfaces) — all 9 have a shipped read/status/UI surface:**
@@ -225,6 +225,22 @@ to Papers and common image formats to Loupe. This pass does **not** claim a live
 double-click/open proof, PDF render, or image render; CI/qemu must still prove
 the package desktop entries, MIME association, and themed GTK app render before
 Preview can ship.
+
+Current Fingerprint continuation: package/PAM/status substrate is now
+source-gated but not shipped. Fedora 44 repo metadata and a clean
+`fedora-bootc:44` command test confirmed `authselect`, `fprintd`,
+`fprintd-pam`, and `libfprint`; `fprintd` provides `/usr/sbin/fprintd-list`,
+`/usr/sbin/fprintd-enroll`, the `net.reactivated.Fprint` D-Bus service, and
+`fprintd.service`, while `fprintd-pam` provides `pam_fprintd.so`. The bootc
+image installs and `rpm -q` asserts those packages, asserts the fprintd CLIs,
+enables fingerprint PAM through `authselect enable-feature with-fingerprint`
+(no hand-edited PAM), and verifies `authselect current` includes
+`with-fingerprint`. Core exposes `/v1/fingerprint/status` with honest gates for
+fprintd, the PAM module, authselect, reader detection, and enrolled fingers;
+Settings Security adds a read-only Fingerprint unlock status row. This pass does
+**not** add enroll/delete controls, store fingerprints, prove a reader, or prove
+sudo/session unlock; CI/qemu plus real hardware must still prove fprintd D-Bus
+enrollment/verification and password fallback before Fingerprint can ship.
 
 Current Per-app Privacy continuation: app-keyed portal permission revokes are now
 source-gated but not shipped. Core exposes `/v1/app-privacy/revoke`, validates
@@ -991,10 +1007,11 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 - **Verifiable:** CI/qemu only (package + render). **Effort:** S · **Risk:** LOW once the package name is confirmed.
 - _Note: spec agent connection-failed; package name + mimeapps wiring must be web-verified before building._
 
-### `TODO` Fingerprint unlock (Touch ID analogue)
+### `in-progress` Fingerprint unlock (Touch ID analogue)
+- [x] **Package/PAM/status substrate source-gated (CI/qemu/hardware-pending):** Fedora 44 repo metadata and a `fedora-bootc:44` command test confirm `authselect`, `fprintd`, `fprintd-pam`, and `libfprint`, with `with-fingerprint` available on the bootc base's `local` authselect profile. The image installs + `rpm -q` asserts those packages, asserts the fprintd CLIs and `pam_fprintd.so`, enables fingerprint PAM through `authselect enable-feature with-fingerprint`, and core exposes `/v1/fingerprint/status` with honest fprintd/PAM/authselect/reader/enrollment gates. Settings ▸ Security shows a read-only Fingerprint unlock row. No enroll/delete UI or live auth proof is claimed yet.
 - [ ] Enroll a fingerprint and unlock the session / authorize sudo with it (laptop readers). Secure-Enclave parity is HW-bound; generic `fprintd` reader support is the achievable, real win.
 - **Approach:** custom_surface (a Goblins "Fingerprint" enrollment flow in Settings ▸ Security on the `fprintd` D-Bus) + config (PAM via `authselect`).
-- **Packages:** `fprintd`, `fprintd-pam`, `libfprint` (verify fc44).
+- **Packages:** `authselect`, `fprintd`, `fprintd-pam`, `libfprint` (verified fc44; `with-fingerprint` verified in the bootc base's `local` profile).
 - **Files:** `os/bootc/Containerfile` (packages); PAM enablement via **`authselect` feature** (e.g. `with-fingerprint`) — NOT hand-edited PAM stacks (login-critical; a bad PAM edit locks users out); `crates/goblins-os-settings/src/main.rs` (enroll/remove rows on `net.reactivated.Fprint` D-Bus); `crates/goblins-os-verify/src/main.rs` (gate the authselect profile + packages).
 - **APIs:** `net.reactivated.Fprint` D-Bus (Device.EnrollStart/VerifyStart); `authselect`.
 - **Honest gating:** no reader detected → enrollment hidden/disabled with "No fingerprint reader found on this device."; password always remains a fallback.

@@ -1608,6 +1608,16 @@ fn installed_checks(root: &Path) -> Vec<Check> {
     checks.push(file_check(root, "usr/bin/vdpauinfo"));
     checks.push(file_check(root, "usr/bin/papers"));
     checks.push(file_check(root, "usr/bin/loupe"));
+    checks.push(file_check(root, "usr/bin/authselect"));
+    checks.push(file_check(root, "usr/sbin/fprintd-list"));
+    checks.push(file_check(root, "usr/sbin/fprintd-enroll"));
+    checks.push(file_check(root, "usr/sbin/fprintd-delete"));
+    checks.push(file_check(root, "usr/sbin/fprintd-verify"));
+    checks.push(file_check(root, "usr/lib64/security/pam_fprintd.so"));
+    checks.push(file_check(
+        root,
+        "usr/share/dbus-1/system-services/net.reactivated.Fprint.service",
+    ));
     checks.push(file_check(
         root,
         "usr/share/applications/org.gnome.Papers.desktop",
@@ -8362,6 +8372,50 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/bootc/Containerfile"),
             "preview-package-desktop-entries-asserted",
             "org.gnome.Papers.desktop",
+        ),
+        container_package_lockstep_check(root, "fingerprint-authselect-packaged", "authselect"),
+        container_package_lockstep_check(root, "fingerprint-fprintd-packaged", "fprintd"),
+        container_package_lockstep_check(root, "fingerprint-fprintd-pam-packaged", "fprintd-pam"),
+        container_package_lockstep_check(root, "fingerprint-libfprint-packaged", "libfprint"),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "fingerprint-authselect-feature-enabled",
+            "authselect enable-feature with-fingerprint",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "fingerprint-authselect-feature-asserted",
+            "authselect current | grep -q -- '- with-fingerprint'",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "fingerprint-pam-module-asserted",
+            "pam_fprintd.so",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-fingerprint-status-route",
+            "/v1/fingerprint/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/fingerprint.rs"),
+            "core-fingerprint-uses-authselect",
+            "authselect_has_fingerprint",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/fingerprint.rs"),
+            "core-fingerprint-targets-fprintd-service",
+            "net.reactivated.Fprint.service",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/fingerprint.rs"),
+            "core-fingerprint-keeps-password-fallback-copy",
+            "password remains available",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-security-fingerprint-row",
+            "Fingerprint unlock",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),

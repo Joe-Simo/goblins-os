@@ -10,6 +10,7 @@ mod bluetooth;
 mod boot_lock;
 mod codex;
 mod displays;
+mod fingerprint;
 mod firewall;
 mod focus;
 mod hardware;
@@ -77,6 +78,7 @@ use crate::{
     boot_lock::boot_lock_status,
     codex::{codex_login_start, codex_login_url, codex_status},
     displays::{apply_displays, displays_status},
+    fingerprint::fingerprint_status,
     firewall::{firewall_status, set_firewall_enabled},
     hardware::hardware_status,
     input::{input_status, set_input_preference, set_input_sources},
@@ -252,6 +254,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/ocr/recognize", post(ocr::ocr_recognize))
         .route("/v1/firewall/status", get(firewall_status))
         .route("/v1/firewall/enabled", post(set_firewall_enabled))
+        .route("/v1/fingerprint/status", get(fingerprint_status))
         .route("/v1/focus/status", get(focus::focus_status))
         .route("/v1/focus/activate", post(focus::activate_focus))
         .route("/v1/focus/deactivate", post(focus::deactivate_focus))

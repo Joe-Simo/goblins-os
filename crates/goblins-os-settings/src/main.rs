@@ -124,6 +124,7 @@ struct SettingsState {
     hotspot: Option<HotspotStatus>,
     shortcuts: Option<ShortcutsStatus>,
     keychain: Option<KeychainStatus>,
+    fingerprint: Option<FingerprintStatus>,
     app_privacy: Option<AppPrivacyStatus>,
 }
 
@@ -178,6 +179,23 @@ struct AppPrivacyRevokeOutcome {
 struct KeychainStatus {
     secret_service_available: bool,
     manager_app_available: bool,
+    detail: String,
+}
+
+/// Read-only Fingerprint unlock capability from `GET /v1/fingerprint/status`.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct FingerprintStatus {
+    available: bool,
+    fprintd_available: bool,
+    pam_module_available: bool,
+    authselect_available: bool,
+    authselect_fingerprint_enabled: bool,
+    reader_available: Option<bool>,
+    enrolled_fingers: Vec<String>,
     detail: String,
 }
 
@@ -3001,6 +3019,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             hotspot: None,
             shortcuts: None,
             keychain: None,
+            fingerprint: None,
             app_privacy: None,
         };
     }
@@ -3039,6 +3058,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         hotspot: get_core_json(&config.core_url, "/v1/hotspot/status").ok(),
         shortcuts: get_core_json(&config.core_url, "/v1/shortcuts/status").ok(),
         keychain: get_core_json(&config.core_url, "/v1/keychain/status").ok(),
+        fingerprint: get_core_json(&config.core_url, "/v1/fingerprint/status").ok(),
         app_privacy: get_core_json(&config.core_url, "/v1/app-privacy/status").ok(),
     }
 }
@@ -5318,6 +5338,15 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
             keychain.detail.clone(),
         ));
     }
+    if let Some(fingerprint) = &state.fingerprint {
+        let (fingerprint_label, fingerprint_ready) = fingerprint_security_label(fingerprint);
+        rows.push((
+            "Fingerprint unlock",
+            fingerprint_label,
+            fingerprint_ready,
+            fingerprint.detail.clone(),
+        ));
+    }
     panel.append(&health_summary_group(rows));
 
     panel.append(&label("Network protection", &["gos-subsection-title"]));
@@ -5341,11 +5370,41 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
         )),
     }
 
+    panel.append(&label("Device unlock", &["gos-subsection-title"]));
+    match &state.fingerprint {
+        Some(fingerprint) => panel.append(&system_row("Fingerprint", &fingerprint.detail)),
+        None => panel.append(&system_row(
+            "Fingerprint",
+            "Waiting for fingerprint unlock status from Goblins OS.",
+        )),
+    }
+
     panel.append(&label("Sign-in", &["gos-subsection-title"]));
     panel.append(&system_row(
         "Session lock",
         "The Goblins OS session gate keeps the desktop locked until you unlock it. Sign-in and password policy are owned by the system and are not adjustable here.",
     ));
+}
+
+fn fingerprint_security_label(status: &FingerprintStatus) -> (String, bool) {
+    if !status.fprintd_available {
+        return ("unavailable".to_string(), false);
+    }
+    if !status.pam_module_available
+        || !status.authselect_available
+        || !status.authselect_fingerprint_enabled
+    {
+        return ("setup pending".to_string(), false);
+    }
+    if !status.available {
+        return ("unavailable".to_string(), false);
+    }
+    match status.reader_available {
+        Some(true) if !status.enrolled_fingers.is_empty() => ("configured".to_string(), true),
+        Some(true) => ("ready to enroll".to_string(), true),
+        Some(false) => ("no reader".to_string(), false),
+        None => ("packaged".to_string(), false),
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -22175,6 +22234,59 @@ mod tests {
         assert_eq!(
             super::setting_change_rejected_detail("   "),
             "Could not apply the setting. The previous value was restored."
+        );
+    }
+
+    #[test]
+    fn fingerprint_security_label_tracks_capability_without_faking_reader_state() {
+        let mut status = super::FingerprintStatus {
+            available: false,
+            fprintd_available: false,
+            pam_module_available: false,
+            authselect_available: false,
+            authselect_fingerprint_enabled: false,
+            reader_available: None,
+            enrolled_fingers: Vec::new(),
+            detail: "Fingerprint unavailable.".to_string(),
+        };
+        assert_eq!(
+            super::fingerprint_security_label(&status),
+            ("unavailable".to_string(), false)
+        );
+
+        status.fprintd_available = true;
+        status.pam_module_available = true;
+        assert_eq!(
+            super::fingerprint_security_label(&status),
+            ("setup pending".to_string(), false)
+        );
+
+        status.authselect_available = true;
+        status.authselect_fingerprint_enabled = true;
+        status.available = true;
+        assert_eq!(
+            super::fingerprint_security_label(&status),
+            ("packaged".to_string(), false)
+        );
+
+        status.reader_available = Some(false);
+        assert_eq!(
+            super::fingerprint_security_label(&status),
+            ("no reader".to_string(), false)
+        );
+
+        status.reader_available = Some(true);
+        assert_eq!(
+            super::fingerprint_security_label(&status),
+            ("ready to enroll".to_string(), true)
+        );
+
+        status
+            .enrolled_fingers
+            .push("Right index finger".to_string());
+        assert_eq!(
+            super::fingerprint_security_label(&status),
+            ("configured".to_string(), true)
         );
     }
 

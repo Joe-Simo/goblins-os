@@ -126,6 +126,10 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       gnome-font-viewer \
       papers \
       loupe \
+      authselect \
+      fprintd \
+      fprintd-pam \
+      libfprint \
       seahorse \
       tesseract \
       tesseract-langpack-eng \
@@ -143,6 +147,10 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       gnome-font-viewer \
       papers \
       loupe \
+      authselect \
+      fprintd \
+      fprintd-pam \
+      libfprint \
       seahorse \
       tesseract \
       tesseract-langpack-eng \
@@ -195,6 +203,15 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v xdg-open \
     && command -v papers \
     && command -v loupe \
+    && command -v authselect \
+    && command -v fprintd-list \
+    && command -v fprintd-enroll \
+    && command -v fprintd-delete \
+    && command -v fprintd-verify \
+    && test -f /usr/lib64/security/pam_fprintd.so \
+    && test -f /usr/share/dbus-1/system-services/net.reactivated.Fprint.service \
+    && authselect enable-feature with-fingerprint \
+    && authselect current | grep -q -- '- with-fingerprint' \
     && command -v fc-match \
     && command -v fc-list \
     && fc-match Inter | grep -qi 'Inter' \

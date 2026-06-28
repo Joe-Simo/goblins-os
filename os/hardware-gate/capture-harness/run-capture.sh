@@ -125,7 +125,7 @@ rm -f "$WORK/qmp.sock"
   -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &
 QEMU_PID=$!
 
-export GOS_QMP="$WORK/qmp.sock" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT"
+export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT"
 # Phase the run with the QMP driver (waits for Anaconda, drives it, waits for the
 # desktop, dismisses onboarding, launches the orchestrator, captures on signals).
 python3 "$HERE/drive-capture.py"

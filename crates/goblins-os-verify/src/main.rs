@@ -6280,6 +6280,36 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-exports-serial-log-for-stage-diagnostics",
+            "GOS_SERIALLOG",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-waits-for-iso-boot-menu-marker",
+            "wait_serial_contains(\"ISO boot menu\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-skips-grub-timeout",
+            "key(\"ret\")",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-requires-anaconda-summary-frame",
+            "require_frame(\"Anaconda summary\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-requires-first-boot-desktop-frame",
+            "require_frame(\"first boot desktop\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-prints-frame-timeout-samples",
+            "framebuffer timeout after",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-firewall-proof",
             "firewall_live_toggle_proof",
         ),

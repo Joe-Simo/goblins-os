@@ -1566,10 +1566,26 @@ Fedora 44 container probe that imported `gi.repository.IBus` and showed
 still source/image-gated and does **not** prove the live qemu IBus session or
 mark Text Shortcuts shipped.
 
+Current hardware-gate capture continuation: hardware-gate run `28336906753` at
+`c10c89a` proved the GHCR image push and shippable installer ISO build, then
+failed in the display-backed VM capture before any in-session proof reached the
+host HTTP server. The diagnostic tail showed QMP alive, KVM readable/writable,
+serial output still at the GRUB countdown/`Booting 'Install Goblins OS 44'`, and
+an empty `httpd.log`; the old capture driver ignored both `wait_frame` return
+values, so it could continue through blind clicks/Alt-F2 and report every proof
+as missing. The current local fix exports `GOS_SERIALLOG`, waits for the ISO boot
+menu/boot handoff serial markers, presses Enter to skip the GRUB timeout, makes
+the Anaconda summary and first-boot desktop framebuffer waits required, and logs
+framebuffer samples on timeout. `verify-shipping-status.sh` and
+`goblins-os-verify` now pin those stage checks. This is source-gated only until
+a fresh hardware-gate run proves the VM can reach the orchestrator and produce
+the required live proof artifacts.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
-   rerun the display-backed hardware gate for the new Text Shortcuts live
-   runtime/render path and inspect
+   after source-gating the fail-closed capture-stage fix, rerun the
+   display-backed hardware gate for the new Text Shortcuts live runtime/render
+   path and inspect
    `text-shortcuts-live-ibus-runtime-render-proof.json` plus
    `32-text-shortcuts-live-ibus-runtime-render.png` only if the session reaches
    the in-guest IBus proof. Keep Text Shortcuts `in-progress` unless that proof

@@ -9,7 +9,8 @@ Codifies the validated flow against a running qemu VM (QMP socket):
   5. screendump each surface to OUTDIR/<shot>.png on its HTTP /ready/<shot> signal
      until ORCH_ALLDONE
 
-Env: GOS_QMP (qmp.sock), GOS_HTTPLOG (httpd.log), GOS_OUTDIR, GOS_PORT.
+Env: GOS_QMP (qmp.sock), GOS_SERIALLOG (serial.log), GOS_HTTPLOG
+(httpd.log), GOS_OUTDIR, GOS_PORT.
 Note: per-shot window-focus timing lives in in-session-orchestrator.sh; tune the
 settle there if surfaces capture as duplicates (md5-identical). KVM (CI) makes
 the VM fast enough that the same timings that work under hvf hold.
@@ -18,6 +19,7 @@ import json, os, socket, subprocess, time
 from urllib.parse import parse_qs, urlparse
 
 QMP = os.environ["GOS_QMP"]; HTTPLOG = os.environ["GOS_HTTPLOG"]
+SERIALLOG = os.environ.get("GOS_SERIALLOG", os.path.join(os.path.dirname(QMP), "serial.log"))
 OUTDIR = os.environ["GOS_OUTDIR"]; PORT = os.environ.get("GOS_PORT", "8099")
 REQUIRED_PROOFS = (
     "firewall-live-toggle",
@@ -99,6 +101,28 @@ def fb_size():
     try: return os.path.getsize(p)
     except OSError: return 0
 
+def serial_text():
+    try:
+        with open(SERIALLOG, errors="ignore") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+def wait_serial_contains(label, needle, timeout):
+    t = time.time()
+    last_tail = ""
+    while time.time() - t < timeout:
+        data = serial_text()
+        if needle in data:
+            print(f"{label}: observed serial marker {needle!r}", flush=True)
+            return True
+        last_tail = data[-500:]
+        time.sleep(1)
+    raise SystemExit(
+        f"{label} did not appear in serial log within {timeout}s; "
+        f"expected {needle!r}; serial_tail={last_tail!r}"
+    )
+
 def http_get_path(line):
     marker = '"GET '
     if marker not in line:
@@ -128,19 +152,43 @@ def require_proofs(proofs):
     if bad:
         raise SystemExit("missing or failing required proof signals: " + ", ".join(bad))
 
-def wait_frame(lo, hi, timeout):
+def wait_frame(label, lo, hi, timeout):
     t = time.time()
+    samples = []
+    next_sample_at = 0
+    last_size = 0
     while time.time() - t < timeout:
         sz = fb_size()
-        if lo <= sz <= hi: return True
+        last_size = sz
+        now = time.time()
+        if len(samples) < 8 or now >= next_sample_at:
+            samples.append(sz)
+            next_sample_at = now + 30
+        if lo <= sz <= hi:
+            print(f"{label}: matched framebuffer size {sz}", flush=True)
+            return True
         time.sleep(10)
+    print(
+        f"{label}: framebuffer timeout after {timeout}s; "
+        f"expected {lo}..{hi}; last={last_size}; samples={samples[-16:]}",
+        flush=True,
+    )
     return False
 
+def require_frame(label, lo, hi, timeout):
+    if not wait_frame(label, lo, hi, timeout):
+        raise SystemExit(f"{label} did not appear; framebuffer did not match expected range")
+
+# 0. Boot the highlighted installer entry instead of burning the GRUB timeout.
+wait_serial_contains("ISO boot menu", "Install Goblins OS 44", 180)
+if "Booting `Install Goblins OS 44'" not in serial_text():
+    key("ret")
+wait_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 120)
 # 1. Anaconda summary -> destination -> begin
-wait_frame(78000, 95000, 300)
+require_frame("Anaconda summary", 78000, 95000, 900)
 click(0.55, 0.455); time.sleep(3); click(0.039, 0.06); time.sleep(3); click(0.937, 0.935)
 # 2. wait for first-boot desktop (large frame)
-wait_frame(150000, 10**9, 700)
+require_frame("first boot desktop", 150000, 10**9, 900)
 # 3. dismiss onboarding
 key("esc"); time.sleep(2); click(0.5, 0.627); time.sleep(3)
 # 4. launch orchestrator via Alt+F2 (pipe-free)

@@ -8737,6 +8737,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "preview-package-desktop-entries-asserted",
             "org.gnome.Papers.desktop",
         ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-preview-status-route",
+            "/v1/preview/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-preview-open-route",
+            "/v1/preview/open",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/preview.rs"),
+            "core-preview-uses-xdg-open",
+            "Command::new(\"xdg-open\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/preview.rs"),
+            "core-preview-names-papers-and-loupe",
+            "Papers for PDFs and Loupe for images",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/preview.rs"),
+            "core-preview-does-not-read-file-contents",
+            "It never reads file contents or claims rendered proof.",
+        ),
         container_package_lockstep_check(root, "fingerprint-authselect-packaged", "authselect"),
         container_package_lockstep_check(root, "fingerprint-fprintd-packaged", "fprintd"),
         container_package_lockstep_check(root, "fingerprint-fprintd-pam-packaged", "fprintd-pam"),

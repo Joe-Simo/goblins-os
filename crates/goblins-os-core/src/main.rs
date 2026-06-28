@@ -28,6 +28,7 @@ mod notifications;
 mod ocr;
 mod openai_key;
 mod policy;
+mod preview;
 mod privacy;
 mod readiness;
 mod resident;
@@ -94,6 +95,7 @@ use crate::{
     notifications::{notifications_status, set_notification_preference},
     openai_key::{openai_key_status, set_openai_key, set_resident_engine},
     policy::{configure_policy, grant_permission, policy_status},
+    preview::{open_preview, preview_status},
     privacy::{privacy_status, set_desktop_privacy, set_privacy},
     readiness::readiness,
     resident::{ai_runtime, ai_runtime_status},
@@ -263,6 +265,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/firewall/status", get(firewall_status))
         .route("/v1/firewall/enabled", post(set_firewall_enabled))
         .route("/v1/fingerprint/status", get(fingerprint_status))
+        .route("/v1/preview/status", get(preview_status))
+        .route("/v1/preview/open", post(open_preview))
         .route("/v1/focus/status", get(focus::focus_status))
         .route("/v1/focus/activate", post(focus::activate_focus))
         .route("/v1/focus/deactivate", post(focus::deactivate_focus))

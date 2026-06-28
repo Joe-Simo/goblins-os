@@ -6290,6 +6290,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-treats-iso-boot-handoff-marker-as-optional",
+            "observe_serial_contains(\"ISO boot handoff\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-continues-to-framebuffer-stages-after-missing-booting-marker",
+            "continuing to framebuffer stages",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-skips-grub-timeout",
             "key(\"ret\")",
         ),

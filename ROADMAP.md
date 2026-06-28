@@ -1581,6 +1581,16 @@ framebuffer samples on timeout. `verify-shipping-status.sh` and
 a fresh hardware-gate run proves the VM can reach the orchestrator and produce
 the required live proof artifacts.
 
+Follow-up hardware-gate run `28338292698` at `61ce761` again proved the GHCR
+image push and shippable installer ISO build. The stricter capture driver caught
+the next blocker: after observing the GRUB menu and pressing Enter, this QEMU/GRUB
+path did not emit the old `Booting 'Install Goblins OS 44'` serial marker within
+120 seconds, even though the serial screen cleared. The current local fix keeps
+the boot-menu marker required, treats the boot-handoff marker as optional
+diagnostic output, and continues to the required Anaconda framebuffer stage so
+the next failure is tied to the real installer/desktop state rather than a GRUB
+serial-string assumption. This is source-gated only until rerun.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    after source-gating the fail-closed capture-stage fix, rerun the

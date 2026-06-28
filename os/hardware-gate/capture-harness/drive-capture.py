@@ -123,6 +123,20 @@ def wait_serial_contains(label, needle, timeout):
         f"expected {needle!r}; serial_tail={last_tail!r}"
     )
 
+def observe_serial_contains(label, needle, timeout):
+    t = time.time()
+    while time.time() - t < timeout:
+        if needle in serial_text():
+            print(f"{label}: observed serial marker {needle!r}", flush=True)
+            return True
+        time.sleep(1)
+    print(
+        f"{label}: serial marker {needle!r} not observed within {timeout}s; "
+        "continuing to framebuffer stages",
+        flush=True,
+    )
+    return False
+
 def http_get_path(line):
     marker = '"GET '
     if marker not in line:
@@ -183,7 +197,7 @@ def require_frame(label, lo, hi, timeout):
 wait_serial_contains("ISO boot menu", "Install Goblins OS 44", 180)
 if "Booting `Install Goblins OS 44'" not in serial_text():
     key("ret")
-wait_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 120)
+observe_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 30)
 # 1. Anaconda summary -> destination -> begin
 require_frame("Anaconda summary", 78000, 95000, 900)
 click(0.55, 0.455); time.sleep(3); click(0.039, 0.06); time.sleep(3); click(0.937, 0.935)

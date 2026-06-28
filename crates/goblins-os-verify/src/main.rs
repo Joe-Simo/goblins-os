@@ -9003,9 +9003,29 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/migration/copy-plan",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-migration-estimate-route",
+            "/v1/migration/estimate",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/migration.rs"),
             "core-migration-copy-plan-builder",
             "build_migration_copy_plan",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-estimate-builder",
+            "build_migration_estimate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-estimate-skips-symlinks",
+            "file_type.is_symlink()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-estimate-no-live-copy-claim",
+            "No files were mounted or copied by this sizing step.",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/migration.rs"),

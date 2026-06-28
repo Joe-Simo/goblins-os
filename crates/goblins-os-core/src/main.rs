@@ -89,7 +89,7 @@ use crate::{
     },
     install_targets::{install_progress_status, install_target_status, prepare_install},
     installer::{complete_installer, installer_readiness},
-    migration::migration_copy_plan,
+    migration::{migration_copy_plan, migration_estimate},
     model_manager::{install_local_model, local_model_catalog},
     network::{network_status, set_proxy_mode, wifi_connect, wifi_scan},
     notifications::{notifications_status, set_notification_preference},
@@ -310,6 +310,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(migration::migration_capabilities),
         )
         .route("/v1/migration/copy-plan", post(migration_copy_plan))
+        .route("/v1/migration/estimate", post(migration_estimate))
         .route("/v1/studio/turn", post(studio_turn))
         .route("/v1/studio/sessions", get(studio_sessions))
         .route("/v1/studio/session", get(studio_session))

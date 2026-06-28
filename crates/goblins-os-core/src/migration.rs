@@ -8,7 +8,10 @@
 //! and ledger paths without mounting or copying; udisks execution, process
 //! streaming, and the installer page are the deliberate CI/qemu follow-up.
 
-use std::path::{Component, Path};
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
@@ -57,6 +60,7 @@ const ALLOWLISTED_PREFERENCES: &[&str] = &[
 ];
 
 const MIGRATION_LEDGER_DIR: &str = ".local/share/goblins-os/migration";
+const MAX_ESTIMATE_ENTRIES: u64 = 250_000;
 
 #[derive(Clone, Copy)]
 struct MigrationCategorySpec {
@@ -96,11 +100,24 @@ pub struct MigrationCopyPlanRequest {
     categories: Vec<String>,
 }
 
+#[derive(Deserialize)]
+pub struct MigrationEstimateRequest {
+    source_root: String,
+    categories: Vec<String>,
+}
+
 #[derive(Serialize)]
 pub struct MigrationCopyPlanOutcome {
     ok: bool,
     text: String,
     plan: Option<MigrationCopyPlan>,
+}
+
+#[derive(Serialize)]
+pub struct MigrationEstimateOutcome {
+    ok: bool,
+    text: String,
+    estimate: Option<MigrationEstimate>,
 }
 
 #[derive(Serialize)]
@@ -116,11 +133,44 @@ pub struct MigrationCopyPlan {
 }
 
 #[derive(Serialize)]
+pub struct MigrationEstimate {
+    source_root: String,
+    categories: Vec<MigrationCategoryEstimate>,
+    total_bytes: u64,
+    total_files: u64,
+    missing_paths: Vec<String>,
+    skipped_paths: Vec<String>,
+    truncated: bool,
+    executes_live_copy: bool,
+}
+
+#[derive(Serialize)]
 pub struct MigrationCopyJob {
     category_id: &'static str,
     category_name: &'static str,
     source_paths: Vec<String>,
     destination: String,
+}
+
+#[derive(Serialize)]
+pub struct MigrationCategoryEstimate {
+    category_id: &'static str,
+    category_name: &'static str,
+    source_paths: Vec<MigrationPathEstimate>,
+    total_bytes: u64,
+    total_files: u64,
+    missing_paths: Vec<String>,
+    skipped_paths: Vec<String>,
+    truncated: bool,
+}
+
+#[derive(Serialize)]
+pub struct MigrationPathEstimate {
+    path: String,
+    exists: bool,
+    bytes: u64,
+    files: u64,
+    truncated: bool,
 }
 
 pub async fn migration_capabilities() -> Json<MigrationCapabilities> {
@@ -146,6 +196,33 @@ pub async fn migration_copy_plan(
                 ok: false,
                 text,
                 plan: None,
+            }),
+        ),
+    }
+}
+
+pub async fn migration_estimate(
+    Json(request): Json<MigrationEstimateRequest>,
+) -> (StatusCode, Json<MigrationEstimateOutcome>) {
+    match build_migration_estimate(request) {
+        Ok(estimate) => (
+            StatusCode::OK,
+            Json(MigrationEstimateOutcome {
+                ok: true,
+                text: if estimate.truncated {
+                    "Migration estimate reached the source scan limit. The live copy plan remains unchanged and no files were copied.".to_string()
+                } else {
+                    "Migration estimate is ready. No files were mounted or copied by this sizing step.".to_string()
+                },
+                estimate: Some(estimate),
+            }),
+        ),
+        Err(text) => (
+            StatusCode::BAD_REQUEST,
+            Json(MigrationEstimateOutcome {
+                ok: false,
+                text,
+                estimate: None,
             }),
         ),
     }
@@ -207,6 +284,40 @@ fn build_migration_copy_plan(
     })
 }
 
+fn build_migration_estimate(
+    request: MigrationEstimateRequest,
+) -> Result<MigrationEstimate, String> {
+    let source_root = normalize_absolute_dir(&request.source_root, "source root")?;
+    let categories = selected_categories(&request.categories)?;
+    let mut scan = MigrationSizeScan::default();
+    let estimates = categories
+        .iter()
+        .map(|category| estimate_category(&source_root, category, &mut scan))
+        .collect::<Vec<_>>();
+    let total_bytes = estimates.iter().map(|estimate| estimate.total_bytes).sum();
+    let total_files = estimates.iter().map(|estimate| estimate.total_files).sum();
+    let missing_paths = estimates
+        .iter()
+        .flat_map(|estimate| estimate.missing_paths.iter().cloned())
+        .collect();
+    let skipped_paths = estimates
+        .iter()
+        .flat_map(|estimate| estimate.skipped_paths.iter().cloned())
+        .collect();
+    let truncated = estimates.iter().any(|estimate| estimate.truncated);
+
+    Ok(MigrationEstimate {
+        source_root,
+        categories: estimates,
+        total_bytes,
+        total_files,
+        missing_paths,
+        skipped_paths,
+        truncated,
+        executes_live_copy: false,
+    })
+}
+
 fn selected_categories(ids: &[String]) -> Result<Vec<MigrationCategorySpec>, String> {
     if ids.is_empty() {
         return Err("Choose at least one migration category.".to_string());
@@ -228,6 +339,59 @@ fn selected_categories(ids: &[String]) -> Result<Vec<MigrationCategorySpec>, Str
         selected.push(*category);
     }
     Ok(selected)
+}
+
+fn estimate_category(
+    source_root: &str,
+    category: &MigrationCategorySpec,
+    scan: &mut MigrationSizeScan,
+) -> MigrationCategoryEstimate {
+    let mut source_paths = Vec::new();
+    let mut missing_paths = Vec::new();
+    let mut skipped_paths = Vec::new();
+    let mut total_bytes = 0;
+    let mut total_files = 0;
+    let mut truncated = false;
+
+    for source in category.sources {
+        let path = join_absolute(source_root, source, "");
+        let mut path_estimate = MigrationPathEstimate {
+            path: path.clone(),
+            exists: false,
+            bytes: 0,
+            files: 0,
+            truncated: false,
+        };
+        let path_buf = PathBuf::from(&path);
+        if !path_buf.exists() {
+            missing_paths.push(path);
+            source_paths.push(path_estimate);
+            continue;
+        }
+
+        path_estimate.exists = true;
+        let mut local_skipped = Vec::new();
+        let estimate = estimate_path_size(&path_buf, scan, &mut local_skipped);
+        path_estimate.bytes = estimate.bytes;
+        path_estimate.files = estimate.files;
+        path_estimate.truncated = estimate.truncated;
+        total_bytes += estimate.bytes;
+        total_files += estimate.files;
+        truncated |= estimate.truncated;
+        skipped_paths.extend(local_skipped);
+        source_paths.push(path_estimate);
+    }
+
+    MigrationCategoryEstimate {
+        category_id: category.id,
+        category_name: category.name,
+        source_paths,
+        total_bytes,
+        total_files,
+        missing_paths,
+        skipped_paths,
+        truncated,
+    }
 }
 
 fn migration_copy_jobs(
@@ -281,6 +445,74 @@ fn migration_rsync_argv(
     }
     argv.push(ensure_trailing_slash(destination_home));
     argv
+}
+
+#[derive(Default)]
+struct MigrationSizeScan {
+    entries: u64,
+}
+
+#[derive(Default)]
+struct MigrationSizeEstimate {
+    bytes: u64,
+    files: u64,
+    truncated: bool,
+}
+
+fn estimate_path_size(
+    path: &Path,
+    scan: &mut MigrationSizeScan,
+    skipped_paths: &mut Vec<String>,
+) -> MigrationSizeEstimate {
+    if scan.entries >= MAX_ESTIMATE_ENTRIES {
+        skipped_paths.push(path.display().to_string());
+        return MigrationSizeEstimate {
+            truncated: true,
+            ..MigrationSizeEstimate::default()
+        };
+    }
+    scan.entries += 1;
+
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        skipped_paths.push(path.display().to_string());
+        return MigrationSizeEstimate::default();
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        skipped_paths.push(path.display().to_string());
+        return MigrationSizeEstimate::default();
+    }
+    if metadata.is_file() {
+        return MigrationSizeEstimate {
+            bytes: metadata.len(),
+            files: 1,
+            truncated: false,
+        };
+    }
+    if !metadata.is_dir() {
+        skipped_paths.push(path.display().to_string());
+        return MigrationSizeEstimate::default();
+    }
+
+    let Ok(entries) = fs::read_dir(path) else {
+        skipped_paths.push(path.display().to_string());
+        return MigrationSizeEstimate::default();
+    };
+    let mut estimate = MigrationSizeEstimate::default();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            skipped_paths.push(path.display().to_string());
+            continue;
+        };
+        let child = estimate_path_size(&entry.path(), scan, skipped_paths);
+        estimate.bytes += child.bytes;
+        estimate.files += child.files;
+        estimate.truncated |= child.truncated;
+        if child.truncated {
+            break;
+        }
+    }
+    estimate
 }
 
 fn normalize_absolute_dir(raw: &str, label: &str) -> Result<String, String> {
@@ -394,9 +626,31 @@ fn driver_present(binary: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_migration_capabilities, build_migration_copy_plan, filesystem_table,
-        MigrationCopyPlanRequest,
+        build_migration_capabilities, build_migration_copy_plan, build_migration_estimate,
+        filesystem_table, MigrationCopyPlanRequest, MigrationEstimateRequest,
     };
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
+
+    fn temp_migration_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-migration-{name}-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn write_file(path: &Path, bytes: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, bytes).unwrap();
+    }
 
     #[test]
     fn filesystem_table_gates_on_drivers() {
@@ -513,5 +767,66 @@ mod tests {
             categories: vec!["pictures".to_string(), "pictures".to_string()],
         })
         .is_err());
+    }
+
+    #[test]
+    fn migration_estimate_counts_selected_categories_without_copying() {
+        let root = temp_migration_root("estimate-counts");
+        write_file(&root.join("Documents/report.txt"), b"hello");
+        write_file(&root.join("Desktop/note.txt"), b"desktop");
+        write_file(&root.join("Pictures/image.raw"), &[1, 2, 3, 4]);
+        write_file(&root.join("Downloads/ignored.bin"), &[9, 9, 9]);
+
+        let estimate = build_migration_estimate(MigrationEstimateRequest {
+            source_root: root.display().to_string(),
+            categories: vec!["documents-desktop".to_string(), "pictures".to_string()],
+        })
+        .unwrap();
+
+        assert!(!estimate.executes_live_copy);
+        assert!(!estimate.truncated);
+        assert_eq!(estimate.total_files, 3);
+        assert_eq!(estimate.total_bytes, 5 + 7 + 4);
+        assert_eq!(estimate.categories.len(), 2);
+        assert!(estimate.missing_paths.is_empty());
+        assert!(estimate.skipped_paths.is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migration_estimate_reports_missing_and_skipped_paths_honestly() {
+        let root = temp_migration_root("estimate-missing");
+        write_file(&root.join("Documents/report.txt"), b"hello");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            root.join("Documents/report.txt"),
+            root.join("Documents/report-link.txt"),
+        )
+        .unwrap();
+
+        let estimate = build_migration_estimate(MigrationEstimateRequest {
+            source_root: root.display().to_string(),
+            categories: vec!["documents-desktop".to_string(), "music".to_string()],
+        })
+        .unwrap();
+
+        assert!(!estimate.executes_live_copy);
+        assert_eq!(estimate.total_files, 1);
+        assert!(estimate
+            .missing_paths
+            .iter()
+            .any(|path| path.ends_with("/Desktop")));
+        assert!(estimate
+            .missing_paths
+            .iter()
+            .any(|path| path.ends_with("/Music")));
+        #[cfg(unix)]
+        assert!(estimate
+            .skipped_paths
+            .iter()
+            .any(|path| path.ends_with("/Documents/report-link.txt")));
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

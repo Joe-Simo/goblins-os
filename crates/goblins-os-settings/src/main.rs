@@ -638,6 +638,8 @@ struct InputStatus {
 struct InputSourcesStatus {
     schema_available: bool,
     sources: Vec<InputSourceEntry>,
+    addable_sources: Vec<InputSourceChoice>,
+    add_detail: String,
     detail: String,
 }
 
@@ -660,6 +662,14 @@ struct InputEnginePackageStatus {
     component_xml: String,
     engine_binary: String,
     installed: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq, Debug)]
+struct InputSourceChoice {
+    kind: String,
+    id: String,
+    label: String,
+    detail: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq, Debug)]
@@ -12522,6 +12532,7 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
             ));
         }
     }
+    panel.append(&input_source_add_sheet(&core_url, input_sources));
     append_input_engine_packages(panel, &input.input_engine_packages);
 
     append_text_shortcuts_editor(panel, state);
@@ -12588,6 +12599,84 @@ fn input_source_row(
     head.append(&actions);
     row.append(&head);
     row
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn input_source_add_sheet(core_url: &str, input_sources: &InputSourcesStatus) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let detail_text = input_source_add_sheet_detail(input_sources);
+    let row = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-input-source-row");
+    set_accessible_label_description(&row, "Add input source", &detail_text);
+
+    let header = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    header.append(&label("Add input source…", &["gos-row-title"]));
+    let status = label(&detail_text, &["gos-row-copy"]);
+    header.append(&status);
+    row.append(&header);
+
+    if !input_sources.schema_available || input_sources.addable_sources.is_empty() {
+        return row;
+    }
+
+    let choices = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    for source in &input_sources.addable_sources {
+        choices.append(&input_source_choice_row(core_url, source, &row, &status));
+    }
+    row.append(&choices);
+    row
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn input_source_choice_row(
+    core_url: &str,
+    source: &InputSourceChoice,
+    parent: &gtk4::Box,
+    status: &gtk4::Label,
+) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+    let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
+    copy.set_hexpand(true);
+    copy.append(&label(&source.label, &["gos-row-title"]));
+    copy.append(&label(
+        &settings_detail_display_copy(&source.detail),
+        &["gos-row-copy"],
+    ));
+    row.append(&copy);
+
+    let add = button("Add", &["gos-permission-action", "gos-input-source-action"]);
+    add.set_tooltip_text(Some("Add this installed input method to the session."));
+    set_accessible_label_description(&add, "Add input source", &source.label);
+
+    let core_url = core_url.to_string();
+    let source = source.clone();
+    let parent = parent.clone();
+    let status = status.clone();
+    add.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        let detail = match add_input_source(&core_url, &source) {
+            Ok(message) => message,
+            Err(error) => {
+                button.set_sensitive(true);
+                settings_detail_display_copy(&setting_change_rejected_detail(&error))
+            }
+        };
+        status.set_text(&detail);
+        set_accessible_label_description(&parent, "Add input source", &detail);
+    });
+    row.append(&add);
+    row
+}
+
+fn input_source_add_sheet_detail(input_sources: &InputSourcesStatus) -> String {
+    if !input_sources.schema_available {
+        return settings_detail_display_copy(&input_sources.detail);
+    }
+    settings_detail_display_copy(&input_sources.add_detail)
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -18749,6 +18838,24 @@ fn set_input_sources(base_url: &str, sources: &[InputSourceEntry]) -> Result<Str
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn add_input_source(base_url: &str, source: &InputSourceChoice) -> Result<String, String> {
+    let body = serde_json::json!({
+        "kind": source.kind,
+        "id": source.id,
+    })
+    .to_string();
+    let response = http_post_json_response(base_url, "/v1/input/source", &body)
+        .map_err(|error| format!("Goblins OS could not reach the input manager: {error}."))?;
+    let outcome = input_sources_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_text_shortcuts(base_url: &str, shortcuts: &[TextShortcutEntry]) -> Result<String, String> {
     let body = serde_json::json!({
         "shortcuts": shortcuts,
@@ -20511,6 +20618,22 @@ fn test_input_status(
                 ]
             } else {
                 Vec::new()
+            },
+            addable_sources: if gsettings_available && keyboard_schema_available {
+                vec![InputSourceChoice {
+                    kind: "ibus".to_string(),
+                    id: "hangul".to_string(),
+                    label: "Korean (Hangul)".to_string(),
+                    detail: "Korean input method from ibus-hangul. It is listed by IBus and can be added to this session."
+                        .to_string(),
+                }]
+            } else {
+                Vec::new()
+            },
+            add_detail: if gsettings_available && keyboard_schema_available {
+                "1 installed CJK input method can be added.".to_string()
+            } else {
+                unavailable_detail.to_string()
             },
             detail: if gsettings_available && keyboard_schema_available {
                 "Input sources are ready.".to_string()
@@ -23083,6 +23206,19 @@ mod tests {
         );
         assert!(super::input_sources_without(&sources[0..1], 0).is_none());
         assert!(super::input_sources_without(&sources, 9).is_none());
+    }
+
+    #[test]
+    fn input_source_add_sheet_copy_uses_core_choices() {
+        let input = super::test_input_status(true, true, true, true);
+        assert!(super::input_source_add_sheet_detail(&input.input_sources)
+            .contains("1 installed CJK input method can be added"));
+
+        let unavailable = super::test_input_status(false, true, true, true);
+        assert!(
+            super::input_source_add_sheet_detail(&unavailable.input_sources)
+                .contains("Desktop preference support")
+        );
     }
 
     #[test]

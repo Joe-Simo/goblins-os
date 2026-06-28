@@ -201,6 +201,23 @@ XKB/IBus sources using the canonical Goblins shell accent. This does not add a
 source picker, change IME environment defaults, restore `Super+Space`, or claim
 live candidate/input switching; render and live switching remain CI/qemu-pending.
 
+Current IME add-source continuation: the **Add input source…** surface is now
+source-gated. Core exposes `/v1/input/source`, re-reads the current GNOME
+`sources` list, intersects installed CJK engine packages with `ibus list-engine`,
+omits already-configured sources, and rejects any requested source that is not
+both installed and reported by the live IBus runtime. Settings ▸ Keyboard renders
+an add section driven only by core-provided choices and posts to the narrow add
+route. This does not change IME environment defaults, restore `Super+Space`, or
+claim live source switching/candidate-window behavior; render and live switching
+remain CI/qemu-pending. Local source gates: targeted
+`cargo test -p goblins-os-core input`, targeted
+`cargo test -p goblins-os-settings input_source`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (1999)**, scoped
+`git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
+the Rust 1.88 GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
+
 Current Focus continuation: Focus arm/disarm/tick is now source-gated but not
 shipped. Core exposes `/v1/focus/activate`, `/v1/focus/deactivate`, and
 `/v1/focus/tick`; validates configured mode JSON, snapshots/restores global
@@ -1153,7 +1170,8 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 - [x] **Set/reorder/remove substrate source-gated (CI/qemu-pending):** core exposes `/v1/input/sources`, validates only `xkb`/`ibus` source entries, encodes the `a(ss)` GVariant, and returns honest failure when gsettings or `org.gnome.desktop.input-sources sources` is absent. Settings ▸ Keyboard adds Move up / Move down / Remove row controls for existing configured sources only; the last source cannot be removed. Host tests cover `a(ss)` encode/decode, allowlist, reorder/remove, and the last-source rule; native GTK clippy passes in the Rust 1.88 container; verify gate added. **Not shipped** until CI/qemu proves render + interaction + live source switching.
 - [x] **CJK engine package substrate source-gated (CI/qemu-pending):** Fedora 44 package metadata and a clean Fedora 44 install probe confirm `ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, and the existing `ibus-gtk4` module. The bootc image installs and `rpm -q` asserts the CJK engines, asserts `/usr/share/ibus/component/{libpinyin,anthy,hangul}.xml`, asserts `/usr/libexec/ibus-engine-{libpinyin,anthy,hangul}`, and asserts the GTK4 IBus module. Core reports a pure CJK engine package registry plus runtime path readiness; Settings ▸ Keyboard renders read-only CJK engine package rows. **Not shipped** until CI/qemu proves the installed image, Settings render, live IBus engine listing, source switching, and candidate window behavior.
 - [x] **Menu-bar active-source indicator source-gated (CI/qemu-pending):** `goblins-menubar` reads GNOME's `org.gnome.desktop.input-sources` `sources/current` keys, hides itself when only one source is configured, hides rather than guessing if the schema/current key is not readable, and shows a compact Goblins-accent abbreviation chip for known XKB/IBus sources. **Not shipped** until CI/qemu proves the shell render and live source switching.
-- [ ] **Deferred (risk-gated):** the Containerfile IME-env decision, an **Add input source…** sheet that lists only installed engines, and re-enabling `Super+Space` switching — the last reverses an intentional boot/launcher decision, so it lands deliberately, not blind.
+- [x] **Add input source sheet source-gated (CI/qemu-pending):** core exposes a narrow append-only `/v1/input/source` route that lists/adds only installed CJK IBus engines reported by `ibus list-engine` and not already configured; Settings ▸ Keyboard renders **Add input source…** choices from that core list. **Not shipped** until CI/qemu proves Settings render, installed-session `ibus list-engine`, real gsettings writes, menu-bar indicator update, source switching, and candidate-window behavior.
+- [ ] **Deferred (risk-gated):** the Containerfile IME-env decision and re-enabling `Super+Space` switching — the last reverses an intentional boot/launcher decision, so it lands deliberately, not blind.
 - **Packages:** `ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, `ibus-gtk4` (CJK engines verified fc44); `ibus-setup` remains a UI-picker question, not installed by the source-gated package substrate.
 - **dconf/gsettings:** `org.gnome.desktop.input-sources` `sources` (`a(ss)`), `mru-sources`, `per-window`, `xkb-options`, `show-all-sources`; **revert** the `switch-input-source`/`-backward` emptying in `10-goblins-os-desktop:50-51` — bind `['<Super>space']` **only when >1 source**, and resolve `Super+Space` ownership with the launcher.
 - **Files:** `os/bootc/Containerfile` (install/assert the CJK engine packages; keep the IME environment decision deferred), `os/dconf/db/local.d/10-goblins-os-desktop`, `crates/goblins-os-core/src/input.rs` (`INPUT_SOURCES_SCHEMA` + `a(ss)` encode/decode, CJK engine registry, list/add/remove/reorder/set-current, `ibus list-engine` probe), `crates/goblins-os-core/src/main.rs` (extend existing `/v1/input/*` payloads), `crates/goblins-os-settings/src/main.rs` (real ordered-source list plus read-only engine package readiness, replacing the placeholder `input_source_summary_spec`), `os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js` (active-source abbreviation indicator when >1 source).

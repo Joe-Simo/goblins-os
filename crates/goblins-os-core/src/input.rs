@@ -103,6 +103,16 @@ pub struct InputSourceEntry {
 pub struct InputSourcesStatus {
     schema_available: bool,
     sources: Vec<InputSourceEntry>,
+    addable_sources: Vec<InputSourceChoice>,
+    add_detail: String,
+    detail: String,
+}
+
+#[derive(Clone, Serialize, PartialEq, Eq, Debug)]
+pub struct InputSourceChoice {
+    kind: String,
+    id: String,
+    label: String,
     detail: String,
 }
 
@@ -138,6 +148,12 @@ pub struct SetInputSourcesRequest {
     sources: Vec<InputSourceEntry>,
 }
 
+#[derive(Deserialize)]
+pub struct AddInputSourceRequest {
+    kind: String,
+    id: String,
+}
+
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum InputPreferenceTarget {
@@ -168,6 +184,12 @@ pub struct InputSourcesOutcome {
     ok: bool,
     sources: Vec<InputSourceEntry>,
     text: String,
+}
+
+struct IbusEngineProbe {
+    available: bool,
+    engine_ids: Vec<String>,
+    detail: String,
 }
 
 enum GSettingsError {
@@ -230,12 +252,25 @@ pub async fn set_input_sources(
     set_input_sources_outcome(request)
 }
 
+pub async fn add_input_source(
+    Json(request): Json<AddInputSourceRequest>,
+) -> (StatusCode, Json<InputSourcesOutcome>) {
+    add_input_source_outcome(request)
+}
+
 fn build_input_status() -> InputStatus {
     let gsettings_available = gsettings(&["list-schemas"]).is_ok();
     let keyboard_schema = schema_snapshot(gsettings_available, KEYBOARD_SCHEMA);
     let mouse_schema = schema_snapshot(gsettings_available, MOUSE_SCHEMA);
     let touchpad_schema = schema_snapshot(gsettings_available, TOUCHPAD_SCHEMA);
     let input_sources_schema = schema_snapshot(gsettings_available, INPUT_SOURCES_SCHEMA);
+    let sources = setting_raw(&input_sources_schema, INPUT_SOURCES_SCHEMA, "sources")
+        .map(|raw| parse_input_sources(&raw))
+        .unwrap_or_default();
+    let input_engine_packages = input_engine_packages_status();
+    let ibus_probe = ibus_engine_probe();
+    let (addable_sources, add_detail) =
+        addable_input_source_choices(&sources, &input_engine_packages.engines, &ibus_probe);
 
     InputStatus {
         source: "goblins-os-core",
@@ -301,9 +336,9 @@ fn build_input_status() -> InputStatus {
         },
         input_sources: InputSourcesStatus {
             schema_available: input_sources_schema.available,
-            sources: setting_raw(&input_sources_schema, INPUT_SOURCES_SCHEMA, "sources")
-                .map(|raw| parse_input_sources(&raw))
-                .unwrap_or_default(),
+            sources,
+            addable_sources,
+            add_detail,
             detail: schema_detail(
                 gsettings_available,
                 input_sources_schema.available,
@@ -311,7 +346,7 @@ fn build_input_status() -> InputStatus {
                 INPUT_SOURCES_SCHEMA,
             ),
         },
-        input_engine_packages: input_engine_packages_status(),
+        input_engine_packages,
         detail: input_status_detail(gsettings_available),
     }
 }
@@ -360,6 +395,128 @@ fn input_engine_packages_detail(installed_count: usize, total_count: usize) -> S
             "CJK input engines are not fully installed in this runtime. {installed_count} of {total_count} engine packages are ready."
         )
     }
+}
+
+fn ibus_engine_probe() -> IbusEngineProbe {
+    match Command::new("ibus").arg("list-engine").output() {
+        Ok(output) if output.status.success() => {
+            let engine_ids = parse_ibus_list_engine(&String::from_utf8_lossy(&output.stdout));
+            IbusEngineProbe {
+                available: true,
+                detail: if engine_ids.is_empty() {
+                    "IBus is available, but it did not report any addable engines.".to_string()
+                } else {
+                    format!("IBus reported {} installed engines.", engine_ids.len())
+                },
+                engine_ids,
+            }
+        }
+        Ok(output) => IbusEngineProbe {
+            available: false,
+            engine_ids: Vec::new(),
+            detail: {
+                let detail = gsettings_error_detail(
+                    &String::from_utf8_lossy(&output.stderr),
+                    &String::from_utf8_lossy(&output.stdout),
+                );
+                if detail.is_empty() {
+                    "IBus did not report installed engines in this session.".to_string()
+                } else {
+                    format!("IBus did not report installed engines: {detail}")
+                }
+            },
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => IbusEngineProbe {
+            available: false,
+            engine_ids: Vec::new(),
+            detail: "IBus is not installed in this session, so input sources cannot be added here."
+                .to_string(),
+        },
+        Err(_) => IbusEngineProbe {
+            available: false,
+            engine_ids: Vec::new(),
+            detail: "IBus could not be inspected in this session, so input sources cannot be added here."
+                .to_string(),
+        },
+    }
+}
+
+fn parse_ibus_list_engine(stdout: &str) -> Vec<String> {
+    let mut engine_ids = Vec::new();
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Some(first) = line.split_whitespace().next() else {
+            continue;
+        };
+        let token = first
+            .trim_matches(|ch: char| ch == '*' || ch == '-' || ch == ':')
+            .trim();
+        if token.eq_ignore_ascii_case("language") || token.eq_ignore_ascii_case("engines") {
+            continue;
+        }
+        if input_source_id_is_safe(token) && !engine_ids.iter().any(|id| id == token) {
+            engine_ids.push(token.to_string());
+        }
+    }
+    engine_ids
+}
+
+fn addable_input_source_choices(
+    configured: &[InputSourceEntry],
+    packages: &[InputEnginePackageStatus],
+    ibus_probe: &IbusEngineProbe,
+) -> (Vec<InputSourceChoice>, String) {
+    if !ibus_probe.available {
+        return (Vec::new(), ibus_probe.detail.clone());
+    }
+
+    let choices = packages
+        .iter()
+        .filter(|engine| engine.installed)
+        .filter(|engine| engine.kind == "ibus")
+        .filter(|engine| ibus_probe.engine_ids.iter().any(|id| id == engine.id))
+        .filter(|engine| {
+            !configured
+                .iter()
+                .any(|source| source.kind == engine.kind && source.id == engine.id)
+        })
+        .map(|engine| InputSourceChoice {
+            kind: engine.kind.to_string(),
+            id: engine.id.to_string(),
+            label: engine.label.to_string(),
+            detail: format!(
+                "{} input method from {}. It is listed by IBus and can be added to this session.",
+                engine.language, engine.package
+            ),
+        })
+        .collect::<Vec<_>>();
+
+    let detail = if !choices.is_empty() {
+        format!(
+            "{} installed CJK input method{} can be added.",
+            choices.len(),
+            if choices.len() == 1 { "" } else { "s" }
+        )
+    } else if packages
+        .iter()
+        .filter(|engine| engine.installed)
+        .filter(|engine| engine.kind == "ibus")
+        .all(|engine| {
+            configured
+                .iter()
+                .any(|source| source.kind == engine.kind && source.id == engine.id)
+        })
+    {
+        "All installed CJK input methods are already configured for this session.".to_string()
+    } else {
+        "No installed CJK input methods are currently reported by IBus for this session."
+            .to_string()
+    };
+
+    (choices, detail)
 }
 
 /// Read a raw gsettings value (unparsed) when the key exists — used for the
@@ -573,6 +730,89 @@ fn set_input_sources_outcome(
             }),
         ),
     }
+}
+
+fn add_input_source_outcome(
+    request: AddInputSourceRequest,
+) -> (StatusCode, Json<InputSourcesOutcome>) {
+    if gsettings(&["list-schemas"]).is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(InputSourcesOutcome {
+                ok: false,
+                sources: Vec::new(),
+                text: "Desktop preferences are not ready, so input sources cannot be added in this session.".to_string(),
+            }),
+        );
+    }
+
+    let schema = schema_snapshot(true, INPUT_SOURCES_SCHEMA);
+    if !schema.available || !schema.has_key("sources") {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(InputSourcesOutcome {
+                ok: false,
+                sources: Vec::new(),
+                text: "Input sources are not ready because the desktop session does not report the input source list.".to_string(),
+            }),
+        );
+    }
+
+    let current = setting_raw(&schema, INPUT_SOURCES_SCHEMA, "sources")
+        .map(|raw| parse_input_sources(&raw))
+        .unwrap_or_default();
+    let packages = input_engine_packages_status();
+    let ibus_probe = ibus_engine_probe();
+    let requested = InputSourceEntry {
+        kind: request.kind,
+        id: request.id,
+    };
+    let sources = match input_sources_with_added_choice(
+        &current,
+        requested,
+        &packages.engines,
+        &ibus_probe,
+    ) {
+        Ok(sources) => sources,
+        Err(text) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(InputSourcesOutcome {
+                    ok: false,
+                    sources: current,
+                    text,
+                }),
+            );
+        }
+    };
+
+    set_input_sources_outcome(SetInputSourcesRequest { sources })
+}
+
+fn input_sources_with_added_choice(
+    current: &[InputSourceEntry],
+    requested: InputSourceEntry,
+    packages: &[InputEnginePackageStatus],
+    ibus_probe: &IbusEngineProbe,
+) -> Result<Vec<InputSourceEntry>, String> {
+    let requested = normalize_input_sources(vec![requested])?
+        .into_iter()
+        .next()
+        .expect("normalize_input_sources returns one entry for one valid source");
+    let (choices, _) = addable_input_source_choices(current, packages, ibus_probe);
+    if !choices
+        .iter()
+        .any(|choice| choice.kind == requested.kind && choice.id == requested.id)
+    {
+        return Err(
+            "Input sources can be added only when their installed IBus engine is reported by this session and they are not already configured."
+                .to_string(),
+        );
+    }
+
+    let mut updated = current.to_vec();
+    updated.push(requested);
+    normalize_input_sources(updated)
 }
 
 fn normalize_input_sources(
@@ -960,9 +1200,10 @@ fn gsettings_error_detail(stderr: &str, stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cjk_engine_package_statuses_with, encode_input_sources, encode_preference_value,
-        input_engine_packages_detail, input_target_spec, normalize_input_sources,
-        parse_gsettings_bool, parse_gsettings_f64, parse_gsettings_u32, parse_preference_value,
+        addable_input_source_choices, cjk_engine_package_statuses_with, encode_input_sources,
+        encode_preference_value, input_engine_packages_detail, input_sources_with_added_choice,
+        input_target_spec, normalize_input_sources, parse_gsettings_bool, parse_gsettings_f64,
+        parse_gsettings_u32, parse_ibus_list_engine, parse_preference_value, IbusEngineProbe,
         InputPreferenceTarget, InputPreferenceValue, InputSourceEntry,
     };
     use serde_json::json;
@@ -1144,5 +1385,88 @@ mod tests {
         assert!(all_ready.iter().all(|engine| engine.installed));
         assert!(input_engine_packages_detail(3, 3).contains("are installed"));
         assert!(input_engine_packages_detail(2, 3).contains("not fully installed"));
+    }
+
+    #[test]
+    fn parses_ibus_engine_list_without_guessing_languages() {
+        let engines = parse_ibus_list_engine(
+            "
+            language: Chinese
+              libpinyin - Intelligent Pinyin
+              table:wubi - Wubi
+            language: Korean
+              hangul - Korean
+            ",
+        );
+
+        assert_eq!(engines, vec!["libpinyin", "table:wubi", "hangul"]);
+        assert!(parse_ibus_list_engine("language: English\nengines:\n").is_empty());
+    }
+
+    #[test]
+    fn addable_input_sources_require_installed_runtime_and_not_configured() {
+        let packages = cjk_engine_package_statuses_with(|path| {
+            path.ends_with(".xml") || path.contains("/ibus-engine-")
+        });
+        let configured = vec![InputSourceEntry {
+            kind: "ibus".into(),
+            id: "libpinyin".into(),
+        }];
+        let probe = IbusEngineProbe {
+            available: true,
+            engine_ids: vec!["libpinyin".into(), "hangul".into()],
+            detail: "IBus reported engines.".into(),
+        };
+
+        let (choices, detail) = addable_input_source_choices(&configured, &packages, &probe);
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].id, "hangul");
+        assert!(choices[0].detail.contains("listed by IBus"));
+        assert!(detail.contains("1 installed CJK input method can be added"));
+
+        let updated = input_sources_with_added_choice(
+            &configured,
+            InputSourceEntry {
+                kind: "ibus".into(),
+                id: "hangul".into(),
+            },
+            &packages,
+            &probe,
+        )
+        .expect("hangul is addable");
+        assert_eq!(
+            updated,
+            vec![
+                InputSourceEntry {
+                    kind: "ibus".into(),
+                    id: "libpinyin".into(),
+                },
+                InputSourceEntry {
+                    kind: "ibus".into(),
+                    id: "hangul".into(),
+                },
+            ]
+        );
+
+        assert!(input_sources_with_added_choice(
+            &configured,
+            InputSourceEntry {
+                kind: "ibus".into(),
+                id: "anthy".into(),
+            },
+            &packages,
+            &probe,
+        )
+        .is_err());
+
+        let missing_probe = IbusEngineProbe {
+            available: false,
+            engine_ids: Vec::new(),
+            detail: "IBus is not installed.".into(),
+        };
+        let (choices, detail) =
+            addable_input_source_choices(&configured, &packages, &missing_probe);
+        assert!(choices.is_empty());
+        assert_eq!(detail, "IBus is not installed.");
     }
 }

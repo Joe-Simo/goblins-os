@@ -8467,9 +8467,29 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/input/sources",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-input-source-add-route",
+            "/v1/input/source",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/input.rs"),
             "core-input-sources-write-allowlist",
             "normalize_input_sources",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/input.rs"),
+            "core-input-source-add-probes-ibus",
+            "Command::new(\"ibus\").arg(\"list-engine\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/input.rs"),
+            "core-input-source-addable-intersection",
+            "addable_input_source_choices",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/input.rs"),
+            "core-input-source-add-rejects-unlisted",
+            "installed IBus engine is reported by this session",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/input.rs"),
@@ -8485,6 +8505,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-keyboard-input-sources-write-route",
             "/v1/input/sources",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-input-source-add-sheet",
+            "Add input source…",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-input-source-add-route",
+            "/v1/input/source",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-input-source-add-uses-core-choices",
+            "input_sources.addable_sources",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/input.rs"),

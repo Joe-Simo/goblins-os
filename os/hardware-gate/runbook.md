@@ -147,7 +147,10 @@ the release media that was booted:
   "text_shortcuts_overlay_intent_proof": "text-shortcuts-overlay-intent-proof.json",
   "text_shortcuts_candidate_bubble_frame_proof": "text-shortcuts-candidate-bubble-frame-proof.json",
   "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json",
-  "input_sources_roundtrip_proof": "input-sources-roundtrip-proof.json"
+  "input_sources_roundtrip_proof": "input-sources-roundtrip-proof.json",
+  "focus_arm_roundtrip_proof": "focus-arm-roundtrip-proof.json",
+  "app_privacy_revoke_proof": "app-privacy-revoke-proof.json",
+  "preview_open_render_proof": "preview-open-render-proof.json"
 }
 ```
 
@@ -230,6 +233,15 @@ mode and restore snapshot are cleared and banners return to true, and finally
 restores the original Focus and notification state before signoff. This proves
 the existing arm/disarm bridge in qemu; it does not claim mode CRUD, schedule
 timers, or per-app breakthrough behavior shipped.
+
+The App privacy revoke gate is `app-privacy-revoke-proof.json`, linked from
+`proof-manifest.json` as `app_privacy_revoke_proof`. It snapshots the
+PermissionStore state for a deterministic `org.goblins.GatePrivacyProof`
+location grant, seeds that grant through `PermissionStore.SetPermission`, posts
+the existing `/v1/app-privacy/revoke` route, verifies
+`PermissionStore.GetPermission` no longer reports the grant, and restores the
+prior state before signoff. This proves the app-keyed revoke bridge in qemu; it
+does not claim resource-keyed camera/microphone revoke behavior.
 
 The Preview open/render gate is `preview-open-render-proof.json`, linked from
 `proof-manifest.json` as `preview_open_render_proof`. It queries
@@ -328,6 +340,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
 - Focus arm roundtrip result, including `focus-arm-roundtrip-proof.json`
+- App privacy revoke result, including `app-privacy-revoke-proof.json`
 - Preview open/render result, including `preview-open-render-proof.json`, `29-preview-pdf-open.png`, and `30-preview-image-open.png`
 - install destination, formatting/root filesystem, bootloader/EFI, and dual-boot preservation result
 - for custom formatting, encryption, separate `/home`, LUKS/LVM, TPM2 LUKS, ext4, or btrfs, show an advanced storage summary before writes

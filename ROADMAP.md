@@ -477,6 +477,16 @@ outcome. Local source gates: `cargo fmt --all`, `cargo clippy --workspace -- -D 
 scoped `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`,
 and `goblins-os-verify --source-root .` → **blocked=0 (1575)**. CI/qemu render
 and a live portal revoke/reload proof remain pending.
+Current Per-app Privacy hardware-proof continuation: the display-backed
+hardware-gate harness now requires `app-privacy-revoke-proof.json`: inside the
+installed session it snapshots the deterministic
+`org.goblins.GatePrivacyProof` portal PermissionStore location grant, seeds that
+grant with `PermissionStore.SetPermission`, posts `/v1/app-privacy/revoke`,
+verifies `PermissionStore.GetPermission` no longer reports the grant, restores
+the prior state, writes the proof beside the screenshot run, and links it from
+`proof-manifest.json`. This is source-gated proof plumbing only; no live qemu run
+has produced the proof artifact yet, and resource-keyed device revokes remain
+deferred.
 
 Current Multi-display continuation: the guarded apply substrate is now
 source-gated but not shipped. Core exposes `/v1/displays/apply`, reads
@@ -1658,7 +1668,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 ### `in-progress` Per-app privacy permissions UI (camera / mic / location / files)
 - [x] **Read substrate + surface shipped** (`crates/goblins-os-core/src/app_permissions.rs` + `/v1/app-privacy/status`, Settings ▸ Privacy "App permissions" group): reads the xdg `PermissionStore` over `gdbus` (`List(in s table, out as ids)`, **web-verified** against the spec — no new package, the portal already ships) for the `location`/`background`/`notifications`/`devices` tables and lists the entries per category, honest-gated when the store isn't running. Pure `parse_list_reply` unit-tested (183 core tests); container clippy `-D warnings` clean; route + surface verify gates.
 - [x] **Per-app revoke substrate source-gated (CI/qemu-pending):** `/v1/app-privacy/revoke` validates the known PermissionStore tables and safe desktop IDs, then calls `DeletePermission(table, id, app)` only for app-keyed grants. Settings ▸ Privacy now renders per-app revoke rows with exact core feedback. Resource-keyed device grants and live portal reload proof remain deferred.
-- [ ] **Portal write proof + resource mappings (deferred):** CI/qemu render plus live revoke/reload proof, and `Lookup`/metadata mapping for camera/microphone resource-keyed grants before any device revoke UI.
+- [x] **Live app-keyed revoke hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `app-privacy-revoke-proof.json`, seeds a deterministic app-keyed location grant through `PermissionStore.SetPermission`, posts `/v1/app-privacy/revoke`, verifies `PermissionStore.GetPermission` read-back is empty, restores the prior grant state, links the JSON in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. No live qemu run has produced the proof yet.
+- [ ] **Resource mappings (deferred):** `Lookup`/metadata mapping for camera/microphone resource-keyed grants before any device revoke UI.
 - **Approach:** custom_surface (own Goblins panel reading/writing the xdg-desktop-portal permission store).
 - **Packages:** none (xdg-desktop-portal already shipped).
 - **APIs:** `org.freedesktop.impl.portal.PermissionStore` D-Bus (Lookup/Set/Delete per table: `devices` for camera/mic, `location`, `screenshot`, `background`); flatpak app metadata for friendly names.

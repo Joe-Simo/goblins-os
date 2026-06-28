@@ -200,7 +200,7 @@ fn set_shortcut_binding_outcome(
         return shortcut_response(
             StatusCode::CONFLICT,
             false,
-            &format!("That shortcut is already used by {}.", conflict),
+            &format!("That shortcut is already used by {conflict}."),
             key.to_string(),
             bindings,
         );

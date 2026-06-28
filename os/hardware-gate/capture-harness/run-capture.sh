@@ -139,6 +139,7 @@ TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-b
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="$RUN_DIR/keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="$RUN_DIR/input-sources-roundtrip-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="$RUN_DIR/focus-arm-roundtrip-proof.json"
+APP_PRIVACY_REVOKE_PROOF="$RUN_DIR/app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="$RUN_DIR/preview-open-render-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
@@ -298,6 +299,25 @@ if ! grep -Fq '"status": "pass"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
   echo "HONESTY GUARD: missing or failing Focus arm roundtrip proof at $FOCUS_ARM_ROUNDTRIP_PROOF"
   exit 4
 fi
+if ! grep -Fq '"status": "pass"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"route": "/v1/app-privacy/revoke"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"table": "location"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"app": "org.goblins.GatePrivacyProof"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"seed_method": "PermissionStore.SetPermission"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"revoke_method": "PermissionStore.DeletePermission"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"readback_method": "PermissionStore.GetPermission"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"seed_grant": "yes"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"seed_readback": "true"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"revoke_http": "200"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"revoke_ok": "true"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"post_revoke_absent": "true"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"restore_prior_state": "true"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"roundtrip_restored": "true"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"resource_keyed_claim": "false"' "$APP_PRIVACY_REVOKE_PROOF" \
+  || ! grep -Fq '"device_revoke_claim": "false"' "$APP_PRIVACY_REVOKE_PROOF"; then
+  echo "HONESTY GUARD: missing or failing App privacy revoke proof at $APP_PRIVACY_REVOKE_PROOF"
+  exit 4
+fi
 if ! grep -Fq '"status": "pass"' "$PREVIEW_OPEN_RENDER_PROOF" \
   || ! grep -Fq '"status_route": "/v1/preview/status"' "$PREVIEW_OPEN_RENDER_PROOF" \
   || ! grep -Fq '"route": "/v1/preview/open"' "$PREVIEW_OPEN_RENDER_PROOF" \
@@ -363,6 +383,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
           "input_sources_roundtrip_proof":"input-sources-roundtrip-proof.json",
           "focus_arm_roundtrip_proof":"focus-arm-roundtrip-proof.json",
+          "app_privacy_revoke_proof":"app-privacy-revoke-proof.json",
           "preview_open_render_proof":"preview-open-render-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)

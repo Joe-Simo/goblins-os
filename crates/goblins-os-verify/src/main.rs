@@ -5439,6 +5439,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-app-privacy-revoke-proof",
+            "app-privacy-revoke-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-preview-open-render-proof",
             "preview-open-render-proof.json",
         ),
@@ -5511,6 +5516,31 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-focus-arm-roundtrip-proof",
             "/proof/focus-arm-roundtrip",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-app-privacy-revoke-proof",
+            "/proof/app-privacy-revoke",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-app-privacy-seeds-permission-store",
+            "PermissionStore.SetPermission",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-app-privacy-revokes-through-permission-store",
+            "PermissionStore.DeletePermission",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-app-privacy-reads-back-permission-store",
+            "PermissionStore.GetPermission",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-app-privacy-restores-prior-state",
+            "restore_prior_state=true",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5839,6 +5869,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-app-privacy-revoke-proof-json",
+            "app-privacy-revoke-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-writes-preview-open-render-proof-json",
             "preview-open-render-proof.json",
         ),
@@ -5886,6 +5921,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-focus-arm-roundtrip-proof",
             "HONESTY GUARD: missing or failing Focus arm roundtrip proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-app-privacy-revoke-proof",
+            "HONESTY GUARD: missing or failing App privacy revoke proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6071,6 +6111,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-focus-arm-roundtrip-proof",
             "focus_arm_roundtrip_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-app-privacy-revoke-proof",
+            "app_privacy_revoke_proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6459,6 +6504,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-app-privacy-revoke-proof",
+            "app_privacy_revoke_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-preview-open-render-proof",
             "preview_open_render_proof_passes",
         ),
@@ -6479,6 +6529,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "screenshot_run_is_complete",
             "shipping-status-complete-run-requires-focus-arm-roundtrip-proof",
             r#"focus_arm_roundtrip_proof_passes "$run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "screenshot_run_is_complete",
+            "shipping-status-complete-run-requires-app-privacy-revoke-proof",
+            r#"app_privacy_revoke_proof_passes "$run_dir/$APP_PRIVACY_REVOKE_PROOF""#,
         ),
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6507,6 +6563,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "print_missing_screenshot_paths",
+            "shipping-status-missing-list-includes-app-privacy-revoke-proof",
+            r#"echo "  $run_dir/$APP_PRIVACY_REVOKE_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "print_missing_screenshot_paths",
             "shipping-status-missing-list-includes-preview-open-render-proof",
             r#"echo "  $run_dir/$PREVIEW_OPEN_RENDER_PROOF""#,
         ),
@@ -6521,6 +6583,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "signoff_block_required_proof_is_complete",
             "shipping-status-signoff-requires-focus-arm-roundtrip-proof",
             r#"signoff_block_contains "$block" "^- Focus arm roundtrip checked: yes" || return 1"#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "signoff_block_required_proof_is_complete",
+            "shipping-status-signoff-requires-app-privacy-revoke-proof",
+            r#"signoff_block_contains "$block" "^- App privacy revoke checked: yes" || return 1"#,
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6561,6 +6629,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-focus-arm-roundtrip-proof-filename",
             "focus-arm-roundtrip-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-app-privacy-revoke-proof-filename",
+            "app-privacy-revoke-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6724,6 +6797,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-signoff-requires-app-privacy-revoke-proof-row",
+            "App privacy revoke checked: yes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-signoff-completion-consistency",
             "declares completion before required proof is present",
         ),
@@ -6814,6 +6892,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-app-privacy-revoke-proof",
+            "app_privacy_revoke_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-requires-preview-open-render-proof",
             "preview_open_render_proof_passes",
         ),
@@ -6864,6 +6947,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-app-privacy-revoke-proof",
+            "App privacy revoke checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-preview-open-render-proof",
             "Preview open/render checked",
         ),
@@ -6876,6 +6964,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-focus-arm-roundtrip-status-completes-project",
             r#"[[ "$FOCUS_ARM_ROUNDTRIP_STATUS" == yes* ]]"#,
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-app-privacy-revoke-status-completes-project",
+            r#"[[ "$APP_PRIVACY_REVOKE_STATUS" == yes* ]]"#,
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),

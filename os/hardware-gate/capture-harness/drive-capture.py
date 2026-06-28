@@ -29,6 +29,7 @@ REQUIRED_PROOFS = (
     "keyboard-shortcuts-roundtrip",
     "input-sources-roundtrip",
     "focus-arm-roundtrip",
+    "app-privacy-revoke",
     "preview-open-render",
 )
 PROOF_FILENAMES = {
@@ -41,6 +42,7 @@ PROOF_FILENAMES = {
     "keyboard-shortcuts-roundtrip": "keyboard-shortcuts-roundtrip-proof.json",
     "input-sources-roundtrip": "input-sources-roundtrip-proof.json",
     "focus-arm-roundtrip": "focus-arm-roundtrip-proof.json",
+    "app-privacy-revoke": "app-privacy-revoke-proof.json",
     "preview-open-render": "preview-open-render-proof.json",
 }
 

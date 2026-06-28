@@ -8418,6 +8418,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "Fingerprint unlock",
         ),
         contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-network-hotspot-management",
+            "append_hotspot_management",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-network-hotspot-write-route",
+            "/v1/hotspot/enabled",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-network-hotspot-input-validation",
+            "hotspot_settings_inputs",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-network-hotspot-password-copy",
+            "Passwords are used once to configure the hotspot and are never shown here.",
+        ),
+        contains_check(
             root.join("os/bootc/Containerfile"),
             "bootc-installs-firewall-helper",
             "goblins-os-firewall /usr/libexec/goblins-os/goblins-os-firewall",

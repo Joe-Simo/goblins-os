@@ -266,9 +266,8 @@ struct FirewallStatus {
     management_detail: String,
 }
 
-/// Read-only Personal Hotspot posture from `GET /v1/hotspot/status` (NetworkManager).
-/// The Settings UI mirrors it honestly; starting a hotspot stays a deliberate future
-/// capability (it writes a new AP connection).
+/// Personal Hotspot posture from `GET /v1/hotspot/status` (NetworkManager).
+/// Settings may call the gated core write route, but live AP proof stays qemu-bound.
 #[cfg_attr(
     not(all(target_os = "linux", feature = "native-desktop")),
     allow(dead_code)
@@ -277,6 +276,12 @@ struct FirewallStatus {
 struct HotspotStatus {
     available: bool,
     active: bool,
+    #[serde(default)]
+    can_start: bool,
+    #[serde(default)]
+    ssid: Option<String>,
+    #[serde(default)]
+    device: Option<String>,
     detail: String,
 }
 
@@ -752,6 +757,16 @@ struct FirewallToggleOutcome {
     ok: bool,
     #[allow(dead_code)]
     enabled: bool,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct HotspotToggleOutcome {
+    ok: bool,
+    #[allow(dead_code)]
+    active: bool,
+    #[allow(dead_code)]
+    ssid: Option<String>,
     text: String,
 }
 
@@ -5660,7 +5675,7 @@ fn build_network(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_network_summary(panel, state);
     append_wifi_management(panel, state);
-    append_hotspot_status(panel, state);
+    append_hotspot_management(panel, state);
     append_proxy_settings(panel, state);
     append_facility_status(
         panel,
@@ -5679,29 +5694,280 @@ fn build_network(panel: &gtk4::Box, state: &SettingsState) {
     );
 }
 
-/// Read-only Personal Hotspot row (macOS "Personal Hotspot" altitude). Starting a
-/// hotspot stays a deliberate future capability; this shows honest live status.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn append_hotspot_status(panel: &gtk4::Box, state: &SettingsState) {
+fn append_hotspot_management(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
 
+    panel.append(&label("Personal Hotspot", &["gos-subsection-title"]));
+
     let Some(hotspot) = &state.hotspot else {
+        panel.append(&system_row(
+            "Personal Hotspot",
+            "Waiting for Personal Hotspot status from Goblins OS.",
+        ));
         return;
     };
-    panel.append(&label("Personal Hotspot", &["gos-subsection-title"]));
-    let value = if !hotspot.available {
+
+    let mut summary = vec![(
+        "Personal Hotspot",
+        hotspot_state_label(hotspot).to_string(),
+        hotspot.active,
+        hotspot.detail.clone(),
+    )];
+    if let Some(ssid) = hotspot.ssid.as_ref().filter(|value| !value.is_empty()) {
+        summary.push((
+            "Network name",
+            ssid.clone(),
+            hotspot.active,
+            "The active hotspot SSID reported by NetworkManager.".to_string(),
+        ));
+    }
+    if let Some(device) = hotspot.device.as_ref().filter(|value| !value.is_empty()) {
+        summary.push((
+            "Shared over",
+            device.clone(),
+            hotspot.active,
+            "The Wi-Fi device currently broadcasting the hotspot.".to_string(),
+        ));
+    }
+    panel.append(&health_summary_group(summary));
+
+    let can_change = hotspot.available && (hotspot.active || hotspot.can_start);
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 14);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-switch-row");
+
+    let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
+    copy.set_hexpand(true);
+    let title = label(hotspot_toggle_label(hotspot.active), &["gos-row-title"]);
+    let detail_text = hotspot_toggle_detail(hotspot);
+    let detail = label(&detail_text, &["gos-row-copy"]);
+    copy.append(&title);
+    copy.append(&detail);
+    row.append(&copy);
+
+    let toggle = gtk4::Switch::new();
+    toggle.add_css_class("gos-switch");
+    toggle.set_active(hotspot.active);
+    toggle.set_sensitive(can_change);
+    toggle.set_valign(gtk4::Align::Center);
+    toggle.set_tooltip_text(Some("Personal Hotspot"));
+    set_accessible_label_description(&toggle, "Personal Hotspot", &detail_text);
+    row.append(&toggle);
+    panel.append(&row);
+
+    let form = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    form.add_css_class("gos-preference-group");
+
+    let ssid_entry = gtk4::Entry::new();
+    ssid_entry.set_text(&hotspot_next_ssid(hotspot));
+    ssid_entry.set_sensitive(can_change && !hotspot.active);
+    ssid_entry.set_tooltip_text(Some("Hotspot network name"));
+    ssid_entry.set_max_length(32);
+    set_accessible_label_description(
+        &ssid_entry,
+        "Hotspot network name",
+        "Edits apply the next time Personal Hotspot is turned on.",
+    );
+    form.append(&input_row(
+        "Network name",
+        "Edits apply the next time Personal Hotspot is turned on.",
+        &ssid_entry,
+    ));
+
+    let password_entry = gtk4::PasswordEntry::new();
+    password_entry.set_placeholder_text(Some("8-63 characters"));
+    password_entry.set_sensitive(can_change && !hotspot.active);
+    password_entry.set_tooltip_text(Some("Hotspot password"));
+    set_accessible_label_description(
+        &password_entry,
+        "Hotspot password",
+        "Passwords are used once to configure the hotspot and are never shown here.",
+    );
+    form.append(&input_row(
+        "Password",
+        "Passwords are used once to configure the hotspot and are never shown here.",
+        &password_entry,
+    ));
+    panel.append(&form);
+
+    let feedback = label(&hotspot_management_detail(hotspot), &["gos-row-copy"]);
+    panel.append(&feedback);
+
+    if !can_change {
+        return;
+    }
+
+    let core_url = config_core_url(state);
+    let current_active = Rc::new(Cell::new(hotspot.active));
+    let updating_switch = Rc::new(Cell::new(false));
+    {
+        let title = title.clone();
+        let detail = detail.clone();
+        let feedback = feedback.clone();
+        let ssid_entry = ssid_entry.clone();
+        let password_entry = password_entry.clone();
+        let current_active = current_active.clone();
+        let updating_switch = updating_switch.clone();
+        toggle.connect_active_notify(move |toggle| {
+            if updating_switch.get() {
+                return;
+            }
+            let next_active = toggle.is_active();
+            if next_active == current_active.get() {
+                return;
+            }
+
+            let payload = if next_active {
+                match hotspot_settings_inputs(&ssid_entry.text(), &password_entry.text()) {
+                    Ok(values) => Some(values),
+                    Err(message) => {
+                        feedback.set_text(&message);
+                        updating_switch.set(true);
+                        toggle.set_active(current_active.get());
+                        updating_switch.set(false);
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
+            toggle.set_sensitive(false);
+            ssid_entry.set_sensitive(false);
+            password_entry.set_sensitive(false);
+            let result = match payload.as_ref() {
+                Some((ssid, password)) => set_hotspot(&core_url, true, Some(ssid), Some(password)),
+                None => set_hotspot(&core_url, false, None, None),
+            };
+            match result {
+                Ok(message) => {
+                    current_active.set(next_active);
+                    title.set_text(hotspot_toggle_label(next_active));
+                    detail.set_text(&message);
+                    feedback.set_text(&message);
+                    password_entry.set_text("");
+                    toggle.update_property(&[gtk4::accessible::Property::Description(&message)]);
+                }
+                Err(message) => {
+                    feedback.set_text(&message);
+                    updating_switch.set(true);
+                    toggle.set_active(current_active.get());
+                    updating_switch.set(false);
+                }
+            }
+            let editable = !current_active.get();
+            toggle.set_sensitive(true);
+            ssid_entry.set_sensitive(editable);
+            password_entry.set_sensitive(editable);
+        });
+    }
+}
+
+fn hotspot_state_label(status: &HotspotStatus) -> &'static str {
+    if !status.available {
         "unavailable"
-    } else if hotspot.active {
+    } else if status.active {
         "on"
     } else {
         "off"
-    };
-    panel.append(&health_summary_group(vec![(
-        "Personal Hotspot",
-        value.to_string(),
-        hotspot.active,
-        hotspot.detail.clone(),
-    )]));
+    }
+}
+
+fn hotspot_toggle_label(active: bool) -> &'static str {
+    if active {
+        "Personal Hotspot on"
+    } else {
+        "Personal Hotspot off"
+    }
+}
+
+fn hotspot_toggle_detail(status: &HotspotStatus) -> String {
+    if !status.available {
+        return status.detail.clone();
+    }
+    if status.active || status.can_start {
+        status.detail.clone()
+    } else {
+        format!(
+            "{} Hotspot sharing support is not ready in this image.",
+            status.detail
+        )
+    }
+}
+
+fn hotspot_management_detail(status: &HotspotStatus) -> String {
+    if !status.available {
+        return "Networking is not ready in this session, so Personal Hotspot controls stay disabled.".to_string();
+    }
+    if status.active {
+        return "Personal Hotspot is active. Network name and password edits apply after the hotspot is turned off.".to_string();
+    }
+    if status.can_start {
+        "Enter a network name and password, then turn on Personal Hotspot. The password is sent only to the system network service for setup.".to_string()
+    } else {
+        "Personal Hotspot cannot start until NetworkManager shared-mode support is available in the image.".to_string()
+    }
+}
+
+fn hotspot_next_ssid(status: &HotspotStatus) -> String {
+    status
+        .ssid
+        .as_deref()
+        .filter(|ssid| !ssid.trim().is_empty())
+        .unwrap_or("Goblins OS")
+        .to_string()
+}
+
+fn hotspot_settings_inputs(ssid: &str, password: &str) -> Result<(String, String), String> {
+    let ssid = ssid.trim();
+    if ssid.is_empty() {
+        return Err("A hotspot network name is required.".to_string());
+    }
+    if ssid.starts_with('-') {
+        return Err("A hotspot network name cannot start with a dash.".to_string());
+    }
+    if ssid.len() > 32 {
+        return Err("A hotspot network name must be 32 bytes or fewer.".to_string());
+    }
+    if ssid.chars().any(char::is_control) {
+        return Err("A hotspot network name cannot contain control characters.".to_string());
+    }
+
+    let password = password.trim();
+    if password.len() < 8 {
+        return Err("Personal Hotspot passwords must be at least 8 characters.".to_string());
+    }
+    if password.len() > 63 {
+        return Err("Personal Hotspot passwords must be 63 characters or fewer.".to_string());
+    }
+    if password.chars().any(char::is_control) {
+        return Err("Personal Hotspot passwords cannot contain control characters.".to_string());
+    }
+
+    Ok((ssid.to_string(), password.to_string()))
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn input_row<T: gtk4::prelude::IsA<gtk4::Widget>>(
+    title: &str,
+    detail: &str,
+    control: &T,
+) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 14);
+    row.add_css_class("gos-row");
+
+    let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
+    copy.set_hexpand(true);
+    copy.append(&label(title, &["gos-row-title"]));
+    copy.append(&label(detail, &["gos-row-copy"]));
+    row.append(&copy);
+
+    control.set_hexpand(true);
+    row.append(control);
+    row
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -17798,6 +18064,34 @@ fn wifi_connect_outcome(body: &[u8]) -> Result<WifiConnectOutcome, CoreFetchErro
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_hotspot(
+    base_url: &str,
+    enabled: bool,
+    ssid: Option<&str>,
+    password: Option<&str>,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "enabled": enabled,
+        "ssid": ssid.map(str::trim).filter(|value| !value.is_empty()),
+        "password": password.map(str::trim).filter(|value| !value.is_empty()),
+    })
+    .to_string();
+    let response = http_post_json_response(base_url, "/v1/hotspot/enabled", &body)
+        .map_err(|error| format!("Goblins OS could not reach Personal Hotspot: {error}."))?;
+    let outcome = hotspot_toggle_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn hotspot_toggle_outcome(body: &[u8]) -> Result<HotspotToggleOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_proxy_mode(base_url: &str, mode: &str) -> Result<String, String> {
     let body = serde_json::json!({ "mode": mode }).to_string();
     let response = http_post_json_response(base_url, "/v1/network/proxy/mode", &body)
@@ -20217,12 +20511,12 @@ mod tests {
         bluetooth_power_outcome, camera_access_detail, cleanup_temp_detail, cleanup_trash_detail,
         days_label, desktop_privacy_outcome, display_output_detail, display_output_title,
         engine_selection_success_copy, facility_state_is_ready, facility_state_label,
-        facility_user_detail, input_feedback_sounds_detail, interface_sounds_detail,
-        key_repeat_detail, local_account_identity_detail, local_account_type_detail,
-        lock_screen_notifications_detail, magnifier_detail, microphone_access_detail,
-        milliseconds_label, motion_preference_detail, night_light_detail,
-        night_light_schedule_detail, night_light_temperature_label, normalized_appearance_theme,
-        normalized_audio_volume, normalized_background_picture_option,
+        facility_user_detail, hotspot_settings_inputs, hotspot_toggle_outcome,
+        input_feedback_sounds_detail, interface_sounds_detail, key_repeat_detail,
+        local_account_identity_detail, local_account_type_detail, lock_screen_notifications_detail,
+        magnifier_detail, microphone_access_detail, milliseconds_label, motion_preference_detail,
+        night_light_detail, night_light_schedule_detail, night_light_temperature_label,
+        normalized_appearance_theme, normalized_audio_volume, normalized_background_picture_option,
         normalized_background_shading, normalized_keyboard_delay,
         normalized_keyboard_repeat_interval, normalized_night_light_temperature,
         normalized_old_files_age, normalized_proxy_mode, normalized_text_scale,
@@ -24458,6 +24752,40 @@ mod tests {
         assert!(engine_selection_success_copy("local-gpt-oss").contains("GPT-OSS"));
         assert!(engine_selection_success_copy("codex").contains("Codex"));
         assert!(engine_selection_success_copy("openai-api").contains("hosted models"));
+    }
+
+    #[test]
+    fn hotspot_settings_inputs_validate_before_core_write() {
+        assert_eq!(
+            hotspot_settings_inputs(" Goblins OS ", "correct horse").unwrap(),
+            ("Goblins OS".to_string(), "correct horse".to_string())
+        );
+        assert!(hotspot_settings_inputs("-option", "correct horse").is_err());
+        assert!(hotspot_settings_inputs(&"x".repeat(33), "correct horse").is_err());
+        assert!(hotspot_settings_inputs("bad\nssid", "correct horse").is_err());
+
+        let secret = "secret-passphrase";
+        for error in [
+            hotspot_settings_inputs("Goblins OS", "short").unwrap_err(),
+            hotspot_settings_inputs("Goblins OS", &"x".repeat(64)).unwrap_err(),
+            hotspot_settings_inputs("Goblins OS", "bad\npassword").unwrap_err(),
+        ] {
+            assert!(!error.contains(secret));
+        }
+    }
+
+    #[test]
+    fn hotspot_toggle_outcome_keeps_core_text() {
+        let outcome = hotspot_toggle_outcome(
+            br#"{"ok":false,"active":false,"ssid":"Goblins OS","text":"Personal Hotspot could not be changed."}"#,
+        )
+        .unwrap();
+
+        assert!(!outcome.ok);
+        assert_eq!(
+            outcome.text,
+            "Personal Hotspot could not be changed.".to_string()
+        );
     }
 
     #[test]

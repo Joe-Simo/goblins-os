@@ -72,6 +72,9 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       desktop-file-utils \
       gtk4 \
       ibus \
+      ibus-libpinyin \
+      ibus-anthy \
+      ibus-hangul \
       ibus-gtk4 \
       ibus-gtk3 \
       ibus-libs \
@@ -158,6 +161,9 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       dnsmasq \
       wl-clipboard \
       ibus \
+      ibus-libpinyin \
+      ibus-anthy \
+      ibus-hangul \
       ibus-gtk4 \
       ibus-gtk3 \
       ibus-libs \
@@ -199,6 +205,13 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v dnsmasq \
     && command -v ibus \
     && command -v ibus-daemon \
+    && test -f /usr/share/ibus/component/libpinyin.xml \
+    && test -f /usr/share/ibus/component/anthy.xml \
+    && test -f /usr/share/ibus/component/hangul.xml \
+    && test -x /usr/libexec/ibus-engine-libpinyin \
+    && test -x /usr/libexec/ibus-engine-anthy \
+    && test -x /usr/libexec/ibus-engine-hangul \
+    && test -f /usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so \
     && command -v snapper \
     && command -v xdg-open \
     && command -v papers \

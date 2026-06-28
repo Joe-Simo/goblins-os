@@ -167,19 +167,28 @@ the stale aarch64 BIB manifest local-ref row, missing complete aarch64/x86_64
 hardware-gate screenshot runs, and missing complete signoff rows.
 `systemd-analyze verify` is not available on this macOS host.
 
-Current implementation continuation: the IME/input-source **set** substrate is
-now source-gated but not shipped. Core exposes `/v1/input/sources`, validates the
-existing configured sources with a narrow `xkb`/`ibus` allowlist, encodes the
-`a(ss)` GVariant, and honestly fails when gsettings or the schema/key is absent.
-Settings ▸ Keyboard now adds source-row Move up / Move down / Remove controls
-against that route; the last source cannot be removed, and this pass does not
-install new CJK engines, add a source picker, change IME environment defaults, or
-restore `Super+Space`. Local source gates: `cargo fmt --all --check`,
+Current implementation continuation: the IME/input-source **set** and CJK
+package substrates are now source-gated but not shipped. Core exposes
+`/v1/input/sources`, validates the existing configured sources with a narrow
+`xkb`/`ibus` allowlist, encodes the `a(ss)` GVariant, and honestly fails when
+gsettings or the schema/key is absent. Settings ▸ Keyboard adds source-row
+Move up / Move down / Remove controls against that route; the last source
+cannot be removed. The current CJK package pass web/container-verified Fedora 44
+`ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, and the existing `ibus-gtk4`
+module, installs/asserts those engine packages in the bootc image, asserts the
+IBus component XML files and engine binaries, and adds a pure core engine-package
+registry plus read-only Settings package readiness rows. This pass does not add
+a source picker, change IME environment defaults, restore `Super+Space`, or
+claim live candidate/input switching. Local source gates for the current package
+pass: Fedora 44 clean install probe for the CJK RPMs and paths, targeted
+`cargo test -p goblins-os-core input`, targeted
+`cargo test -p goblins-os-settings input_source`, `cargo fmt --all --check`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
-`goblins-os-verify --source-root .` → **blocked=0 (1563)**, scoped
+`goblins-os-verify --source-root .` → **blocked=0 (1912)**, scoped
 `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
 the Rust 1.88 GTK container
-`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`
+from a clean temp Rust workspace.
 GTK render, live source switching, menu-bar indicator, candidate window, and
 input-source interaction proof remain CI/qemu-pending.
 
@@ -979,10 +988,11 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 - [x] **Read substrate** (`crates/goblins-os-core/src/input.rs`): the `a(ss)` `org.gnome.desktop.input-sources sources` GVariant is parsed into ordered `InputSourceEntry` and surfaced in `/v1/input/status`. Pure parser unit-tested on the host.
 - [x] **Settings list (GTK) shipped**: Settings ▸ Keyboard now renders a read-only **Input sources** list (friendly names via a unit-tested `input_source_label`, e.g. xkb `us` → "English (US)", ibus `libpinyin` → "Pinyin (Chinese)", honest raw-id fallback), with honest unavailable/empty rows. Compile- + `clippy -D warnings`-clean in the native container; 93 settings host tests; verify gate added.
 - [x] **Set/reorder/remove substrate source-gated (CI/qemu-pending):** core exposes `/v1/input/sources`, validates only `xkb`/`ibus` source entries, encodes the `a(ss)` GVariant, and returns honest failure when gsettings or `org.gnome.desktop.input-sources sources` is absent. Settings ▸ Keyboard adds Move up / Move down / Remove row controls for existing configured sources only; the last source cannot be removed. Host tests cover `a(ss)` encode/decode, allowlist, reorder/remove, and the last-source rule; native GTK clippy passes in the Rust 1.88 container; verify gate added. **Not shipped** until CI/qemu proves render + interaction + live source switching.
-- [ ] **Deferred (risk-gated):** install the IBus CJK engines (`ibus-libpinyin`/`-anthy`/`-hangul`/`-gtk4`), the Containerfile IME-env relaxation, an **Add input source…** sheet that lists only installed engines, the menu-bar active-source indicator, and re-enabling `Super+Space` switching — the last reverses an intentional boot/launcher decision, so it lands deliberately, not blind.
-- **Packages:** `ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, `ibus-gtk4`, `ibus-setup` (CJK engines verified fc44).
+- [x] **CJK engine package substrate source-gated (CI/qemu-pending):** Fedora 44 package metadata and a clean Fedora 44 install probe confirm `ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, and the existing `ibus-gtk4` module. The bootc image installs and `rpm -q` asserts the CJK engines, asserts `/usr/share/ibus/component/{libpinyin,anthy,hangul}.xml`, asserts `/usr/libexec/ibus-engine-{libpinyin,anthy,hangul}`, and asserts the GTK4 IBus module. Core reports a pure CJK engine package registry plus runtime path readiness; Settings ▸ Keyboard renders read-only CJK engine package rows. **Not shipped** until CI/qemu proves the installed image, Settings render, live IBus engine listing, source switching, and candidate window behavior.
+- [ ] **Deferred (risk-gated):** the Containerfile IME-env decision, an **Add input source…** sheet that lists only installed engines, the menu-bar active-source indicator, and re-enabling `Super+Space` switching — the last reverses an intentional boot/launcher decision, so it lands deliberately, not blind.
+- **Packages:** `ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, `ibus-gtk4` (CJK engines verified fc44); `ibus-setup` remains a UI-picker question, not installed by the source-gated package substrate.
 - **dconf/gsettings:** `org.gnome.desktop.input-sources` `sources` (`a(ss)`), `mru-sources`, `per-window`, `xkb-options`, `show-all-sources`; **revert** the `switch-input-source`/`-backward` emptying in `10-goblins-os-desktop:50-51` — bind `['<Super>space']` **only when >1 source**, and resolve `Super+Space` ownership with the launcher.
-- **Files:** `os/bootc/Containerfile` (install 5 ibus packages; relax the IME-disabling env at lines 307-311 so `GTK_IM_MODULE`=ibus and IBus autostarts), `os/dconf/db/local.d/10-goblins-os-desktop`, `crates/goblins-os-core/src/input.rs` (`INPUT_SOURCES_SCHEMA` + `a(ss)` encode/decode, list/add/remove/reorder/set-current, `ibus list-engine` probe), `crates/goblins-os-core/src/main.rs` (extend existing `/v1/input/*` payloads), `crates/goblins-os-settings/src/main.rs` (real ordered-source list replacing the placeholder `input_source_summary_spec`), `os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js` (active-source abbreviation indicator when >1 source).
+- **Files:** `os/bootc/Containerfile` (install/assert the CJK engine packages; keep the IME environment decision deferred), `os/dconf/db/local.d/10-goblins-os-desktop`, `crates/goblins-os-core/src/input.rs` (`INPUT_SOURCES_SCHEMA` + `a(ss)` encode/decode, CJK engine registry, list/add/remove/reorder/set-current, `ibus list-engine` probe), `crates/goblins-os-core/src/main.rs` (extend existing `/v1/input/*` payloads), `crates/goblins-os-settings/src/main.rs` (real ordered-source list plus read-only engine package readiness, replacing the placeholder `input_source_summary_spec`), `os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js` (active-source abbreviation indicator when >1 source).
 - **APIs:** `org.gnome.desktop.input-sources` (ships in gsettings-desktop-schemas), IBus D-Bus / `ibus` CLI, gnome-shell native `InputSourceManager` (we do **not** reimplement the candidate window — the engines render it), `ibus-gtk4` IM module.
 - **Goblins-grade:** each source a `gos-row` (human name title, engine id copy, monospace abbreviation chip "PY/あ/한/US"); meaningful order via arrow/drag reorder; "Add input source…" sheet lists only installed engines; active source carries the calm accent selection language; candidate window themed via `os/gtk-4.0/gtk.css` to the rounded vibrant Goblins material.
 - **Honest gating:** session absent → existing "not ready" copy, controls disabled; engine not installed → never listed; single source → zero new chrome (menu-bar indicator + binding only when `sources.len() > 1`); last source can't be removed.

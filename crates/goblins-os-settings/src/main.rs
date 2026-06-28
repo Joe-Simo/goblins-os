@@ -630,6 +630,7 @@ struct InputStatus {
     mouse: MouseInputStatus,
     touchpad: TouchpadInputStatus,
     input_sources: InputSourcesStatus,
+    input_engine_packages: InputEnginePackagesStatus,
     detail: String,
 }
 
@@ -638,6 +639,27 @@ struct InputSourcesStatus {
     schema_available: bool,
     sources: Vec<InputSourceEntry>,
     detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct InputEnginePackagesStatus {
+    engines: Vec<InputEnginePackageStatus>,
+    installed_count: usize,
+    all_installed: bool,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct InputEnginePackageStatus {
+    language: String,
+    label: String,
+    abbreviation: String,
+    kind: String,
+    id: String,
+    package: String,
+    component_xml: String,
+    engine_binary: String,
+    installed: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq, Debug)]
@@ -12500,6 +12522,7 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
             ));
         }
     }
+    append_input_engine_packages(panel, &input.input_engine_packages);
 
     append_text_shortcuts_editor(panel, state);
     append_keyboard_shortcuts(panel, state);
@@ -12607,6 +12630,48 @@ fn input_source_action_button(
     });
 
     action
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_input_engine_packages(panel: &gtk4::Box, status: &InputEnginePackagesStatus) {
+    panel.append(&label("CJK input methods", &["gos-subsection-title"]));
+    let state = if status.all_installed {
+        "ready"
+    } else {
+        "incomplete"
+    };
+    panel.append(&health_row(
+        "CJK engine packages",
+        state,
+        status.all_installed,
+        &status.detail,
+    ));
+
+    for engine in &status.engines {
+        let state = if engine.installed {
+            "installed"
+        } else {
+            "missing"
+        };
+        let detail = format!(
+            "{} input source {}:{} ({}) from {}; component {}, engine {}.",
+            engine.language,
+            engine.kind,
+            engine.id,
+            engine.abbreviation,
+            engine.package,
+            engine.component_xml,
+            engine.engine_binary
+        );
+        panel.append(&health_row(&engine.label, state, engine.installed, &detail));
+    }
+
+    if status.installed_count == 0 && status.engines.is_empty() {
+        panel.append(&system_row(
+            "CJK input methods",
+            "No packaged CJK input method registry was reported by core.",
+        ));
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -20452,6 +20517,48 @@ fn test_input_status(
             } else {
                 unavailable_detail.to_string()
             },
+        },
+        input_engine_packages: InputEnginePackagesStatus {
+            engines: vec![
+                InputEnginePackageStatus {
+                    language: "Chinese".to_string(),
+                    label: "Pinyin (Chinese)".to_string(),
+                    abbreviation: "PY".to_string(),
+                    kind: "ibus".to_string(),
+                    id: "libpinyin".to_string(),
+                    package: "ibus-libpinyin".to_string(),
+                    component_xml: "/usr/share/ibus/component/libpinyin.xml".to_string(),
+                    engine_binary: "/usr/libexec/ibus-engine-libpinyin".to_string(),
+                    installed: true,
+                },
+                InputEnginePackageStatus {
+                    language: "Japanese".to_string(),
+                    label: "Japanese (Anthy)".to_string(),
+                    abbreviation: "あ".to_string(),
+                    kind: "ibus".to_string(),
+                    id: "anthy".to_string(),
+                    package: "ibus-anthy".to_string(),
+                    component_xml: "/usr/share/ibus/component/anthy.xml".to_string(),
+                    engine_binary: "/usr/libexec/ibus-engine-anthy".to_string(),
+                    installed: true,
+                },
+                InputEnginePackageStatus {
+                    language: "Korean".to_string(),
+                    label: "Korean (Hangul)".to_string(),
+                    abbreviation: "한".to_string(),
+                    kind: "ibus".to_string(),
+                    id: "hangul".to_string(),
+                    package: "ibus-hangul".to_string(),
+                    component_xml: "/usr/share/ibus/component/hangul.xml".to_string(),
+                    engine_binary: "/usr/libexec/ibus-engine-hangul".to_string(),
+                    installed: true,
+                },
+            ],
+            installed_count: 3,
+            all_installed: true,
+            detail:
+                "CJK input engines are installed for this image. 3 of 3 engine packages are ready."
+                    .to_string(),
         },
         detail: if gsettings_available {
             "Keyboard, mouse, and trackpad preferences are ready for this desktop.".to_string()

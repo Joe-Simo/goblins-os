@@ -8332,6 +8332,54 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/input/sources",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/input.rs"),
+            "core-input-cjk-engine-registry",
+            "cjk_engine_package_statuses_with",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-cjk-engine-packages",
+            "CJK engine packages",
+        ),
+        container_package_lockstep_check(root, "ime-libpinyin-packaged", "ibus-libpinyin"),
+        container_package_lockstep_check(root, "ime-anthy-packaged", "ibus-anthy"),
+        container_package_lockstep_check(root, "ime-hangul-packaged", "ibus-hangul"),
+        container_contains_check(
+            root,
+            "ime-libpinyin-component-asserted",
+            "/usr/share/ibus/component/libpinyin.xml",
+        ),
+        container_contains_check(
+            root,
+            "ime-anthy-component-asserted",
+            "/usr/share/ibus/component/anthy.xml",
+        ),
+        container_contains_check(
+            root,
+            "ime-hangul-component-asserted",
+            "/usr/share/ibus/component/hangul.xml",
+        ),
+        container_contains_check(
+            root,
+            "ime-libpinyin-engine-asserted",
+            "/usr/libexec/ibus-engine-libpinyin",
+        ),
+        container_contains_check(
+            root,
+            "ime-anthy-engine-asserted",
+            "/usr/libexec/ibus-engine-anthy",
+        ),
+        container_contains_check(
+            root,
+            "ime-hangul-engine-asserted",
+            "/usr/libexec/ibus-engine-hangul",
+        ),
+        container_contains_check(
+            root,
+            "ime-gtk4-module-asserted",
+            "/usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-security-firewall-status-row",
             "/v1/firewall/status",

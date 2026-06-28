@@ -3,7 +3,7 @@
 //! Goblins OS keeps desktop input preferences behind an allowlisted settings
 //! bridge so the Settings GUI cannot mutate arbitrary schemas or keys.
 
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,38 @@ const KEYBOARD_SCHEMA: &str = "org.gnome.desktop.peripherals.keyboard";
 const MOUSE_SCHEMA: &str = "org.gnome.desktop.peripherals.mouse";
 const TOUCHPAD_SCHEMA: &str = "org.gnome.desktop.peripherals.touchpad";
 const INPUT_SOURCES_SCHEMA: &str = "org.gnome.desktop.input-sources";
+const CJK_INPUT_ENGINE_SPECS: [InputEnginePackageSpec; 3] = [
+    InputEnginePackageSpec {
+        language: "Chinese",
+        label: "Pinyin (Chinese)",
+        abbreviation: "PY",
+        kind: "ibus",
+        id: "libpinyin",
+        package: "ibus-libpinyin",
+        component_xml: "/usr/share/ibus/component/libpinyin.xml",
+        engine_binary: "/usr/libexec/ibus-engine-libpinyin",
+    },
+    InputEnginePackageSpec {
+        language: "Japanese",
+        label: "Japanese (Anthy)",
+        abbreviation: "あ",
+        kind: "ibus",
+        id: "anthy",
+        package: "ibus-anthy",
+        component_xml: "/usr/share/ibus/component/anthy.xml",
+        engine_binary: "/usr/libexec/ibus-engine-anthy",
+    },
+    InputEnginePackageSpec {
+        language: "Korean",
+        label: "Korean (Hangul)",
+        abbreviation: "한",
+        kind: "ibus",
+        id: "hangul",
+        package: "ibus-hangul",
+        component_xml: "/usr/share/ibus/component/hangul.xml",
+        engine_binary: "/usr/libexec/ibus-engine-hangul",
+    },
+];
 
 #[derive(Serialize)]
 pub struct InputStatus {
@@ -22,6 +54,7 @@ pub struct InputStatus {
     mouse: MouseInputStatus,
     touchpad: TouchpadInputStatus,
     input_sources: InputSourcesStatus,
+    input_engine_packages: InputEnginePackagesStatus,
     detail: String,
 }
 
@@ -71,6 +104,27 @@ pub struct InputSourcesStatus {
     schema_available: bool,
     sources: Vec<InputSourceEntry>,
     detail: String,
+}
+
+#[derive(Serialize)]
+pub struct InputEnginePackagesStatus {
+    engines: Vec<InputEnginePackageStatus>,
+    installed_count: usize,
+    all_installed: bool,
+    detail: String,
+}
+
+#[derive(Clone, Serialize, PartialEq, Eq, Debug)]
+pub struct InputEnginePackageStatus {
+    language: &'static str,
+    label: &'static str,
+    abbreviation: &'static str,
+    kind: &'static str,
+    id: &'static str,
+    package: &'static str,
+    component_xml: &'static str,
+    engine_binary: &'static str,
+    installed: bool,
 }
 
 #[derive(Deserialize)]
@@ -146,6 +200,18 @@ enum InputPreferenceValue {
     Bool(bool),
     U32(u32),
     F64(f64),
+}
+
+#[derive(Clone, Copy)]
+struct InputEnginePackageSpec {
+    language: &'static str,
+    label: &'static str,
+    abbreviation: &'static str,
+    kind: &'static str,
+    id: &'static str,
+    package: &'static str,
+    component_xml: &'static str,
+    engine_binary: &'static str,
 }
 
 pub async fn input_status() -> Json<InputStatus> {
@@ -245,7 +311,54 @@ fn build_input_status() -> InputStatus {
                 INPUT_SOURCES_SCHEMA,
             ),
         },
+        input_engine_packages: input_engine_packages_status(),
         detail: input_status_detail(gsettings_available),
+    }
+}
+
+fn input_engine_packages_status() -> InputEnginePackagesStatus {
+    let engines = cjk_engine_package_statuses_with(|path| Path::new(path).is_file());
+    let installed_count = engines.iter().filter(|engine| engine.installed).count();
+    let all_installed = installed_count == engines.len();
+    InputEnginePackagesStatus {
+        detail: input_engine_packages_detail(installed_count, engines.len()),
+        engines,
+        installed_count,
+        all_installed,
+    }
+}
+
+fn cjk_engine_package_statuses_with(
+    file_exists: impl Fn(&str) -> bool,
+) -> Vec<InputEnginePackageStatus> {
+    CJK_INPUT_ENGINE_SPECS
+        .iter()
+        .map(|spec| {
+            let installed = file_exists(spec.component_xml) && file_exists(spec.engine_binary);
+            InputEnginePackageStatus {
+                language: spec.language,
+                label: spec.label,
+                abbreviation: spec.abbreviation,
+                kind: spec.kind,
+                id: spec.id,
+                package: spec.package,
+                component_xml: spec.component_xml,
+                engine_binary: spec.engine_binary,
+                installed,
+            }
+        })
+        .collect()
+}
+
+fn input_engine_packages_detail(installed_count: usize, total_count: usize) -> String {
+    if installed_count == total_count {
+        format!(
+            "CJK input engines are installed for this image. {installed_count} of {total_count} engine packages are ready."
+        )
+    } else {
+        format!(
+            "CJK input engines are not fully installed in this runtime. {installed_count} of {total_count} engine packages are ready."
+        )
     }
 }
 
@@ -847,7 +960,8 @@ fn gsettings_error_detail(stderr: &str, stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_input_sources, encode_preference_value, input_target_spec, normalize_input_sources,
+        cjk_engine_package_statuses_with, encode_input_sources, encode_preference_value,
+        input_engine_packages_detail, input_target_spec, normalize_input_sources,
         parse_gsettings_bool, parse_gsettings_f64, parse_gsettings_u32, parse_preference_value,
         InputPreferenceTarget, InputPreferenceValue, InputSourceEntry,
     };
@@ -986,5 +1100,49 @@ mod tests {
             encode_input_sources(&sources),
             "[('xkb', 'us'), ('ibus', 'libpinyin')]"
         );
+    }
+
+    #[test]
+    fn cjk_engine_package_registry_names_fedora_packages_and_ibus_ids() {
+        let engines = cjk_engine_package_statuses_with(|_| true);
+        let pairs = engines
+            .iter()
+            .map(|engine| (engine.package, engine.kind, engine.id))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            pairs,
+            vec![
+                ("ibus-libpinyin", "ibus", "libpinyin"),
+                ("ibus-anthy", "ibus", "anthy"),
+                ("ibus-hangul", "ibus", "hangul"),
+            ]
+        );
+        assert!(engines.iter().all(|engine| engine.installed));
+        assert!(engines.iter().all(|engine| engine
+            .component_xml
+            .starts_with("/usr/share/ibus/component/")));
+        assert!(engines.iter().all(|engine| engine
+            .engine_binary
+            .starts_with("/usr/libexec/ibus-engine-")));
+    }
+
+    #[test]
+    fn cjk_engine_package_readiness_requires_component_and_binary() {
+        let engines = cjk_engine_package_statuses_with(|path| {
+            path.ends_with("libpinyin.xml") || path.ends_with("ibus-engine-hangul")
+        });
+
+        assert_eq!(engines.len(), 3);
+        assert!(!engines[0].installed);
+        assert!(!engines[1].installed);
+        assert!(!engines[2].installed);
+
+        let all_ready = cjk_engine_package_statuses_with(|path| {
+            path.ends_with(".xml") || path.contains("/ibus-engine-")
+        });
+        assert!(all_ready.iter().all(|engine| engine.installed));
+        assert!(input_engine_packages_detail(3, 3).contains("are installed"));
+        assert!(input_engine_packages_detail(2, 3).contains("not fully installed"));
     }
 }

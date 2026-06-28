@@ -201,15 +201,19 @@ Current Personal Hotspot continuation: the Settings binding is now source-gated
 but not shipped. Core still owns `/v1/hotspot/enabled`, policy gating,
 NetworkManager AP creation, `dnsmasq` shared-mode gating, single-radio Wi-Fi
 uplink rejection, non-persistent `save no` AP profiles, and PSK-sanitized
-errors. Settings ▸ Network now renders the Personal Hotspot switch plus
-write-only network-name/password rows, prevalidates SSID/password inputs before
-POST, clears the password after a successful request, and reverts the switch on
-the real core failure message. This pass does **not** add connected-device
-readout, WPA3/SAE selection, or live AP proof. Local source gates:
-`cargo fmt --all --check`, targeted `cargo test -p goblins-os-settings hotspot`,
+errors. Settings ▸ Network renders the Personal Hotspot switch plus write-only
+network-name/password rows, prevalidates SSID/password inputs before POST,
+clears the password after a successful request, and reverts the switch on the
+real core failure message. The current client-readout continuation adds an
+honest dnsmasq lease-table parser and Settings count/list rows that only report
+connected devices when NetworkManager shared-mode lease data is present; missing
+lease data stays "unknown", never "0 devices." This pass does **not** add WPA3/SAE
+selection or live AP proof. Local source gates:
+`cargo fmt --all --check`, targeted `cargo test -p goblins-os-core hotspot`,
+targeted `cargo test -p goblins-os-settings hotspot`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`,
-`goblins-os-verify --source-root .` → **blocked=0 (1896)**, scoped
+`goblins-os-verify --source-root .` → **blocked=0 (1900)**, scoped
 `git diff --check`, and `bash -n os/hardware-gate/verify-shipping-status.sh`.
 CI/qemu must still prove the Settings render, policy-denied and live-write
 paths, NetworkManager AP creation, DHCP/shared-mode behavior, and connected
@@ -1054,7 +1058,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - [x] **Status read + row shipped** (`crates/goblins-os-core/src/hotspot.rs` + `/v1/hotspot/status`, Settings ▸ Network "Personal Hotspot" row): detects an active Wi-Fi access-point connection via `nmcli` (UUID-keyed lookup → no name-escaping; pure `active_wifi_devices`/`mode_is_ap` helpers unit-tested, 174 core tests), honest-gated to "unavailable" without NetworkManager. Container-verified (clippy `-D warnings`), verify gates added.
 - [x] **Gated start/stop core substrate source-gated (CI/qemu-pending):** `/v1/hotspot/enabled` is policy-gated by `settings-control`, validates SSID/password before `nmcli`, requires `dnsmasq` for NetworkManager shared mode, rejects no-AP-adapter and single-radio Wi-Fi-uplink states, uses a non-persistent `save no` AP profile, removes the fixed "Goblins Hotspot" profile on stop/failure, and sanitizes errors so the PSK never leaks. The image installs and `rpm -q`/`command -v` asserts `dnsmasq`.
 - [x] **Settings binding source-gated (CI/qemu-pending):** Settings ▸ Network now has the Personal Hotspot switch plus editable SSID/password rows, validates bad SSIDs and password length before POST, sends passwords only to core, clears the password after a successful request, and reverts on the real core outcome instead of faking success.
-- [ ] **Live AP proof + connected clients (deferred):** prove the radio can become a WPA2/WPA3 AP sharing the uplink, add the live connected-devices readout via NetworkManager shared-mode, and capture qemu/live-device proof.
+- [x] **Connected-client readout source-gated (CI/qemu-pending):** core parses NetworkManager/dnsmasq lease tables for the active hotspot device and Settings shows a connected-device count/list only when lease data is present. Missing lease data remains unknown instead of reporting a false zero.
+- [ ] **Live AP proof + connected clients (deferred):** prove the radio can become a WPA2/WPA3 AP sharing the uplink, validate the connected-devices readout against live NetworkManager shared-mode leases, and capture qemu/live-device proof.
 - **Packages:** `dnsmasq` (verified `2.92rel2-9.fc44`; **mandatory** — `ipv4.method shared` needs it for DHCP/NAT, not pulled by NetworkManager-wifi).
 - **Files:** `crates/goblins-os-core/src/hotspot.rs` (NEW — nmcli status/start/stop, SSID + password validation, uplink/single-radio gating, PSK error sanitization, tests), `crates/goblins-os-core/src/main.rs` (`mod hotspot` + `/v1/network/hotspot/status`, `/v1/network/hotspot`), `crates/goblins-os-settings/src/main.rs` (`append_hotspot_management` in `build_network`, modeled on `append_bluetooth_power_control`; `HotspotStatus` + `set_hotspot`), `os/bootc/Containerfile` (`dnsmasq`).
 - **APIs:** `nmcli` AP profile (`802-11-wireless.mode ap`, `band bg`, `ipv4.method shared`, `wifi-sec.key-mgmt wpa-psk`/`sae`, `wifi-sec.psk`), reusing `network.rs` `split_terse` + `policy_state_for_control("settings-control")`; GTK4 `Switch`/`Entry`/`PasswordEntry`.

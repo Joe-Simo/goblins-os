@@ -282,7 +282,23 @@ struct HotspotStatus {
     ssid: Option<String>,
     #[serde(default)]
     device: Option<String>,
+    #[serde(default)]
+    connected_clients_known: bool,
+    #[serde(default)]
+    connected_client_count: Option<usize>,
+    #[serde(default)]
+    connected_clients: Vec<HotspotClient>,
     detail: String,
+}
+
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct HotspotClient {
+    ip_address: String,
+    hostname: Option<String>,
 }
 
 /// Read-only system-image deployment status from `GET /v1/system/image`, backed
@@ -5730,6 +5746,14 @@ fn append_hotspot_management(panel: &gtk4::Box, state: &SettingsState) {
             "The Wi-Fi device currently broadcasting the hotspot.".to_string(),
         ));
     }
+    if hotspot.active && hotspot.connected_clients_known {
+        summary.push((
+            "Connected devices",
+            hotspot_connected_clients_label(hotspot),
+            true,
+            hotspot_connected_clients_detail(hotspot),
+        ));
+    }
     panel.append(&health_summary_group(summary));
 
     let can_change = hotspot.available && (hotspot.active || hotspot.can_start);
@@ -5793,6 +5817,16 @@ fn append_hotspot_management(panel: &gtk4::Box, state: &SettingsState) {
 
     let feedback = label(&hotspot_management_detail(hotspot), &["gos-row-copy"]);
     panel.append(&feedback);
+
+    if hotspot.active && hotspot.connected_clients_known && !hotspot.connected_clients.is_empty() {
+        panel.append(&label("Connected devices", &["gos-subsection-title"]));
+        for client in &hotspot.connected_clients {
+            panel.append(&system_row(
+                &hotspot_client_title(client),
+                &format!("Address {}", client.ip_address),
+            ));
+        }
+    }
 
     if !can_change {
         return;
@@ -5908,6 +5942,38 @@ fn hotspot_management_detail(status: &HotspotStatus) -> String {
     } else {
         "Personal Hotspot cannot start until NetworkManager shared-mode support is available in the image.".to_string()
     }
+}
+
+fn hotspot_connected_clients_label(status: &HotspotStatus) -> String {
+    status
+        .connected_client_count
+        .map(|count| {
+            if count == 1 {
+                "1 device".to_string()
+            } else {
+                format!("{count} devices")
+            }
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn hotspot_connected_clients_detail(status: &HotspotStatus) -> String {
+    match status.connected_client_count {
+        Some(0) => "No connected devices are listed in the hotspot lease table.".to_string(),
+        Some(1) => "One connected device is listed in the hotspot lease table.".to_string(),
+        Some(count) => format!("{count} connected devices are listed in the hotspot lease table."),
+        None => "Connected devices are unavailable until the hotspot lease table is present."
+            .to_string(),
+    }
+}
+
+fn hotspot_client_title(client: &HotspotClient) -> String {
+    client
+        .hostname
+        .as_deref()
+        .filter(|hostname| !hostname.trim().is_empty())
+        .unwrap_or("Unnamed device")
+        .to_string()
 }
 
 fn hotspot_next_ssid(status: &HotspotStatus) -> String {
@@ -20511,7 +20577,8 @@ mod tests {
         bluetooth_power_outcome, camera_access_detail, cleanup_temp_detail, cleanup_trash_detail,
         days_label, desktop_privacy_outcome, display_output_detail, display_output_title,
         engine_selection_success_copy, facility_state_is_ready, facility_state_label,
-        facility_user_detail, hotspot_settings_inputs, hotspot_toggle_outcome,
+        facility_user_detail, hotspot_client_title, hotspot_connected_clients_detail,
+        hotspot_connected_clients_label, hotspot_settings_inputs, hotspot_toggle_outcome,
         input_feedback_sounds_detail, interface_sounds_detail, key_repeat_detail,
         local_account_identity_detail, local_account_type_detail, lock_screen_notifications_detail,
         magnifier_detail, microphone_access_detail, milliseconds_label, motion_preference_detail,
@@ -20534,9 +20601,9 @@ mod tests {
         storage_used_gb, text_scale_percent, usb_protection_detail, volume_boost_detail,
         wallpaper_color_detail, wallpaper_placement_outcome, wallpaper_shading_outcome,
         wallpaper_uri_detail, wifi_connect_outcome, AudioDeviceStatus, AudioEndpointStatus,
-        BluetoothAdapterStatus, DisplayOutputStatus, DisplaysStatus, HttpEndpoint, HttpResponse,
-        LocalAccountSummary, LocalModelInstallOutcome, OpenAIAuthStatus, SettingsPanel,
-        SidebarMovement, SystemFacility,
+        BluetoothAdapterStatus, DisplayOutputStatus, DisplaysStatus, HotspotClient, HotspotStatus,
+        HttpEndpoint, HttpResponse, LocalAccountSummary, LocalModelInstallOutcome,
+        OpenAIAuthStatus, SettingsPanel, SidebarMovement, SystemFacility,
     };
 
     #[test]
@@ -24786,6 +24853,37 @@ mod tests {
             outcome.text,
             "Personal Hotspot could not be changed.".to_string()
         );
+    }
+
+    #[test]
+    fn hotspot_connected_clients_copy_distinguishes_unknown_from_zero() {
+        let mut status = HotspotStatus {
+            available: true,
+            active: true,
+            can_start: true,
+            ssid: Some("Goblins OS".to_string()),
+            device: Some("wlan0".to_string()),
+            connected_clients_known: false,
+            connected_client_count: None,
+            connected_clients: Vec::new(),
+            detail: "Personal Hotspot is on.".to_string(),
+        };
+
+        assert_eq!(hotspot_connected_clients_label(&status), "unknown");
+        assert!(hotspot_connected_clients_detail(&status).contains("unavailable"));
+
+        status.connected_clients_known = true;
+        status.connected_client_count = Some(0);
+        assert_eq!(hotspot_connected_clients_label(&status), "0 devices");
+        assert!(hotspot_connected_clients_detail(&status).contains("No connected devices"));
+
+        status.connected_client_count = Some(1);
+        status.connected_clients.push(HotspotClient {
+            ip_address: "10.42.0.10".to_string(),
+            hostname: Some("phone".to_string()),
+        });
+        assert_eq!(hotspot_connected_clients_label(&status), "1 device");
+        assert_eq!(hotspot_client_title(&status.connected_clients[0]), "phone");
     }
 
     #[test]

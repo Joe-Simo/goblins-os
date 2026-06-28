@@ -5,7 +5,12 @@
 //! the hotspot profile before calling `nmcli`, uses a non-persistent connection,
 //! and never returns a password or raw `nmcli` command line.
 
-use std::process::{Command, Stdio};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
@@ -27,7 +32,16 @@ pub struct HotspotStatus {
     /// Whether the local substrate can attempt to start the hotspot.
     can_start: bool,
     ssid: Option<String>,
+    connected_clients_known: bool,
+    connected_client_count: Option<usize>,
+    connected_clients: Vec<HotspotClient>,
     detail: String,
+}
+
+#[derive(Serialize)]
+pub struct HotspotClient {
+    ip_address: String,
+    hostname: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -83,6 +97,9 @@ fn build_hotspot_status() -> HotspotStatus {
             device: None,
             can_start: false,
             ssid: None,
+            connected_clients_known: false,
+            connected_client_count: None,
+            connected_clients: Vec::new(),
             detail: "Personal Hotspot status is unavailable on this device (NetworkManager is not installed).".to_string(),
         };
     }
@@ -114,15 +131,21 @@ fn build_hotspot_status() -> HotspotStatus {
     });
 
     match hotspot {
-        Some((device, _)) => HotspotStatus {
-            source: "goblins-os-core",
-            active: true,
-            available: true,
-            can_start: dnsmasq_present(),
-            ssid: current_hotspot_ssid(),
-            detail: format!("Personal Hotspot is on, sharing this connection over {device}."),
-            device: Some(device),
-        },
+        Some((device, _)) => {
+            let clients = hotspot_clients_for_device(&device);
+            HotspotStatus {
+                source: "goblins-os-core",
+                active: true,
+                available: true,
+                can_start: dnsmasq_present(),
+                ssid: current_hotspot_ssid(),
+                connected_clients_known: clients.is_some(),
+                connected_client_count: clients.as_ref().map(Vec::len),
+                connected_clients: clients.unwrap_or_default(),
+                detail: format!("Personal Hotspot is on, sharing this connection over {device}."),
+                device: Some(device),
+            }
+        }
         None => HotspotStatus {
             source: "goblins-os-core",
             available: true,
@@ -130,6 +153,9 @@ fn build_hotspot_status() -> HotspotStatus {
             device: None,
             can_start: dnsmasq_present(),
             ssid: None,
+            connected_clients_known: false,
+            connected_client_count: None,
+            connected_clients: Vec::new(),
             detail: "Personal Hotspot is off. No Wi-Fi access point is currently active."
                 .to_string(),
         },
@@ -439,6 +465,61 @@ fn current_hotspot_ssid() -> Option<String> {
     })
 }
 
+fn hotspot_clients_for_device(device: &str) -> Option<Vec<HotspotClient>> {
+    let now_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    hotspot_lease_candidates(device)
+        .into_iter()
+        .find_map(|path| fs::read_to_string(path).ok())
+        .map(|text| parse_dnsmasq_leases(&text, now_epoch))
+}
+
+fn hotspot_lease_candidates(device: &str) -> Vec<PathBuf> {
+    if let Ok(path) = std::env::var("GOBLINS_OS_HOTSPOT_LEASE_FILE") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return vec![PathBuf::from(trimmed)];
+        }
+    }
+
+    let mut candidates = Vec::new();
+    if !device.trim().is_empty() {
+        candidates
+            .push(Path::new("/var/lib/NetworkManager").join(format!("dnsmasq-{device}.leases")));
+    }
+    candidates.push(PathBuf::from("/var/lib/NetworkManager/dnsmasq.leases"));
+    candidates.push(PathBuf::from("/var/lib/misc/dnsmasq.leases"));
+    candidates
+}
+
+fn parse_dnsmasq_leases(text: &str, now_epoch: u64) -> Vec<HotspotClient> {
+    text.lines()
+        .filter_map(|line| parse_dnsmasq_lease_line(line, now_epoch))
+        .collect()
+}
+
+fn parse_dnsmasq_lease_line(line: &str, now_epoch: u64) -> Option<HotspotClient> {
+    let mut fields = line.split_whitespace();
+    let expiry = fields.next()?.parse::<u64>().ok()?;
+    let _mac = fields.next()?;
+    let ip_address = fields.next()?.trim();
+    let hostname = fields.next().unwrap_or("*").trim();
+    if expiry != 0 && expiry <= now_epoch {
+        return None;
+    }
+    if ip_address.is_empty() || ip_address == "*" {
+        return None;
+    }
+
+    Some(HotspotClient {
+        ip_address: ip_address.to_string(),
+        hostname: (!hostname.is_empty() && hostname != "*").then(|| hostname.to_string()),
+    })
+}
+
 /// True when `nmcli -t -f 802-11-wireless.mode connection show <uuid>` reports the
 /// access-point (hotspot) mode. Pure + unit-tested.
 fn mode_is_ap(output: &str) -> bool {
@@ -625,8 +706,8 @@ fn split_terse(line: &str) -> Vec<String> {
 mod tests {
     use super::{
         active_wifi_devices, choose_hotspot_device, mode_is_ap, parse_active_connections,
-        parse_ap_capability, parse_device_status, sanitize_hotspot_error, split_terse,
-        validate_hotspot_password, validate_hotspot_ssid,
+        parse_ap_capability, parse_device_status, parse_dnsmasq_leases, sanitize_hotspot_error,
+        split_terse, validate_hotspot_password, validate_hotspot_ssid,
     };
 
     #[test]
@@ -731,5 +812,21 @@ mod tests {
             choose_hotspot_device(&devices, &active, &["wlan0".to_string()]).unwrap(),
             "wlan0"
         );
+    }
+
+    #[test]
+    fn hotspot_lease_parser_reports_only_current_clients() {
+        let leases = "\
+1800 00:11:22:33:44:55 10.42.0.10 phone *
+900 00:11:22:33:44:66 10.42.0.11 expired *
+0 00:11:22:33:44:77 10.42.0.12 * *
+bad line
+";
+        let clients = parse_dnsmasq_leases(leases, 1000);
+        assert_eq!(clients.len(), 2);
+        assert_eq!(clients[0].ip_address, "10.42.0.10");
+        assert_eq!(clients[0].hostname.as_deref(), Some("phone"));
+        assert_eq!(clients[1].ip_address, "10.42.0.12");
+        assert_eq!(clients[1].hostname, None);
     }
 }

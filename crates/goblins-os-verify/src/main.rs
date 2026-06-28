@@ -8438,6 +8438,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "Passwords are used once to configure the hotspot and are never shown here.",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/hotspot.rs"),
+            "core-hotspot-connected-client-readout",
+            "connected_clients_known",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/hotspot.rs"),
+            "core-hotspot-parses-dnsmasq-leases",
+            "parse_dnsmasq_leases",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/hotspot.rs"),
+            "core-hotspot-networkmanager-lease-path",
+            "/var/lib/NetworkManager/dnsmasq",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-hotspot-connected-client-copy",
+            "Connected devices",
+        ),
+        contains_check(
             root.join("os/bootc/Containerfile"),
             "bootc-installs-firewall-helper",
             "goblins-os-firewall /usr/libexec/goblins-os/goblins-os-firewall",

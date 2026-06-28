@@ -11052,6 +11052,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "Exec=/usr/libexec/goblins-os/goblins-os-today",
         ),
         contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "today-render-screens-uses-installed-binary",
+            "capture goblins-os-today \"Today\"",
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "today-render-screens-light-hook",
+            "122-today.png",
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "today-render-screens-dark-hook",
+            "123-today-dark.png",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-sound-recognition-route",
             "/v1/sound-recognition/status",

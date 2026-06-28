@@ -94,6 +94,7 @@ cleanup_app_windows() {
   pkill -f "/usr/libexec/goblins-os/goblins-os-shell" 2>/dev/null || true
   pkill -f "/usr/libexec/goblins-os/goblins-os-launcher" 2>/dev/null || true
   pkill -f "/usr/libexec/goblins-os/goblins-os-control-center" 2>/dev/null || true
+  pkill -f "/usr/libexec/goblins-os/goblins-os-today" 2>/dev/null || true
   pkill -f "dbus-run-session -- /usr/libexec/goblins-os/" 2>/dev/null || true
   sleep 0.4
 }
@@ -621,12 +622,17 @@ export GOBLINS_OS_RENDER_HOLD_WINDOW=1
 capture goblins-os-control-center "Goblins OS Control Center" 37-control-center.png
 unset GOBLINS_OS_RENDER_HOLD_WINDOW
 
+# The Today panel reads the installed core route and renders real local Date/Clock
+# values plus honest empty states for weather, calendar, and the daily brief.
+capture goblins-os-today "Today" 122-today.png
+
 # Dark theme — the OS is not locked to one scheme. The same surfaces in Dark,
 # proving Light/Dark/Auto themes the whole OS (chrome and the Build Studio).
 export GOBLINS_OS_THEME=dark
 capture goblins-os-shell     "Goblins OS"          09-shell-dark.png
 capture goblins-os-shell     "Goblins OS Text Shortcuts Proof" 121-text-shortcuts-candidate-dark.png --text-shortcuts-proof candidate
 capture goblins-os-shell     "Goblins OS"          10-studio-dark.png --studio
+capture goblins-os-today     "Today"               123-today-dark.png
 # The destructive confirmation in Dark — proving the install flow themes with the
 # rest of the OS (the typed-acknowledgement hero in both schemes).
 clear_first_boot_profile

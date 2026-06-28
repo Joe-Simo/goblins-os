@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Visual Look Up
+Comment=Identify selected regions with a local vision model
+Exec=/usr/libexec/goblins-os/goblins-os-visual-lookup
+Icon=/usr/share/goblins-os/brand/icons/goblins.svg
+Categories=Graphics;
+Keywords=Visual;Look Up;Image;Identify;Vision;AI;Goblins OS;
+NoDisplay=false
+StartupNotify=true
+StartupWMClass=org.goblins.OS.VisualLookup

@@ -58,6 +58,7 @@ const APPLICATIONS: &[&str] = &[
     "org.goblins.OS.Settings.desktop",
     "org.goblins.OS.Shell.desktop",
     "org.goblins.OS.Today.desktop",
+    "org.goblins.OS.VisualLookup.desktop",
 ];
 
 const AUTOSTART: &[&str] = &["org.goblins.OS.Installer.desktop"];
@@ -11424,6 +11425,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/bootc/Containerfile"),
             "bootc-builds-visual-lookup-native-feature",
             "goblins-os-visual-lookup/native-desktop",
+        ),
+        contains_check(
+            root.join("os/applications/org.goblins.OS.VisualLookup.desktop"),
+            "visual-lookup-desktop-entry-name",
+            "Name=Visual Look Up",
+        ),
+        contains_check(
+            root.join("os/applications/org.goblins.OS.VisualLookup.desktop"),
+            "visual-lookup-desktop-launches-helper",
+            "Exec=/usr/libexec/goblins-os/goblins-os-visual-lookup",
+        ),
+        contains_check(
+            root.join("os/applications/org.goblins.OS.VisualLookup.desktop"),
+            "visual-lookup-desktop-visible-menu-entry",
+            "NoDisplay=false",
+        ),
+        contains_check(
+            root.join("os/applications/org.goblins.OS.VisualLookup.desktop"),
+            "visual-lookup-desktop-startup-wm-class",
+            "StartupWMClass=org.goblins.OS.VisualLookup",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-validates-visual-lookup-desktop",
+            "desktop-file-validate /usr/share/applications/org.goblins.OS.VisualLookup.desktop",
         ),
         contains_check(
             root.join("crates/goblins-os-visual-lookup/src/main.rs"),

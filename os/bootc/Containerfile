@@ -326,6 +326,8 @@ COPY os/glib-schemas/ /usr/share/glib-2.0/schemas/
 RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
+    && desktop-file-validate /usr/share/applications/org.goblins.OS.VisualLookup.desktop \
+    && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-visual-lookup$' /usr/share/applications/org.goblins.OS.VisualLookup.desktop \
     && test -f /usr/share/applications/org.gnome.Papers.desktop \
     && test -f /usr/share/applications/org.gnome.Loupe.desktop \
     && test -f /usr/share/applications/mimeapps.list \

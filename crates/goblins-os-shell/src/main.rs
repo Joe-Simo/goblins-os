@@ -380,6 +380,7 @@ enum TextShortcutsProofMode {
     Dismiss,
     Candidate,
     CandidateRender,
+    LiveRuntimeRender,
 }
 
 /// Parse the launcher's deep-link from argv (or the env fallback the launcher can
@@ -420,6 +421,7 @@ fn text_shortcuts_proof_mode(mode: &str) -> Option<TextShortcutsProofMode> {
         "dismiss" => Some(TextShortcutsProofMode::Dismiss),
         "candidate" => Some(TextShortcutsProofMode::Candidate),
         "candidate-render" => Some(TextShortcutsProofMode::CandidateRender),
+        "live-runtime-render" => Some(TextShortcutsProofMode::LiveRuntimeRender),
         _ => None,
     }
 }
@@ -2504,11 +2506,97 @@ fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone, Copy, Debug, Default)]
+struct TextShortcutsLiveLedgerState {
+    focused_field_callback: bool,
+    process_key_event_callback: bool,
+    text_input_v3_commit: bool,
+    render_intent_visible: bool,
+    style_class: bool,
+    font_family: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+impl TextShortcutsLiveLedgerState {
+    fn rendered_accept_bubble(self) -> bool {
+        self.render_intent_visible && self.style_class && self.font_family
+    }
+
+    fn runtime_ready(self) -> bool {
+        self.focused_field_callback && self.process_key_event_callback && self.text_input_v3_commit
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn text_shortcuts_live_ledger_state(path: &str) -> TextShortcutsLiveLedgerState {
+    let Ok(ledger) = std::fs::read_to_string(path) else {
+        return TextShortcutsLiveLedgerState::default();
+    };
+
+    TextShortcutsLiveLedgerState {
+        focused_field_callback: ledger.contains("\"callback\":\"focus-in\""),
+        process_key_event_callback: ledger.contains("\"callback\":\"process-key-event\""),
+        text_input_v3_commit: ledger.contains("\"commit-text\""),
+        render_intent_visible: ledger.contains("\"event\":\"render-intent\"")
+            && ledger.contains("\"action\":\"show-candidate\""),
+        style_class: ledger.contains("\"style_class\":\"gos-text-shortcuts-candidate\""),
+        font_family: ledger.contains("\"font_family\":\"Inter\""),
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn bool_word(value: bool) -> &'static str {
+    if value {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn write_text_shortcuts_live_render_proof(
+    path: &str,
+    entry_text: &str,
+    state: TextShortcutsLiveLedgerState,
+) -> std::io::Result<()> {
+    let entry_text = entry_text.replace(['\n', '\r'], " ");
+    let rendered = state.rendered_accept_bubble();
+    let runtime_ready = state.runtime_ready();
+    std::fs::write(
+        path,
+        format!(
+            concat!(
+                "surface=goblins-textshortcuts-live-ibus-runtime-render\n",
+                "entry_text={entry_text}\n",
+                "focused_field_callback={focused}\n",
+                "process_key_event_callback={process_key}\n",
+                "text_input_v3_commit={commit}\n",
+                "rendered_accept_bubble={rendered}\n",
+                "style_class=gos-text-shortcuts-candidate\n",
+                "font_family=Inter\n",
+                "rendered_bubble_ready_claim={rendered}\n",
+                "live_overlay_claim={live_overlay}\n",
+                "runtime_ready_claim={runtime_ready}\n",
+                "core_readiness_flip=deferred\n",
+            ),
+            entry_text = entry_text,
+            focused = bool_word(state.focused_field_callback),
+            process_key = bool_word(state.process_key_event_callback),
+            commit = bool_word(state.text_input_v3_commit),
+            rendered = bool_word(rendered),
+            live_overlay = bool_word(state.render_intent_visible),
+            runtime_ready = bool_word(runtime_ready),
+        ),
+    )
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<()> {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
     let proof_file = env::var("GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE").ok();
+    let proof_events_file = env::var("GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS").ok();
     if let Some(path) = &proof_file {
         std::fs::write(path, "")?;
     }
@@ -2556,6 +2644,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Dismiss => "Escape-dismiss proof",
             TextShortcutsProofMode::Candidate => "Text Shortcuts candidate",
             TextShortcutsProofMode::CandidateRender => "Text Shortcuts candidate render",
+            TextShortcutsProofMode::LiveRuntimeRender => "Live IBus runtime render proof",
         };
         center.append(&label(title, &["gos-card-title"]));
 
@@ -2568,6 +2657,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Dismiss => gtk::InputPurpose::FreeForm,
             TextShortcutsProofMode::Candidate => gtk::InputPurpose::FreeForm,
             TextShortcutsProofMode::CandidateRender => gtk::InputPurpose::FreeForm,
+            TextShortcutsProofMode::LiveRuntimeRender => gtk::InputPurpose::FreeForm,
         });
         if mode == TextShortcutsProofMode::Password {
             entry.set_visibility(false);
@@ -2579,6 +2669,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Dismiss => "Type omw, then press Escape",
             TextShortcutsProofMode::Candidate => "omw",
             TextShortcutsProofMode::CandidateRender => "omw",
+            TextShortcutsProofMode::LiveRuntimeRender => "Type omw, then .",
         }));
         if matches!(
             mode,
@@ -2592,8 +2683,19 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Candidate | TextShortcutsProofMode::CandidateRender
         ) {
             if let Some(path) = proof_file.clone() {
+                let events_path = proof_events_file.clone();
+                let live_runtime_render = mode == TextShortcutsProofMode::LiveRuntimeRender;
                 entry.connect_changed(move |entry| {
-                    let _ = std::fs::write(&path, entry.text().as_str());
+                    if live_runtime_render {
+                        let state = events_path
+                            .as_deref()
+                            .map(text_shortcuts_live_ledger_state)
+                            .unwrap_or_default();
+                        let _ =
+                            write_text_shortcuts_live_render_proof(&path, entry.text().as_str(), state);
+                    } else {
+                        let _ = std::fs::write(&path, entry.text().as_str());
+                    }
                 });
             }
         }
@@ -2601,7 +2703,9 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         center.append(&entry);
         if matches!(
             mode,
-            TextShortcutsProofMode::Candidate | TextShortcutsProofMode::CandidateRender
+            TextShortcutsProofMode::Candidate
+                | TextShortcutsProofMode::CandidateRender
+                | TextShortcutsProofMode::LiveRuntimeRender
         ) {
             if let Some(path) = proof_file.clone() {
                 let payload = match mode {
@@ -2627,9 +2731,20 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
                         "runtime_ready_claim=false\n",
                     )
                     .to_string(),
+                    TextShortcutsProofMode::LiveRuntimeRender => {
+                        write_text_shortcuts_live_render_proof(
+                            &path,
+                            entry.text().as_str(),
+                            TextShortcutsLiveLedgerState::default(),
+                        )
+                        .ok();
+                        String::new()
+                    }
                     _ => unreachable!("candidate proof payload only exists for candidate modes"),
                 };
-                let _ = std::fs::write(&path, payload);
+                if !payload.is_empty() {
+                    let _ = std::fs::write(&path, payload);
+                }
             }
             let candidate = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             candidate.add_css_class("gos-text-shortcuts-candidate");
@@ -2640,6 +2755,30 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             hint.append(&label("Esc", &["gos-text-shortcuts-keycap"]));
             candidate.append(&spacer());
             candidate.append(&hint);
+            if mode == TextShortcutsProofMode::LiveRuntimeRender {
+                candidate.set_visible(false);
+                let candidate_box = candidate.clone();
+                let entry = entry.clone();
+                let proof_path = proof_file.clone();
+                let events_path = proof_events_file.clone();
+                let _ = gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
+                    let state = events_path
+                        .as_deref()
+                        .map(text_shortcuts_live_ledger_state)
+                        .unwrap_or_default();
+                    if state.rendered_accept_bubble() {
+                        candidate_box.set_visible(true);
+                    }
+                    if let Some(path) = &proof_path {
+                        let _ = write_text_shortcuts_live_render_proof(
+                            path,
+                            entry.text().as_str(),
+                            state,
+                        );
+                    }
+                    gtk::glib::ControlFlow::Continue
+                });
+            }
             center.append(&candidate);
         }
         root.append(&center);
@@ -3272,6 +3411,16 @@ mod tests {
             ),
             Some(StandaloneTarget::TextShortcutsProof(
                 TextShortcutsProofMode::CandidateRender
+            ))
+        );
+        assert_eq!(
+            standalone_target_from_args(
+                ["--text-shortcuts-proof", "live-runtime-render"]
+                    .map(String::from)
+                    .into_iter()
+            ),
+            Some(StandaloneTarget::TextShortcutsProof(
+                TextShortcutsProofMode::LiveRuntimeRender
             ))
         );
         assert_eq!(

@@ -565,8 +565,153 @@ text_shortcuts_candidate_bubble_render_proof(){
   return 0
 }
 text_shortcuts_live_ibus_runtime_render_proof(){
-  proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=live-ibus-runtime-render-not-implemented&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=missing&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
-  return 1
+  local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/goblins-os"
+  local table_file="$config_dir/text-shortcuts.json"
+  local ledger_file=/tmp/gate-text-shortcuts-live-ibus-runtime-render-events.jsonl
+  local render_file=/tmp/gate-text-shortcuts-live-ibus-runtime-render.txt
+  local passthrough_file=/tmp/gate-text-shortcuts-live-ibus-runtime-render-passthrough.txt
+  local password_file=/tmp/gate-text-shortcuts-live-ibus-runtime-render-password.txt
+  local render_pid passthrough_pid password_pid service_state active_engine
+  local normal_actual passthrough_actual password_actual
+  local focused_field_callback process_key_event_callback text_input_v3_commit rendered_accept_bubble
+  local style_class_seen font_family_seen
+
+  mkdir -p "$config_dir"
+  printf '[{"replace":"omw","with":"onmyway"}]\n' > "$table_file"
+  rm -f "$ledger_file" "$render_file" "$passthrough_file" "$password_file"
+  : > "$ledger_file"
+
+  if ! systemctl --user set-environment GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS="$ledger_file" >/dev/null 2>&1; then
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=proof-env&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=missing&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+  systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-live-ibus-service.log 2>&1 || true
+  for _ in $(seq 1 60); do
+    service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
+    [ "$service_state" = "active" ] && break
+    sleep 0.5
+  done
+  if [ "$service_state" != "active" ]; then
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=user-service&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=missing&service=${service_state:-missing}&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+
+  ibus read-cache >/dev/null 2>&1 || true
+  if ! ibus engine goblins-textshortcuts >/dev/null 2>&1; then
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=engine-set&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=missing&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+  active_engine="$(ibus engine 2>/dev/null | tr -d '\n' || true)"
+  if [ "$active_engine" != "goblins-textshortcuts" ]; then
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=engine-active&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=${active_engine:-missing}&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+
+  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$render_file" \
+    GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS="$ledger_file" \
+    "$B/goblins-os-shell" --text-shortcuts-proof live-runtime-render >/tmp/gate-text-shortcuts-live-ibus-runtime-render.log 2>&1 &
+  render_pid=$!
+  sleep 4
+  if ! wtype -- "omw" >/dev/null 2>&1; then
+    kill "$render_pid" 2>/dev/null || true
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=render-wtype&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+  for _ in $(seq 1 40); do
+    if grep -Fxq "focused_field_callback=true" "$render_file" 2>/dev/null \
+      && grep -Fxq "rendered_accept_bubble=true" "$render_file" 2>/dev/null; then
+      break
+    fi
+    sleep 0.25
+  done
+  if ! grep -Fxq "focused_field_callback=true" "$render_file" 2>/dev/null \
+    || ! grep -Fxq "rendered_accept_bubble=true" "$render_file" 2>/dev/null; then
+    kill "$render_pid" 2>/dev/null || true
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=render-ledger&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+  sig 32-text-shortcuts-live-ibus-runtime-render
+  if ! wtype -- "." >/dev/null 2>&1; then
+    kill "$render_pid" 2>/dev/null || true
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=normal-boundary-wtype&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=true&text_input_v3_commit=false&rendered_accept_bubble=true&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=true&live_overlay_claim=true&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+  for _ in $(seq 1 40); do
+    normal_actual="$(grep -E '^entry_text=' "$render_file" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
+    [ "$normal_actual" = "onmyway." ] && break
+    sleep 0.25
+  done
+  kill "$render_pid" 2>/dev/null || true
+  wait "$render_pid" 2>/dev/null || true
+  if [ "$normal_actual" != "onmyway." ]; then
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=normal-readback&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=${normal_actual:-missing}&passthrough_actual=missing&password_refusal=false&focused_field_callback=true&text_input_v3_commit=false&rendered_accept_bubble=true&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=true&live_overlay_claim=true&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+
+  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$passthrough_file" "$B/goblins-os-shell" --text-shortcuts-proof passthrough >/tmp/gate-text-shortcuts-live-ibus-passthrough.log 2>&1 &
+  passthrough_pid=$!
+  sleep 4
+  if ! wtype -- "hello." >/dev/null 2>&1; then
+    kill "$passthrough_pid" 2>/dev/null || true
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=passthrough-wtype&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=onmyway.&passthrough_actual=missing&password_refusal=false&focused_field_callback=true&text_input_v3_commit=false&rendered_accept_bubble=true&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=true&live_overlay_claim=true&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+  for _ in $(seq 1 20); do
+    passthrough_actual="$(cat "$passthrough_file" 2>/dev/null || true)"
+    [ "$passthrough_actual" = "hello." ] && break
+    sleep 0.5
+  done
+  kill "$passthrough_pid" 2>/dev/null || true
+  wait "$passthrough_pid" 2>/dev/null || true
+  if [ "$passthrough_actual" != "hello." ]; then
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=passthrough-readback&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=onmyway.&passthrough_actual=${passthrough_actual:-missing}&password_refusal=false&focused_field_callback=true&text_input_v3_commit=false&rendered_accept_bubble=true&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=true&live_overlay_claim=true&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+
+  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$password_file" "$B/goblins-os-shell" --text-shortcuts-proof password >/tmp/gate-text-shortcuts-live-ibus-password.log 2>&1 &
+  password_pid=$!
+  sleep 4
+  if ! wtype -- "omw." >/dev/null 2>&1; then
+    kill "$password_pid" 2>/dev/null || true
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=password-wtype&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=onmyway.&passthrough_actual=hello.&password_refusal=false&focused_field_callback=true&text_input_v3_commit=false&rendered_accept_bubble=true&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=true&live_overlay_claim=true&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+  for _ in $(seq 1 20); do
+    password_actual="$(cat "$password_file" 2>/dev/null || true)"
+    [ "$password_actual" = "omw." ] && break
+    sleep 0.5
+  done
+  kill "$password_pid" 2>/dev/null || true
+  wait "$password_pid" 2>/dev/null || true
+  if [ "$password_actual" != "omw." ]; then
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=password-readback&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=onmyway.&passthrough_actual=hello.&password_refusal=false&focused_field_callback=true&text_input_v3_commit=false&rendered_accept_bubble=true&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=true&live_overlay_claim=true&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+
+  focused_field_callback=false
+  process_key_event_callback=false
+  text_input_v3_commit=false
+  rendered_accept_bubble=false
+  style_class_seen=false
+  font_family_seen=false
+  grep -Fq '"callback":"focus-in"' "$ledger_file" && focused_field_callback=true
+  grep -Fq '"callback":"process-key-event"' "$ledger_file" && process_key_event_callback=true
+  grep -Fq '"commit-text"' "$ledger_file" && text_input_v3_commit=true
+  grep -Fq '"action":"show-candidate"' "$ledger_file" && rendered_accept_bubble=true
+  grep -Fq '"style_class":"gos-text-shortcuts-candidate"' "$ledger_file" && style_class_seen=true
+  grep -Fq '"font_family":"Inter"' "$ledger_file" && font_family_seen=true
+  if [ "$focused_field_callback" != "true" ] \
+    || [ "$process_key_event_callback" != "true" ] \
+    || [ "$text_input_v3_commit" != "true" ] \
+    || [ "$rendered_accept_bubble" != "true" ] \
+    || [ "$style_class_seen" != "true" ] \
+    || [ "$font_family_seen" != "true" ]; then
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=ledger-final&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=onmyway.&passthrough_actual=hello.&password_refusal=true&focused_field_callback=$focused_field_callback&text_input_v3_commit=$text_input_v3_commit&rendered_accept_bubble=$rendered_accept_bubble&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=$rendered_accept_bubble&live_overlay_claim=$rendered_accept_bubble&runtime_ready_claim=false&core_readiness_flip=deferred"
+    return 1
+  fi
+
+  proof_text_shortcuts_live_ibus_runtime_render "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=goblins-textshortcuts&normal_actual=onmyway.&passthrough_actual=hello.&password_refusal=true&focused_field_callback=true&text_input_v3_commit=true&rendered_accept_bubble=true&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=true&live_overlay_claim=true&runtime_ready_claim=true&core_readiness_flip=deferred"
+  return 0
 }
 keyboard_shortcuts_roundtrip_proof(){
   local shortcut_set_file=/tmp/gate-keyboard-shortcut-set.json

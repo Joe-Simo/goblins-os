@@ -5565,6 +5565,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-drives-textshortcuts-live-runtime-render-proof-app",
+            "--text-shortcuts-proof live-runtime-render",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-propagates-textshortcuts-live-proof-ledger-env",
+            "systemctl --user set-environment GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-captures-textshortcuts-candidate-bubble-render-screenshot",
             "31-text-shortcuts-candidate-bubble-render",
         ),
@@ -12250,6 +12260,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-shell/src/main.rs"),
             "shell-textshortcuts-proof-candidate-render-cli",
             "candidate-render",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-live-runtime-render-mode",
+            "TextShortcutsProofMode::LiveRuntimeRender",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-live-runtime-render-cli",
+            "live-runtime-render",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-live-ledger-env",
+            "GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-live-render-marker",
+            "rendered_accept_bubble={rendered}",
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),

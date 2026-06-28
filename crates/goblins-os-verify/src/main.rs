@@ -9441,6 +9441,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "Sound Recognition listener is installed but not ready.",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-decision-window",
+            "evaluate_sound_recognition_window",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-thresholds-detection",
+            "sound_decision_threshold",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-builds-notification-payload",
+            "sound_recognition_notification_payload",
+        ),
+        contains_check(
+            root.join("os/sound-recognition/goblins-os-sound-listener"),
+            "sound-recognition-listener-decision-contract-ready",
+            "\"decision_contract_ready\": True",
+        ),
+        contains_check(
+            root.join("os/sound-recognition/goblins-os-sound-listener"),
+            "sound-recognition-listener-decision-self-test",
+            "--decision-self-test",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "sound-recognition-listener-image-decision-self-test",
+            "goblins-os-sound-listener --decision-self-test",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-live-captions-route",
             "/v1/live-captions/status",

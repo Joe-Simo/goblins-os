@@ -273,6 +273,7 @@ RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && test -x /usr/libexec/goblins-os/goblins-os-sound-listener \
     && python3 -m py_compile /usr/libexec/goblins-os/goblins-os-sound-listener \
     && /usr/libexec/goblins-os/goblins-os-sound-listener --self-test \
+    && /usr/libexec/goblins-os/goblins-os-sound-listener --decision-self-test \
     && /usr/libexec/goblins-os/goblins-os-sound-listener --capability-check | grep -q '"ready": false' \
     && for launcher_desktop in \
       /usr/share/applications/org.goblins.OS.Games.Heroic.desktop \

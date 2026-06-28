@@ -28,6 +28,42 @@ DETAIL = (
     "still pending model provisioning and CI/qemu proof. "
     "No microphone audio is captured by this listener yet."
 )
+RELIABILITY_DETAIL = (
+    "This recognizes sounds approximately and on-device only. Do not rely on it "
+    "in emergencies or high-risk situations."
+)
+DEFAULT_DEBOUNCE_MS = 30_000
+
+SOUND_CATEGORIES: dict[str, dict[str, Any]] = {
+    "smoke-fire-alarm": {
+        "name": "Smoke or fire alarm",
+        "audioset_classes": ["Smoke detector, smoke alarm", "Fire alarm"],
+    },
+    "siren": {
+        "name": "Siren",
+        "audioset_classes": ["Siren", "Emergency vehicle"],
+    },
+    "doorbell": {"name": "Doorbell", "audioset_classes": ["Doorbell"]},
+    "knock": {"name": "Knock", "audioset_classes": ["Knock"]},
+    "baby-crying": {
+        "name": "Baby crying",
+        "audioset_classes": ["Baby cry, infant cry"],
+    },
+    "dog-bark": {"name": "Dog bark", "audioset_classes": ["Bark"]},
+    "car-horn": {
+        "name": "Car horn",
+        "audioset_classes": ["Vehicle horn, car horn, honking"],
+    },
+    "appliance-beep": {
+        "name": "Appliance beep",
+        "audioset_classes": ["Beep, bleep", "Microwave oven", "Alarm clock"],
+    },
+    "running-water": {
+        "name": "Running water",
+        "audioset_classes": ["Water", "Liquid", "Pour", "Splash, splatter"],
+    },
+    "shouting": {"name": "Shouting", "audioset_classes": ["Shout", "Yell"]},
+}
 
 
 def _model_dir() -> Path:
@@ -54,6 +90,113 @@ def _first_model(path: Path) -> str | None:
     return str(models[0]) if models else None
 
 
+def _normalize_audioset_label(value: str) -> str:
+    return "".join(ch.lower() for ch in value if ch.isascii() and ch.isalnum())
+
+
+def _normalize_sensitivity(value: str) -> str:
+    return value if value in {"low", "medium", "high"} else "medium"
+
+
+def _clamp_confidence(value: float) -> float:
+    if value != value:
+        return 0.70
+    return round(min(0.95, max(0.30, value)), 2)
+
+
+def decision_threshold(sensitivity: str, min_confidence: float) -> float:
+    base = _clamp_confidence(min_confidence)
+    normalized = _normalize_sensitivity(sensitivity)
+    if normalized == "low":
+        adjusted = base + 0.10
+    elif normalized == "high":
+        adjusted = base - 0.10
+    else:
+        adjusted = base
+    return _clamp_confidence(adjusted)
+
+
+def _category_matches(category_id: str, audioset_class: str) -> bool:
+    category = SOUND_CATEGORIES.get(category_id)
+    if category is None:
+        return False
+    needle = _normalize_audioset_label(audioset_class)
+    if not needle:
+        return False
+    for candidate in category["audioset_classes"]:
+        normalized = _normalize_audioset_label(candidate)
+        if normalized == needle or needle in normalized or normalized in needle:
+            return True
+    return False
+
+
+def evaluate_detection_window(
+    scores: list[dict[str, Any]],
+    *,
+    enabled_sound_ids: list[str],
+    sensitivity: str,
+    min_confidence: float,
+    now_ms: int,
+    last_alerts: dict[str, int] | None = None,
+    debounce_ms: int = DEFAULT_DEBOUNCE_MS,
+    alert_sound: bool = False,
+    alert_flash: bool = False,
+) -> dict[str, Any]:
+    enabled = [
+        sound_id for sound_id in enabled_sound_ids if sound_id in SOUND_CATEGORIES
+    ]
+    if not enabled:
+        return {"alert": None, "suppressed_reason": "no-enabled-sounds"}
+
+    threshold = decision_threshold(sensitivity, min_confidence)
+    best: tuple[str, dict[str, Any]] | None = None
+    for score in scores:
+        try:
+            audioset_class = str(score["audioset_class"])
+            confidence = float(score["confidence"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if confidence != confidence or confidence < threshold:
+            continue
+        for sound_id in enabled:
+            if _category_matches(sound_id, audioset_class):
+                if best is None or confidence > float(best[1]["confidence"]):
+                    best = (
+                        sound_id,
+                        {
+                            "audioset_class": audioset_class,
+                            "confidence": confidence,
+                        },
+                    )
+
+    if best is None:
+        return {"alert": None, "suppressed_reason": "below-threshold-or-unmapped"}
+
+    sound_id, score = best
+    if last_alerts and now_ms - int(last_alerts.get(sound_id, -debounce_ms)) < debounce_ms:
+        return {"alert": None, "suppressed_reason": "debounced"}
+
+    category = SOUND_CATEGORIES[sound_id]
+    confidence = max(0.0, min(1.0, float(score["confidence"])))
+    percent = round(confidence * 100)
+    return {
+        "alert": {
+            "category_id": sound_id,
+            "category_name": category["name"],
+            "audioset_class": score["audioset_class"],
+            "confidence": round(confidence, 2),
+            "notification_title": f"Sound recognized: {category['name']}",
+            "notification_body": (
+                f"{category['name']} matched \"{score['audioset_class']}\" "
+                f"at {percent}% confidence. {RELIABILITY_DETAIL}"
+            ),
+            "alert_sound": alert_sound,
+            "alert_flash": alert_flash,
+        },
+        "suppressed_reason": None,
+    }
+
+
 def capability_payload() -> dict[str, Any]:
     capture = _capture_bin()
     return {
@@ -67,17 +210,57 @@ def capability_payload() -> dict[str, Any]:
         "model": _first_model(_model_dir()),
         "capture_driver": shutil.which(capture),
         "capture_driver_name": capture,
+        "decision_contract_ready": True,
         "runtime_ready_claim": False,
     }
+
+
+def run_decision_self_test() -> None:
+    assert decision_threshold("medium", 0.70) == 0.70
+    assert decision_threshold("high", 0.70) == 0.60
+    assert decision_threshold("low", 0.70) == 0.80
+    decision = evaluate_detection_window(
+        [
+            {
+                "audioset_class": "Vehicle horn, car horn, honking",
+                "confidence": 0.99,
+            },
+            {"audioset_class": "Doorbell", "confidence": 0.91},
+        ],
+        enabled_sound_ids=["doorbell", "siren"],
+        sensitivity="medium",
+        min_confidence=0.70,
+        now_ms=60_000,
+        alert_sound=True,
+        alert_flash=True,
+    )
+    alert = decision["alert"]
+    assert alert is not None
+    assert alert["category_id"] == "doorbell"
+    assert alert["alert_sound"] is True
+    assert alert["alert_flash"] is True
+    assert "Do not rely on it in emergencies" in alert["notification_body"]
+
+    suppressed = evaluate_detection_window(
+        [{"audioset_class": "Baby cry, infant cry", "confidence": 0.96}],
+        enabled_sound_ids=["baby-crying"],
+        sensitivity="medium",
+        min_confidence=0.70,
+        now_ms=60_000,
+        last_alerts={"baby-crying": 45_000},
+    )
+    assert suppressed == {"alert": None, "suppressed_reason": "debounced"}
 
 
 def run_self_test() -> None:
     payload = capability_payload()
     assert payload["ready"] is False
     assert payload["runtime_ready_claim"] is False
+    assert payload["decision_contract_ready"] is True
     assert "No microphone audio is captured" in payload["detail"]
     assert payload["capture_driver_name"]
     assert payload["component"].endswith("goblins-os-sound-listener")
+    run_decision_self_test()
 
 
 def main() -> int:
@@ -85,8 +268,14 @@ def main() -> int:
         description="Goblins OS Sound Recognition listener boundary"
     )
     parser.add_argument("--capability-check", action="store_true")
+    parser.add_argument("--decision-self-test", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+
+    if args.decision_self_test:
+        run_decision_self_test()
+        print("goblins_sound_listener_decision_selftest ok")
+        return 0
 
     if args.self_test:
         run_self_test()

@@ -121,6 +121,7 @@ pub struct SoundRecognitionStatus {
     alert_sound: bool,
     alert_flash: bool,
     notify_in_lock_screen: bool,
+    decision_engine: Capability,
     classifier_model: Capability,
     listener: Capability,
     capture: Capability,
@@ -206,6 +207,48 @@ struct ListenerCapabilityPayload {
     detail: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct ClassifierScore<'a> {
+    audioset_class: &'a str,
+    confidence: f64,
+}
+
+#[derive(Clone, Copy)]
+struct SoundRecognitionLastAlert<'a> {
+    id: &'a str,
+    last_ms: u64,
+}
+
+#[derive(Clone, Copy)]
+struct SoundRecognitionDecisionContext<'a> {
+    enabled_sound_ids: &'a [String],
+    sensitivity: &'a str,
+    min_confidence: f64,
+    alert_sound: bool,
+    alert_flash: bool,
+    now_ms: u64,
+    last_alerts: &'a [SoundRecognitionLastAlert<'a>],
+    debounce_ms: u64,
+}
+
+#[derive(Debug, PartialEq)]
+struct SoundRecognitionAlert {
+    category_id: &'static str,
+    category_name: &'static str,
+    audioset_class: String,
+    confidence: f64,
+    notification_title: String,
+    notification_body: String,
+    alert_sound: bool,
+    alert_flash: bool,
+}
+
+#[derive(Debug, PartialEq)]
+enum SoundRecognitionDecision {
+    Alert(SoundRecognitionAlert),
+    Suppressed { reason: &'static str },
+}
+
 enum SoundRecognitionPreferenceValue {
     Bool(bool),
     Sensitivity(&'static str),
@@ -254,7 +297,9 @@ fn build_status() -> SoundRecognitionStatus {
     let classifier_model = classifier_model_capability();
     let listener = listener_capability();
     let capture = capture_capability();
-    let available = classifier_model.ready && listener.ready && capture.ready;
+    let decision_engine = decision_engine_capability();
+    let available =
+        decision_engine.ready && classifier_model.ready && listener.ready && capture.ready;
     let active = enabled && available && !enabled_sounds.is_empty();
     let sounds = SOUND_CATEGORIES
         .iter()
@@ -280,6 +325,7 @@ fn build_status() -> SoundRecognitionStatus {
         alert_sound,
         alert_flash,
         notify_in_lock_screen,
+        decision_engine,
         classifier_model,
         listener,
         capture,
@@ -607,6 +653,106 @@ fn normalize_enabled_sounds(ids: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn evaluate_sound_recognition_window(
+    scores: &[ClassifierScore<'_>],
+    context: &SoundRecognitionDecisionContext<'_>,
+) -> SoundRecognitionDecision {
+    let enabled_sounds = normalize_enabled_sounds(context.enabled_sound_ids.to_vec());
+    if enabled_sounds.is_empty() {
+        return SoundRecognitionDecision::Suppressed {
+            reason: "no-enabled-sounds",
+        };
+    }
+
+    let threshold = sound_decision_threshold(context.sensitivity, context.min_confidence);
+    let Some((category, score)) = scores
+        .iter()
+        .filter(|score| score.confidence.is_finite())
+        .filter(|score| score.confidence >= threshold)
+        .filter_map(|score| {
+            let category = SOUND_CATEGORIES.iter().find(|category| {
+                enabled_sounds.iter().any(|id| id == category.id)
+                    && audioset_class_matches(category, score.audioset_class)
+            })?;
+            Some((category, score))
+        })
+        .max_by(|(_, left), (_, right)| left.confidence.total_cmp(&right.confidence))
+    else {
+        return SoundRecognitionDecision::Suppressed {
+            reason: "below-threshold-or-unmapped",
+        };
+    };
+
+    if context.last_alerts.iter().any(|last| {
+        last.id == category.id && context.now_ms.saturating_sub(last.last_ms) < context.debounce_ms
+    }) {
+        return SoundRecognitionDecision::Suppressed {
+            reason: "debounced",
+        };
+    }
+
+    SoundRecognitionDecision::Alert(sound_recognition_notification_payload(
+        category,
+        score.audioset_class,
+        score.confidence,
+        context.alert_sound,
+        context.alert_flash,
+    ))
+}
+
+fn sound_recognition_notification_payload(
+    category: &'static SoundCategory,
+    audioset_class: &str,
+    confidence: f64,
+    alert_sound: bool,
+    alert_flash: bool,
+) -> SoundRecognitionAlert {
+    SoundRecognitionAlert {
+        category_id: category.id,
+        category_name: category.name,
+        audioset_class: audioset_class.to_string(),
+        confidence: (confidence.clamp(0.0, 1.0) * 100.0).round() / 100.0,
+        notification_title: format!("Sound recognized: {}", category.name),
+        notification_body: format!(
+            "{} matched \"{}\" at {}% confidence. {RELIABILITY_DETAIL}",
+            category.name,
+            audioset_class,
+            (confidence.clamp(0.0, 1.0) * 100.0).round() as u32
+        ),
+        alert_sound,
+        alert_flash,
+    }
+}
+
+fn audioset_class_matches(category: &SoundCategory, audioset_class: &str) -> bool {
+    let needle = normalize_audioset_label(audioset_class);
+    if needle.is_empty() {
+        return false;
+    }
+    category.audioset_classes.iter().any(|candidate| {
+        let candidate = normalize_audioset_label(candidate);
+        candidate == needle || candidate.contains(&needle) || needle.contains(&candidate)
+    })
+}
+
+fn normalize_audioset_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn sound_decision_threshold(sensitivity: &str, min_confidence: f64) -> f64 {
+    let base = clamp_min_confidence(min_confidence);
+    let adjusted = match normalize_sensitivity(sensitivity) {
+        "low" => base + 0.10,
+        "high" => base - 0.10,
+        _ => base,
+    };
+    clamp_min_confidence(adjusted)
+}
+
 fn sound_category_by_id(id: &str) -> Option<&'static SoundCategory> {
     SOUND_CATEGORIES.iter().find(|category| category.id == id)
 }
@@ -640,6 +786,42 @@ fn classifier_model_capability() -> Capability {
                 "No recognition model in {} — add the classifier model to enable Sound Recognition.",
                 model_dir().display()
             ),
+        },
+    }
+}
+
+fn decision_engine_capability() -> Capability {
+    let enabled = vec!["doorbell".to_string()];
+    let context = SoundRecognitionDecisionContext {
+        enabled_sound_ids: &enabled,
+        sensitivity: "medium",
+        min_confidence: 0.70,
+        alert_sound: false,
+        alert_flash: false,
+        now_ms: 30_000,
+        last_alerts: &[],
+        debounce_ms: 30_000,
+    };
+    let ready = matches!(
+        evaluate_sound_recognition_window(
+            &[ClassifierScore {
+                audioset_class: "Doorbell",
+                confidence: 0.91,
+            }],
+            &context,
+        ),
+        SoundRecognitionDecision::Alert(SoundRecognitionAlert {
+            category_id: "doorbell",
+            ..
+        })
+    );
+    Capability {
+        ready,
+        component: "goblins-os-core sound-recognition decision contract".to_string(),
+        detail: if ready {
+            "Classifier score mapping, thresholding, debounce, and notification payload construction are host-tested; live microphone capture is still gated.".to_string()
+        } else {
+            "Sound Recognition decision contract could not pass its local self-check.".to_string()
         },
     }
 }
@@ -830,9 +1012,12 @@ fn gsettings(args: &[&str]) -> Result<String, ()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_min_confidence, encode_sound_ids, normalize_enabled_sounds, normalize_sensitivity,
-        parse_gsettings_strv, parse_listener_capability, parse_sound_recognition_value,
-        sound_recognition_target_spec, toggled_sound_ids, SoundCategoryStatus,
+        audioset_class_matches, clamp_min_confidence, encode_sound_ids,
+        evaluate_sound_recognition_window, normalize_audioset_label, normalize_enabled_sounds,
+        normalize_sensitivity, parse_gsettings_strv, parse_listener_capability,
+        parse_sound_recognition_value, sound_decision_threshold, sound_recognition_target_spec,
+        toggled_sound_ids, ClassifierScore, SoundCategoryStatus, SoundRecognitionDecision,
+        SoundRecognitionDecisionContext, SoundRecognitionLastAlert,
         SoundRecognitionPreferenceTarget, SoundRecognitionPreferenceValue, SoundRecognitionStatus,
         SOUND_CATEGORIES,
     };
@@ -950,6 +1135,131 @@ mod tests {
     }
 
     #[test]
+    fn classifier_output_maps_only_to_enabled_sound_categories() {
+        let enabled = vec!["doorbell".to_string(), "siren".to_string()];
+        let context = SoundRecognitionDecisionContext {
+            enabled_sound_ids: &enabled,
+            sensitivity: "medium",
+            min_confidence: 0.70,
+            alert_sound: true,
+            alert_flash: true,
+            now_ms: 60_000,
+            last_alerts: &[],
+            debounce_ms: 30_000,
+        };
+
+        let decision = evaluate_sound_recognition_window(
+            &[
+                ClassifierScore {
+                    audioset_class: "Vehicle horn, car horn, honking",
+                    confidence: 0.99,
+                },
+                ClassifierScore {
+                    audioset_class: "Doorbell",
+                    confidence: 0.91,
+                },
+            ],
+            &context,
+        );
+
+        let SoundRecognitionDecision::Alert(alert) = decision else {
+            panic!("expected enabled doorbell alert");
+        };
+        assert_eq!(alert.category_id, "doorbell");
+        assert_eq!(alert.category_name, "Doorbell");
+        assert!(alert.notification_title.contains("Sound recognized"));
+        assert!(alert
+            .notification_body
+            .contains("Do not rely on it in emergencies"));
+        assert!(alert.alert_sound);
+        assert!(alert.alert_flash);
+    }
+
+    #[test]
+    fn classifier_output_respects_threshold_and_sensitivity() {
+        assert_eq!(sound_decision_threshold("medium", 0.70), 0.70);
+        assert_eq!(sound_decision_threshold("high", 0.70), 0.60);
+        assert_eq!(sound_decision_threshold("low", 0.70), 0.80);
+
+        let enabled = vec!["siren".to_string()];
+        let high_sensitivity = SoundRecognitionDecisionContext {
+            enabled_sound_ids: &enabled,
+            sensitivity: "high",
+            min_confidence: 0.70,
+            alert_sound: false,
+            alert_flash: false,
+            now_ms: 60_000,
+            last_alerts: &[],
+            debounce_ms: 30_000,
+        };
+        let low_sensitivity = SoundRecognitionDecisionContext {
+            sensitivity: "low",
+            ..high_sensitivity
+        };
+        let scores = [ClassifierScore {
+            audioset_class: "Siren",
+            confidence: 0.65,
+        }];
+
+        assert!(matches!(
+            evaluate_sound_recognition_window(&scores, &high_sensitivity),
+            SoundRecognitionDecision::Alert(_)
+        ));
+        assert_eq!(
+            evaluate_sound_recognition_window(&scores, &low_sensitivity),
+            SoundRecognitionDecision::Suppressed {
+                reason: "below-threshold-or-unmapped"
+            }
+        );
+    }
+
+    #[test]
+    fn classifier_output_debounces_repeated_alerts() {
+        let enabled = vec!["baby-crying".to_string()];
+        let last_alerts = [SoundRecognitionLastAlert {
+            id: "baby-crying",
+            last_ms: 45_000,
+        }];
+        let context = SoundRecognitionDecisionContext {
+            enabled_sound_ids: &enabled,
+            sensitivity: "medium",
+            min_confidence: 0.70,
+            alert_sound: false,
+            alert_flash: false,
+            now_ms: 60_000,
+            last_alerts: &last_alerts,
+            debounce_ms: 30_000,
+        };
+
+        assert_eq!(
+            evaluate_sound_recognition_window(
+                &[ClassifierScore {
+                    audioset_class: "Baby cry, infant cry",
+                    confidence: 0.96,
+                }],
+                &context,
+            ),
+            SoundRecognitionDecision::Suppressed {
+                reason: "debounced"
+            }
+        );
+    }
+
+    #[test]
+    fn audioset_label_matching_is_stable_for_classifier_variants() {
+        let car_horn = SOUND_CATEGORIES
+            .iter()
+            .find(|category| category.id == "car-horn")
+            .unwrap();
+        assert_eq!(
+            normalize_audioset_label("Vehicle horn, car horn, honking"),
+            "vehiclehorncarhornhonking"
+        );
+        assert!(audioset_class_matches(car_horn, "car horn"));
+        assert!(!audioset_class_matches(car_horn, "Doorbell"));
+    }
+
+    #[test]
     fn listener_capability_check_preserves_not_ready_state() {
         let capability = parse_listener_capability(
             br#"{"ready":false,"component":"/usr/libexec/goblins-os/goblins-os-sound-listener","detail":"installed, model pending","runtime_ready_claim":false}"#,
@@ -986,6 +1296,11 @@ mod tests {
             alert_sound: false,
             alert_flash: false,
             notify_in_lock_screen: false,
+            decision_engine: super::Capability {
+                ready: true,
+                component: "goblins-os-core sound-recognition decision contract".to_string(),
+                detail: "ready".to_string(),
+            },
             classifier_model: super::Capability {
                 ready: false,
                 component: "/var/lib/goblins-os/sound-recognition".to_string(),
@@ -1014,6 +1329,7 @@ mod tests {
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"offline_safe\":true"));
+        assert!(json.contains("\"decision_engine\""));
         assert!(json.contains("\"classifier_model\""));
         assert!(json.contains("\"doorbell\""));
         assert!(json.contains("Do not rely on it in emergencies"));

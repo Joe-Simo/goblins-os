@@ -9067,6 +9067,46 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "settings-focus-controls-source-gated",
             "append_focus_settings",
         ),
+        contains_check(
+            root.join("crates/goblins-os-control-center/src/main.rs"),
+            "control-center-fetches-focus-status-route",
+            "/v1/focus/status",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-control-center/src/main.rs"),
+            "control-center-focus-has-no-activate-write",
+            "/v1/focus/activate",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-control-center/src/main.rs"),
+            "control-center-focus-has-no-deactivate-write",
+            "/v1/focus/deactivate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-control-center/src/main.rs"),
+            "control-center-focus-opens-notifications-settings",
+            "--panel=notifications",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-control-center/src/main.rs"),
+            "control-center-focus-uses-core-reported-modes",
+            "status.modes",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-control-center/src/main.rs"),
+            "control-center-focus-no-modes-read-only-copy",
+            "No Focus modes are configured yet.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-control-center/src/main.rs"),
+            "control-center-focus-degrades-without-core",
+            "Focus status is unavailable because Goblins OS core did not respond.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-control-center/src/main.rs"),
+            "control-center-focus-tile-source-gated",
+            "focus_tile_copy",
+        ),
         file_check(root, "os/focus/goblins-os-focus-tick"),
         file_check(root, "os/systemd-user/org.goblins.OS.FocusTick.service"),
         file_check(root, "os/systemd-user/org.goblins.OS.FocusTick.timer"),

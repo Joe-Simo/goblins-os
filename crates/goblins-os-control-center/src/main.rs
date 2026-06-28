@@ -30,6 +30,111 @@ impl ControlConfig {
     }
 }
 
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
+struct FocusStatus {
+    available: bool,
+    active_mode: String,
+    scheduled_mode: Option<String>,
+    armed_by_schedule: bool,
+    modes: Vec<FocusMode>,
+    detail: String,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
+struct FocusMode {
+    id: String,
+    name: String,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FocusTileCopy {
+    state: String,
+    detail: String,
+    active: bool,
+    opens_settings: bool,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn focus_tile_copy(status: Option<&FocusStatus>) -> FocusTileCopy {
+    let Some(status) = status else {
+        return FocusTileCopy {
+            state: "Unavailable".to_string(),
+            detail: "Focus status is unavailable because Goblins OS core did not respond."
+                .to_string(),
+            active: false,
+            opens_settings: false,
+        };
+    };
+
+    if !status.available {
+        return FocusTileCopy {
+            state: "Unavailable".to_string(),
+            detail: if status.detail.trim().is_empty() {
+                "Focus is unavailable in this session.".to_string()
+            } else {
+                status.detail.clone()
+            },
+            active: false,
+            opens_settings: false,
+        };
+    }
+
+    let active_mode = status.active_mode.trim();
+    if active_mode.is_empty() {
+        let detail = if status.modes.is_empty() {
+            "Focus is off. No Focus modes are configured yet.".to_string()
+        } else if let Some(name) = status
+            .scheduled_mode
+            .as_deref()
+            .and_then(|id| focus_mode_name(&status.modes, id))
+        {
+            format!("Focus is off. {name} matches the current schedule.")
+        } else if status.detail.trim().is_empty() {
+            "Focus is off.".to_string()
+        } else {
+            status.detail.clone()
+        };
+        return FocusTileCopy {
+            state: "Off".to_string(),
+            detail: format!("{detail} Open Settings to manage Focus."),
+            active: false,
+            opens_settings: true,
+        };
+    }
+
+    match focus_mode_name(&status.modes, active_mode) {
+        Some(name) => FocusTileCopy {
+            state: name.to_string(),
+            detail: if status.armed_by_schedule {
+                format!("{name} is active from a schedule. Open Settings to change Focus.")
+            } else {
+                format!("{name} is active. Open Settings to change Focus.")
+            },
+            active: true,
+            opens_settings: true,
+        },
+        None => FocusTileCopy {
+            state: "Unknown mode".to_string(),
+            detail: format!(
+                "Focus reports active mode '{active_mode}', but that mode is not in the configured Focus list."
+            ),
+            active: true,
+            opens_settings: true,
+        },
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn focus_mode_name<'a>(modes: &'a [FocusMode], id: &str) -> Option<&'a str> {
+    modes
+        .iter()
+        .find(|mode| mode.id == id)
+        .map(|mode| mode.name.as_str())
+}
+
 fn main() -> ControlResult<()> {
     run_control_center(ControlConfig::from_env())
 }
@@ -62,7 +167,7 @@ mod native {
     use gtk4 as gtk;
     use serde::Deserialize;
 
-    use super::{ControlConfig, ControlResult};
+    use super::{focus_tile_copy, ControlConfig, ControlResult, FocusStatus};
 
     const APP_ID: &str = "org.goblins.OS.ControlCenter";
     const MAX_BODY_BYTES: u64 = 256 * 1024;
@@ -186,6 +291,10 @@ mod native {
         tiles.append(&wifi_tile());
         tiles.append(&scheme_tile());
         card.append(&tiles);
+
+        // ── Focus ──
+        card.append(&section("Focus"));
+        card.append(&focus_tile(&config.core_url, &window));
 
         // ── AI mode ──
         card.append(&section("AI Mode"));
@@ -439,6 +548,35 @@ mod native {
                         tile.remove_css_class("is-on");
                     }
                 }
+            }
+        });
+        tile
+    }
+
+    fn focus_tile(core_url: &str, window: &gtk::ApplicationWindow) -> gtk::Button {
+        let status = focus_status(core_url);
+        let copy = focus_tile_copy(status.as_ref());
+        let (tile, _state) = make_tile(
+            "preferences-system-notifications-symbolic",
+            "Focus",
+            &copy.state,
+            copy.active,
+        );
+        tile.set_hexpand(true);
+        tile.set_halign(gtk::Align::Fill);
+        update_tile_accessibility(&tile, "Focus", &copy.detail);
+        if !copy.opens_settings {
+            tile.set_sensitive(false);
+            return tile;
+        }
+
+        let weak = window.downgrade();
+        tile.connect_clicked(move |_| {
+            let _ = Command::new("/usr/libexec/goblins-os/goblins-os-settings")
+                .arg("--panel=notifications")
+                .spawn();
+            if let Some(win) = weak.upgrade() {
+                win.close();
             }
         });
         tile
@@ -864,6 +1002,10 @@ mod native {
             })
     }
 
+    fn focus_status(core_url: &str) -> Option<FocusStatus> {
+        get_json(core_url, "/v1/focus/status")
+    }
+
     fn get_json<T: for<'de> Deserialize<'de>>(core_url: &str, path: &str) -> Option<T> {
         let (status, body) = http_request(core_url, "GET", path, None).ok()?;
         if !(200..=299).contains(&status) {
@@ -948,6 +1090,9 @@ mod tests {
         assert!(source.contains("Volume"));
         assert!(source.contains("percent_description"));
         assert!(source.contains("Display brightness"));
+        assert!(source.contains("/v1/focus/status"));
+        assert!(source.contains("--panel=notifications"));
+        assert!(source.contains("focus_tile_copy"));
         assert!(source.contains("Ask Goblin…"));
         assert!(source.contains("Open Settings and close Control Center"));
         let legacy_render_env = ["GOBLINS", "OS", "CONTROL", "CENTER", "DEMO"].join("_");
@@ -967,5 +1112,50 @@ mod tests {
                 "Control Center section labels should stay title case: {legacy}"
             );
         }
+    }
+
+    #[test]
+    fn focus_tile_copy_reports_core_truth() {
+        let work = super::FocusMode {
+            id: "work".to_string(),
+            name: "Work".to_string(),
+        };
+        let status = super::FocusStatus {
+            available: true,
+            active_mode: "work".to_string(),
+            scheduled_mode: Some("work".to_string()),
+            armed_by_schedule: true,
+            modes: vec![work],
+            detail: "Focus mode 'work' is active from a schedule.".to_string(),
+        };
+
+        let copy = super::focus_tile_copy(Some(&status));
+        assert_eq!(copy.state, "Work");
+        assert!(copy.active);
+        assert!(copy.opens_settings);
+        assert!(copy.detail.contains("schedule"));
+    }
+
+    #[test]
+    fn focus_tile_copy_degrades_without_guessing() {
+        let unavailable = super::focus_tile_copy(None);
+        assert_eq!(unavailable.state, "Unavailable");
+        assert!(!unavailable.active);
+        assert!(!unavailable.opens_settings);
+        assert!(unavailable.detail.contains("core did not respond"));
+
+        let unknown_active = super::FocusStatus {
+            available: true,
+            active_mode: "deep".to_string(),
+            scheduled_mode: None,
+            armed_by_schedule: false,
+            modes: Vec::new(),
+            detail: "Focus mode 'deep' is active.".to_string(),
+        };
+        let copy = super::focus_tile_copy(Some(&unknown_active));
+        assert_eq!(copy.state, "Unknown mode");
+        assert!(copy.active);
+        assert!(copy.opens_settings);
+        assert!(copy.detail.contains("not in the configured Focus list"));
     }
 }

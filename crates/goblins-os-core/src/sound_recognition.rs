@@ -20,10 +20,13 @@ const SCHEMA: &str = "org.goblins.SoundRecognition";
 const DEFAULT_MODEL_DIR: &str = "/var/lib/goblins-os/sound-recognition";
 const MODEL_DIR_ENV: &str = "GOBLINS_OS_SOUND_RECOGNITION_MODEL_DIR";
 const LISTENER_BIN_ENV: &str = "GOBLINS_OS_SOUND_RECOGNITION_LISTENER";
-const CAPTURE_BIN_ENV: &str = "GOBLINS_OS_SOUND_RECOGNITION_CAPTURE_BIN";
 const DEFAULT_LISTENER: &str = "/usr/libexec/goblins-os/goblins-os-sound-listener";
-const DEFAULT_CAPTURE_BIN: &str = "arecord";
 const RELIABILITY_DETAIL: &str = "This recognizes sounds approximately and on-device only. Do not rely on it in emergencies or high-risk situations.";
+const NOTIFICATION_APP_NAME: &str = "Goblins OS Sound Recognition";
+const NOTIFICATION_APP_ID: &str = "org.goblins.OS.SoundRecognition";
+const NOTIFICATION_APP_ICON: &str = "goblins-os";
+const NOTIFICATION_DESKTOP_ENTRY: &str = "org.goblins.OS.Settings";
+const NOTIFICATION_CATEGORY_HINT: &str = "device.sound-recognition";
 
 #[derive(Clone, Copy)]
 struct SoundCategory {
@@ -205,6 +208,16 @@ struct ListenerCapabilityPayload {
     ready: bool,
     component: Option<String>,
     detail: Option<String>,
+    runtime_ready_claim: Option<bool>,
+    capture_driver: Option<String>,
+    capture_driver_name: Option<String>,
+    capture_runtime_ready: Option<bool>,
+    capture_detail: Option<String>,
+}
+
+struct ListenerRuntimeCapabilities {
+    listener: Capability,
+    capture: Capability,
 }
 
 #[derive(Clone, Copy)]
@@ -226,6 +239,7 @@ struct SoundRecognitionDecisionContext<'a> {
     min_confidence: f64,
     alert_sound: bool,
     alert_flash: bool,
+    notify_in_lock_screen: bool,
     now_ms: u64,
     last_alerts: &'a [SoundRecognitionLastAlert<'a>],
     debounce_ms: u64,
@@ -241,11 +255,29 @@ struct SoundRecognitionAlert {
     notification_body: String,
     alert_sound: bool,
     alert_flash: bool,
+    delivery_plan: SoundRecognitionNotificationDeliveryPlan,
+}
+
+#[derive(Debug, PartialEq)]
+struct SoundRecognitionNotificationDeliveryPlan {
+    app_name: &'static str,
+    app_id: &'static str,
+    app_icon: &'static str,
+    desktop_entry: &'static str,
+    summary: String,
+    body: String,
+    urgency: &'static str,
+    category_hint: &'static str,
+    expire_timeout_ms: i32,
+    alert_sound: bool,
+    alert_flash: bool,
+    show_on_lock_screen: bool,
+    delivery_ready_claim: bool,
 }
 
 #[derive(Debug, PartialEq)]
 enum SoundRecognitionDecision {
-    Alert(SoundRecognitionAlert),
+    Alert(Box<SoundRecognitionAlert>),
     Suppressed { reason: &'static str },
 }
 
@@ -295,8 +327,9 @@ fn build_status() -> SoundRecognitionStatus {
         schema_available && get_bool("notify-in-lock-screen").unwrap_or(false);
 
     let classifier_model = classifier_model_capability();
-    let listener = listener_capability();
-    let capture = capture_capability();
+    let listener_runtime = listener_runtime_capabilities();
+    let listener = listener_runtime.listener;
+    let capture = listener_runtime.capture;
     let decision_engine = decision_engine_capability();
     let available =
         decision_engine.ready && classifier_model.ready && listener.ready && capture.ready;
@@ -691,13 +724,14 @@ fn evaluate_sound_recognition_window(
         };
     }
 
-    SoundRecognitionDecision::Alert(sound_recognition_notification_payload(
+    SoundRecognitionDecision::Alert(Box::new(sound_recognition_notification_payload(
         category,
         score.audioset_class,
         score.confidence,
         context.alert_sound,
         context.alert_flash,
-    ))
+        context.notify_in_lock_screen,
+    )))
 }
 
 fn sound_recognition_notification_payload(
@@ -706,21 +740,67 @@ fn sound_recognition_notification_payload(
     confidence: f64,
     alert_sound: bool,
     alert_flash: bool,
+    notify_in_lock_screen: bool,
 ) -> SoundRecognitionAlert {
+    let clamped_confidence = confidence.clamp(0.0, 1.0);
+    let notification_title = format!("Sound recognized: {}", category.name);
+    let notification_body = format!(
+        "{} matched \"{}\" at {}% confidence. {RELIABILITY_DETAIL}",
+        category.name,
+        audioset_class,
+        (clamped_confidence * 100.0).round() as u32
+    );
+    let delivery_plan = sound_recognition_notification_delivery_plan(
+        category,
+        &notification_title,
+        &notification_body,
+        alert_sound,
+        alert_flash,
+        notify_in_lock_screen,
+    );
+
     SoundRecognitionAlert {
         category_id: category.id,
         category_name: category.name,
         audioset_class: audioset_class.to_string(),
-        confidence: (confidence.clamp(0.0, 1.0) * 100.0).round() / 100.0,
-        notification_title: format!("Sound recognized: {}", category.name),
-        notification_body: format!(
-            "{} matched \"{}\" at {}% confidence. {RELIABILITY_DETAIL}",
-            category.name,
-            audioset_class,
-            (confidence.clamp(0.0, 1.0) * 100.0).round() as u32
-        ),
+        confidence: (clamped_confidence * 100.0).round() / 100.0,
+        notification_title,
+        notification_body,
         alert_sound,
         alert_flash,
+        delivery_plan,
+    }
+}
+
+fn sound_recognition_notification_delivery_plan(
+    category: &'static SoundCategory,
+    summary: &str,
+    body: &str,
+    alert_sound: bool,
+    alert_flash: bool,
+    show_on_lock_screen: bool,
+) -> SoundRecognitionNotificationDeliveryPlan {
+    SoundRecognitionNotificationDeliveryPlan {
+        app_name: NOTIFICATION_APP_NAME,
+        app_id: NOTIFICATION_APP_ID,
+        app_icon: NOTIFICATION_APP_ICON,
+        desktop_entry: NOTIFICATION_DESKTOP_ENTRY,
+        summary: summary.to_string(),
+        body: body.to_string(),
+        urgency: sound_recognition_notification_urgency(category),
+        category_hint: NOTIFICATION_CATEGORY_HINT,
+        expire_timeout_ms: 10_000,
+        alert_sound,
+        alert_flash,
+        show_on_lock_screen,
+        delivery_ready_claim: false,
+    }
+}
+
+fn sound_recognition_notification_urgency(category: &SoundCategory) -> &'static str {
+    match category.group {
+        "Safety" => "critical",
+        _ => "normal",
     }
 }
 
@@ -798,6 +878,7 @@ fn decision_engine_capability() -> Capability {
         min_confidence: 0.70,
         alert_sound: false,
         alert_flash: false,
+        notify_in_lock_screen: false,
         now_ms: 30_000,
         last_alerts: &[],
         debounce_ms: 30_000,
@@ -810,10 +891,7 @@ fn decision_engine_capability() -> Capability {
             }],
             &context,
         ),
-        SoundRecognitionDecision::Alert(SoundRecognitionAlert {
-            category_id: "doorbell",
-            ..
-        })
+        SoundRecognitionDecision::Alert(alert) if alert.category_id == "doorbell"
     );
     Capability {
         ready,
@@ -826,14 +904,13 @@ fn decision_engine_capability() -> Capability {
     }
 }
 
-fn listener_capability() -> Capability {
+fn listener_runtime_capabilities() -> ListenerRuntimeCapabilities {
     let listener = listener_bin();
     if !binary_present(&listener) {
-        return Capability {
-            ready: false,
-            component: listener,
-            detail: "Sound Recognition listener is not installed in this session.".to_string(),
-        };
+        return listener_unavailable_capabilities(
+            listener,
+            "Sound Recognition listener is not installed in this session.",
+        );
     }
 
     match std::process::Command::new(&listener)
@@ -842,54 +919,87 @@ fn listener_capability() -> Capability {
         .output()
     {
         Ok(output) if output.status.success() => {
-            parse_listener_capability(&output.stdout, &listener).unwrap_or(Capability {
-                ready: false,
-                component: listener,
-                detail: "Sound Recognition listener did not return a valid capability report."
-                    .to_string(),
+            parse_listener_runtime_capabilities(&output.stdout, &listener).unwrap_or_else(|| {
+                listener_unavailable_capabilities(
+                    listener,
+                    "Sound Recognition listener did not return a valid capability report.",
+                )
             })
         }
-        _ => Capability {
+        _ => listener_unavailable_capabilities(
+            listener,
+            "Sound Recognition listener could not run its capability check.",
+        ),
+    }
+}
+
+fn listener_unavailable_capabilities(
+    listener: String,
+    detail: &str,
+) -> ListenerRuntimeCapabilities {
+    ListenerRuntimeCapabilities {
+        listener: Capability {
+            ready: false,
+            component: listener.clone(),
+            detail: detail.to_string(),
+        },
+        capture: Capability {
             ready: false,
             component: listener,
-            detail: "Sound Recognition listener could not run its capability check.".to_string(),
+            detail: "Microphone capture is controlled by the Sound Recognition listener, which is not ready in this session.".to_string(),
         },
     }
 }
 
-fn parse_listener_capability(raw: &[u8], fallback_component: &str) -> Option<Capability> {
+fn parse_listener_runtime_capabilities(
+    raw: &[u8],
+    fallback_component: &str,
+) -> Option<ListenerRuntimeCapabilities> {
     let payload: ListenerCapabilityPayload = serde_json::from_slice(raw).ok()?;
-    Some(Capability {
-        ready: payload.ready,
+    let runtime_ready_claim = payload.runtime_ready_claim.unwrap_or(false);
+    let listener = Capability {
+        ready: payload.ready && runtime_ready_claim,
         component: payload
             .component
+            .as_ref()
             .filter(|component| !component.trim().is_empty())
+            .cloned()
             .unwrap_or_else(|| fallback_component.to_string()),
         detail: payload
             .detail
             .filter(|detail| !detail.trim().is_empty())
             .unwrap_or_else(|| {
-                if payload.ready {
+                if payload.ready && runtime_ready_claim {
                     "Sound Recognition listener is ready.".to_string()
                 } else {
                     "Sound Recognition listener is installed but not ready.".to_string()
                 }
             }),
-    })
-}
+    };
 
-fn capture_capability() -> Capability {
-    let binary = capture_bin();
-    let ready = binary_present(&binary);
-    Capability {
-        ready,
-        component: binary.clone(),
-        detail: if ready {
-            "Microphone capture path is available.".to_string()
-        } else {
-            "Microphone capture is not ready on this device.".to_string()
-        },
-    }
+    let capture_driver = payload
+        .capture_driver
+        .filter(|driver| !driver.trim().is_empty())
+        .or_else(|| {
+            payload
+                .capture_driver_name
+                .filter(|driver| !driver.trim().is_empty())
+        })
+        .unwrap_or_else(|| "session listener capture".to_string());
+    let capture_runtime_ready = payload.capture_runtime_ready.unwrap_or(false);
+    let capture = Capability {
+        ready: payload.ready && runtime_ready_claim && capture_runtime_ready,
+        component: capture_driver,
+        detail: payload.capture_detail.unwrap_or_else(|| {
+            if capture_runtime_ready {
+                "Microphone capture runtime is ready.".to_string()
+            } else {
+                "Microphone capture is reported by the listener but has not been proven in this session.".to_string()
+            }
+        }),
+    };
+
+    Some(ListenerRuntimeCapabilities { listener, capture })
 }
 
 fn first_model(dir: &Path, extensions: &[&str]) -> Option<PathBuf> {
@@ -915,10 +1025,6 @@ fn model_dir() -> PathBuf {
 
 fn listener_bin() -> String {
     env::var(LISTENER_BIN_ENV).unwrap_or_else(|_| DEFAULT_LISTENER.to_string())
-}
-
-fn capture_bin() -> String {
-    env::var(CAPTURE_BIN_ENV).unwrap_or_else(|_| DEFAULT_CAPTURE_BIN.to_string())
 }
 
 fn binary_present(binary: &str) -> bool {
@@ -1014,7 +1120,7 @@ mod tests {
     use super::{
         audioset_class_matches, clamp_min_confidence, encode_sound_ids,
         evaluate_sound_recognition_window, normalize_audioset_label, normalize_enabled_sounds,
-        normalize_sensitivity, parse_gsettings_strv, parse_listener_capability,
+        normalize_sensitivity, parse_gsettings_strv, parse_listener_runtime_capabilities,
         parse_sound_recognition_value, sound_decision_threshold, sound_recognition_target_spec,
         toggled_sound_ids, ClassifierScore, SoundCategoryStatus, SoundRecognitionDecision,
         SoundRecognitionDecisionContext, SoundRecognitionLastAlert,
@@ -1143,6 +1249,7 @@ mod tests {
             min_confidence: 0.70,
             alert_sound: true,
             alert_flash: true,
+            notify_in_lock_screen: true,
             now_ms: 60_000,
             last_alerts: &[],
             debounce_ms: 30_000,
@@ -1173,6 +1280,48 @@ mod tests {
             .contains("Do not rely on it in emergencies"));
         assert!(alert.alert_sound);
         assert!(alert.alert_flash);
+        assert_eq!(
+            alert.delivery_plan.app_id,
+            "org.goblins.OS.SoundRecognition"
+        );
+        assert_eq!(alert.delivery_plan.app_icon, "goblins-os");
+        assert_eq!(alert.delivery_plan.desktop_entry, "org.goblins.OS.Settings");
+        assert_eq!(alert.delivery_plan.summary, alert.notification_title);
+        assert_eq!(alert.delivery_plan.body, alert.notification_body);
+        assert_eq!(alert.delivery_plan.urgency, "normal");
+        assert_eq!(
+            alert.delivery_plan.category_hint,
+            "device.sound-recognition"
+        );
+        assert_eq!(alert.delivery_plan.expire_timeout_ms, 10_000);
+        assert!(alert.delivery_plan.alert_sound);
+        assert!(alert.delivery_plan.alert_flash);
+        assert!(alert.delivery_plan.show_on_lock_screen);
+        assert!(!alert.delivery_plan.delivery_ready_claim);
+
+        let safety_enabled = vec!["siren".to_string()];
+        let safety_context = SoundRecognitionDecisionContext {
+            enabled_sound_ids: &safety_enabled,
+            sensitivity: "medium",
+            min_confidence: 0.70,
+            alert_sound: false,
+            alert_flash: false,
+            notify_in_lock_screen: false,
+            now_ms: 60_000,
+            last_alerts: &[],
+            debounce_ms: 30_000,
+        };
+        let SoundRecognitionDecision::Alert(safety_alert) = evaluate_sound_recognition_window(
+            &[ClassifierScore {
+                audioset_class: "Siren",
+                confidence: 0.97,
+            }],
+            &safety_context,
+        ) else {
+            panic!("expected safety alert");
+        };
+        assert_eq!(safety_alert.delivery_plan.urgency, "critical");
+        assert!(!safety_alert.delivery_plan.delivery_ready_claim);
     }
 
     #[test]
@@ -1188,6 +1337,7 @@ mod tests {
             min_confidence: 0.70,
             alert_sound: false,
             alert_flash: false,
+            notify_in_lock_screen: false,
             now_ms: 60_000,
             last_alerts: &[],
             debounce_ms: 30_000,
@@ -1226,6 +1376,7 @@ mod tests {
             min_confidence: 0.70,
             alert_sound: false,
             alert_flash: false,
+            notify_in_lock_screen: false,
             now_ms: 60_000,
             last_alerts: &last_alerts,
             debounce_ms: 30_000,
@@ -1261,25 +1412,50 @@ mod tests {
 
     #[test]
     fn listener_capability_check_preserves_not_ready_state() {
-        let capability = parse_listener_capability(
-            br#"{"ready":false,"component":"/usr/libexec/goblins-os/goblins-os-sound-listener","detail":"installed, model pending","runtime_ready_claim":false}"#,
+        let runtime = parse_listener_runtime_capabilities(
+            br#"{"ready":false,"component":"/usr/libexec/goblins-os/goblins-os-sound-listener","detail":"installed, model pending","runtime_ready_claim":false,"capture_driver":"/usr/bin/arecord","capture_driver_name":"arecord","capture_runtime_ready":false,"capture_detail":"capture driver present, runtime unproven"}"#,
             "/fallback",
         )
         .unwrap();
 
-        assert!(!capability.ready);
+        assert!(!runtime.listener.ready);
         assert_eq!(
-            capability.component,
+            runtime.listener.component,
             "/usr/libexec/goblins-os/goblins-os-sound-listener"
         );
-        assert_eq!(capability.detail, "installed, model pending");
-
-        let fallback = parse_listener_capability(br#"{"ready":false}"#, "/fallback").unwrap();
-        assert_eq!(fallback.component, "/fallback");
+        assert_eq!(runtime.listener.detail, "installed, model pending");
+        assert!(!runtime.capture.ready);
+        assert_eq!(runtime.capture.component, "/usr/bin/arecord");
         assert_eq!(
-            fallback.detail,
+            runtime.capture.detail,
+            "capture driver present, runtime unproven"
+        );
+
+        let fallback =
+            parse_listener_runtime_capabilities(br#"{"ready":false}"#, "/fallback").unwrap();
+        assert_eq!(fallback.listener.component, "/fallback");
+        assert_eq!(
+            fallback.listener.detail,
             "Sound Recognition listener is installed but not ready."
         );
+        assert_eq!(fallback.capture.component, "session listener capture");
+        assert!(!fallback.capture.ready);
+
+        let explicit_ready = parse_listener_runtime_capabilities(
+            br#"{"ready":true,"runtime_ready_claim":true,"capture_driver":"/usr/bin/arecord","capture_runtime_ready":true}"#,
+            "/fallback",
+        )
+        .unwrap();
+        assert!(explicit_ready.listener.ready);
+        assert!(explicit_ready.capture.ready);
+
+        let no_runtime_claim = parse_listener_runtime_capabilities(
+            br#"{"ready":true,"capture_driver":"/usr/bin/arecord","capture_runtime_ready":true}"#,
+            "/fallback",
+        )
+        .unwrap();
+        assert!(!no_runtime_claim.listener.ready);
+        assert!(!no_runtime_claim.capture.ready);
     }
 
     #[test]

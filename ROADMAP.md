@@ -624,6 +624,27 @@ the GTK render, installed schema/write behavior, installed user-service
 behavior, PipeWire capture, notification/flash path, and reliability copy before
 Sound Recognition can ship.
 
+Current Sound Recognition notification-delivery contract continuation: the
+Goblins notification handoff is now source-gated but not shipped. Core builds an
+explicit delivery plan with `org.goblins.OS.SoundRecognition`, the Goblins icon,
+desktop-entry/category hints, critical urgency for safety sounds, alert-sound /
+flash / lock-screen intent, and `delivery_ready_claim=false`; the installed
+listener mirrors that contract with `--notification-self-test` and advertises
+`notification_delivery_contract_ready=true` while still returning `ready=false`,
+`runtime_ready_claim=false`, and `capture_runtime_ready=false`. Core also treats
+microphone capture readiness as listener-owned runtime capability now, so
+`arecord`/driver presence alone cannot make Sound Recognition active. No model,
+microphone capture, notification delivery, sound, flash, or live listener loop is
+claimed in this pass. Local source gates: `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (2196)**,
+`git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`,
+`python3 -m py_compile os/sound-recognition/goblins-os-sound-listener`, and
+the listener `--self-test` / `--decision-self-test` / `--notification-self-test`.
+CI/qemu must still prove the GTK render, installed schema/write behavior,
+installed user-service behavior, PipeWire capture, notification/flash path, and
+reliability copy before Sound Recognition can ship.
+
 Current Switch Control continuation: the GNOME Shell scanner scaffold is now
 source-gated but not shipped. The `goblins-switch@goblins.os` extension is
 installed in the Goblins shell mode and dconf seed, reads the existing
@@ -1616,6 +1637,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **Settings controls + write bridge source-gated (CI/qemu-pending):** core exposes `/v1/sound-recognition/preference` and `/v1/sound-recognition/sound-toggle`, writes only the allowlisted `org.goblins.SoundRecognition` keys, rejects unknown sound ids, clamps confidence, and returns honest saved-but-not-listening copy until model/listener/capture/categories are ready. Settings ▸ Accessibility renders readiness, reliability caveat, master toggle, per-sound switches, sensitivity, confidence, and alert toggles through those routes. No listener, model weights, capture loop, notification firing, or live mic behavior is claimed yet.
 - [x] **Session listener boundary source-gated (CI/qemu-pending):** `os/sound-recognition/goblins-os-sound-listener` is installed as `/usr/libexec/goblins-os/goblins-os-sound-listener`, exposes `--capability-check`/`--self-test`, reports `ready=false`/`runtime_ready_claim=false`, and exits without microphone capture until model provisioning, inference dependencies, capture integration, notifications, and qemu proof land together. Core consumes the listener capability report instead of treating binary presence as listener readiness; the user service is installed but not session-wanted. No model weights, listener loop, notifications, or mic capture are claimed.
 - [x] **Detection decision contract source-gated (CI/qemu-pending):** core maps classifier AudioSet classes to the fixed category registry, applies sensitivity/confidence thresholds, debounces repeated per-category alerts, and builds the Goblins notification payload without delivering it. The installed listener mirrors that pure contract through `--decision-self-test` and reports `decision_contract_ready=true` while keeping `ready=false`/`runtime_ready_claim=false`; no model, capture, notification firing, sound, flash, or live daemon loop is claimed.
+- [x] **Notification delivery-plan contract source-gated (CI/qemu-pending):** core and the installed listener now share the deterministic Goblins notification delivery plan (`org.goblins.OS.SoundRecognition`, Goblins icon, desktop-entry/category hints, safety-critical urgency, alert sound/flash/lock-screen intent) while keeping `delivery_ready_claim=false`, `runtime_ready_claim=false`, and `capture_runtime_ready=false`. Core treats capture readiness as a listener-owned runtime capability, so driver presence alone cannot make the feature active. No notification delivery, sound, flash, mic capture, model, or live daemon loop is claimed.
 - [ ] Always-listening on-device recognition of a fixed catalog (smoke/fire alarm, siren, doorbell, knock, baby crying, dog bark, car horn, appliance beep, running water, shouting) firing a Goblins notification + optional sound/flash, for deaf/HoH users. **Reliability honesty is first-class** (not a footnote).
 - **Packages:** `python3-onnxruntime` (`1.22.2`), `python3-numpy`, `libnotify` (`0.8.7-1.fc44`), `alsa-utils`, `pipewire`, `pipewire-alsa`, `wireplumber`, `sox` (audio stack already present; `sox` already used in the brand-sound layer).
 - **gsettings/dconf:** NEW relocatable `org.goblins.SoundRecognition` (enabled, sounds `as`, sensitivity, alert-sound, alert-flash → drives `…a11y.keyboard visual-bell`, min-confidence, notify-in-lock-screen) seeded **all-off**. Reuse existing notifications + per-app registry so alerts respect DND/lock-screen.

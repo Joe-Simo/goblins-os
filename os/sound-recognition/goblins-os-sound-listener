@@ -33,36 +33,47 @@ RELIABILITY_DETAIL = (
     "in emergencies or high-risk situations."
 )
 DEFAULT_DEBOUNCE_MS = 30_000
+NOTIFICATION_APP_NAME = "Goblins OS Sound Recognition"
+NOTIFICATION_APP_ID = "org.goblins.OS.SoundRecognition"
+NOTIFICATION_APP_ICON = "goblins-os"
+NOTIFICATION_DESKTOP_ENTRY = "org.goblins.OS.Settings"
+NOTIFICATION_CATEGORY_HINT = "device.sound-recognition"
 
 SOUND_CATEGORIES: dict[str, dict[str, Any]] = {
     "smoke-fire-alarm": {
         "name": "Smoke or fire alarm",
+        "group": "Safety",
         "audioset_classes": ["Smoke detector, smoke alarm", "Fire alarm"],
     },
     "siren": {
         "name": "Siren",
+        "group": "Safety",
         "audioset_classes": ["Siren", "Emergency vehicle"],
     },
-    "doorbell": {"name": "Doorbell", "audioset_classes": ["Doorbell"]},
-    "knock": {"name": "Knock", "audioset_classes": ["Knock"]},
+    "doorbell": {"name": "Doorbell", "group": "Home", "audioset_classes": ["Doorbell"]},
+    "knock": {"name": "Knock", "group": "Home", "audioset_classes": ["Knock"]},
     "baby-crying": {
         "name": "Baby crying",
+        "group": "People",
         "audioset_classes": ["Baby cry, infant cry"],
     },
-    "dog-bark": {"name": "Dog bark", "audioset_classes": ["Bark"]},
+    "dog-bark": {"name": "Dog bark", "group": "Animals", "audioset_classes": ["Bark"]},
     "car-horn": {
         "name": "Car horn",
+        "group": "Outside",
         "audioset_classes": ["Vehicle horn, car horn, honking"],
     },
     "appliance-beep": {
         "name": "Appliance beep",
+        "group": "Home",
         "audioset_classes": ["Beep, bleep", "Microwave oven", "Alarm clock"],
     },
     "running-water": {
         "name": "Running water",
+        "group": "Home",
         "audioset_classes": ["Water", "Liquid", "Pour", "Splash, splatter"],
     },
-    "shouting": {"name": "Shouting", "audioset_classes": ["Shout", "Yell"]},
+    "shouting": {"name": "Shouting", "group": "People", "audioset_classes": ["Shout", "Yell"]},
 }
 
 
@@ -141,6 +152,7 @@ def evaluate_detection_window(
     debounce_ms: int = DEFAULT_DEBOUNCE_MS,
     alert_sound: bool = False,
     alert_flash: bool = False,
+    notify_in_lock_screen: bool = False,
 ) -> dict[str, Any]:
     enabled = [
         sound_id for sound_id in enabled_sound_ids if sound_id in SOUND_CATEGORIES
@@ -179,21 +191,64 @@ def evaluate_detection_window(
     category = SOUND_CATEGORIES[sound_id]
     confidence = max(0.0, min(1.0, float(score["confidence"])))
     percent = round(confidence * 100)
+    notification_title = f"Sound recognized: {category['name']}"
+    notification_body = (
+        f"{category['name']} matched \"{score['audioset_class']}\" "
+        f"at {percent}% confidence. {RELIABILITY_DETAIL}"
+    )
     return {
         "alert": {
             "category_id": sound_id,
             "category_name": category["name"],
             "audioset_class": score["audioset_class"],
             "confidence": round(confidence, 2),
-            "notification_title": f"Sound recognized: {category['name']}",
-            "notification_body": (
-                f"{category['name']} matched \"{score['audioset_class']}\" "
-                f"at {percent}% confidence. {RELIABILITY_DETAIL}"
-            ),
+            "notification_title": notification_title,
+            "notification_body": notification_body,
             "alert_sound": alert_sound,
             "alert_flash": alert_flash,
+            "delivery_plan": build_notification_delivery_plan(
+                sound_id,
+                notification_title,
+                notification_body,
+                alert_sound=alert_sound,
+                alert_flash=alert_flash,
+                show_on_lock_screen=notify_in_lock_screen,
+            ),
         },
         "suppressed_reason": None,
+    }
+
+
+def _notification_urgency(category_id: str) -> str:
+    category = SOUND_CATEGORIES.get(category_id)
+    if category and category.get("group") == "Safety":
+        return "critical"
+    return "normal"
+
+
+def build_notification_delivery_plan(
+    category_id: str,
+    summary: str,
+    body: str,
+    *,
+    alert_sound: bool,
+    alert_flash: bool,
+    show_on_lock_screen: bool,
+) -> dict[str, Any]:
+    return {
+        "app_name": NOTIFICATION_APP_NAME,
+        "app_id": NOTIFICATION_APP_ID,
+        "app_icon": NOTIFICATION_APP_ICON,
+        "desktop_entry": NOTIFICATION_DESKTOP_ENTRY,
+        "summary": summary,
+        "body": body,
+        "urgency": _notification_urgency(category_id),
+        "category_hint": NOTIFICATION_CATEGORY_HINT,
+        "expire_timeout_ms": 10_000,
+        "alert_sound": alert_sound,
+        "alert_flash": alert_flash,
+        "show_on_lock_screen": show_on_lock_screen,
+        "delivery_ready_claim": False,
     }
 
 
@@ -210,7 +265,13 @@ def capability_payload() -> dict[str, Any]:
         "model": _first_model(_model_dir()),
         "capture_driver": shutil.which(capture),
         "capture_driver_name": capture,
+        "capture_runtime_ready": False,
+        "capture_detail": (
+            "Capture driver presence is reported, but live microphone capture "
+            "has not been proven in this session."
+        ),
         "decision_contract_ready": True,
+        "notification_delivery_contract_ready": True,
         "runtime_ready_claim": False,
     }
 
@@ -233,6 +294,7 @@ def run_decision_self_test() -> None:
         now_ms=60_000,
         alert_sound=True,
         alert_flash=True,
+        notify_in_lock_screen=True,
     )
     alert = decision["alert"]
     assert alert is not None
@@ -240,6 +302,30 @@ def run_decision_self_test() -> None:
     assert alert["alert_sound"] is True
     assert alert["alert_flash"] is True
     assert "Do not rely on it in emergencies" in alert["notification_body"]
+    delivery_plan = alert["delivery_plan"]
+    assert delivery_plan["app_id"] == NOTIFICATION_APP_ID
+    assert delivery_plan["app_icon"] == NOTIFICATION_APP_ICON
+    assert delivery_plan["desktop_entry"] == NOTIFICATION_DESKTOP_ENTRY
+    assert delivery_plan["summary"] == alert["notification_title"]
+    assert delivery_plan["body"] == alert["notification_body"]
+    assert delivery_plan["urgency"] == "normal"
+    assert delivery_plan["category_hint"] == NOTIFICATION_CATEGORY_HINT
+    assert delivery_plan["expire_timeout_ms"] == 10_000
+    assert delivery_plan["alert_sound"] is True
+    assert delivery_plan["alert_flash"] is True
+    assert delivery_plan["show_on_lock_screen"] is True
+    assert delivery_plan["delivery_ready_claim"] is False
+
+    safety = evaluate_detection_window(
+        [{"audioset_class": "Siren", "confidence": 0.97}],
+        enabled_sound_ids=["siren"],
+        sensitivity="medium",
+        min_confidence=0.70,
+        now_ms=60_000,
+    )
+    assert safety["alert"] is not None
+    assert safety["alert"]["delivery_plan"]["urgency"] == "critical"
+    assert safety["alert"]["delivery_plan"]["delivery_ready_claim"] is False
 
     suppressed = evaluate_detection_window(
         [{"audioset_class": "Baby cry, infant cry", "confidence": 0.96}],
@@ -257,10 +343,33 @@ def run_self_test() -> None:
     assert payload["ready"] is False
     assert payload["runtime_ready_claim"] is False
     assert payload["decision_contract_ready"] is True
+    assert payload["notification_delivery_contract_ready"] is True
     assert "No microphone audio is captured" in payload["detail"]
     assert payload["capture_driver_name"]
     assert payload["component"].endswith("goblins-os-sound-listener")
     run_decision_self_test()
+
+
+def run_notification_self_test() -> None:
+    decision = evaluate_detection_window(
+        [{"audioset_class": "Fire alarm", "confidence": 0.94}],
+        enabled_sound_ids=["smoke-fire-alarm"],
+        sensitivity="medium",
+        min_confidence=0.70,
+        now_ms=90_000,
+        alert_sound=True,
+        alert_flash=True,
+        notify_in_lock_screen=False,
+    )
+    alert = decision["alert"]
+    assert alert is not None
+    delivery_plan = alert["delivery_plan"]
+    assert delivery_plan["app_name"] == NOTIFICATION_APP_NAME
+    assert delivery_plan["app_id"] == NOTIFICATION_APP_ID
+    assert delivery_plan["desktop_entry"] == NOTIFICATION_DESKTOP_ENTRY
+    assert delivery_plan["urgency"] == "critical"
+    assert delivery_plan["show_on_lock_screen"] is False
+    assert delivery_plan["delivery_ready_claim"] is False
 
 
 def main() -> int:
@@ -269,12 +378,18 @@ def main() -> int:
     )
     parser.add_argument("--capability-check", action="store_true")
     parser.add_argument("--decision-self-test", action="store_true")
+    parser.add_argument("--notification-self-test", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
     if args.decision_self_test:
         run_decision_self_test()
         print("goblins_sound_listener_decision_selftest ok")
+        return 0
+
+    if args.notification_self_test:
+        run_notification_self_test()
+        print("goblins_sound_listener_notification_selftest ok")
         return 0
 
     if args.self_test:

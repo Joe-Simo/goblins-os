@@ -340,7 +340,11 @@ RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && python3 -m py_compile /usr/libexec/goblins-os/goblins-os-sound-listener \
     && /usr/libexec/goblins-os/goblins-os-sound-listener --self-test \
     && /usr/libexec/goblins-os/goblins-os-sound-listener --decision-self-test \
+    && /usr/libexec/goblins-os/goblins-os-sound-listener --notification-self-test \
     && /usr/libexec/goblins-os/goblins-os-sound-listener --capability-check | grep -q '"ready": false' \
+    && /usr/libexec/goblins-os/goblins-os-sound-listener --capability-check | grep -q '"runtime_ready_claim": false' \
+    && /usr/libexec/goblins-os/goblins-os-sound-listener --capability-check | grep -q '"capture_runtime_ready": false' \
+    && /usr/libexec/goblins-os/goblins-os-sound-listener --capability-check | grep -q '"notification_delivery_contract_ready": true' \
     && for launcher_desktop in \
       /usr/share/applications/org.goblins.OS.Games.Heroic.desktop \
       /usr/share/applications/org.goblins.OS.Games.Bottles.desktop \

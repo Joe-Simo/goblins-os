@@ -11033,8 +11033,23 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-uses-listener-runtime-capability",
+            "listener_runtime_capabilities",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
             "sound-recognition-core-keeps-listener-not-ready-state",
             "Sound Recognition listener is installed but not ready.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-capture-from-listener",
+            "capture_runtime_ready",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-rejects-implicit-runtime-ready",
+            "payload.runtime_ready_claim.unwrap_or(false)",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/sound_recognition.rs"),
@@ -11052,9 +11067,39 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "sound_recognition_notification_payload",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-builds-notification-delivery-plan",
+            "sound_recognition_notification_delivery_plan",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-notification-app-id",
+            "org.goblins.OS.SoundRecognition",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/sound_recognition.rs"),
+            "sound-recognition-core-notification-delivery-not-claimed",
+            "delivery_ready_claim: false",
+        ),
+        contains_check(
             root.join("os/sound-recognition/goblins-os-sound-listener"),
             "sound-recognition-listener-decision-contract-ready",
             "\"decision_contract_ready\": True",
+        ),
+        contains_check(
+            root.join("os/sound-recognition/goblins-os-sound-listener"),
+            "sound-recognition-listener-notification-contract-ready",
+            "\"notification_delivery_contract_ready\": True",
+        ),
+        contains_check(
+            root.join("os/sound-recognition/goblins-os-sound-listener"),
+            "sound-recognition-listener-capture-runtime-false",
+            "\"capture_runtime_ready\": False",
+        ),
+        contains_check(
+            root.join("os/sound-recognition/goblins-os-sound-listener"),
+            "sound-recognition-listener-capture-detail",
+            "Capture driver presence is reported, but live microphone capture",
         ),
         contains_check(
             root.join("os/sound-recognition/goblins-os-sound-listener"),
@@ -11062,9 +11107,29 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "--decision-self-test",
         ),
         contains_check(
+            root.join("os/sound-recognition/goblins-os-sound-listener"),
+            "sound-recognition-listener-notification-self-test",
+            "--notification-self-test",
+        ),
+        contains_check(
             root.join("os/bootc/Containerfile"),
             "sound-recognition-listener-image-decision-self-test",
             "goblins-os-sound-listener --decision-self-test",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "sound-recognition-listener-image-notification-self-test",
+            "goblins-os-sound-listener --notification-self-test",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "sound-recognition-listener-image-capture-runtime-stays-false",
+            "goblins-os-sound-listener --capability-check | grep -q '\"capture_runtime_ready\": false'",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "sound-recognition-listener-image-notification-contract-ready",
+            "goblins-os-sound-listener --capability-check | grep -q '\"notification_delivery_contract_ready\": true'",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),

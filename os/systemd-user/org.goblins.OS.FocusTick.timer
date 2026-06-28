@@ -1,0 +1,11 @@
+[Unit]
+Description=Goblins OS Focus schedule timer
+CollectMode=inactive-or-failed
+PartOf=gnome-session-initialized.target
+After=gnome-session-initialized.target
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=15s
+Persistent=false
+Unit=org.goblins.OS.FocusTick.service

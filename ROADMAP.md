@@ -198,13 +198,19 @@ shipped. Core exposes `/v1/focus/activate`, `/v1/focus/deactivate`, and
 notification banners through the shared notifications bridge, records whether
 Focus was armed by a schedule, and makes the tick path leave manual Focus modes
 alone. The system gschema now includes `armed-by-schedule`, `restore-banners`,
-and reserved `restore-apps` keys. Local source gates: `cargo fmt --all --check`,
-`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
-container `glib-compile-schemas --dry-run os/glib-schemas`, scoped
+and reserved `restore-apps` keys. The current continuation adds the user-session
+`org.goblins.OS.FocusTick.{service,timer}` plus `/usr/libexec/goblins-os/goblins-os-focus-tick`,
+which posts only to a local `/v1/focus/tick` core URL on `OnCalendar=minutely`;
+the Goblins session target wants the timer, and the image asserts the helper and
+unit files. Local source gates for the current timer pass:
+`python3 -m py_compile os/focus/goblins-os-focus-tick`, local-core guard smoke,
+Fedora 44 `systemd-analyze verify` for the service/timer (unit contents staged
+inside the container to avoid macOS bind-mount deadlock), `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, scoped
 `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
-`goblins-os-verify --source-root .` → **blocked=0 (1571)**. Settings/Control
-Center/menu-bar surfaces, per-app breakthroughs, a user timer, and live qemu
-write proof remain deferred.
+`goblins-os-verify --source-root .` → **blocked=0 (1922)**. Settings/Control
+Center/menu-bar surfaces, per-app breakthroughs, and live qemu write proof remain
+deferred.
 
 Current Personal Hotspot continuation: the Settings binding is now source-gated
 but not shipped. Core still owns `/v1/hotspot/enabled`, policy gating,
@@ -1141,7 +1147,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 ### `in-progress` Named Focus modes + Do-Not-Disturb scheduling
 - [x] **Substrate + storage + status route shipped**: NEW system gschema `org.goblins.os.focus` (active-mode + modes/schedules JSON), installed via `os/glib-schemas/` + a Containerfile `glib-compile-schemas /usr/share/glib-2.0/schemas` step (the repo's first *system* schema; host-validated with `glib-compile-schemas`, manifest-classified). `crates/goblins-os-core/src/focus.rs` + `/v1/focus/status` read it and evaluate the active/scheduled mode — pure `schedule_active` (incl. overnight midnight-wrap + weekday match), `parse_local_now` (timezone-aware via `date`, no new crate), and `unquote_gsettings_string`, all unit-tested (181 core tests). Honest-gated when the schema is absent. clippy/fmt clean; 3 verify gates.
 - [x] **Arm/disarm/tick substrate source-gated (CI/qemu-pending):** `/v1/focus/activate`, `/v1/focus/deactivate`, and `/v1/focus/tick` write only the Goblins Focus schema plus global `org.gnome.desktop.notifications show-banners` through the shared `notifications.rs` bridge. Activating Focus snapshots `show-banners`, silences banners, records manual vs scheduled ownership, and deactivation restores the saved snapshot; the tick decision arms matching schedules, disarms schedule-owned modes when no schedule matches, and leaves manual Focus modes alone. Host tests cover mode/schedule JSON validation, scalar gsettings encoding, and tick decisions; gschema dry-run and verify gates pass. **Not shipped** until the UI/timer/live write proof lands.
-- [ ] **Surfaces + timer + per-app breakthroughs (deferred):** mode/schedule CRUD, per-app breakthrough via the `notifications.rs` helper, the `SettingsPanel::Focus` editor + Control-Center tile + menu-bar indicator, and the `OnCalendar=minutely` user timer → `POST /v1/focus/tick`. (Drops iCloud/location/Smart Activation — absent, never stubbed.)
+- [x] **Schedule timer substrate source-gated (CI/qemu-pending):** `os/systemd-user/org.goblins.OS.FocusTick.{service,timer}` runs a user-session oneshot every minute; the helper posts to `/v1/focus/tick` only through a local HTTP core URL, exits quietly when core is unavailable, and never claims schedule success itself. The Goblins session drop-in wants the timer, the image installs/asserts the helper and units, the source manifest includes `os/focus/`, and verifier/release gates check the helper, timer, local-core guard, and Containerfile install. **Not shipped** until CI/qemu proves the user timer starts in session and the live tick writes/restores notification state.
+- [ ] **Surfaces + per-app breakthroughs (deferred):** mode/schedule CRUD, per-app breakthrough via the `notifications.rs` helper, the `SettingsPanel::Focus` editor + Control-Center tile + menu-bar indicator. (Drops iCloud/location/Smart Activation — absent, never stubbed.)
 - **Packages:** none.
 - **gsettings/dconf:** DRIVES `org.gnome.desktop.notifications show-banners` (already allowlisted as `ShowBanners`) + per-app `…notifications.application` enable/show-banners. OWN a new `org.goblins.os.focus` schema (active-mode, modes JSON, schedules JSON, armed-by-schedule, restore-banners, restore-apps), compiled like the wm schema; dconf-seed default modes so first boot is non-empty (active-mode='', schedules='[]').
 - **Files:** `crates/goblins-os-core/src/focus.rs` (NEW — mode CRUD, arm/disarm writing show-banners + per-app enable via the **same** `notifications.rs` helper, schedule CRUD + evaluation, snapshot/restore), `crates/goblins-os-core/src/main.rs` (`/v1/focus/{status,activate,mode,schedule,tick}`), `crates/goblins-os-settings/src/main.rs` (`SettingsPanel::Focus` + mode list / allowed-apps / schedule editor; Notifications cross-link), `crates/goblins-os-control-center/src/main.rs` (Focus quick-pick tile + "on until <time>"), `…/goblins-menubar@goblins.os/extension.js` (Focus entry + armed-only indicator glyph), `os/systemd-user/goblins-os-focus.{service,timer}` (NEW `OnCalendar=minutely` → `POST /v1/focus/tick`), `…/schemas/org.goblins.os.focus.gschema.xml` + `os/bootc/Containerfile` (glib-compile-schemas line), `os/dconf/db/local.d/10-goblins-os-desktop` (seed).

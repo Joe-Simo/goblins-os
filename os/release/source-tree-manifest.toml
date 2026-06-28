@@ -19,6 +19,7 @@ paths = [
   "os/codex/",
   "os/dconf/",
   "os/etc/",
+  "os/focus/",
   "os/gdm/",
   "os/glib-schemas/",
   "os/goblins-os-textshortcuts/",

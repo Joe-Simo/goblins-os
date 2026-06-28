@@ -205,6 +205,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v dnsmasq \
     && command -v ibus \
     && command -v ibus-daemon \
+    && command -v python3 \
     && test -f /usr/share/ibus/component/libpinyin.xml \
     && test -f /usr/share/ibus/component/anthy.xml \
     && test -f /usr/share/ibus/component/hangul.xml \
@@ -297,6 +298,7 @@ COPY os/gnome-shell-modes/goblins-os.json /usr/share/gnome-shell/modes/goblins-o
 COPY --chmod=0755 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus /usr/libexec/goblins-os/goblins-textshortcuts-ibus
 COPY os/goblins-os-textshortcuts/goblins-textshortcuts.xml /usr/share/ibus/component/goblins-textshortcuts.xml
 COPY --chmod=0755 os/sound-recognition/goblins-os-sound-listener /usr/libexec/goblins-os/goblins-os-sound-listener
+COPY --chmod=0755 os/focus/goblins-os-focus-tick /usr/libexec/goblins-os/goblins-os-focus-tick
 COPY --chmod=0755 os/voice/goblins-os-dictate /usr/libexec/goblins-os/goblins-os-dictate
 COPY --chmod=0755 os/voice/goblins-os-voice-control /usr/libexec/goblins-os/goblins-os-voice-control
 COPY os/systemd-user/ /usr/lib/systemd/user/
@@ -316,6 +318,11 @@ RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && { test -x /usr/bin/liveinst || test -x /usr/bin/anaconda || test -x /usr/libexec/anaconda/run-anaconda; } \
     && test -x /usr/libexec/goblins-os/goblins-os-install-game-launcher \
     && test -x /usr/libexec/goblins-os/goblins-os-sound-listener \
+    && test -x /usr/libexec/goblins-os/goblins-os-focus-tick \
+    && test -f /usr/lib/systemd/user/org.goblins.OS.FocusTick.service \
+    && test -f /usr/lib/systemd/user/org.goblins.OS.FocusTick.timer \
+    && grep -Fq 'ExecStart=/usr/libexec/goblins-os/goblins-os-focus-tick' /usr/lib/systemd/user/org.goblins.OS.FocusTick.service \
+    && grep -Fq 'OnCalendar=minutely' /usr/lib/systemd/user/org.goblins.OS.FocusTick.timer \
     && python3 -m py_compile /usr/libexec/goblins-os/goblins-os-sound-listener \
     && /usr/libexec/goblins-os/goblins-os-sound-listener --self-test \
     && /usr/libexec/goblins-os/goblins-os-sound-listener --decision-self-test \

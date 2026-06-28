@@ -1,0 +1,65 @@
+#!/usr/bin/python3
+"""Run one Goblins OS Focus schedule tick from the user session."""
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any, Optional
+
+
+DEFAULT_CORE_URL = "http://127.0.0.1:8787"
+
+
+def local_core_url() -> Optional[str]:
+    value = os.environ.get("GOBLINS_OS_CORE_URL", DEFAULT_CORE_URL).rstrip("/")
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        print("Focus tick skipped: core URL must be local HTTP.", file=sys.stderr)
+        return None
+    return value
+
+
+def post_focus_tick(core_url: str) -> Optional[dict[str, Any]]:
+    request = urllib.request.Request(
+        f"{core_url}/v1/focus/tick",
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = response.read(8192)
+    except urllib.error.HTTPError as error:
+        body = error.read(8192)
+    except OSError as error:
+        print(f"Focus tick skipped: core is not reachable ({error}).", file=sys.stderr)
+        return None
+
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        print("Focus tick skipped: core returned an unreadable response.", file=sys.stderr)
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def main() -> int:
+    core_url = local_core_url()
+    if core_url is None:
+        return 0
+
+    outcome = post_focus_tick(core_url)
+    if outcome is None:
+        return 0
+
+    text = outcome.get("text")
+    if text:
+        print(str(text), file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -8636,6 +8636,44 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "core-exposes-focus-tick-route",
             "/v1/focus/tick",
         ),
+        file_check(root, "os/focus/goblins-os-focus-tick"),
+        file_check(root, "os/systemd-user/org.goblins.OS.FocusTick.service"),
+        file_check(root, "os/systemd-user/org.goblins.OS.FocusTick.timer"),
+        contains_check(
+            root.join("os/focus/goblins-os-focus-tick"),
+            "focus-tick-helper-posts-core-route",
+            "/v1/focus/tick",
+        ),
+        contains_check(
+            root.join("os/focus/goblins-os-focus-tick"),
+            "focus-tick-helper-local-core-only",
+            "core URL must be local HTTP",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.FocusTick.service"),
+            "focus-tick-service-execstart",
+            "ExecStart=/usr/libexec/goblins-os/goblins-os-focus-tick",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.FocusTick.timer"),
+            "focus-tick-timer-minutely",
+            "OnCalendar=minutely",
+        ),
+        contains_check(
+            root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
+            "focus-tick-session-wants-timer",
+            "Wants=org.goblins.OS.FocusTick.timer",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "focus-tick-helper-installed",
+            "COPY --chmod=0755 os/focus/goblins-os-focus-tick /usr/libexec/goblins-os/goblins-os-focus-tick",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "focus-tick-python-asserted",
+            "command -v python3",
+        ),
         contains_check(
             root.join("crates/goblins-os-core/src/focus.rs"),
             "core-focus-restores-notification-banners",

@@ -23,6 +23,7 @@ const LAUNCHER = '/usr/libexec/goblins-os/goblins-os-launcher';
 const SCREENSHOT_CONTEXT = '/usr/libexec/goblins-os/goblins-os-screenshot-context';
 const CONTROL_CENTER = '/usr/libexec/goblins-os/goblins-os-control-center';
 const SETTINGS = '/usr/libexec/goblins-os/goblins-os-settings';
+const INPUT_SOURCES_SCHEMA = 'org.gnome.desktop.input-sources';
 // Color-only overlay applied on top of the dark gnome-shell.css base when the
 // desktop color-scheme is light, giving macOS-style adaptive (light/dark) chrome.
 const LIGHT_CHROME_CSS = '/usr/share/themes/GoblinsOS/gnome-shell/gnome-shell-light.css';
@@ -46,9 +47,10 @@ export default class GoblinsMenuBar extends Extension {
         // Position 0 in the left box: the very first item on the menu bar.
         Main.panel.addToStatusArea('goblins-mark', this._mark, 0, 'left');
 
-        // Right: Goblins AI, then Control Center. The AI button is a compact
-        // command menu so system-wide assistant actions stay one menu-bar click
-        // away without crowding the top panel.
+        // Right: Goblins AI, input source (only when there are multiple sources),
+        // then Control Center. The AI button is a compact command menu so
+        // system-wide assistant actions stay one menu-bar click away without
+        // crowding the top panel.
         this._ai = new PanelMenu.Button(0.0, 'Goblins AI');
         this._ai.add_child(new St.Icon({
             gicon: Gio.icon_new_for_string(AI_ICON),
@@ -62,6 +64,17 @@ export default class GoblinsMenuBar extends Extension {
         this._ai.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addAiMenuItem('Goblins AI Settings', [SETTINGS, '--panel=models']);
         Main.panel.addToStatusArea('goblins-ai', this._ai, 1, 'right');
+
+        this._inputSource = new PanelMenu.Button(0.0, 'Input Source', true);
+        this._inputSourceLabel = new St.Label({
+            text: '',
+            style_class: 'goblins-input-source-indicator',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._inputSource.add_child(this._inputSourceLabel);
+        this._inputSource.hide();
+        Main.panel.addToStatusArea('goblins-input-source', this._inputSource, 2, 'right');
+        this._bindInputSourceIndicator();
 
         this._control = new PanelMenu.Button(0.0, 'Control Center', true);
         this._control.add_child(new St.Icon({
@@ -128,6 +141,148 @@ export default class GoblinsMenuBar extends Extension {
         } catch (error) {
             logError(error, 'goblins-menubar: failed to apply adaptive chrome stylesheet');
         }
+    }
+
+    _bindInputSourceIndicator() {
+        try {
+            this._inputSourceSettings = new Gio.Settings({schema_id: INPUT_SOURCES_SCHEMA});
+            this._inputSourcesChangedId = this._inputSourceSettings.connect(
+                'changed::sources',
+                () => this._refreshInputSourceIndicator()
+            );
+            this._inputSourceCurrentChangedId = this._inputSourceSettings.connect(
+                'changed::current',
+                () => this._refreshInputSourceIndicator()
+            );
+            this._refreshInputSourceIndicator();
+        } catch (error) {
+            this._setInputSourceIndicator('', false);
+            logError(error, 'goblins-menubar: input source indicator unavailable');
+        }
+    }
+
+    _refreshInputSourceIndicator() {
+        if (!this._inputSourceSettings) {
+            this._setInputSourceIndicator('', false);
+            return;
+        }
+
+        try {
+            const sources = this._readInputSources();
+            if (sources.length <= 1) {
+                this._setInputSourceIndicator('', false);
+                return;
+            }
+
+            const current = this._currentInputSourceIndex(sources.length);
+            if (current === null) {
+                this._setInputSourceIndicator('', false);
+                return;
+            }
+
+            const source = sources[current];
+            this._setInputSourceIndicator(
+                this._inputSourceAbbreviation(source.kind, source.id),
+                true
+            );
+        } catch (error) {
+            this._setInputSourceIndicator('', false);
+            logError(error, 'goblins-menubar: failed to refresh input source indicator');
+        }
+    }
+
+    _readInputSources() {
+        const variant = this._inputSourceSettings.get_value('sources');
+        const unpacked = typeof variant?.deep_unpack === 'function'
+            ? variant.deep_unpack()
+            : [];
+        if (!Array.isArray(unpacked))
+            return [];
+
+        const sources = [];
+        for (const entry of unpacked) {
+            const normalized = this._normalizeInputSourceEntry(entry);
+            if (normalized)
+                sources.push(normalized);
+        }
+        return sources;
+    }
+
+    _normalizeInputSourceEntry(entry) {
+        const pair = entry && typeof entry.deep_unpack === 'function'
+            ? entry.deep_unpack()
+            : entry;
+        if (!Array.isArray(pair) || pair.length < 2)
+            return null;
+
+        const kind = this._safeInputSourceToken(pair[0]);
+        const id = this._safeInputSourceToken(pair[1]);
+        if (!kind || !id)
+            return null;
+        return {kind, id};
+    }
+
+    _currentInputSourceIndex(sourceCount) {
+        try {
+            const current = this._inputSourceSettings.get_uint('current');
+            if (Number.isInteger(current) && current >= 0 && current < sourceCount)
+                return current;
+        } catch (error) {
+            logError(error, 'goblins-menubar: failed to read current input source');
+        }
+        return null;
+    }
+
+    _setInputSourceIndicator(text, visible) {
+        this._inputSourceLabel?.set_text(text);
+        if (visible)
+            this._inputSource?.show();
+        else
+            this._inputSource?.hide();
+    }
+
+    _inputSourceAbbreviation(kind, id) {
+        const normalizedKind = kind.toLowerCase();
+        const normalizedId = id.toLowerCase();
+        if (normalizedKind === 'xkb')
+            return this._layoutAbbreviation(normalizedId);
+
+        if (normalizedKind === 'ibus') {
+            if (normalizedId === 'libpinyin' || normalizedId === 'pinyin')
+                return 'PY';
+            if (normalizedId === 'anthy' || normalizedId === 'mozc')
+                return 'JP';
+            if (normalizedId === 'hangul')
+                return 'KO';
+            return this._compactInputSourceCode(normalizedId);
+        }
+
+        return this._compactInputSourceCode(normalizedId || normalizedKind);
+    }
+
+    _layoutAbbreviation(id) {
+        if (id === 'us')
+            return 'US';
+        if (id === 'gb')
+            return 'GB';
+        return this._compactInputSourceCode(id);
+    }
+
+    _compactInputSourceCode(value) {
+        const cleaned = String(value || '')
+            .replace(/^.*:/, '')
+            .replace(/[^a-z0-9]+/gi, ' ')
+            .trim();
+        const token = cleaned.split(/\s+/)[0] || 'IM';
+        return token.slice(0, 3).toUpperCase();
+    }
+
+    _safeInputSourceToken(value) {
+        return String(value || '')
+            .replace(/[\r\n\t]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 64);
     }
 
     _addAiMenuItem(label, argv) {
@@ -225,6 +380,14 @@ export default class GoblinsMenuBar extends Extension {
             this._interfaceSettings.disconnect(this._schemeChangedId);
             this._schemeChangedId = null;
         }
+        if (this._inputSourcesChangedId && this._inputSourceSettings) {
+            this._inputSourceSettings.disconnect(this._inputSourcesChangedId);
+            this._inputSourcesChangedId = null;
+        }
+        if (this._inputSourceCurrentChangedId && this._inputSourceSettings) {
+            this._inputSourceSettings.disconnect(this._inputSourceCurrentChangedId);
+            this._inputSourceCurrentChangedId = null;
+        }
         if (this._lightChromeLoaded && this._lightChromeFile) {
             try {
                 const theme = this._themeContext?.get_theme();
@@ -236,6 +399,7 @@ export default class GoblinsMenuBar extends Extension {
         }
         this._themeContext = null;
         this._interfaceSettings = null;
+        this._inputSourceSettings = null;
         this._lightChromeFile = null;
         if (this._mark) {
             this._mark.destroy();
@@ -250,5 +414,10 @@ export default class GoblinsMenuBar extends Extension {
             this._ai.destroy();
             this._ai = null;
         }
+        if (this._inputSource) {
+            this._inputSource.destroy();
+            this._inputSource = null;
+        }
+        this._inputSourceLabel = null;
     }
 }

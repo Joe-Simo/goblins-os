@@ -22,6 +22,17 @@
   color: #f5f5f7;
 }
 
+.goblins-input-source-indicator {
+  min-width: 24px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #f5f5f7;
+  background-color: rgba(0, 145, 255, 0.22);
+  border: 1px solid rgba(0, 145, 255, 0.62);
+}
+
 /* The control-center button at the right of the menu bar — a monochrome sliders
    glyph. This base sheet inks it white for the dark glass panel; the light overlay
    re-colors it to #1a1a1f for the light frosted panel (it is symbolic, so CSS color

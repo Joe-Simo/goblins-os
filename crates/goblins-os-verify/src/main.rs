@@ -7606,6 +7606,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "theme?.unload_stylesheet(this._lightChromeFile)",
         ),
         contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-input-source-uses-gnome-schema",
+            "org.gnome.desktop.input-sources",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-input-source-hides-single-source",
+            "sources.length <= 1",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-input-source-watches-current",
+            "changed::current",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-input-source-honest-current-gate",
+            "current === null",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-input-source-cjk-abbreviations",
+            "normalizedId === 'libpinyin'",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/stylesheet.css"),
+            "menubar-input-source-uses-canonical-accent",
+            "rgba(0, 145, 255, 0.22)",
+        ),
+        contains_check(
             root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell-light.css"),
             "shell-light-overlay-recolors-panel",
             "#panel {",

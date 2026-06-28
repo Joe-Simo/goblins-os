@@ -9466,6 +9466,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "press Escape",
         ),
         contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-candidate-mode",
+            "TextShortcutsProofMode::Candidate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-candidate-bubble-style",
+            ".gos-text-shortcuts-candidate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-candidate-honest-render-claim",
+            "rendered_bubble_ready_claim=false",
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "render-textshortcuts-candidate-light",
+            "120-text-shortcuts-candidate.png",
+        ),
+        contains_check(
+            root.join("os/bootc/render-screens.sh"),
+            "render-textshortcuts-candidate-dark",
+            "121-text-shortcuts-candidate-dark.png",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-voice-control-route",
             "/v1/voice/control/resolve",

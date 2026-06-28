@@ -977,6 +977,22 @@ rendered bubble, focused-field callback, or text-input-v3 proof. Local gates:
 `goblins-os-verify --source-root .` -> **blocked=0 (1940)**. This is still
 CI/qemu-pending and does **not** mark Text Shortcuts shipped.
 
+Current Text Shortcuts candidate-bubble proof-surface continuation:
+`goblins-os-shell --text-shortcuts-proof candidate` now exposes a proof-only GTK
+field seeded with `omw` and a Goblins-native candidate bubble for `on my way`.
+The proof file records `replacement=on my way`, `accept_on=word-boundary`,
+`dismiss_key=Escape`, and `rendered_bubble_ready_claim=false`; the render script
+now captures light/dark candidate-bubble screenshots for CI/qemu, and
+`goblins-os-verify` pins the mode, style, honest render claim, and render targets.
+This does **not** implement a live IBus overlay, focused-field callback, or
+Wayland text-input-v3 bubble. Local gates: `bash -n os/bootc/render-screens.sh
+os/hardware-gate/verify-shipping-status.sh`, `cargo fmt --all --check`, `cargo
+test -p goblins-os-shell parses_text_shortcuts_proof_targets`, `cargo clippy
+--workspace -- -D warnings`, `cargo test --workspace`, Rust 1.88 GTK container
+`cargo clippy -p goblins-os-shell --features goblins-os-shell/native-desktop -- -D warnings`,
+and `goblins-os-verify --source-root .` -> **blocked=0 (1945)**.
+This is still CI/qemu-pending and does **not** mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining

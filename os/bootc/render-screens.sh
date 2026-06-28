@@ -599,6 +599,7 @@ curl -s -X POST http://127.0.0.1:8787/v1/session/unlock \
 sleep 0.5
 
 capture goblins-os-shell     "Goblins OS"          04-shell.png
+capture goblins-os-shell     "Goblins OS Text Shortcuts Proof" 120-text-shortcuts-candidate.png --text-shortcuts-proof candidate
 
 # Build Studio through the real deep-link entrypoint. If the core has no saved
 # build sessions this truthfully renders the empty new-build state.
@@ -624,6 +625,7 @@ unset GOBLINS_OS_RENDER_HOLD_WINDOW
 # proving Light/Dark/Auto themes the whole OS (chrome and the Build Studio).
 export GOBLINS_OS_THEME=dark
 capture goblins-os-shell     "Goblins OS"          09-shell-dark.png
+capture goblins-os-shell     "Goblins OS Text Shortcuts Proof" 121-text-shortcuts-candidate-dark.png --text-shortcuts-proof candidate
 capture goblins-os-shell     "Goblins OS"          10-studio-dark.png --studio
 # The destructive confirmation in Dark — proving the install flow themes with the
 # rest of the OS (the typed-acknowledgement hero in both schemes).

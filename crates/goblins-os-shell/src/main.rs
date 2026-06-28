@@ -378,6 +378,7 @@ enum TextShortcutsProofMode {
     Passthrough,
     Password,
     Dismiss,
+    Candidate,
 }
 
 /// Parse the launcher's deep-link from argv (or the env fallback the launcher can
@@ -416,6 +417,7 @@ fn text_shortcuts_proof_mode(mode: &str) -> Option<TextShortcutsProofMode> {
         "passthrough" => Some(TextShortcutsProofMode::Passthrough),
         "password" => Some(TextShortcutsProofMode::Password),
         "dismiss" => Some(TextShortcutsProofMode::Dismiss),
+        "candidate" => Some(TextShortcutsProofMode::Candidate),
         _ => None,
     }
 }
@@ -2550,6 +2552,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Passthrough => "Pass-through proof field",
             TextShortcutsProofMode::Password => "Password-field refusal proof",
             TextShortcutsProofMode::Dismiss => "Escape-dismiss proof",
+            TextShortcutsProofMode::Candidate => "Text Shortcuts candidate",
         };
         center.append(&label(title, &["gos-card-title"]));
 
@@ -2560,6 +2563,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Passthrough => gtk::InputPurpose::FreeForm,
             TextShortcutsProofMode::Password => gtk::InputPurpose::Password,
             TextShortcutsProofMode::Dismiss => gtk::InputPurpose::FreeForm,
+            TextShortcutsProofMode::Candidate => gtk::InputPurpose::FreeForm,
         });
         if mode == TextShortcutsProofMode::Password {
             entry.set_visibility(false);
@@ -2569,7 +2573,11 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Passthrough => "Type hello.",
             TextShortcutsProofMode::Password => "Password field",
             TextShortcutsProofMode::Dismiss => "Type omw, then press Escape",
+            TextShortcutsProofMode::Candidate => "omw",
         }));
+        if mode == TextShortcutsProofMode::Candidate {
+            entry.set_text("omw");
+        }
 
         if let Some(path) = proof_file.clone() {
             entry.connect_changed(move |entry| {
@@ -2578,6 +2586,24 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         }
 
         center.append(&entry);
+        if mode == TextShortcutsProofMode::Candidate {
+            if let Some(path) = proof_file.clone() {
+                let _ = std::fs::write(
+                    &path,
+                    "replacement=on my way\naccept_on=word-boundary\ndismiss_key=Escape\nrendered_bubble_ready_claim=false\n",
+                );
+            }
+            let candidate = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            candidate.add_css_class("gos-text-shortcuts-candidate");
+            candidate.append(&label("on my way", &["gos-text-shortcuts-candidate-text"]));
+            let hint = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            hint.add_css_class("gos-text-shortcuts-candidate-hint");
+            hint.append(&label("Space", &["gos-text-shortcuts-keycap"]));
+            hint.append(&label("Esc", &["gos-text-shortcuts-keycap"]));
+            candidate.append(&spacer());
+            candidate.append(&hint);
+            center.append(&candidate);
+        }
         root.append(&center);
         window.set_child(Some(&root));
         window.present();
@@ -3092,6 +3118,36 @@ window.gos-windowed .gos-top-bar {
               0 1px 0 @gos_panel_sheen inset,
               0 12px 32px @gos_shadow_raise;
 }
+
+.gos-text-shortcuts-candidate {
+  margin-top: -2px;
+  padding: 8px 10px;
+  min-height: 36px;
+  border-radius: 12px;
+  border: 1px solid alpha(@gos_accent, 0.38);
+  background: alpha(@gos_accent, 0.12);
+  box-shadow: 0 8px 24px @gos_shadow_raise;
+}
+
+.gos-text-shortcuts-candidate-text {
+  color: @gos_ink;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.gos-text-shortcuts-candidate-hint {
+  color: @gos_ink_muted;
+}
+
+.gos-text-shortcuts-keycap {
+  min-width: 34px;
+  padding: 3px 7px;
+  border-radius: 8px;
+  color: @gos_ink_secondary;
+  background: alpha(@gos_surface_sunken, 0.72);
+  font-size: 11px;
+  font-weight: 650;
+}
 "#;
 
 #[cfg(test)]
@@ -3158,6 +3214,16 @@ mod tests {
             ),
             Some(StandaloneTarget::TextShortcutsProof(
                 TextShortcutsProofMode::Dismiss
+            ))
+        );
+        assert_eq!(
+            standalone_target_from_args(
+                ["--text-shortcuts-proof", "candidate"]
+                    .map(String::from)
+                    .into_iter()
+            ),
+            Some(StandaloneTarget::TextShortcutsProof(
+                TextShortcutsProofMode::Candidate
             ))
         );
         assert_eq!(

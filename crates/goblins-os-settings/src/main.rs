@@ -38,6 +38,7 @@ const GNOME_DISKS: &str = "gnome-disks";
 const GNOME_SYSTEM_MONITOR: &str = "gnome-system-monitor";
 const GNOME_LOGS: &str = "gnome-logs";
 const GNOME_SOFTWARE: &str = "gnome-software";
+const SEAHORSE_PASSWORDS_AND_KEYS: &str = "seahorse";
 
 type SettingsResult<T> = Result<T, Box<dyn Error>>;
 
@@ -5774,6 +5775,7 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
         )),
     }
     append_keychain_collections(panel, state);
+    append_keychain_manager_handoff(panel);
 
     panel.append(&label("Device unlock", &["gos-subsection-title"]));
     match &state.fingerprint {
@@ -5849,6 +5851,17 @@ fn keychain_collection_item_label(item_count: Option<usize>) -> String {
         Some(count) => format!("{count} saved items reported."),
         None => "Saved-item count is waiting.".to_string(),
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_keychain_manager_handoff(panel: &gtk4::Box) {
+    append_native_app_handoff(
+        panel,
+        "Open Passwords & Keys",
+        "Passwords & Keys",
+        SEAHORSE_PASSWORDS_AND_KEYS,
+        "manage saved passwords, keys, and certificates in the system keyring",
+    );
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]

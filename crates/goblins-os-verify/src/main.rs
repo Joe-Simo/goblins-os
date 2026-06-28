@@ -9697,6 +9697,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keychain-manager-handoff-row",
+            "Open Passwords & Keys",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keychain-manager-handoff-launches-seahorse",
+            "SEAHORSE_PASSWORDS_AND_KEYS: &str = \"seahorse\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keychain-manager-handoff-uses-native-launcher",
+            "append_keychain_manager_handoff(panel)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-network-hotspot-management",
             "append_hotspot_management",
         ),

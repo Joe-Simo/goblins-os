@@ -281,6 +281,7 @@ evtest --query /dev/input/event0 EV_KEY BTN_GAMEPAD || true
 # Audio output. Capture sink listing plus audible/signal activity.
 wpctl status
 pw-cli info 0
+pw-dump | head -200
 pactl list short sinks
 speaker-test -t sine -l 1
 ```

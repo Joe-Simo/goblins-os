@@ -1130,12 +1130,23 @@ struct LiveCaptionsStatus {
     stt_model: LiveCaptionsCapability,
     pipewire: LiveCaptionsCapability,
     capture: LiveCaptionsCapability,
+    #[serde(default)]
+    capture_plan: Option<LiveCaptionsCapturePlan>,
     detail: String,
 }
 
 #[derive(Clone, Deserialize)]
 struct LiveCaptionsCapability {
     ready: bool,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct LiveCaptionsCapturePlan {
+    #[allow(dead_code)]
+    runtime_ready_claim: bool,
+    capture_runtime_ready: bool,
+    transcription_ready_claim: bool,
     detail: String,
 }
 
@@ -1422,19 +1433,42 @@ fn live_captions_status_detail(status: &LiveCaptionsStatus) -> String {
     } else {
         "Captioning locality is not reported by this session."
     };
+    let capture_plan = status
+        .capture_plan
+        .as_ref()
+        .map(live_captions_capture_plan_detail)
+        .unwrap_or_default();
     if status.available {
-        format!("{} {}", status.detail, locality)
+        format!("{} {}{}", status.detail, locality, capture_plan)
     } else {
         format!(
-            "{} {} Runtime: {} Model: {} PipeWire: {} Capture: {}",
+            "{} {} Runtime: {} Model: {} PipeWire: {} Capture: {}{}",
             status.detail,
             locality,
             status.stt_runtime.detail,
             status.stt_model.detail,
             status.pipewire.detail,
-            status.capture.detail
+            status.capture.detail,
+            capture_plan
         )
     }
+}
+
+fn live_captions_capture_plan_detail(plan: &LiveCaptionsCapturePlan) -> String {
+    let capture_claim = if plan.capture_runtime_ready {
+        "live capture claimed"
+    } else {
+        "live capture not claimed"
+    };
+    let transcription_claim = if plan.transcription_ready_claim {
+        "live transcription claimed"
+    } else {
+        "live transcription not claimed"
+    };
+    format!(
+        " Capture plan: {} ({capture_claim}; {transcription_claim}).",
+        plan.detail
+    )
 }
 
 fn live_captions_config_detail(status: &LiveCaptionsStatus) -> String {
@@ -21159,6 +21193,12 @@ fn test_live_captions_status(
                 "pw-record capture is not ready.".to_string()
             },
         },
+        capture_plan: Some(LiveCaptionsCapturePlan {
+            runtime_ready_claim: false,
+            capture_runtime_ready: false,
+            transcription_ready_claim: false,
+            detail: "Live Captions has a deterministic PipeWire capture plan, but no live monitor target, capture stream, or transcription loop is claimed yet.".to_string(),
+        }),
         detail: if !schema_available {
             "Live Captions is unavailable here (its preferences schema is not installed)."
                 .to_string()
@@ -25276,6 +25316,9 @@ mod tests {
         let waiting_detail = super::live_captions_status_detail(&waiting);
         assert!(waiting_detail.contains("Add a speech model"));
         assert!(waiting_detail.contains("PipeWire"));
+        assert!(waiting_detail.contains("Capture plan"));
+        assert!(waiting_detail.contains("live capture not claimed"));
+        assert!(waiting_detail.contains("live transcription not claimed"));
 
         let active = super::test_live_captions_status(true, true, true, true);
         assert_eq!(super::live_captions_state(&active), ("captioning", true));

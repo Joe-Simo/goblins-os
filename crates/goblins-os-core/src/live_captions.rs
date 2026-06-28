@@ -19,6 +19,7 @@ use axum::{
     Json,
 };
 use serde::Serialize;
+use serde_json::Value;
 
 const SCHEMA: &str = "org.goblins.shell.extensions.captions";
 const DEFAULT_MODEL_DIR: &str = "/var/lib/goblins-os/voice/stt";
@@ -32,6 +33,8 @@ const DEFAULT_SILENCE_RMS: f32 = 450.0;
 const DEFAULT_MIN_SEGMENT_MS: u64 = 500;
 const DEFAULT_MAX_SEGMENT_MS: u64 = 2_000;
 const DEFAULT_TRAILING_SILENCE_MS: u64 = 450;
+const CAPTURE_TARGET_PLACEHOLDER: &str = "<pipewire-monitor-target>";
+const CAPTION_CHUNK_PLACEHOLDER: &str = "/run/user/UID/goblins-os/live-captions/chunk.wav";
 
 #[derive(Serialize)]
 pub struct LiveCaptionsStatus {
@@ -50,6 +53,7 @@ pub struct LiveCaptionsStatus {
     stt_model: Capability,
     pipewire: Capability,
     capture: Capability,
+    capture_plan: CaptionCapturePlan,
     segment: SegmentConfig,
     detail: String,
 }
@@ -67,6 +71,23 @@ struct SegmentConfig {
     min_segment_ms: u64,
     max_segment_ms: u64,
     trailing_silence_ms: u64,
+}
+
+#[derive(Serialize)]
+struct CaptionCapturePlan {
+    source: &'static str,
+    monitor_target: Option<String>,
+    capture_command: Vec<String>,
+    runtime_ready_claim: bool,
+    capture_runtime_ready: bool,
+    transcription_ready_claim: bool,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct PipeWireMonitorTarget {
+    target: String,
+    description: String,
 }
 
 pub async fn live_captions_status() -> Json<LiveCaptionsStatus> {
@@ -123,6 +144,7 @@ fn build_status() -> LiveCaptionsStatus {
     let stt_model = stt_model_capability();
     let pipewire = pipewire_capability();
     let capture = capture_capability();
+    let capture_plan = pending_caption_capture_plan(&capture.component);
     let available = stt_runtime.ready && stt_model.ready && pipewire.ready && capture.ready;
     let active = enabled && available;
 
@@ -142,6 +164,7 @@ fn build_status() -> LiveCaptionsStatus {
         stt_model,
         pipewire,
         capture,
+        capture_plan,
         segment: SegmentConfig {
             silence_rms: DEFAULT_SILENCE_RMS,
             min_segment_ms: DEFAULT_MIN_SEGMENT_MS,
@@ -162,7 +185,7 @@ fn status_detail(schema_available: bool, enabled: bool, available: bool) -> Stri
             .to_string();
     }
     if !available {
-        return "Add a speech model to turn on Live Captions, and make sure PipeWire system-audio capture is ready.".to_string();
+        return "Add a speech model to turn on Live Captions, and make sure PipeWire system-audio capture is ready. Capture planning is source-gated; no live captions start until an installed session proves the monitor target and transcription loop.".to_string();
     }
     "Live Captions is ready to caption local audio on this device.".to_string()
 }
@@ -224,12 +247,12 @@ fn stt_model_capability() -> Capability {
 }
 
 fn pipewire_capability() -> Capability {
-    let ready = binary_present("wpctl") && binary_present("pw-cli");
+    let ready = binary_present("wpctl") && binary_present("pw-cli") && binary_present("pw-dump");
     Capability {
         ready,
         component: "PipeWire monitor source".to_string(),
         detail: if ready {
-            "PipeWire control tools are available.".to_string()
+            "PipeWire control tools are available for monitor-source planning.".to_string()
         } else {
             "PipeWire audio routing is not ready in this session.".to_string()
         },
@@ -238,16 +261,97 @@ fn pipewire_capability() -> Capability {
 
 fn capture_capability() -> Capability {
     let binary = capture_bin();
-    let ready = binary_present(&binary);
+    let command_present = binary_present(&binary);
     Capability {
-        ready,
+        ready: false,
         component: binary.clone(),
-        detail: if ready {
-            "System audio capture command is available.".to_string()
+        detail: if command_present {
+            "System audio capture command is installed; live capture remains disabled until a PipeWire monitor target is proven in CI/qemu.".to_string()
         } else {
             "System audio capture is not ready on this device.".to_string()
         },
     }
+}
+
+fn pending_caption_capture_plan(capture_binary: &str) -> CaptionCapturePlan {
+    caption_capture_plan_from_pw_dump_with_binary(
+        capture_binary,
+        "",
+        Path::new(CAPTION_CHUNK_PLACEHOLDER),
+    )
+}
+
+#[cfg(test)]
+fn caption_capture_plan_from_pw_dump(pw_dump_json: &str, output: &Path) -> CaptionCapturePlan {
+    caption_capture_plan_from_pw_dump_with_binary(DEFAULT_CAPTURE_BIN, pw_dump_json, output)
+}
+
+fn caption_capture_plan_from_pw_dump_with_binary(
+    capture_binary: &str,
+    pw_dump_json: &str,
+    output: &Path,
+) -> CaptionCapturePlan {
+    let target = pipewire_monitor_targets_from_dump(pw_dump_json)
+        .into_iter()
+        .next();
+    let monitor_target = target.map(|target| target.target);
+    let target_arg = monitor_target
+        .as_deref()
+        .unwrap_or(CAPTURE_TARGET_PLACEHOLDER);
+    CaptionCapturePlan {
+        source: "pipewire-default-sink-monitor",
+        monitor_target: monitor_target.clone(),
+        capture_command: caption_capture_args(capture_binary, target_arg, output),
+        runtime_ready_claim: false,
+        capture_runtime_ready: false,
+        transcription_ready_claim: false,
+        detail: if monitor_target.is_some() {
+            "PipeWire monitor target can be resolved from pw-dump; live capture and transcription remain CI/qemu-pending.".to_string()
+        } else {
+            "No PipeWire monitor target was resolved from pw-dump; Live Captions stays waiting."
+                .to_string()
+        },
+    }
+}
+
+fn pipewire_monitor_targets_from_dump(pw_dump_json: &str) -> Vec<PipeWireMonitorTarget> {
+    let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(pw_dump_json) else {
+        return Vec::new();
+    };
+
+    let mut targets: Vec<PipeWireMonitorTarget> = entries
+        .iter()
+        .filter_map(pipewire_monitor_target_from_entry)
+        .collect();
+    targets.sort_by(|left, right| {
+        left.description
+            .cmp(&right.description)
+            .then(left.target.cmp(&right.target))
+    });
+    targets.dedup_by(|left, right| left.target == right.target);
+    targets
+}
+
+fn pipewire_monitor_target_from_entry(entry: &Value) -> Option<PipeWireMonitorTarget> {
+    let props = entry.get("info")?.get("props")?;
+    if prop_str(props, "media.class")? != "Audio/Source" {
+        return None;
+    }
+    let node_name = prop_str(props, "node.name")?;
+    let description = prop_str(props, "node.description").unwrap_or(node_name);
+    let name_is_monitor = node_name.ends_with(".monitor");
+    let description_is_monitor = description.to_ascii_lowercase().contains("monitor");
+    if !name_is_monitor && !description_is_monitor {
+        return None;
+    }
+    Some(PipeWireMonitorTarget {
+        target: node_name.to_string(),
+        description: description.to_string(),
+    })
+}
+
+fn prop_str<'a>(props: &'a Value, key: &str) -> Option<&'a str> {
+    props.get(key)?.as_str()
 }
 
 fn first_model(dir: &Path, extensions: &[&str]) -> Option<PathBuf> {
@@ -304,6 +408,21 @@ fn whisper_caption_args(model: &Path, input: &Path, output_prefix: &Path) -> Vec
         "-nt".to_string(),
         "-of".to_string(),
         output_prefix.to_string_lossy().to_string(),
+    ]
+}
+
+fn caption_capture_args(capture_binary: &str, target: &str, output: &Path) -> Vec<String> {
+    vec![
+        capture_binary.to_string(),
+        "--target".to_string(),
+        target.to_string(),
+        "--rate".to_string(),
+        "16000".to_string(),
+        "--channels".to_string(),
+        "1".to_string(),
+        "--format".to_string(),
+        "s16".to_string(),
+        output.to_string_lossy().to_string(),
     ]
 }
 
@@ -380,10 +499,11 @@ fn gsettings(args: &[&str]) -> Result<String, ()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        caption_stream_event, is_silence, normalize_audio_source, normalize_position,
-        normalize_text_size, rms_i16, segment_should_flush, whisper_caption_args, Capability,
-        LiveCaptionsStatus, SegmentConfig, DEFAULT_MAX_SEGMENT_MS, DEFAULT_MIN_SEGMENT_MS,
-        DEFAULT_SILENCE_RMS, DEFAULT_TRAILING_SILENCE_MS,
+        caption_capture_args, caption_capture_plan_from_pw_dump, caption_stream_event, is_silence,
+        normalize_audio_source, normalize_position, normalize_text_size,
+        pipewire_monitor_targets_from_dump, rms_i16, segment_should_flush, whisper_caption_args,
+        Capability, CaptionCapturePlan, LiveCaptionsStatus, SegmentConfig, DEFAULT_MAX_SEGMENT_MS,
+        DEFAULT_MIN_SEGMENT_MS, DEFAULT_SILENCE_RMS, DEFAULT_TRAILING_SILENCE_MS,
     };
     use std::path::Path;
 
@@ -419,6 +539,101 @@ mod tests {
                 "/tmp/chunk",
             ]
         );
+    }
+
+    #[test]
+    fn builds_stable_pipewire_capture_argv() {
+        assert_eq!(
+            caption_capture_args(
+                "pw-record",
+                "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor",
+                Path::new("/run/user/1000/goblins-os/live-captions/chunk.wav"),
+            ),
+            vec![
+                "pw-record",
+                "--target",
+                "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor",
+                "--rate",
+                "16000",
+                "--channels",
+                "1",
+                "--format",
+                "s16",
+                "/run/user/1000/goblins-os/live-captions/chunk.wav",
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_pipewire_monitor_targets_from_pw_dump() {
+        let dump = r#"[
+            {
+                "id": 41,
+                "type": "PipeWire:Interface:Node",
+                "info": {
+                    "props": {
+                        "media.class": "Audio/Sink",
+                        "node.name": "alsa_output.pci-0000_00_1f.3.analog-stereo",
+                        "node.description": "Built-in Audio Analog Stereo"
+                    }
+                }
+            },
+            {
+                "id": 42,
+                "type": "PipeWire:Interface:Node",
+                "info": {
+                    "props": {
+                        "media.class": "Audio/Source",
+                        "node.name": "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor",
+                        "node.description": "Monitor of Built-in Audio Analog Stereo"
+                    }
+                }
+            },
+            {
+                "id": 43,
+                "type": "PipeWire:Interface:Node",
+                "info": {
+                    "props": {
+                        "media.class": "Audio/Source",
+                        "node.name": "alsa_input.pci-0000_00_1f.3.analog-stereo",
+                        "node.description": "Built-in Microphone"
+                    }
+                }
+            }
+        ]"#;
+        let targets = pipewire_monitor_targets_from_dump(dump);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].target,
+            "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"
+        );
+    }
+
+    #[test]
+    fn capture_plan_resolves_target_but_keeps_live_claims_false() {
+        let dump = r#"[{
+            "id": 51,
+            "type": "PipeWire:Interface:Node",
+            "info": {
+                "props": {
+                    "media.class": "Audio/Source",
+                    "node.name": "bluez_output.00_11_22_33_44_55.a2dp-sink.monitor",
+                    "node.description": "Monitor of Headphones"
+                }
+            }
+        }]"#;
+        let plan = caption_capture_plan_from_pw_dump(
+            dump,
+            Path::new("/run/user/1000/goblins-os/live-captions/chunk.wav"),
+        );
+        assert_eq!(
+            plan.monitor_target.as_deref(),
+            Some("bluez_output.00_11_22_33_44_55.a2dp-sink.monitor")
+        );
+        assert!(!plan.runtime_ready_claim);
+        assert!(!plan.capture_runtime_ready);
+        assert!(!plan.transcription_ready_claim);
+        assert!(plan.detail.contains("CI/qemu-pending"));
     }
 
     #[test]
@@ -484,6 +699,19 @@ mod tests {
                 component: "pw-record".to_string(),
                 detail: "missing".to_string(),
             },
+            capture_plan: CaptionCapturePlan {
+                source: "pipewire-default-sink-monitor",
+                monitor_target: None,
+                capture_command: caption_capture_args(
+                    "pw-record",
+                    "<pipewire-monitor-target>",
+                    Path::new("/run/user/UID/goblins-os/live-captions/chunk.wav"),
+                ),
+                runtime_ready_claim: false,
+                capture_runtime_ready: false,
+                transcription_ready_claim: false,
+                detail: "Live Captions has a deterministic PipeWire capture plan, but no live monitor target, capture stream, or transcription loop is claimed yet.".to_string(),
+            },
             segment: SegmentConfig {
                 silence_rms: DEFAULT_SILENCE_RMS,
                 min_segment_ms: DEFAULT_MIN_SEGMENT_MS,
@@ -497,6 +725,8 @@ mod tests {
         assert!(json.contains("\"audio_source\":\"system\""));
         assert!(json.contains("\"stt_model\""));
         assert!(json.contains("\"position\":\"bottom\""));
+        assert!(json.contains("\"capture_runtime_ready\":false"));
+        assert!(json.contains("\"transcription_ready_claim\":false"));
     }
 
     #[test]
@@ -533,6 +763,19 @@ mod tests {
                 component: "pw-record".to_string(),
                 detail: "missing".to_string(),
             },
+            capture_plan: CaptionCapturePlan {
+                source: "pipewire-default-sink-monitor",
+                monitor_target: None,
+                capture_command: caption_capture_args(
+                    "pw-record",
+                    "<pipewire-monitor-target>",
+                    Path::new("/run/user/UID/goblins-os/live-captions/chunk.wav"),
+                ),
+                runtime_ready_claim: false,
+                capture_runtime_ready: false,
+                transcription_ready_claim: false,
+                detail: "Live Captions has a deterministic PipeWire capture plan, but no live monitor target, capture stream, or transcription loop is claimed yet.".to_string(),
+            },
             segment: SegmentConfig {
                 silence_rms: DEFAULT_SILENCE_RMS,
                 min_segment_ms: DEFAULT_MIN_SEGMENT_MS,
@@ -544,6 +787,7 @@ mod tests {
         let event = caption_stream_event(&status);
         assert!(event.starts_with("event: caption-status\n"));
         assert!(event.contains("\"active\":false"));
+        assert!(event.contains("\"runtime_ready_claim\":false"));
         assert!(!event.contains("captioned speech"));
     }
 }

@@ -1652,6 +1652,8 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         "image/png=org.gnome.Loupe.desktop",
     ));
     checks.push(file_check(root, "usr/bin/pw-cli"));
+    checks.push(file_check(root, "usr/bin/pw-record"));
+    checks.push(file_check(root, "usr/bin/pw-dump"));
     checks.push(file_check(root, "usr/bin/wpctl"));
     checks.push(file_check(root, "usr/bin/evtest"));
     checks.push(file_check(root, "usr/bin/lsusb"));
@@ -11160,6 +11162,46 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/live_captions.rs"),
             "live-captions-whisper-argv-builder",
             "whisper_caption_args",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/live_captions.rs"),
+            "live-captions-pipewire-monitor-parser",
+            "pipewire_monitor_targets_from_dump",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/live_captions.rs"),
+            "live-captions-capture-argv-builder",
+            "caption_capture_args",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/live_captions.rs"),
+            "live-captions-capture-plan-false-runtime-claim",
+            "runtime_ready_claim: false",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/live_captions.rs"),
+            "live-captions-capture-plan-false-capture-claim",
+            "capture_runtime_ready: false",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/live_captions.rs"),
+            "live-captions-capture-plan-false-transcription-claim",
+            "transcription_ready_claim: false",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/live_captions.rs"),
+            "live-captions-capture-plan-no-live-copy",
+            "no live monitor target, capture stream, or transcription loop is claimed yet",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "live-captions-image-asserts-pw-record",
+            "command -v pw-record",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "live-captions-image-asserts-pw-dump",
+            "command -v pw-dump",
         ),
         contains_check(
             root.join("os/glib-schemas/org.goblins.shell.extensions.captions.gschema.xml"),

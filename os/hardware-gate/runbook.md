@@ -148,6 +148,7 @@ the release media that was booted:
   "text_shortcuts_candidate_bubble_frame_proof": "text-shortcuts-candidate-bubble-frame-proof.json",
   "text_shortcuts_candidate_bubble_layout_proof": "text-shortcuts-candidate-bubble-layout-proof.json",
   "text_shortcuts_candidate_bubble_render_intent_proof": "text-shortcuts-candidate-bubble-render-intent-proof.json",
+  "text_shortcuts_candidate_bubble_render_proof": "text-shortcuts-candidate-bubble-render-proof.json",
   "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json",
   "input_sources_roundtrip_proof": "input-sources-roundtrip-proof.json",
   "focus_arm_roundtrip_proof": "focus-arm-roundtrip-proof.json",
@@ -233,6 +234,22 @@ pass-through unchanged behavior, fail-open sink handling, the
 `runtime_ready_claim=false`. This still does not prove a live rendered accept
 bubble, focused-field callback, or Wayland text-input-v3 bubble; it only keeps
 the render-intent bridge from drifting before live overlay proof exists.
+
+The candidate-bubble-render screenshot gate is
+`text-shortcuts-candidate-bubble-render-proof.json` plus
+`31-text-shortcuts-candidate-bubble-render.png`. It launches
+`goblins-os-shell --text-shortcuts-proof candidate-render` in the installed
+display-backed VM, captures the rendered Goblins candidate proof surface, and
+rejects the run unless the proof links the screenshot to the
+`goblins-textshortcuts-accept-bubble-render-intent`,
+`goblins-textshortcuts-accept-bubble-layout`, and
+`goblins-textshortcuts-accept-bubble-frame` contracts, records the
+`gos-text-shortcuts-candidate` style contract, Inter font, and
+`rendered_candidate_surface=true`, while keeping
+`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
+`runtime_ready_claim=false`. This proves qemu captured the rendered proof
+surface; it still does not mark the live IBus overlay, focused-field callback,
+or Wayland text-input-v3 bubble as shipped.
 
 The keyboard-shortcuts gate is `keyboard-shortcuts-roundtrip-proof.json`. It
 posts to `/v1/keyboard/shortcuts/binding` to set the owned `window-hud` shortcut
@@ -368,6 +385,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Text Shortcuts candidate bubble frame result, including `text-shortcuts-candidate-bubble-frame-proof.json`
 - Text Shortcuts candidate bubble layout result, including `text-shortcuts-candidate-bubble-layout-proof.json`
 - Text Shortcuts candidate bubble render intent result, including `text-shortcuts-candidate-bubble-render-intent-proof.json`
+- Text Shortcuts candidate bubble render screenshot result, including `text-shortcuts-candidate-bubble-render-proof.json` and `31-text-shortcuts-candidate-bubble-render.png`
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
 - Focus arm roundtrip result, including `focus-arm-roundtrip-proof.json`

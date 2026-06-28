@@ -379,6 +379,7 @@ enum TextShortcutsProofMode {
     Password,
     Dismiss,
     Candidate,
+    CandidateRender,
 }
 
 /// Parse the launcher's deep-link from argv (or the env fallback the launcher can
@@ -418,6 +419,7 @@ fn text_shortcuts_proof_mode(mode: &str) -> Option<TextShortcutsProofMode> {
         "password" => Some(TextShortcutsProofMode::Password),
         "dismiss" => Some(TextShortcutsProofMode::Dismiss),
         "candidate" => Some(TextShortcutsProofMode::Candidate),
+        "candidate-render" => Some(TextShortcutsProofMode::CandidateRender),
         _ => None,
     }
 }
@@ -2553,6 +2555,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Password => "Password-field refusal proof",
             TextShortcutsProofMode::Dismiss => "Escape-dismiss proof",
             TextShortcutsProofMode::Candidate => "Text Shortcuts candidate",
+            TextShortcutsProofMode::CandidateRender => "Text Shortcuts candidate render",
         };
         center.append(&label(title, &["gos-card-title"]));
 
@@ -2564,6 +2567,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Password => gtk::InputPurpose::Password,
             TextShortcutsProofMode::Dismiss => gtk::InputPurpose::FreeForm,
             TextShortcutsProofMode::Candidate => gtk::InputPurpose::FreeForm,
+            TextShortcutsProofMode::CandidateRender => gtk::InputPurpose::FreeForm,
         });
         if mode == TextShortcutsProofMode::Password {
             entry.set_visibility(false);
@@ -2574,24 +2578,58 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             TextShortcutsProofMode::Password => "Password field",
             TextShortcutsProofMode::Dismiss => "Type omw, then press Escape",
             TextShortcutsProofMode::Candidate => "omw",
+            TextShortcutsProofMode::CandidateRender => "omw",
         }));
-        if mode == TextShortcutsProofMode::Candidate {
+        if matches!(
+            mode,
+            TextShortcutsProofMode::Candidate | TextShortcutsProofMode::CandidateRender
+        ) {
             entry.set_text("omw");
         }
 
-        if let Some(path) = proof_file.clone() {
-            entry.connect_changed(move |entry| {
-                let _ = std::fs::write(&path, entry.text().as_str());
-            });
+        if !matches!(
+            mode,
+            TextShortcutsProofMode::Candidate | TextShortcutsProofMode::CandidateRender
+        ) {
+            if let Some(path) = proof_file.clone() {
+                entry.connect_changed(move |entry| {
+                    let _ = std::fs::write(&path, entry.text().as_str());
+                });
+            }
         }
 
         center.append(&entry);
-        if mode == TextShortcutsProofMode::Candidate {
+        if matches!(
+            mode,
+            TextShortcutsProofMode::Candidate | TextShortcutsProofMode::CandidateRender
+        ) {
             if let Some(path) = proof_file.clone() {
-                let _ = std::fs::write(
-                    &path,
-                    "replacement=on my way\naccept_on=word-boundary\ndismiss_key=Escape\nrendered_bubble_ready_claim=false\n",
-                );
+                let payload = match mode {
+                    TextShortcutsProofMode::Candidate => {
+                        "replacement=on my way\naccept_on=word-boundary\ndismiss_key=Escape\nrendered_bubble_ready_claim=false\n".to_string()
+                    }
+                    TextShortcutsProofMode::CandidateRender => concat!(
+                        "surface=goblins-os-shell-text-shortcuts-candidate-bubble-render\n",
+                        "render_intent_surface=goblins-textshortcuts-accept-bubble-render-intent\n",
+                        "layout_surface=goblins-textshortcuts-accept-bubble-layout\n",
+                        "frame_surface=goblins-textshortcuts-accept-bubble-frame\n",
+                        "replacement=on my way\n",
+                        "accept_on=word-boundary\n",
+                        "dismiss_key=Escape\n",
+                        "style_class=gos-text-shortcuts-candidate\n",
+                        "text_style_class=gos-text-shortcuts-candidate-text\n",
+                        "hint_style_class=gos-text-shortcuts-candidate-hint\n",
+                        "font_family=Inter\n",
+                        "screenshot=31-text-shortcuts-candidate-bubble-render.png\n",
+                        "rendered_candidate_surface=true\n",
+                        "rendered_bubble_ready_claim=false\n",
+                        "live_overlay_claim=false\n",
+                        "runtime_ready_claim=false\n",
+                    )
+                    .to_string(),
+                    _ => unreachable!("candidate proof payload only exists for candidate modes"),
+                };
+                let _ = std::fs::write(&path, payload);
             }
             let candidate = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             candidate.add_css_class("gos-text-shortcuts-candidate");
@@ -3224,6 +3262,16 @@ mod tests {
             ),
             Some(StandaloneTarget::TextShortcutsProof(
                 TextShortcutsProofMode::Candidate
+            ))
+        );
+        assert_eq!(
+            standalone_target_from_args(
+                ["--text-shortcuts-proof", "candidate-render"]
+                    .map(String::from)
+                    .into_iter()
+            ),
+            Some(StandaloneTarget::TextShortcutsProof(
+                TextShortcutsProofMode::CandidateRender
             ))
         );
         assert_eq!(

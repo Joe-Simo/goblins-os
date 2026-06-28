@@ -138,6 +138,7 @@ TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="$RUN_DIR/text-shortcuts-overlay-intent-proo
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-frame-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-layout-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-render-intent-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-render-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="$RUN_DIR/keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="$RUN_DIR/input-sources-roundtrip-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="$RUN_DIR/focus-arm-roundtrip-proof.json"
@@ -272,6 +273,22 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT
   || ! grep -Fq '"live_overlay_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" \
   || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render-intent proof at $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"
+  exit 4
+fi
+if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"surface": "goblins-os-shell-text-shortcuts-candidate-bubble-render"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"render_intent_surface": "goblins-textshortcuts-accept-bubble-render-intent"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"layout_surface": "goblins-textshortcuts-accept-bubble-layout"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"frame_surface": "goblins-textshortcuts-accept-bubble-frame"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"screenshot": "31-text-shortcuts-candidate-bubble-render.png"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"rendered_candidate_surface": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"style_class": "gos-text-shortcuts-candidate"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"font_family": "Inter"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"rendered_bubble_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"live_overlay_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF" \
+  || [ ! -s "$RUN_DIR/31-text-shortcuts-candidate-bubble-render.png" ]; then
+  echo "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render screenshot proof at $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF"
   exit 4
 fi
 if ! grep -Fq '"status": "pass"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
@@ -423,6 +440,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "text_shortcuts_candidate_bubble_frame_proof":"text-shortcuts-candidate-bubble-frame-proof.json",
           "text_shortcuts_candidate_bubble_layout_proof":"text-shortcuts-candidate-bubble-layout-proof.json",
           "text_shortcuts_candidate_bubble_render_intent_proof":"text-shortcuts-candidate-bubble-render-intent-proof.json",
+          "text_shortcuts_candidate_bubble_render_proof":"text-shortcuts-candidate-bubble-render-proof.json",
           "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
           "input_sources_roundtrip_proof":"input-sources-roundtrip-proof.json",
           "focus_arm_roundtrip_proof":"focus-arm-roundtrip-proof.json",

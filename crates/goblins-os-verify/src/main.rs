@@ -5435,6 +5435,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-candidate-bubble-render-proof",
+            "text-shortcuts-candidate-bubble-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-candidate-bubble-render-screenshot",
+            "31-text-shortcuts-candidate-bubble-render.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-keyboard-shortcuts-roundtrip-proof",
             "keyboard-shortcuts-roundtrip-proof.json",
         ),
@@ -5522,6 +5532,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-textshortcuts-candidate-bubble-render-intent-proof",
             "/proof/text-shortcuts-candidate-bubble-render-intent",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-textshortcuts-candidate-bubble-render-proof",
+            "/proof/text-shortcuts-candidate-bubble-render",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-captures-textshortcuts-candidate-bubble-render-screenshot",
+            "31-text-shortcuts-candidate-bubble-render",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5895,6 +5915,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-textshortcuts-candidate-bubble-render-proof-json",
+            "text-shortcuts-candidate-bubble-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-writes-keyboard-shortcuts-roundtrip-proof-json",
             "keyboard-shortcuts-roundtrip-proof.json",
         ),
@@ -5957,6 +5982,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-bubble-render-intent-proof",
             "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render-intent proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-render-proof",
+            "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render screenshot proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6037,6 +6067,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-bubble-render-intent-fail-open",
             "\"sink_failure_fail_open\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-render-screenshot",
+            "\"screenshot\": \"31-text-shortcuts-candidate-bubble-render.png\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-render-surface",
+            "\"rendered_candidate_surface\": \"true\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6187,6 +6227,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-textshortcuts-candidate-bubble-render-intent-proof",
             "text_shortcuts_candidate_bubble_render_intent_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-textshortcuts-candidate-bubble-render-proof",
+            "text_shortcuts_candidate_bubble_render_proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6590,6 +6635,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-textshortcuts-candidate-bubble-render-proof",
+            "text_shortcuts_candidate_bubble_render_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-keyboard-shortcuts-roundtrip-proof",
             "keyboard_shortcuts_roundtrip_proof_passes",
         ),
@@ -6725,6 +6775,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-textshortcuts-candidate-bubble-render-intent-proof-filename",
             "text-shortcuts-candidate-bubble-render-intent-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-textshortcuts-candidate-bubble-render-proof-filename",
+            "text-shortcuts-candidate-bubble-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-textshortcuts-candidate-bubble-render-screenshot-filename",
+            "31-text-shortcuts-candidate-bubble-render.png",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6998,6 +7058,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-textshortcuts-candidate-bubble-render-proof",
+            "text_shortcuts_candidate_bubble_render_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-requires-keyboard-shortcuts-roundtrip-proof",
             "keyboard_shortcuts_roundtrip_proof_passes",
         ),
@@ -7060,6 +7125,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-textshortcuts-candidate-bubble-render-intent-proof",
             "Text Shortcuts candidate bubble render intent checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-textshortcuts-candidate-bubble-render-proof",
+            "Text Shortcuts candidate bubble render screenshot checked",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -11703,8 +11773,28 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-candidate-render-mode",
+            "TextShortcutsProofMode::CandidateRender",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-candidate-render-cli",
+            "candidate-render",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
             "shell-textshortcuts-candidate-bubble-style",
             ".gos-text-shortcuts-candidate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-candidate-render-proof-screenshot",
+            "31-text-shortcuts-candidate-bubble-render.png",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-candidate-render-proof-surface",
+            "rendered_candidate_surface=true",
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),

@@ -25,6 +25,7 @@ proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-o
 proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-frame?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_layout(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-layout?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_render_intent(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-render-intent?$1" >/dev/null 2>&1 || true; }
+proof_text_shortcuts_candidate_bubble_render(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-render?$1" >/dev/null 2>&1 || true; }
 proof_keyboard_shortcuts_roundtrip(){ curl -s "http://$H/proof/keyboard-shortcuts-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_input_sources_roundtrip(){ curl -s "http://$H/proof/input-sources-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_focus_arm_roundtrip(){ curl -s "http://$H/proof/focus-arm-roundtrip?$1" >/dev/null 2>&1 || true; }
@@ -523,6 +524,45 @@ text_shortcuts_candidate_bubble_render_intent_proof(){
   proof_text_shortcuts_candidate_bubble_render_intent "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-accept-bubble-render-intent&adapter_self_test=pass&frame_surface=goblins-textshortcuts-accept-bubble-frame&layout_surface=goblins-textshortcuts-accept-bubble-layout&render_intent_count=8&show_intent_count=4&hide_intent_count=4&dismissed_intent=true&committed_intent=true&focus_out_hide=true&sensitive_hide=true&pass_through_unchanged=true&sink_failure_fail_open=true&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
   return 0
 }
+text_shortcuts_candidate_bubble_render_proof(){
+  local render_file=/tmp/gate-text-shortcuts-candidate-bubble-render.txt
+  local render_pid
+
+  rm -f "$render_file"
+  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$render_file" "$B/goblins-os-shell" --text-shortcuts-proof candidate-render >/tmp/gate-text-shortcuts-candidate-bubble-render.log 2>&1 &
+  render_pid=$!
+  sleep 4
+  sig 31-text-shortcuts-candidate-bubble-render
+  kill "$render_pid" 2>/dev/null || true
+  wait "$render_pid" 2>/dev/null || true
+
+  if [ ! -s "$render_file" ]; then
+    proof_text_shortcuts_candidate_bubble_render "status=fail&stage=candidate-bubble-render-file&surface=goblins-os-shell-text-shortcuts-candidate-bubble-render&screenshot=31-text-shortcuts-candidate-bubble-render.png"
+    return 1
+  fi
+  if ! grep -Fxq "surface=goblins-os-shell-text-shortcuts-candidate-bubble-render" "$render_file" \
+    || ! grep -Fxq "render_intent_surface=goblins-textshortcuts-accept-bubble-render-intent" "$render_file" \
+    || ! grep -Fxq "layout_surface=goblins-textshortcuts-accept-bubble-layout" "$render_file" \
+    || ! grep -Fxq "frame_surface=goblins-textshortcuts-accept-bubble-frame" "$render_file" \
+    || ! grep -Fxq "replacement=on my way" "$render_file" \
+    || ! grep -Fxq "accept_on=word-boundary" "$render_file" \
+    || ! grep -Fxq "dismiss_key=Escape" "$render_file" \
+    || ! grep -Fxq "style_class=gos-text-shortcuts-candidate" "$render_file" \
+    || ! grep -Fxq "text_style_class=gos-text-shortcuts-candidate-text" "$render_file" \
+    || ! grep -Fxq "hint_style_class=gos-text-shortcuts-candidate-hint" "$render_file" \
+    || ! grep -Fxq "font_family=Inter" "$render_file" \
+    || ! grep -Fxq "screenshot=31-text-shortcuts-candidate-bubble-render.png" "$render_file" \
+    || ! grep -Fxq "rendered_candidate_surface=true" "$render_file" \
+    || ! grep -Fxq "rendered_bubble_ready_claim=false" "$render_file" \
+    || ! grep -Fxq "live_overlay_claim=false" "$render_file" \
+    || ! grep -Fxq "runtime_ready_claim=false" "$render_file"; then
+    proof_text_shortcuts_candidate_bubble_render "status=fail&stage=candidate-bubble-render-fields&surface=goblins-os-shell-text-shortcuts-candidate-bubble-render&screenshot=31-text-shortcuts-candidate-bubble-render.png"
+    return 1
+  fi
+
+  proof_text_shortcuts_candidate_bubble_render "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-candidate-bubble-render&render_intent_surface=goblins-textshortcuts-accept-bubble-render-intent&layout_surface=goblins-textshortcuts-accept-bubble-layout&frame_surface=goblins-textshortcuts-accept-bubble-frame&replacement=on%20my%20way&accept_on=word-boundary&dismiss_key=Escape&style_class=gos-text-shortcuts-candidate&text_style_class=gos-text-shortcuts-candidate-text&hint_style_class=gos-text-shortcuts-candidate-hint&font_family=Inter&screenshot=31-text-shortcuts-candidate-bubble-render.png&rendered_candidate_surface=true&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
+  return 0
+}
 keyboard_shortcuts_roundtrip_proof(){
   local shortcut_set_file=/tmp/gate-keyboard-shortcut-set.json
   local shortcut_reset_file=/tmp/gate-keyboard-shortcut-reset.json
@@ -998,6 +1038,7 @@ text_shortcuts_overlay_intent_proof || true
 text_shortcuts_candidate_bubble_frame_proof || true
 text_shortcuts_candidate_bubble_layout_proof || true
 text_shortcuts_candidate_bubble_render_intent_proof || true
+text_shortcuts_candidate_bubble_render_proof || true
 keyboard_shortcuts_roundtrip_proof || true
 input_sources_roundtrip_proof || true
 focus_arm_roundtrip_proof || true

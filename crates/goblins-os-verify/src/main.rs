@@ -1691,6 +1691,11 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         "installed-preview-png-defaults-to-loupe",
         "image/png=org.gnome.Loupe.desktop",
     ));
+    checks.push(contains_check(
+        root.join("usr/share/applications/mimeapps.list"),
+        "installed-preview-jpeg-defaults-to-loupe",
+        "image/jpeg=org.gnome.Loupe.desktop",
+    ));
     checks.push(file_check(root, "usr/bin/pw-cli"));
     checks.push(file_check(root, "usr/bin/pw-record"));
     checks.push(file_check(root, "usr/bin/pw-dump"));
@@ -9181,6 +9186,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/preview.rs"),
             "core-preview-does-not-read-file-contents",
             "It never reads file contents or claims rendered proof.",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "preview-installed-selftest-checks-status",
+            "GET /v1/preview/status -> HTTP",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "preview-installed-selftest-requires-viewers",
+            "available=$preview_available xdg-open=$preview_xdg_open papers=$preview_papers loupe=$preview_loupe",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "preview-installed-selftest-checks-supported-extensions",
+            r#"supported_extensions | index("pdf") and index("png")"#,
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "preview-installed-selftest-opens-pdf",
+            "POST /v1/preview/open PDF -> HTTP",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "preview-installed-selftest-opens-image",
+            "POST /v1/preview/open image -> HTTP",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "preview-installed-selftest-rejects-unsupported",
+            "POST /v1/preview/open unsupported -> HTTP",
         ),
         container_package_lockstep_check(root, "fingerprint-authselect-packaged", "authselect"),
         container_package_lockstep_check(root, "fingerprint-fprintd-packaged", "fprintd"),

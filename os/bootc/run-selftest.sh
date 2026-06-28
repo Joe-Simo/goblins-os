@@ -41,11 +41,56 @@ core_pid=$!
 for _ in $(seq 1 60); do curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1 && break; sleep 0.2; done
 for ep in /health /v1/readiness /v1/ai/actions /v1/ai/action-history /v1/system/hardware /v1/local-models \
           /v1/policy/status /v1/ai/runtime/status /v1/codex/resident/status /v1/auth/openai/status \
-          /v1/system/services /v1/installer/install-targets /v1/firewall/status /v1/apps/build-catalog /v1/apps; do
+          /v1/system/services /v1/installer/install-targets /v1/firewall/status /v1/preview/status \
+          /v1/apps/build-catalog /v1/apps; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8787$ep")
   echo "  GET $ep -> HTTP $code"
   [ "$code" = "200" ] || fail=1
 done
+preview_status_code=$(curl -s -o /tmp/goblins-os-preview-status.json -w '%{http_code}' \
+  http://127.0.0.1:8787/v1/preview/status)
+preview_available=$(jq -r '.available // false' /tmp/goblins-os-preview-status.json 2>/dev/null || true)
+preview_xdg_open=$(jq -r '.xdg_open_available // false' /tmp/goblins-os-preview-status.json 2>/dev/null || true)
+preview_papers=$(jq -r '.papers_available // false' /tmp/goblins-os-preview-status.json 2>/dev/null || true)
+preview_loupe=$(jq -r '.loupe_available // false' /tmp/goblins-os-preview-status.json 2>/dev/null || true)
+echo "  GET /v1/preview/status -> HTTP $preview_status_code available=$preview_available xdg-open=$preview_xdg_open papers=$preview_papers loupe=$preview_loupe"
+[ "$preview_status_code" = "200" ] \
+  && [ "$preview_available" = "true" ] \
+  && [ "$preview_xdg_open" = "true" ] \
+  && [ "$preview_papers" = "true" ] \
+  && [ "$preview_loupe" = "true" ] \
+  && jq -e '.supported_extensions | index("pdf") and index("png")' /tmp/goblins-os-preview-status.json >/dev/null \
+  || fail=1
+preview_pdf=/tmp/goblins-os-preview-selftest.pdf
+preview_png=/tmp/goblins-os-preview-selftest.png
+preview_txt=/tmp/goblins-os-preview-selftest.txt
+printf '%%PDF-1.4\n%% Goblins OS Preview self-test\n%%%%EOF\n' > "$preview_pdf"
+printf 'Goblins OS Preview image self-test placeholder\n' > "$preview_png"
+printf 'Goblins OS Preview unsupported self-test placeholder\n' > "$preview_txt"
+preview_pdf_code=$(curl -s -o /tmp/goblins-os-preview-open-pdf.json -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -cn --arg path "$preview_pdf" '{path:$path}')" \
+  http://127.0.0.1:8787/v1/preview/open)
+preview_pdf_ok=$(jq -r '.ok // empty' /tmp/goblins-os-preview-open-pdf.json 2>/dev/null || true)
+preview_pdf_kind=$(jq -r '.kind // empty' /tmp/goblins-os-preview-open-pdf.json 2>/dev/null || true)
+echo "  POST /v1/preview/open PDF -> HTTP $preview_pdf_code ok=$preview_pdf_ok kind=$preview_pdf_kind"
+[ "$preview_pdf_code" = "200" ] && [ "$preview_pdf_ok" = "true" ] && [ "$preview_pdf_kind" = "pdf" ] || fail=1
+preview_image_code=$(curl -s -o /tmp/goblins-os-preview-open-image.json -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -cn --arg path "$preview_png" '{path:$path}')" \
+  http://127.0.0.1:8787/v1/preview/open)
+preview_image_ok=$(jq -r '.ok // empty' /tmp/goblins-os-preview-open-image.json 2>/dev/null || true)
+preview_image_kind=$(jq -r '.kind // empty' /tmp/goblins-os-preview-open-image.json 2>/dev/null || true)
+echo "  POST /v1/preview/open image -> HTTP $preview_image_code ok=$preview_image_ok kind=$preview_image_kind"
+[ "$preview_image_code" = "200" ] && [ "$preview_image_ok" = "true" ] && [ "$preview_image_kind" = "image" ] || fail=1
+preview_unsupported_code=$(curl -s -o /tmp/goblins-os-preview-open-unsupported.json -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -cn --arg path "$preview_txt" '{path:$path}')" \
+  http://127.0.0.1:8787/v1/preview/open)
+preview_unsupported_ok=$(jq -r '.ok // empty' /tmp/goblins-os-preview-open-unsupported.json 2>/dev/null || true)
+preview_unsupported_text=$(jq -r '.text // empty' /tmp/goblins-os-preview-open-unsupported.json 2>/dev/null || true)
+echo "  POST /v1/preview/open unsupported -> HTTP $preview_unsupported_code ok=$preview_unsupported_ok"
+[ "$preview_unsupported_code" = "400" ] && [ "$preview_unsupported_ok" != "true" ] && [ -n "$preview_unsupported_text" ] || fail=1
 firewall_toggle_code=$(curl -s -o /tmp/goblins-os-firewall-toggle.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"enabled":true}' \

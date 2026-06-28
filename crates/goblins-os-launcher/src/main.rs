@@ -55,17 +55,24 @@ fn bounded_context_value(value: &str, max_chars: usize) -> Option<String> {
 struct LauncherConfig {
     core_url: String,
     mode: LauncherMode,
+    super_space_handoff: bool,
 }
 
 impl LauncherConfig {
     fn from_env() -> Self {
+        let args = env::args().skip(1).collect::<Vec<_>>();
         Self {
             core_url: env::var("GOBLINS_OS_CORE_URL")
                 .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
                 .unwrap_or_else(|_| DEFAULT_CORE_URL.into()),
-            mode: LauncherMode::from_args_and_env(),
+            mode: LauncherMode::from_args_and_env(&args),
+            super_space_handoff: super_space_handoff_from_args(&args),
         }
     }
+}
+
+fn super_space_handoff_from_args(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--super-space")
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -79,11 +86,8 @@ enum LauncherMode {
 }
 
 impl LauncherMode {
-    fn from_args_and_env() -> Self {
-        Self::from_values(
-            env::args().skip(1),
-            env::var("GOBLINS_OS_LAUNCHER_MODE").ok(),
-        )
+    fn from_args_and_env(args: &[String]) -> Self {
+        Self::from_values(args, env::var("GOBLINS_OS_LAUNCHER_MODE").ok())
     }
 
     fn from_values<I>(args: I, mode_env: Option<String>) -> Self
@@ -634,6 +638,7 @@ fn rank_file_hits(query: &str, hits: &[FileHit], limit: usize) -> Vec<FileHit> {
 fn run_launcher(config: LauncherConfig) -> LauncherResult<()> {
     let _ = config.core_url.as_str();
     let _ = config.mode;
+    let _ = config.super_space_handoff;
     println!("goblins_os_launcher=unavailable");
     println!("launcher_reason=build_requires_linux_native_desktop_feature");
     Ok(())
@@ -898,6 +903,13 @@ mod native {
     }
 
     pub fn run_launcher(config: LauncherConfig) -> LauncherResult<()> {
+        if config.super_space_handoff
+            && matches!(config.mode, LauncherMode::Normal)
+            && try_super_space_input_source_handoff(&config.core_url)
+        {
+            return Ok(());
+        }
+
         let apps = Rc::new(fetch_apps(&config.core_url));
         // One-shot file scan, cached for the launcher's lifetime (like apps).
         let files = Rc::new(scan_user_files());
@@ -2286,6 +2298,38 @@ mod native {
             })
     }
 
+    #[derive(Deserialize)]
+    struct SwitchInputSourceOutcome {
+        #[serde(default)]
+        ok: bool,
+        #[serde(default)]
+        switched: bool,
+        #[serde(default)]
+        text: String,
+    }
+
+    fn try_super_space_input_source_handoff(core_url: &str) -> bool {
+        let Ok((status, body)) =
+            http_request(core_url, "POST", "/v1/input/switch-next", Some("{}"))
+        else {
+            return false;
+        };
+        if !(200..=299).contains(&status) {
+            return false;
+        }
+        let Ok(outcome) = serde_json::from_slice::<SwitchInputSourceOutcome>(&body) else {
+            return false;
+        };
+        if outcome.ok && outcome.switched {
+            if !outcome.text.is_empty() {
+                eprintln!("goblins_os_launcher_super_space={}", outcome.text);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     /// Render hook: the value of `GOBLINS_OS_RENDER_QUERY` is pre-typed into the
     /// field for deterministic screenshot QA. It never seeds apps or answers.
     fn render_query() -> Option<String> {
@@ -2555,7 +2599,8 @@ mod native {
 mod tests {
     use super::{
         bounded_context_value, convert_units, eval_math, fuzzy_score, looks_like_math,
-        rank_file_hits, FileHit, LauncherMode, VISUAL_CONTEXT_SUBTITLE,
+        rank_file_hits, super_space_handoff_from_args, FileHit, LauncherMode,
+        VISUAL_CONTEXT_SUBTITLE,
     };
 
     fn hit(name: &str, mtime: u64) -> FileHit {
@@ -2692,6 +2737,23 @@ mod tests {
             LauncherMode::from_values(std::iter::empty::<&str>(), Some("screenshot".to_string())),
             LauncherMode::VisualContext
         ));
+    }
+
+    #[test]
+    fn super_space_flag_keeps_normal_launcher_mode_with_input_handoff() {
+        let args = vec!["--super-space".to_string()];
+        assert!(matches!(
+            LauncherMode::from_args_and_env(&args),
+            LauncherMode::Normal
+        ));
+        assert!(super_space_handoff_from_args(&args));
+
+        let assistant_args = vec!["--assistant".to_string()];
+        assert!(matches!(
+            LauncherMode::from_args_and_env(&assistant_args),
+            LauncherMode::Assistant
+        ));
+        assert!(!super_space_handoff_from_args(&assistant_args));
     }
 
     #[test]

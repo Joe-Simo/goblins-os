@@ -985,6 +985,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
+        "super-space-launcher-input-handoff",
+        "command='/usr/libexec/goblins-os/goblins-os-launcher --super-space'",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-launcher/src/main.rs"),
+        "launcher-super-space-input-handoff",
+        "/v1/input/switch-next",
+    ));
+    checks.push(contains_check(
+        root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
         "goblins-sound-theme",
         "theme-name='GoblinsOS'",
     ));
@@ -8472,6 +8482,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/v1/input/source",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-input-source-switch-route",
+            "/v1/input/switch-next",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/input.rs"),
             "core-input-sources-write-allowlist",
             "normalize_input_sources",
@@ -8490,6 +8505,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/input.rs"),
             "core-input-source-add-rejects-unlisted",
             "installed IBus engine is reported by this session",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/input.rs"),
+            "core-input-source-switch-current-key",
+            "gsettings(&[\"set\", INPUT_SOURCES_SCHEMA, \"current\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/input.rs"),
+            "core-input-source-switch-requires-multiple",
+            "Only one input source is configured, so Super+Space opens the launcher.",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/input.rs"),

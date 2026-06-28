@@ -186,6 +186,16 @@ pub struct InputSourcesOutcome {
     text: String,
 }
 
+#[derive(Serialize)]
+pub struct SwitchInputSourceOutcome {
+    ok: bool,
+    switched: bool,
+    source_count: usize,
+    current_index: Option<u32>,
+    current: Option<InputSourceEntry>,
+    text: String,
+}
+
 struct IbusEngineProbe {
     available: bool,
     engine_ids: Vec<String>,
@@ -256,6 +266,10 @@ pub async fn add_input_source(
     Json(request): Json<AddInputSourceRequest>,
 ) -> (StatusCode, Json<InputSourcesOutcome>) {
     add_input_source_outcome(request)
+}
+
+pub async fn switch_to_next_input_source() -> (StatusCode, Json<SwitchInputSourceOutcome>) {
+    switch_to_next_input_source_outcome()
 }
 
 fn build_input_status() -> InputStatus {
@@ -789,6 +803,146 @@ fn add_input_source_outcome(
     set_input_sources_outcome(SetInputSourcesRequest { sources })
 }
 
+fn switch_to_next_input_source_outcome() -> (StatusCode, Json<SwitchInputSourceOutcome>) {
+    if gsettings(&["list-schemas"]).is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SwitchInputSourceOutcome {
+                ok: false,
+                switched: false,
+                source_count: 0,
+                current_index: None,
+                current: None,
+                text: "Desktop preferences are not ready, so input sources cannot be switched in this session.".to_string(),
+            }),
+        );
+    }
+
+    let schema = schema_snapshot(true, INPUT_SOURCES_SCHEMA);
+    if !schema.available || !schema.has_key("sources") || !schema.has_key("current") {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SwitchInputSourceOutcome {
+                ok: false,
+                switched: false,
+                source_count: 0,
+                current_index: None,
+                current: None,
+                text: "Input source switching is not ready because this desktop session does not report both the source list and current source.".to_string(),
+            }),
+        );
+    }
+
+    let sources = setting_raw(&schema, INPUT_SOURCES_SCHEMA, "sources")
+        .map(|raw| parse_input_sources(&raw))
+        .unwrap_or_default();
+    let current = match setting_u32(&schema, INPUT_SOURCES_SCHEMA, "current") {
+        Some(current) => current,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(SwitchInputSourceOutcome {
+                    ok: false,
+                    switched: false,
+                    source_count: sources.len(),
+                    current_index: None,
+                    current: None,
+                    text: "Input source switching is not ready because the current source index is not reported clearly by this session.".to_string(),
+                }),
+            );
+        }
+    };
+
+    let next = match next_input_source_index(&sources, current) {
+        Ok(Some(next)) => next,
+        Ok(None) => {
+            return (
+                StatusCode::OK,
+                Json(SwitchInputSourceOutcome {
+                    ok: true,
+                    switched: false,
+                    source_count: sources.len(),
+                    current_index: Some(current),
+                    current: sources.get(current as usize).cloned(),
+                    text: "Only one input source is configured, so Super+Space opens the launcher."
+                        .to_string(),
+                }),
+            );
+        }
+        Err(text) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(SwitchInputSourceOutcome {
+                    ok: false,
+                    switched: false,
+                    source_count: sources.len(),
+                    current_index: Some(current),
+                    current: None,
+                    text,
+                }),
+            );
+        }
+    };
+
+    let encoded = next.to_string();
+    match gsettings(&["set", INPUT_SOURCES_SCHEMA, "current", &encoded]) {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(SwitchInputSourceOutcome {
+                ok: true,
+                switched: true,
+                source_count: sources.len(),
+                current_index: Some(next),
+                current: sources.get(next as usize).cloned(),
+                text: format!("Switched to input source {} of {}.", next + 1, sources.len()),
+            }),
+        ),
+        Err(GSettingsError::Missing) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SwitchInputSourceOutcome {
+                ok: false,
+                switched: false,
+                source_count: sources.len(),
+                current_index: Some(current),
+                current: sources.get(current as usize).cloned(),
+                text: "Desktop preferences are not ready, so input sources cannot be switched in this session.".to_string(),
+            }),
+        ),
+        Err(GSettingsError::Failed(detail)) => (
+            StatusCode::BAD_GATEWAY,
+            Json(SwitchInputSourceOutcome {
+                ok: false,
+                switched: false,
+                source_count: sources.len(),
+                current_index: Some(current),
+                current: sources.get(current as usize).cloned(),
+                text: if detail.is_empty() {
+                    "The current input source could not be changed by the desktop session.".to_string()
+                } else {
+                    format!("The current input source could not be changed: {detail}")
+                },
+            }),
+        ),
+    }
+}
+
+fn next_input_source_index(
+    sources: &[InputSourceEntry],
+    current: u32,
+) -> Result<Option<u32>, String> {
+    if sources.len() < 2 {
+        return Ok(None);
+    }
+    let current = current as usize;
+    if current >= sources.len() {
+        return Err(
+            "Input source switching is paused because the current source index is outside the configured source list."
+                .to_string(),
+        );
+    }
+    Ok(Some(((current + 1) % sources.len()) as u32))
+}
+
 fn input_sources_with_added_choice(
     current: &[InputSourceEntry],
     requested: InputSourceEntry,
@@ -1202,9 +1356,9 @@ mod tests {
     use super::{
         addable_input_source_choices, cjk_engine_package_statuses_with, encode_input_sources,
         encode_preference_value, input_engine_packages_detail, input_sources_with_added_choice,
-        input_target_spec, normalize_input_sources, parse_gsettings_bool, parse_gsettings_f64,
-        parse_gsettings_u32, parse_ibus_list_engine, parse_preference_value, IbusEngineProbe,
-        InputPreferenceTarget, InputPreferenceValue, InputSourceEntry,
+        input_target_spec, next_input_source_index, normalize_input_sources, parse_gsettings_bool,
+        parse_gsettings_f64, parse_gsettings_u32, parse_ibus_list_engine, parse_preference_value,
+        IbusEngineProbe, InputPreferenceTarget, InputPreferenceValue, InputSourceEntry,
     };
     use serde_json::json;
 
@@ -1468,5 +1622,32 @@ mod tests {
             addable_input_source_choices(&configured, &packages, &missing_probe);
         assert!(choices.is_empty());
         assert_eq!(detail, "IBus is not installed.");
+    }
+
+    #[test]
+    fn super_space_switching_requires_multiple_sources_and_known_current() {
+        let one_source = vec![InputSourceEntry {
+            kind: "xkb".into(),
+            id: "us".into(),
+        }];
+        assert_eq!(next_input_source_index(&one_source, 0).unwrap(), None);
+
+        let sources = vec![
+            InputSourceEntry {
+                kind: "xkb".into(),
+                id: "us".into(),
+            },
+            InputSourceEntry {
+                kind: "ibus".into(),
+                id: "libpinyin".into(),
+            },
+            InputSourceEntry {
+                kind: "ibus".into(),
+                id: "hangul".into(),
+            },
+        ];
+        assert_eq!(next_input_source_index(&sources, 0).unwrap(), Some(1));
+        assert_eq!(next_input_source_index(&sources, 2).unwrap(), Some(0));
+        assert!(next_input_source_index(&sources, 3).is_err());
     }
 }

@@ -218,6 +218,23 @@ remain CI/qemu-pending. Local source gates: targeted
 the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 
+Current IME Super+Space continuation: the shortcut ownership conflict is now
+source-gated without blindly restoring GNOME's stock switcher. The seeded
+`Super+Space` custom key still launches Goblins' own binary, now with
+`--super-space`; the launcher first posts to core `/v1/input/switch-next`, and
+core rotates `org.gnome.desktop.input-sources current` only when more than one
+source is configured and the current index is reported clearly. With one source,
+missing gsettings, a missing `current` key, or an out-of-range index, the launcher
+opens as before. The stock GNOME `switch-input-source` bindings remain empty to
+avoid a double owner; live switching remains CI/qemu-pending. Local source
+gates: targeted `cargo test -p goblins-os-core input`, targeted
+`cargo test -p goblins-os-launcher super_space`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (2004)**, `git diff --check`,
+`bash -n os/hardware-gate/verify-shipping-status.sh`, and the Rust 1.88 current
+worktree GTK container
+`cargo clippy -p goblins-os-launcher --features goblins-os-launcher/native-desktop -- -D warnings`.
+
 Current Focus continuation: Focus arm/disarm/tick is now source-gated but not
 shipped. Core exposes `/v1/focus/activate`, `/v1/focus/deactivate`, and
 `/v1/focus/tick`; validates configured mode JSON, snapshots/restores global
@@ -1171,10 +1188,11 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 - [x] **CJK engine package substrate source-gated (CI/qemu-pending):** Fedora 44 package metadata and a clean Fedora 44 install probe confirm `ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, and the existing `ibus-gtk4` module. The bootc image installs and `rpm -q` asserts the CJK engines, asserts `/usr/share/ibus/component/{libpinyin,anthy,hangul}.xml`, asserts `/usr/libexec/ibus-engine-{libpinyin,anthy,hangul}`, and asserts the GTK4 IBus module. Core reports a pure CJK engine package registry plus runtime path readiness; Settings ▸ Keyboard renders read-only CJK engine package rows. **Not shipped** until CI/qemu proves the installed image, Settings render, live IBus engine listing, source switching, and candidate window behavior.
 - [x] **Menu-bar active-source indicator source-gated (CI/qemu-pending):** `goblins-menubar` reads GNOME's `org.gnome.desktop.input-sources` `sources/current` keys, hides itself when only one source is configured, hides rather than guessing if the schema/current key is not readable, and shows a compact Goblins-accent abbreviation chip for known XKB/IBus sources. **Not shipped** until CI/qemu proves the shell render and live source switching.
 - [x] **Add input source sheet source-gated (CI/qemu-pending):** core exposes a narrow append-only `/v1/input/source` route that lists/adds only installed CJK IBus engines reported by `ibus list-engine` and not already configured; Settings ▸ Keyboard renders **Add input source…** choices from that core list. **Not shipped** until CI/qemu proves Settings render, installed-session `ibus list-engine`, real gsettings writes, menu-bar indicator update, source switching, and candidate-window behavior.
-- [ ] **Deferred (risk-gated):** the Containerfile IME-env decision and re-enabling `Super+Space` switching — the last reverses an intentional boot/launcher decision, so it lands deliberately, not blind.
+- [x] **Super+Space launcher handoff source-gated (CI/qemu-pending):** the seeded launcher binding calls `goblins-os-launcher --super-space`, which first asks core `/v1/input/switch-next` to rotate `org.gnome.desktop.input-sources current` only when more than one source exists. If switching is unavailable or unnecessary, the launcher opens normally. GNOME's stock switcher bindings stay empty so there is still only one owner of the key. **Not shipped** until CI/qemu proves live source switching and the launcher fallback path.
+- [ ] **Deferred (risk-gated):** the Containerfile IME-env decision and live candidate/input switching proof.
 - **Packages:** `ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, `ibus-gtk4` (CJK engines verified fc44); `ibus-setup` remains a UI-picker question, not installed by the source-gated package substrate.
-- **dconf/gsettings:** `org.gnome.desktop.input-sources` `sources` (`a(ss)`), `mru-sources`, `per-window`, `xkb-options`, `show-all-sources`; **revert** the `switch-input-source`/`-backward` emptying in `10-goblins-os-desktop:50-51` — bind `['<Super>space']` **only when >1 source**, and resolve `Super+Space` ownership with the launcher.
-- **Files:** `os/bootc/Containerfile` (install/assert the CJK engine packages; keep the IME environment decision deferred), `os/dconf/db/local.d/10-goblins-os-desktop`, `crates/goblins-os-core/src/input.rs` (`INPUT_SOURCES_SCHEMA` + `a(ss)` encode/decode, CJK engine registry, list/add/remove/reorder/set-current, `ibus list-engine` probe), `crates/goblins-os-core/src/main.rs` (extend existing `/v1/input/*` payloads), `crates/goblins-os-settings/src/main.rs` (real ordered-source list plus read-only engine package readiness, replacing the placeholder `input_source_summary_spec`), `os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js` (active-source abbreviation indicator when >1 source).
+- **dconf/gsettings:** `org.gnome.desktop.input-sources` `sources` (`a(ss)`), `current`, `mru-sources`, `per-window`, `xkb-options`, `show-all-sources`; keep GNOME `switch-input-source`/`-backward` empty so the launcher remains the sole owner of `Super+Space`, and use `/v1/input/switch-next` from `goblins-os-launcher --super-space` to switch only when `sources.len() > 1`.
+- **Files:** `os/bootc/Containerfile` (install/assert the CJK engine packages; keep the IME environment decision deferred), `os/dconf/db/local.d/10-goblins-os-desktop`, `crates/goblins-os-core/src/input.rs` (`INPUT_SOURCES_SCHEMA` + `a(ss)` encode/decode, CJK engine registry, list/add/remove/reorder/set-current, `ibus list-engine` probe, `/v1/input/switch-next` current-source rotation), `crates/goblins-os-core/src/main.rs` (extend existing `/v1/input/*` payloads), `crates/goblins-os-launcher/src/main.rs` (`--super-space` handoff/fallback), `crates/goblins-os-settings/src/main.rs` (real ordered-source list plus read-only engine package readiness, replacing the placeholder `input_source_summary_spec`), `os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js` (active-source abbreviation indicator when >1 source).
 - **APIs:** `org.gnome.desktop.input-sources` (ships in gsettings-desktop-schemas), IBus D-Bus / `ibus` CLI, gnome-shell native `InputSourceManager` (we do **not** reimplement the candidate window — the engines render it), `ibus-gtk4` IM module.
 - **Goblins-grade:** each source a `gos-row` (human name title, engine id copy, monospace abbreviation chip "PY/あ/한/US"); meaningful order via arrow/drag reorder; "Add input source…" sheet lists only installed engines; active source carries the calm accent selection language; candidate window themed via `os/gtk-4.0/gtk.css` to the rounded vibrant Goblins material.
 - **Honest gating:** session absent → existing "not ready" copy, controls disabled; engine not installed → never listed; single source → zero new chrome (menu-bar indicator + binding only when `sources.len() > 1`); last source can't be removed.

@@ -75,7 +75,7 @@ screenshot-clip=['<Shift><Super><Control>3']
 
 [org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-launcher]
 name='Goblins Launcher'
-command='/usr/libexec/goblins-os/goblins-os-launcher'
+command='/usr/libexec/goblins-os/goblins-os-launcher --super-space'
 binding='<Super>space'
 
 [org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/goblins-assistant]

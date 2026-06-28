@@ -114,6 +114,7 @@ struct SettingsState {
     appearance: Option<AppearanceStatus>,
     network: Option<NetworkStatus>,
     notifications: Option<NotificationsStatus>,
+    focus: Option<FocusStatus>,
     displays: Option<DisplaysStatus>,
     bluetooth: Option<BluetoothStatus>,
     audio: Option<AudioStatus>,
@@ -481,6 +482,30 @@ struct NotificationsStatus {
     application_children: Vec<String>,
     applications: Vec<NotificationApplicationStatus>,
     detail: String,
+}
+
+/// Focus mode status from Goblins OS. The Settings UI only shows modes that
+/// core reports and only writes through the existing Focus arm/disarm routes.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct FocusStatus {
+    #[allow(dead_code)]
+    source: String,
+    available: bool,
+    active_mode: String,
+    scheduled_mode: Option<String>,
+    armed_by_schedule: bool,
+    modes: Vec<FocusMode>,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct FocusMode {
+    id: String,
+    name: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -898,6 +923,14 @@ struct NotificationPreferenceOutcome {
     ok: bool,
     #[allow(dead_code)]
     target: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct FocusActionOutcome {
+    ok: bool,
+    #[allow(dead_code)]
+    active_mode: String,
     text: String,
 }
 
@@ -3130,6 +3163,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             appearance: None,
             network: None,
             notifications: None,
+            focus: None,
             displays: None,
             bluetooth: None,
             audio: None,
@@ -3170,6 +3204,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         appearance: get_core_json(&config.core_url, "/v1/appearance/status").ok(),
         network: get_core_json(&config.core_url, "/v1/network/status").ok(),
         notifications: get_core_json(&config.core_url, "/v1/notifications/status").ok(),
+        focus: get_core_json(&config.core_url, "/v1/focus/status").ok(),
         displays: get_core_json(&config.core_url, "/v1/displays/status").ok(),
         bluetooth: get_core_json(&config.core_url, "/v1/bluetooth/status").ok(),
         audio: get_core_json(&config.core_url, "/v1/audio/status").ok(),
@@ -7253,6 +7288,7 @@ fn build_notifications(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_notifications_summary(panel, state);
     append_notifications_ai_context(panel, state);
+    append_focus_settings(panel, state);
 
     panel.append(&label("Delivery", &["gos-subsection-title"]));
     let Some(notifications) = state.notifications.as_ref() else {
@@ -7397,6 +7433,140 @@ fn append_notifications_ai_context(panel: &gtk4::Box, state: &SettingsState) {
     };
 
     append_preference_group(panel, "Goblins AI for notifications", vec![row]);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_focus_settings(panel: &gtk4::Box, state: &SettingsState) {
+    use gtk4::prelude::*;
+
+    panel.append(&label("Focus", &["gos-subsection-title"]));
+    let Some(focus) = state.focus.as_ref() else {
+        panel.append(&system_row(
+            "Focus modes",
+            "Waiting for Focus status from Goblins OS.",
+        ));
+        return;
+    };
+
+    panel.append(&health_row(
+        "Focus engine",
+        focus_status_label(focus),
+        focus.available,
+        &focus.detail,
+    ));
+
+    if !focus.available {
+        return;
+    }
+
+    if let Some(scheduled_mode) = focus.scheduled_mode.as_deref() {
+        panel.append(&system_row(
+            "Scheduled mode",
+            &focus_scheduled_mode_detail(scheduled_mode, &focus.modes),
+        ));
+    }
+
+    if focus.modes.is_empty() {
+        panel.append(&system_row(
+            "Focus modes",
+            "No Focus modes are configured in this session yet. Mode creation remains pending, so Settings will not invent a mode to arm.",
+        ));
+        return;
+    }
+
+    if !focus.active_mode.is_empty() && focus_mode_by_id(&focus.modes, &focus.active_mode).is_none()
+    {
+        panel.append(&system_row(
+            "Active Focus mode",
+            &format!(
+                "Core reports active Focus mode '{}', but it is not in the configured mode list. Choose Off to clear it.",
+                focus.active_mode
+            ),
+        ));
+    }
+
+    let mut options = vec![ChoiceOption {
+        id: "off",
+        label: "Off",
+    }];
+    options.extend(focus.modes.iter().map(|mode| ChoiceOption {
+        id: mode.id.as_str(),
+        label: mode.name.as_str(),
+    }));
+
+    let current = focus_choice_value(focus);
+    let modes_for_detail = focus.modes.clone();
+    let scheduled_for_detail = focus.scheduled_mode.clone();
+    let core_url = config_core_url(state);
+    panel.append(&choice_row(
+        "Active Focus mode",
+        current,
+        &options,
+        move |value| {
+            focus_mode_choice_detail(value, &modes_for_detail, scheduled_for_detail.as_deref())
+        },
+        move |value| set_focus_mode(&core_url, value),
+    ));
+}
+
+fn focus_status_label(focus: &FocusStatus) -> &'static str {
+    if !focus.available {
+        "unavailable"
+    } else if focus.active_mode.is_empty() {
+        "off"
+    } else if focus.armed_by_schedule {
+        "scheduled"
+    } else {
+        "on"
+    }
+}
+
+fn focus_choice_value(focus: &FocusStatus) -> &str {
+    if focus.active_mode.is_empty() || focus_mode_by_id(&focus.modes, &focus.active_mode).is_none()
+    {
+        "off"
+    } else {
+        focus.active_mode.as_str()
+    }
+}
+
+fn focus_mode_by_id<'a>(modes: &'a [FocusMode], id: &str) -> Option<&'a FocusMode> {
+    modes.iter().find(|mode| mode.id == id)
+}
+
+fn focus_scheduled_mode_detail(scheduled_mode: &str, modes: &[FocusMode]) -> String {
+    match focus_mode_by_id(modes, scheduled_mode) {
+        Some(mode) => format!(
+            "{} would be armed by the current schedule when the Focus timer runs.",
+            mode.name
+        ),
+        None => format!(
+            "The current schedule points at '{scheduled_mode}', but that mode is not configured."
+        ),
+    }
+}
+
+fn focus_mode_choice_detail(
+    value: &str,
+    modes: &[FocusMode],
+    scheduled_mode: Option<&str>,
+) -> String {
+    if value == "off" {
+        return "Focus is off. Notification banner state is restored by core when a saved snapshot exists."
+            .to_string();
+    }
+
+    match focus_mode_by_id(modes, value) {
+        Some(mode) if scheduled_mode == Some(value) => format!(
+            "{} is active. This mode also matches the current schedule.",
+            mode.name
+        ),
+        Some(mode) => format!(
+            "{} is active. Notification banners are silenced through the Focus bridge.",
+            mode.name
+        ),
+        None => "That Focus mode is not configured in this session.".to_string(),
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -18779,6 +18949,28 @@ fn notification_preference_outcome(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_focus_mode(base_url: &str, mode: &str) -> Result<String, String> {
+    let response = if mode == "off" {
+        http_post_json_response(base_url, "/v1/focus/deactivate", "{}")
+    } else {
+        let body = serde_json::json!({ "mode": mode }).to_string();
+        http_post_json_response(base_url, "/v1/focus/activate", &body)
+    }
+    .map_err(|error| format!("Goblins OS could not reach Focus controls: {error}."))?;
+    let outcome = focus_action_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn focus_action_outcome(body: &[u8]) -> Result<FocusActionOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_appearance_color_scheme(base_url: &str, theme: &str) -> Result<String, String> {
     let body = serde_json::json!({ "scheme": theme }).to_string();
     let response = http_post_json_response(base_url, "/v1/appearance/color-scheme", &body)
@@ -24010,6 +24202,62 @@ mod tests {
             outcome.text,
             "Notifications from this application stay silent."
         );
+    }
+
+    #[test]
+    fn focus_settings_helpers_report_real_core_state() {
+        let modes = vec![super::FocusMode {
+            id: "work".to_string(),
+            name: "Work".to_string(),
+        }];
+        let active = super::FocusStatus {
+            source: "goblins-os-core".to_string(),
+            available: true,
+            active_mode: "work".to_string(),
+            scheduled_mode: Some("work".to_string()),
+            armed_by_schedule: true,
+            modes: modes.clone(),
+            detail: "Focus mode 'work' is active from a schedule.".to_string(),
+        };
+
+        assert_eq!(super::focus_status_label(&active), "scheduled");
+        assert_eq!(super::focus_choice_value(&active), "work");
+        assert!(
+            super::focus_mode_choice_detail("work", &modes, Some("work"))
+                .contains("matches the current schedule")
+        );
+        assert!(super::focus_scheduled_mode_detail("work", &modes).contains("Focus timer"));
+
+        let empty = super::FocusStatus {
+            source: "goblins-os-core".to_string(),
+            available: true,
+            active_mode: String::new(),
+            scheduled_mode: None,
+            armed_by_schedule: false,
+            modes: Vec::new(),
+            detail: "Focus is off.".to_string(),
+        };
+        assert_eq!(super::focus_status_label(&empty), "off");
+        assert_eq!(super::focus_choice_value(&empty), "off");
+        assert!(super::focus_mode_choice_detail("off", &[], None).contains("restored by core"));
+
+        let unavailable = super::FocusStatus {
+            available: false,
+            detail: "Focus is unavailable here.".to_string(),
+            ..empty
+        };
+        assert_eq!(super::focus_status_label(&unavailable), "unavailable");
+    }
+
+    #[test]
+    fn focus_action_outcome_decodes_core_response() {
+        let outcome = super::focus_action_outcome(
+            br#"{"ok":true,"active_mode":"work","text":"Focus mode 'work' is active."}"#,
+        )
+        .unwrap();
+        assert!(outcome.ok);
+        assert_eq!(outcome.active_mode, "work");
+        assert!(outcome.text.contains("active"));
     }
 
     #[test]

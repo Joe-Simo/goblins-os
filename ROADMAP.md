@@ -291,6 +291,24 @@ inside the container to avoid macOS bind-mount deadlock), `cargo fmt --all --che
 Center/menu-bar surfaces, per-app breakthroughs, and live qemu write proof remain
 deferred.
 
+Current Focus Settings continuation: Settings ▸ Notifications now fetches
+`/v1/focus/status` and exposes a Focus section with a real active-mode chooser
+over `/v1/focus/activate` and `/v1/focus/deactivate`. The surface never creates
+sample/default modes; when the schema reports no configured modes, it stays
+read-only and says so. This is source-gated only: GTK render, live Focus writes,
+timer behavior, Control Center, menu-bar, schedules, mode CRUD, and per-app
+breakthroughs remain CI/qemu-pending.
+Local source gates for this pass: targeted `cargo test -p goblins-os-settings focus`,
+targeted `cargo test -p goblins-os-core focus`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (2019)**,
+`bash -n os/hardware-gate/verify-shipping-status.sh`, and the Rust 1.88 GTK
+container `cargo clippy -p goblins-os-settings --features
+goblins-os-settings/native-desktop -- -D warnings` from a minimal temp workspace.
+The verifier source scan now reads regular files by their metadata byte length
+instead of probing EOF, preserving secret/contains coverage while avoiding the
+macOS read deadlock hit on small SVG/source files.
+
 Current Migration continuation: the package prerequisites and copy-plan substrate
 are now source-gated but not shipped. Fedora 44 package metadata and a clean
 Fedora 44 install probe confirm `ntfs-3g`, `exfatprogs`, `udisks2`, and `rsync`;
@@ -1380,6 +1398,7 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - [x] **Substrate + storage + status route shipped**: NEW system gschema `org.goblins.os.focus` (active-mode + modes/schedules JSON), installed via `os/glib-schemas/` + a Containerfile `glib-compile-schemas /usr/share/glib-2.0/schemas` step (the repo's first *system* schema; host-validated with `glib-compile-schemas`, manifest-classified). `crates/goblins-os-core/src/focus.rs` + `/v1/focus/status` read it and evaluate the active/scheduled mode — pure `schedule_active` (incl. overnight midnight-wrap + weekday match), `parse_local_now` (timezone-aware via `date`, no new crate), and `unquote_gsettings_string`, all unit-tested (181 core tests). Honest-gated when the schema is absent. clippy/fmt clean; 3 verify gates.
 - [x] **Arm/disarm/tick substrate source-gated (CI/qemu-pending):** `/v1/focus/activate`, `/v1/focus/deactivate`, and `/v1/focus/tick` write only the Goblins Focus schema plus global `org.gnome.desktop.notifications show-banners` through the shared `notifications.rs` bridge. Activating Focus snapshots `show-banners`, silences banners, records manual vs scheduled ownership, and deactivation restores the saved snapshot; the tick decision arms matching schedules, disarms schedule-owned modes when no schedule matches, and leaves manual Focus modes alone. Host tests cover mode/schedule JSON validation, scalar gsettings encoding, and tick decisions; gschema dry-run and verify gates pass. **Not shipped** until the UI/timer/live write proof lands.
 - [x] **Schedule timer substrate source-gated (CI/qemu-pending):** `os/systemd-user/org.goblins.OS.FocusTick.{service,timer}` runs a user-session oneshot every minute; the helper posts to `/v1/focus/tick` only through a local HTTP core URL, exits quietly when core is unavailable, and never claims schedule success itself. The Goblins session drop-in wants the timer, the image installs/asserts the helper and units, the source manifest includes `os/focus/`, and verifier/release gates check the helper, timer, local-core guard, and Containerfile install. **Not shipped** until CI/qemu proves the user timer starts in session and the live tick writes/restores notification state.
+- [x] **Settings Focus controls source-gated (CI/qemu-pending):** Settings ▸ Notifications fetches `/v1/focus/status`, shows an honest Focus section, and uses `/v1/focus/activate` plus `/v1/focus/deactivate` for the active-mode chooser. It does not create sample/default modes; empty or unavailable mode state is read-only. **Not shipped** until GTK render and live Focus write proof land.
 - [ ] **Surfaces + per-app breakthroughs (deferred):** mode/schedule CRUD, per-app breakthrough via the `notifications.rs` helper, the `SettingsPanel::Focus` editor + Control-Center tile + menu-bar indicator. (Drops iCloud/location/Smart Activation — absent, never stubbed.)
 - **Packages:** none.
 - **gsettings/dconf:** DRIVES `org.gnome.desktop.notifications show-banners` (already allowlisted as `ShowBanners`) + per-app `…notifications.application` enable/show-banners. OWN a new `org.goblins.os.focus` schema (active-mode, modes JSON, schedules JSON, armed-by-schedule, restore-banners, restore-apps), compiled like the wm schema; dconf-seed default modes so first boot is non-empty (active-mode='', schedules='[]').

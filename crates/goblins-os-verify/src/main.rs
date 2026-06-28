@@ -3,6 +3,7 @@ use std::{
     env,
     error::Error,
     fmt, fs,
+    io::Read,
     path::{Path, PathBuf},
     process::Command,
     sync::{Mutex, OnceLock},
@@ -2529,7 +2530,7 @@ fn scan_source_for_secrets(root: &Path, dir: &Path, hits: &mut Vec<String>) {
         if metadata.len() > SECRET_SCAN_MAX_FILE_BYTES {
             continue;
         }
-        let Ok(text) = fs::read_to_string(&path) else {
+        let Some(text) = read_bounded_text_file(&path, metadata.len()) else {
             continue;
         };
         for (index, line) in text.lines().enumerate() {
@@ -2538,6 +2539,14 @@ fn scan_source_for_secrets(root: &Path, dir: &Path, hits: &mut Vec<String>) {
             }
         }
     }
+}
+
+fn read_bounded_text_file(path: &Path, byte_len: u64) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let len = usize::try_from(byte_len).ok()?;
+    let mut bytes = vec![0_u8; len];
+    file.read_exact(&mut bytes).ok()?;
+    String::from_utf8(bytes).ok()
 }
 
 fn should_skip_secret_scan_path(relative: &Path) -> bool {
@@ -8961,6 +8970,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "core-exposes-focus-tick-route",
             "/v1/focus/tick",
         ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-fetches-focus-status-route",
+            "/v1/focus/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-posts-focus-activate-route",
+            "/v1/focus/activate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-posts-focus-deactivate-route",
+            "/v1/focus/deactivate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-focus-controls-source-gated",
+            "append_focus_settings",
+        ),
         file_check(root, "os/focus/goblins-os-focus-tick"),
         file_check(root, "os/systemd-user/org.goblins.OS.FocusTick.service"),
         file_check(root, "os/systemd-user/org.goblins.OS.FocusTick.timer"),
@@ -10693,14 +10722,19 @@ fn read_to_string(path: impl AsRef<Path>) -> String {
     let path = path.as_ref().to_path_buf();
     let cache = READ_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let Ok(mut cache) = cache.lock() else {
-        return fs::read_to_string(path).unwrap_or_default();
+        return read_bounded_text_file_from_metadata(&path).unwrap_or_default();
     };
     if let Some(text) = cache.get(&path) {
         return text.clone();
     }
-    let text = fs::read_to_string(&path).unwrap_or_default();
+    let text = read_bounded_text_file_from_metadata(&path).unwrap_or_default();
     cache.insert(path, text.clone());
     text
+}
+
+fn read_bounded_text_file_from_metadata(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    read_bounded_text_file(path, metadata.len())
 }
 
 fn ready(id: &str, detail: &str) -> Check {

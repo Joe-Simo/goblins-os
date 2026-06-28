@@ -503,6 +503,28 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -q '"live_ibus_bus_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"text_input_v3_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --adapter-callback-ledger-self-test > /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"status": "pass"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"surface": "goblins-textshortcuts-adapter-callback-ledger"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"focus-in"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"process-key-event"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"set-content-type"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"focus-out"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"reset"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"update-preedit-text"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"delete-surrounding-text"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"commit-text"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"hide-preedit-text"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"render_intent_count":' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"value_redacted": true' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"no_typed_text_logged": true' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"live_ibus_bus_claim": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"text_input_v3_claim": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && ! grep -q 'omw' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && ! grep -q 'on my way' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"adapter_contract_ready": true' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"runtime_ready_claim": false' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \

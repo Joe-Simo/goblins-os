@@ -1500,6 +1500,28 @@ macOS host. This is still source/image-gated and does **not** prove a live IBus
 bus, a focused-field callback from a real application, a Wayland text-input-v3
 commit, or mark Text Shortcuts shipped.
 
+Current Text Shortcuts adapter callback ledger continuation: the installed
+`goblins-textshortcuts-ibus` adapter now has an env-gated
+`GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS` callback ledger sink and an
+`--adapter-callback-ledger-self-test` image-build proof. The ledger records only
+callback categories, operation types, render-intent counts, style/font metadata,
+and false readiness claims; it deliberately rejects proof output containing the
+typed trigger or replacement value. The live `_run_ibus()` engine path wires the
+same sink into `CandidateBubbleRenderIntentController`, and the Containerfile
+plus `goblins-os-verify` fail closed if the proof, callback names, operation
+types, redaction guard, or false live/runtime claims drift. Local gates for this
+pass: `python3 -m py_compile
+os/goblins-os-textshortcuts/goblins-textshortcuts-ibus`,
+`GOBLINS_TEXTSHORTCUTS_ENGINE=target/debug/goblins-textshortcuts-engine python3
+os/goblins-os-textshortcuts/goblins-textshortcuts-ibus
+--adapter-callback-ledger-self-test`, `cargo fmt --all --check`,
+`git diff --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, and `goblins-os-verify --source-root .` ->
+**blocked=0 (2499)**. This remains source/image-gated and does **not** prove a
+live IBus bus, focused-field callback from a real application, Wayland
+text-input-v3 commit, live rendered accept bubble, or mark Text Shortcuts
+shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -1884,6 +1906,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **IBus accept-bubble render-intent bridge + hardware proof hook source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --candidate-bubble-render-intent-self-test` now drives the adapter through the real Rust stdio runtime and proves deterministic render-intent records sourced from the overlay/frame/layout contracts, including dismiss, commit, focus-out hide, sensitive-field hide, pass-through unchanged behavior, fail-open sink handling, Inter, and the `gos-text-shortcuts-candidate` style contract while keeping `rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and `runtime_ready_claim=false`. The Containerfile, `goblins-os-verify`, shipping-status gate, close-signoff, runbook, and display-backed VM capture harness now require `text-shortcuts-candidate-bubble-render-intent-proof.json`. This still does not prove a live rendered accept bubble.
 - [x] **IBus accept-bubble render screenshot proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now requires `31-text-shortcuts-candidate-bubble-render.png` plus `text-shortcuts-candidate-bubble-render-proof.json`, launched from `goblins-os-shell --text-shortcuts-proof candidate-render`, and rejects signoff unless the screenshot proof links the rendered Goblins candidate surface to the render-intent, layout, frame, Inter, and `gos-text-shortcuts-candidate` contracts while keeping rendered/live/runtime readiness claims false. This still does not prove a live IBus overlay, focused-field callback, or Wayland text-input-v3 bubble.
 - [x] **IBus GI adapter contract source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --gi-adapter-contract-self-test` imports the real `gi.repository.IBus` boundary in the image, uses `IBus.Text.new_from_string` and `IBus.keyval_to_unicode`, and drives the Rust stdio runtime through the focus/key/content-purpose/focus-out/reset callback shape. The proof requires preedit update, boundary commit, Escape dismiss, default pass-through, password/PIN refusal, and the existing render-intent contract, while keeping rendered/live bus/text-input/runtime claims false. This still does not prove live IBus callbacks from a focused app or a Wayland text-input-v3 commit.
+- [x] **IBus adapter callback ledger source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --adapter-callback-ledger-self-test` proves the adapter can record callback categories (`focus-in`, `process-key-event`, `set-content-type`, `focus-out`, `reset`), operation types (`update-preedit-text`, `delete-surrounding-text`, `commit-text`, `hide-preedit-text`), and render-intent counts without logging the typed trigger or replacement value. The live adapter path can emit the same redacted ledger only when `GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS` is set. The Containerfile and verifier require the proof, redaction guard, and false rendered/live bus/text-input/runtime claims. This still does not prove live IBus callbacks from a focused app, Wayland text-input-v3 commits, or a live rendered accept bubble.
 - [ ] **Live IBus runtime/render ship proof (deferred, XL/highest-risk):** prove the installed `goblins-textshortcuts` IBus engine loop in a real GNOME/Wayland session, focused-field preedit/commit over `text-input-v3`, pass-through by default, password-field refusal in-session, and the rendered accept bubble. The optional model-gated autocorrect tier remains resource-gated.
 - **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (web-verified for Fedora 44 and asserted with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
 - **gsettings/dconf:** `org.freedesktop.ibus.general preload-engines` (+`goblins-textshortcuts`); `org.gnome.desktop.input-sources sources=[('ibus','goblins-textshortcuts')]`, `per-window=false`; dconf seed in `10-goblins-os-desktop`. The replacement table itself is **JSON** under `~/.config/goblins-os/text-shortcuts.json`, written only through the core bridge — not a gsetting.

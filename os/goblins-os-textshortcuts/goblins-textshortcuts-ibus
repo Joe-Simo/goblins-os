@@ -28,6 +28,7 @@ CAPABILITY_TIMEOUT_SECONDS = 3.0
 ADAPTER_PATH = "/usr/libexec/goblins-os/goblins-textshortcuts-ibus"
 OVERLAY_INTENT_PROOF_SURFACE = "goblins-textshortcuts-ibus-adapter-overlay-intent"
 GI_ADAPTER_CONTRACT_SURFACE = "goblins-textshortcuts-gi-adapter-contract"
+ADAPTER_CALLBACK_LEDGER_SURFACE = "goblins-textshortcuts-adapter-callback-ledger"
 ACCEPT_BUBBLE_FRAME_SURFACE = "goblins-textshortcuts-accept-bubble-frame"
 ACCEPT_BUBBLE_LAYOUT_SURFACE = "goblins-textshortcuts-accept-bubble-layout"
 ACCEPT_BUBBLE_RENDER_INTENT_SURFACE = "goblins-textshortcuts-accept-bubble-render-intent"
@@ -468,6 +469,116 @@ class RecordingCandidateBubbleRenderIntentSink(CandidateBubbleRenderIntentSink):
 
     def publish(self, intent: dict[str, Any]) -> None:
         self.records.append(intent)
+
+
+class RedactedAdapterCallbackLedger(CandidateBubbleRenderIntentSink):
+    def __init__(self, path: str | None = None) -> None:
+        self.path = path
+        self.records: list[dict[str, Any]] = []
+
+    def callback(self, name: str) -> None:
+        self._record(
+            {
+                "event": "callback",
+                "callback": name,
+                "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
+                "redacted": True,
+            }
+        )
+
+    def operations(self, callback: str, response: dict[str, Any]) -> None:
+        operations = response.get("operations", [])
+        if not isinstance(operations, list):
+            operation_types: list[str] = []
+        else:
+            operation_types = [
+                operation["type"]
+                for operation in operations
+                if isinstance(operation, dict) and isinstance(operation.get("type"), str)
+            ]
+        self._record(
+            {
+                "event": "operations",
+                "callback": callback,
+                "operation_types": operation_types,
+                "handled": bool(response.get("handled", False)),
+                "candidate": _candidate_metadata_from_response(response) is not None,
+                "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
+                "redacted": True,
+            }
+        )
+
+    def publish(self, intent: dict[str, Any]) -> None:
+        self._record(
+            {
+                "event": "render-intent",
+                "callback": "render-intent",
+                "action": intent.get("action"),
+                "reason": intent.get("reason"),
+                "has_layout": bool(intent.get("has_layout", False)),
+                "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
+                "render_intent_surface": intent.get("surface"),
+                "style_class": intent.get("style_class"),
+                "font_family": intent.get("font_family"),
+                "rendered_bubble_ready_claim": False,
+                "live_overlay_claim": False,
+                "live_ibus_bus_claim": False,
+                "text_input_v3_claim": False,
+                "runtime_ready_claim": False,
+                "redacted": True,
+            }
+        )
+
+    def payload(self) -> dict[str, Any]:
+        callbacks = [
+            record["callback"]
+            for record in self.records
+            if record.get("event") == "callback" and isinstance(record.get("callback"), str)
+        ]
+        callbacks_exercised = sorted(set(callbacks))
+        operation_types = sorted(
+            {
+                operation_type
+                for record in self.records
+                for operation_type in record.get("operation_types", [])
+                if isinstance(operation_type, str)
+            }
+        )
+        render_intent_count = sum(
+            1 for record in self.records if record.get("event") == "render-intent"
+        )
+        return {
+            "status": "pass",
+            "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
+            "records": self.records,
+            "record_count": len(self.records),
+            "callbacks": callbacks,
+            "callbacks_exercised": callbacks_exercised,
+            "operation_types": operation_types,
+            "render_intent_count": render_intent_count,
+            "value_redacted": True,
+            "no_typed_text_logged": True,
+            "rendered_bubble_ready_claim": False,
+            "live_overlay_claim": False,
+            "live_ibus_bus_claim": False,
+            "text_input_v3_claim": False,
+            "runtime_ready_claim": False,
+        }
+
+    def _record(self, record: dict[str, Any]) -> None:
+        self.records.append(record)
+        if self.path is None:
+            return
+        with open(self.path, "a", encoding="utf-8") as ledger_file:
+            ledger_file.write(json.dumps(record, sort_keys=True, separators=(",", ":")))
+            ledger_file.write("\n")
+
+
+def _proof_event_sink_from_env() -> RedactedAdapterCallbackLedger | None:
+    path = os.environ.get("GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS")
+    if not path:
+        return None
+    return RedactedAdapterCallbackLedger(path)
 
 
 class CandidateBubbleRenderIntentController:
@@ -1577,6 +1688,151 @@ def _run_gi_adapter_contract_self_test() -> dict[str, Any]:
     return payload
 
 
+def _run_adapter_callback_ledger_self_test() -> dict[str, Any]:
+    class FakeTarget:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def update_preedit_text(self, text: str, cursor_pos: int, visible: bool) -> None:
+            self.calls.append(("update", text, cursor_pos, visible))
+
+        def hide_preedit_text(self) -> None:
+            self.calls.append(("hide",))
+
+        def delete_surrounding_text(self, offset: int, n_chars: int) -> None:
+            self.calls.append(("delete", offset, n_chars))
+
+        def commit_text(self, text: str) -> None:
+            self.calls.append(("commit", text))
+
+    ledger = RedactedAdapterCallbackLedger()
+    controller = CandidateBubbleRenderIntentController(
+        sink=ledger,
+        anchor_provider=lambda: _rect(120, 140, 1, 22),
+        monitor_provider=lambda: _rect(0, 0, 800, 600),
+    )
+
+    def send_and_apply(
+        callback: str,
+        runtime: RuntimeBridge,
+        target: FakeTarget,
+        state: CandidateMetadataState,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        ledger.callback(callback)
+        response = runtime.send(request)
+        ledger.operations(callback, response)
+        _apply_response_operations_with_render_intent(
+            target,
+            response,
+            lambda text: text,
+            state,
+            controller,
+        )
+        return response
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        table_path = os.path.join(tmpdir, "text-shortcuts.json")
+        with open(table_path, "w", encoding="utf-8") as table_file:
+            json.dump([{"replace": "omw", "with": "on my way"}], table_file)
+
+        target = FakeTarget()
+        candidate_state = CandidateMetadataState()
+        table_bridge = ShortcutTableBridge(table_path)
+        runtime = RuntimeBridge(response_timeout=CAPABILITY_TIMEOUT_SECONDS)
+        try:
+            _send_table_changed_if_needed(
+                table_bridge,
+                runtime,
+                target,
+                lambda text: text,
+                candidate_state,
+                controller,
+            )
+            send_and_apply(
+                "focus-in",
+                runtime,
+                target,
+                candidate_state,
+                _content_purpose_request("focus-in", 0),
+            )
+            for character in "omw":
+                send_and_apply(
+                    "process-key-event",
+                    runtime,
+                    target,
+                    candidate_state,
+                    _key_protocol_event(character),
+                )
+            send_and_apply(
+                "process-key-event",
+                runtime,
+                target,
+                candidate_state,
+                _special_key_protocol_event(0xFF1B),
+            )
+            for character in "omw ":
+                send_and_apply(
+                    "process-key-event",
+                    runtime,
+                    target,
+                    candidate_state,
+                    _key_protocol_event(character),
+                )
+            send_and_apply(
+                "set-content-type",
+                runtime,
+                target,
+                candidate_state,
+                _content_purpose_request("content-purpose-changed", 9),
+            )
+            send_and_apply(
+                "focus-out",
+                runtime,
+                target,
+                candidate_state,
+                {"type": "focus-out"},
+            )
+            send_and_apply(
+                "reset",
+                runtime,
+                target,
+                candidate_state,
+                {"type": "reset"},
+            )
+        finally:
+            runtime.close()
+
+    payload = ledger.payload()
+    required_callbacks = {
+        "focus-in",
+        "process-key-event",
+        "set-content-type",
+        "focus-out",
+        "reset",
+    }
+    required_operations = {
+        "update-preedit-text",
+        "delete-surrounding-text",
+        "commit-text",
+        "hide-preedit-text",
+    }
+    assert required_callbacks.issubset(set(payload["callbacks_exercised"]))
+    assert required_operations.issubset(set(payload["operation_types"]))
+    assert payload["render_intent_count"] >= 4
+    assert payload["value_redacted"] is True
+    assert payload["no_typed_text_logged"] is True
+    assert payload["rendered_bubble_ready_claim"] is False
+    assert payload["live_overlay_claim"] is False
+    assert payload["live_ibus_bus_claim"] is False
+    assert payload["text_input_v3_claim"] is False
+    assert payload["runtime_ready_claim"] is False
+    serialized = json.dumps(payload, sort_keys=True)
+    assert "omw" not in serialized
+    assert "on my way" not in serialized
+    return payload
+
+
 def _run_overlay_intent_self_test() -> dict[str, Any]:
     class FakeTarget:
         def __init__(self) -> None:
@@ -1826,9 +2082,13 @@ def _run_ibus() -> int:
             self._bridge = RuntimeBridge()
             self._table = ShortcutTableBridge()
             self._candidate_state = CandidateMetadataState()
-            self._candidate_render = CandidateBubbleRenderIntentController()
+            self._proof_ledger = _proof_event_sink_from_env()
+            self._candidate_render = CandidateBubbleRenderIntentController(
+                sink=self._proof_ledger,
+            )
 
         def do_focus_in(self) -> None:
+            self._record_callback("focus-in")
             _send_table_changed_if_needed(
                 self._table,
                 self._bridge,
@@ -1837,27 +2097,35 @@ def _run_ibus() -> int:
                 self._candidate_state,
                 self._candidate_render,
             )
+            response = self._bridge.send(_content_purpose_request("focus-in", self._purpose()))
+            self._record_operations("focus-in", response)
             _apply_response_operations_with_render_intent(
                 self,
-                self._bridge.send(_content_purpose_request("focus-in", self._purpose())),
+                response,
                 IBus.Text.new_from_string,
                 self._candidate_state,
                 self._candidate_render,
             )
 
         def do_focus_out(self) -> None:
+            self._record_callback("focus-out")
+            response = self._bridge.send({"type": "focus-out"})
+            self._record_operations("focus-out", response)
             _apply_response_operations_with_render_intent(
                 self,
-                self._bridge.send({"type": "focus-out"}),
+                response,
                 IBus.Text.new_from_string,
                 self._candidate_state,
                 self._candidate_render,
             )
 
         def do_reset(self) -> None:
+            self._record_callback("reset")
+            response = self._bridge.send({"type": "reset"})
+            self._record_operations("reset", response)
             _apply_response_operations_with_render_intent(
                 self,
-                self._bridge.send({"type": "reset"}),
+                response,
                 IBus.Text.new_from_string,
                 self._candidate_state,
                 self._candidate_render,
@@ -1865,9 +2133,12 @@ def _run_ibus() -> int:
 
         def do_set_content_type(self, purpose: int, hints: int) -> None:
             del hints
+            self._record_callback("set-content-type")
+            response = self._bridge.send(_content_purpose_request("content-purpose-changed", purpose))
+            self._record_operations("set-content-type", response)
             _apply_response_operations_with_render_intent(
                 self,
-                self._bridge.send(_content_purpose_request("content-purpose-changed", purpose)),
+                response,
                 IBus.Text.new_from_string,
                 self._candidate_state,
                 self._candidate_render,
@@ -1875,6 +2146,7 @@ def _run_ibus() -> int:
 
         def do_process_key_event(self, keyval: int, keycode: int, state: int) -> bool:
             del keycode
+            self._record_callback("process-key-event")
             _send_table_changed_if_needed(
                 self._table,
                 self._bridge,
@@ -1884,6 +2156,7 @@ def _run_ibus() -> int:
                 self._candidate_render,
             )
             response = self._bridge.send(_key_request(keyval, state, IBus))
+            self._record_operations("process-key-event", response)
             _apply_response_operations_with_render_intent(
                 self,
                 response,
@@ -1897,6 +2170,14 @@ def _run_ibus() -> int:
             self._candidate_render.clear(self._candidate_state, "destroyed")
             self._bridge.close()
             super().do_destroy()
+
+        def _record_callback(self, callback: str) -> None:
+            if self._proof_ledger is not None:
+                self._proof_ledger.callback(callback)
+
+        def _record_operations(self, callback: str, response: dict[str, Any]) -> None:
+            if self._proof_ledger is not None:
+                self._proof_ledger.operations(callback, response)
 
         def _purpose(self) -> int:
             try:
@@ -1923,6 +2204,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Goblins OS Text Shortcuts IBus adapter")
     parser.add_argument("--capability-check", action="store_true")
     parser.add_argument("--gi-adapter-contract-self-test", action="store_true")
+    parser.add_argument("--adapter-callback-ledger-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-render-intent-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-layout-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-frame-self-test", action="store_true")
@@ -1935,6 +2217,9 @@ def main(argv: list[str]) -> int:
         return 0
     if args.gi_adapter_contract_self_test:
         print(json.dumps(_run_gi_adapter_contract_self_test(), sort_keys=True))
+        return 0
+    if args.adapter_callback_ledger_self_test:
+        print(json.dumps(_run_adapter_callback_ledger_self_test(), sort_keys=True))
         return 0
     if args.candidate_bubble_render_intent_self_test:
         print(json.dumps(_run_candidate_bubble_render_intent_self_test(), sort_keys=True))

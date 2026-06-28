@@ -10727,6 +10727,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-runs-textshortcuts-adapter-callback-ledger-self-test",
+            "goblins-textshortcuts-ibus --adapter-callback-ledger-self-test",
+        ),
+        container_contains_check(
+            root,
             "bootc-requires-textshortcuts-overlay-intent-proof",
             "goblins-textshortcuts-overlay-intent.json",
         ),
@@ -10749,6 +10754,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-requires-textshortcuts-gi-adapter-contract-proof",
             "goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-proof",
+            "goblins-textshortcuts-adapter-callback-ledger.json",
         ),
         container_contains_check(
             root,
@@ -11062,6 +11072,111 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-pass",
+            "grep -q '\"status\": \"pass\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-surface",
+            "grep -q '\"surface\": \"goblins-textshortcuts-adapter-callback-ledger\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-focus-in",
+            "grep -q '\"focus-in\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-process-key",
+            "grep -q '\"process-key-event\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-content-type",
+            "grep -q '\"set-content-type\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-focus-out",
+            "grep -q '\"focus-out\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-reset",
+            "grep -q '\"reset\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-preedit",
+            "grep -q '\"update-preedit-text\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-delete",
+            "grep -q '\"delete-surrounding-text\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-commit",
+            "grep -q '\"commit-text\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-hide",
+            "grep -q '\"hide-preedit-text\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-render-count",
+            "grep -q '\"render_intent_count\":' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-value-redacted",
+            "grep -q '\"value_redacted\": true' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-no-text",
+            "grep -q '\"no_typed_text_logged\": true' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-adapter-callback-ledger-render-claim-false",
+            "grep -q '\"rendered_bubble_ready_claim\": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-adapter-callback-ledger-live-claim-false",
+            "grep -q '\"live_overlay_claim\": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-adapter-callback-ledger-bus-claim-false",
+            "grep -q '\"live_ibus_bus_claim\": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-adapter-callback-ledger-text-input-claim-false",
+            "grep -q '\"text_input_v3_claim\": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-adapter-callback-ledger-runtime-claim-false",
+            "grep -q '\"runtime_ready_claim\": false' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-rejects-textshortcuts-adapter-callback-ledger-trigger-leak",
+            "! grep -q 'omw' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-rejects-textshortcuts-adapter-callback-ledger-replacement-leak",
+            "! grep -q 'on my way' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
             "bootc-runs-textshortcuts-ibus-adapter-capability-check",
             "goblins-textshortcuts-ibus --capability-check",
         ),
@@ -11292,13 +11407,68 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-cli",
+            "--adapter-callback-ledger-self-test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-gi-contract-surface",
             "goblins-textshortcuts-gi-adapter-contract",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-surface",
+            "goblins-textshortcuts-adapter-callback-ledger",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-gi-contract-self-test",
             "def _run_gi_adapter_contract_self_test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-self-test",
+            "def _run_adapter_callback_ledger_self_test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-class",
+            "class RedactedAdapterCallbackLedger",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-env-gate",
+            "GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-redacted",
+            "\"value_redacted\": True",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-no-typed-text",
+            "\"no_typed_text_logged\": True",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-process-key",
+            "self._record_callback(\"process-key-event\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-operation-types",
+            "\"operation_types\": operation_types",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-no-live-bus-claim",
+            "\"live_ibus_bus_claim\": False",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-callback-ledger-no-text-input-claim",
+            "\"text_input_v3_claim\": False",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
@@ -11433,7 +11603,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-live-retains-render-intent-controller",
-            "self._candidate_render = CandidateBubbleRenderIntentController()",
+            "self._candidate_render = CandidateBubbleRenderIntentController(",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),

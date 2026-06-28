@@ -1,9 +1,12 @@
+#[cfg(not(unix))]
+use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
 use std::{
     collections::HashMap,
     env,
     error::Error,
     fmt, fs,
-    io::Read,
     path::{Path, PathBuf},
     process::Command,
     sync::{Mutex, OnceLock},
@@ -2486,69 +2489,118 @@ fn absent_check(path: PathBuf, id: &str, needle: &str) -> Check {
 }
 
 fn source_secret_scan_check(root: &Path) -> Check {
-    let mut hits = Vec::new();
-    scan_source_for_secrets(root, root, &mut hits);
-    if hits.is_empty() {
-        ready(
+    match source_secret_scan_hits(root) {
+        Ok(hits) if hits.is_empty() => ready(
             "source-secret-scan",
             "no live OpenAI-style keys or active secret assignments found in source package",
-        )
-    } else {
-        blocked(
+        ),
+        Ok(hits) => blocked(
             "source-secret-scan",
             &format!("possible live secrets found: {}", hits.join(", ")),
-        )
+        ),
+        Err(error) => blocked("source-secret-scan", &error),
     }
 }
 
 const SECRET_SCAN_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
-fn scan_source_for_secrets(root: &Path, dir: &Path, hits: &mut Vec<String>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
+fn source_secret_scan_hits(root: &Path) -> Result<Vec<String>, String> {
+    let mut command = Command::new("rg");
+    command
+        .current_dir(root)
+        .arg("--line-number")
+        .arg("--no-heading")
+        .arg("--with-filename")
+        .arg("--no-messages")
+        .arg("--hidden")
+        .arg("-I")
+        .arg("--max-filesize")
+        .arg(format!("{}K", SECRET_SCAN_MAX_FILE_BYTES / 1024))
+        .arg("--glob")
+        .arg("!.git/**")
+        .arg("--glob")
+        .arg("!.claude/**")
+        .arg("--glob")
+        .arg("!.ci-target/**")
+        .arg("--glob")
+        .arg("!.ci-target-amd64/**")
+        .arg("--glob")
+        .arg("!target/**")
+        .arg("--glob")
+        .arg("!artifacts/**")
+        .arg("--glob")
+        .arg("!libpod/**")
+        .arg("--glob")
+        .arg("!os/signoff-proofs/**")
+        .arg("--glob")
+        .arg("!os/screenshots/**")
+        .arg("--glob")
+        .arg("!os/iso/output/**")
+        .arg("-e")
+        .arg(
+            r"OPENAI_API_KEY|AI_GATEWAY_API_KEY|OPENAI_ACCOUNT_CLIENT_SECRET|sk-proj-[A-Za-z0-9_-]{24,}|sk-[A-Za-z0-9_-]{29,}|^[[:space:]]*(export[[:space:]]+)?[A-Za-z0-9_]*(KEY|SECRET|TOKEN)[[:space:]]*=",
+        )
+        .arg(".");
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let relative = path.strip_prefix(root).unwrap_or(&path);
-        if should_skip_secret_scan_path(relative) {
-            continue;
+    let output = command
+        .output()
+        .map_err(|error| format!("could not run rg source secret scan: {error}"))?;
+    if !output.status.success() {
+        if output.status.code() == Some(1) {
+            return Ok(Vec::new());
         }
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            scan_source_for_secrets(root, &path, hits);
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.len() > SECRET_SCAN_MAX_FILE_BYTES {
-            continue;
-        }
-        let Some(text) = read_bounded_text_file(&path, metadata.len()) else {
-            continue;
-        };
-        for (index, line) in text.lines().enumerate() {
-            if is_suspicious_secret_line(line) {
-                hits.push(format!("{}:{}", relative.display(), index + 1));
-            }
-        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("rg source secret scan failed: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let hits = stdout
+        .lines()
+        .filter_map(rg_secret_scan_hit)
+        .collect::<Vec<_>>();
+    Ok(hits)
+}
+
+fn rg_secret_scan_hit(line: &str) -> Option<String> {
+    let mut parts = line.splitn(3, ':');
+    let path = parts.next()?;
+    let line_number = parts.next()?;
+    let text = parts.next()?;
+    if is_suspicious_secret_line(text) {
+        Some(format!("{path}:{line_number}"))
+    } else {
+        None
     }
 }
 
 fn read_bounded_text_file(path: &Path, byte_len: u64) -> Option<String> {
-    let mut file = fs::File::open(path).ok()?;
     let len = usize::try_from(byte_len).ok()?;
-    let mut bytes = vec![0_u8; len];
-    file.read_exact(&mut bytes).ok()?;
-    String::from_utf8(bytes).ok()
+    let file = fs::File::open(path).ok()?;
+    #[cfg(unix)]
+    {
+        let mut bytes = vec![0_u8; len];
+        let mut offset = 0_usize;
+        while offset < len {
+            let read = file.read_at(&mut bytes[offset..], offset as u64).ok()?;
+            if read == 0 {
+                bytes.truncate(offset);
+                break;
+            }
+            offset += read;
+        }
+        String::from_utf8(bytes).ok()
+    }
+    #[cfg(not(unix))]
+    let mut file = file;
+    #[cfg(not(unix))]
+    {
+        let mut bytes = Vec::with_capacity(len);
+        file.take(byte_len).read_to_end(&mut bytes).ok()?;
+        return String::from_utf8(bytes).ok();
+    }
 }
 
+#[cfg(test)]
 fn should_skip_secret_scan_path(relative: &Path) -> bool {
     let path = relative.to_string_lossy();
     path == ".git"
@@ -7655,6 +7707,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "rgba(0, 145, 255, 0.22)",
         ),
         contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-focus-uses-goblins-focus-schema",
+            "org.goblins.os.focus",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-focus-hides-when-off",
+            "if (!activeMode)",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-focus-hides-unknown-active-mode",
+            "modes.find(entry => entry.id === activeMode)",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-focus-opens-settings-notifications",
+            "--panel=notifications",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/stylesheet.css"),
+            "menubar-focus-uses-canonical-accent",
+            ".goblins-focus-indicator",
+        ),
+        contains_check(
             root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell-light.css"),
             "shell-light-overlay-recolors-panel",
             "#panel {",
@@ -10775,11 +10852,11 @@ mod tests {
     use super::{
         cargo_lock_packages, contains_realish_openai_key, desktop_field, install_files,
         is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
-        should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
-        write_release_evidence, CheckState, APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES,
-        GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS,
-        NAUTILUS_SCRIPTS, SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS,
-        SYSTEMD_SYSTEM_DROPINS, SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
+        rg_secret_scan_hit, should_skip_secret_scan_path, source_manifest_classifies_top_level,
+        stable_id, write_release_evidence, CheckState, APPLICATIONS, AUTOSTART, BINARIES,
+        DCONF_FILES, GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES,
+        NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS, SETTINGS_INTERACTION_SCREENSHOTS,
+        SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS, SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
     };
     use std::collections::HashSet;
     use std::fs;
@@ -10852,6 +10929,18 @@ paths = [
         assert!(!should_skip_secret_scan_path(Path::new(
             "os/etc/goblins-os/openai-secrets.env"
         )));
+    }
+
+    #[test]
+    fn rg_secret_scan_parser_keeps_existing_line_rules() {
+        assert_eq!(
+            rg_secret_scan_hit("src/main.rs:42:OPENAI_API_KEY=not_for_source"),
+            Some("src/main.rs:42".to_string())
+        );
+        assert_eq!(
+            rg_secret_scan_hit("README.md:7:OPENAI_API_KEY=<placeholder>"),
+            None
+        );
     }
 
     #[test]

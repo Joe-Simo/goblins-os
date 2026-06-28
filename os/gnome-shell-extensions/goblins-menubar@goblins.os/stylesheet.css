@@ -22,7 +22,8 @@
   color: #f5f5f7;
 }
 
-.goblins-input-source-indicator {
+.goblins-input-source-indicator,
+.goblins-focus-indicator {
   min-width: 24px;
   padding: 2px 7px;
   border-radius: 999px;
@@ -31,6 +32,10 @@
   color: #f5f5f7;
   background-color: rgba(0, 145, 255, 0.22);
   border: 1px solid rgba(0, 145, 255, 0.62);
+}
+
+.goblins-focus-indicator {
+  min-width: 34px;
 }
 
 /* The control-center button at the right of the menu bar — a monochrome sliders

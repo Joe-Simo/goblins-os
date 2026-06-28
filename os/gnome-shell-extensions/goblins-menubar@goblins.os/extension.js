@@ -24,6 +24,7 @@ const SCREENSHOT_CONTEXT = '/usr/libexec/goblins-os/goblins-os-screenshot-contex
 const CONTROL_CENTER = '/usr/libexec/goblins-os/goblins-os-control-center';
 const SETTINGS = '/usr/libexec/goblins-os/goblins-os-settings';
 const INPUT_SOURCES_SCHEMA = 'org.gnome.desktop.input-sources';
+const FOCUS_SCHEMA = 'org.goblins.os.focus';
 // Color-only overlay applied on top of the dark gnome-shell.css base when the
 // desktop color-scheme is light, giving macOS-style adaptive (light/dark) chrome.
 const LIGHT_CHROME_CSS = '/usr/share/themes/GoblinsOS/gnome-shell/gnome-shell-light.css';
@@ -47,10 +48,10 @@ export default class GoblinsMenuBar extends Extension {
         // Position 0 in the left box: the very first item on the menu bar.
         Main.panel.addToStatusArea('goblins-mark', this._mark, 0, 'left');
 
-        // Right: Goblins AI, input source (only when there are multiple sources),
-        // then Control Center. The AI button is a compact command menu so
-        // system-wide assistant actions stay one menu-bar click away without
-        // crowding the top panel.
+        // Right: Goblins AI, Focus (only when active), input source (only when
+        // there are multiple sources), then Control Center. The AI button is a
+        // compact command menu so system-wide assistant actions stay one
+        // menu-bar click away without crowding the top panel.
         this._ai = new PanelMenu.Button(0.0, 'Goblins AI');
         this._ai.add_child(new St.Icon({
             gicon: Gio.icon_new_for_string(AI_ICON),
@@ -75,6 +76,28 @@ export default class GoblinsMenuBar extends Extension {
         this._inputSource.hide();
         Main.panel.addToStatusArea('goblins-input-source', this._inputSource, 2, 'right');
         this._bindInputSourceIndicator();
+
+        this._focus = new PanelMenu.Button(0.0, 'Focus', true);
+        this._focusLabel = new St.Label({
+            text: '',
+            style_class: 'goblins-focus-indicator',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._focus.add_child(this._focusLabel);
+        this._focus.connect('button-press-event', () => {
+            this._openFocusSettings();
+            return Clutter.EVENT_STOP;
+        });
+        this._focus.connect('touch-event', (_actor, event) => {
+            if (event.type() === Clutter.EventType.TOUCH_BEGIN) {
+                this._openFocusSettings();
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+        this._focus.hide();
+        Main.panel.addToStatusArea('goblins-focus', this._focus, 3, 'right');
+        this._bindFocusIndicator();
 
         this._control = new PanelMenu.Button(0.0, 'Control Center', true);
         this._control.add_child(new St.Icon({
@@ -285,6 +308,111 @@ export default class GoblinsMenuBar extends Extension {
             .slice(0, 64);
     }
 
+    _bindFocusIndicator() {
+        try {
+            this._focusSettings = new Gio.Settings({schema_id: FOCUS_SCHEMA});
+            this._focusActiveChangedId = this._focusSettings.connect(
+                'changed::active-mode',
+                () => this._refreshFocusIndicator()
+            );
+            this._focusModesChangedId = this._focusSettings.connect(
+                'changed::modes',
+                () => this._refreshFocusIndicator()
+            );
+            this._focusScheduledChangedId = this._focusSettings.connect(
+                'changed::armed-by-schedule',
+                () => this._refreshFocusIndicator()
+            );
+            this._refreshFocusIndicator();
+        } catch (error) {
+            this._setFocusIndicator('', false);
+            logError(error, 'goblins-menubar: Focus indicator unavailable');
+        }
+    }
+
+    _refreshFocusIndicator() {
+        if (!this._focusSettings) {
+            this._setFocusIndicator('', false);
+            return;
+        }
+
+        try {
+            const activeMode = this._safeFocusToken(this._focusSettings.get_string('active-mode'));
+            if (!activeMode) {
+                this._setFocusIndicator('', false);
+                return;
+            }
+
+            const modes = this._readFocusModes();
+            const mode = modes.find(entry => entry.id === activeMode);
+            if (!mode) {
+                this._setFocusIndicator('', false);
+                return;
+            }
+
+            this._setFocusIndicator(this._focusIndicatorText(mode.name), true);
+        } catch (error) {
+            this._setFocusIndicator('', false);
+            logError(error, 'goblins-menubar: failed to refresh Focus indicator');
+        }
+    }
+
+    _readFocusModes() {
+        const raw = this._focusSettings.get_string('modes');
+        const parsed = JSON.parse(raw || '[]');
+        if (!Array.isArray(parsed))
+            return [];
+
+        const modes = [];
+        for (const entry of parsed) {
+            const mode = this._normalizeFocusMode(entry);
+            if (mode)
+                modes.push(mode);
+        }
+        return modes;
+    }
+
+    _normalizeFocusMode(entry) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+            return null;
+
+        const id = this._safeFocusToken(entry.id);
+        const name = this._safeFocusLabel(entry.name, '', 80);
+        if (!id || !name)
+            return null;
+        return {id, name};
+    }
+
+    _setFocusIndicator(text, visible) {
+        this._focusLabel?.set_text(text);
+        if (visible)
+            this._focus?.show();
+        else
+            this._focus?.hide();
+    }
+
+    _focusIndicatorText(name) {
+        return this._safeFocusLabel(name, 'Focus', 14);
+    }
+
+    _safeFocusToken(value) {
+        return String(value || '')
+            .replace(/[^A-Za-z0-9._:-]+/g, '')
+            .slice(0, 64);
+    }
+
+    _safeFocusLabel(value, fallback, maxChars) {
+        const text = String(value || '')
+            .replace(/[\r\n\t]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!text)
+            return fallback;
+        if (text.length <= maxChars)
+            return text;
+        return `${text.slice(0, Math.max(1, maxChars - 3))}...`;
+    }
+
     _addAiMenuItem(label, argv) {
         const item = new PopupMenu.PopupMenuItem(label);
         item.connect('activate', () => this._spawn(argv, 'goblins-menubar: failed to open Goblins AI action'));
@@ -345,6 +473,10 @@ export default class GoblinsMenuBar extends Extension {
         this._spawn([CONTROL_CENTER], 'goblins-menubar: failed to open control center');
     }
 
+    _openFocusSettings() {
+        this._spawn([SETTINGS, '--panel=notifications'], 'goblins-menubar: failed to open Focus settings');
+    }
+
     _activeWindowContext() {
         const win = global.display?.focus_window || null;
         const windowTitle = this._safeContextValue(win?.get_title?.(), 'Active window', 180);
@@ -388,6 +520,18 @@ export default class GoblinsMenuBar extends Extension {
             this._inputSourceSettings.disconnect(this._inputSourceCurrentChangedId);
             this._inputSourceCurrentChangedId = null;
         }
+        if (this._focusActiveChangedId && this._focusSettings) {
+            this._focusSettings.disconnect(this._focusActiveChangedId);
+            this._focusActiveChangedId = null;
+        }
+        if (this._focusModesChangedId && this._focusSettings) {
+            this._focusSettings.disconnect(this._focusModesChangedId);
+            this._focusModesChangedId = null;
+        }
+        if (this._focusScheduledChangedId && this._focusSettings) {
+            this._focusSettings.disconnect(this._focusScheduledChangedId);
+            this._focusScheduledChangedId = null;
+        }
         if (this._lightChromeLoaded && this._lightChromeFile) {
             try {
                 const theme = this._themeContext?.get_theme();
@@ -400,6 +544,7 @@ export default class GoblinsMenuBar extends Extension {
         this._themeContext = null;
         this._interfaceSettings = null;
         this._inputSourceSettings = null;
+        this._focusSettings = null;
         this._lightChromeFile = null;
         if (this._mark) {
             this._mark.destroy();
@@ -419,5 +564,10 @@ export default class GoblinsMenuBar extends Extension {
             this._inputSource = null;
         }
         this._inputSourceLabel = null;
+        if (this._focus) {
+            this._focus.destroy();
+            this._focus = null;
+        }
+        this._focusLabel = null;
     }
 }

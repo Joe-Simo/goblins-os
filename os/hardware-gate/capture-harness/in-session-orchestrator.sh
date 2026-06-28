@@ -26,6 +26,7 @@ proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-sho
 proof_text_shortcuts_candidate_bubble_layout(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-layout?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_render_intent(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-render-intent?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_render(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-render?$1" >/dev/null 2>&1 || true; }
+proof_text_shortcuts_live_ibus_runtime_render(){ curl -s "http://$H/proof/text-shortcuts-live-ibus-runtime-render?$1" >/dev/null 2>&1 || true; }
 proof_keyboard_shortcuts_roundtrip(){ curl -s "http://$H/proof/keyboard-shortcuts-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_input_sources_roundtrip(){ curl -s "http://$H/proof/input-sources-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_focus_arm_roundtrip(){ curl -s "http://$H/proof/focus-arm-roundtrip?$1" >/dev/null 2>&1 || true; }
@@ -563,6 +564,10 @@ text_shortcuts_candidate_bubble_render_proof(){
   proof_text_shortcuts_candidate_bubble_render "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-candidate-bubble-render&render_intent_surface=goblins-textshortcuts-accept-bubble-render-intent&layout_surface=goblins-textshortcuts-accept-bubble-layout&frame_surface=goblins-textshortcuts-accept-bubble-frame&replacement=on%20my%20way&accept_on=word-boundary&dismiss_key=Escape&style_class=gos-text-shortcuts-candidate&text_style_class=gos-text-shortcuts-candidate-text&hint_style_class=gos-text-shortcuts-candidate-hint&font_family=Inter&screenshot=31-text-shortcuts-candidate-bubble-render.png&rendered_candidate_surface=true&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
   return 0
 }
+text_shortcuts_live_ibus_runtime_render_proof(){
+  proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=live-ibus-runtime-render-not-implemented&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=missing&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+  return 1
+}
 keyboard_shortcuts_roundtrip_proof(){
   local shortcut_set_file=/tmp/gate-keyboard-shortcut-set.json
   local shortcut_reset_file=/tmp/gate-keyboard-shortcut-reset.json
@@ -1039,6 +1044,7 @@ text_shortcuts_candidate_bubble_frame_proof || true
 text_shortcuts_candidate_bubble_layout_proof || true
 text_shortcuts_candidate_bubble_render_intent_proof || true
 text_shortcuts_candidate_bubble_render_proof || true
+text_shortcuts_live_ibus_runtime_render_proof || true
 keyboard_shortcuts_roundtrip_proof || true
 input_sources_roundtrip_proof || true
 focus_arm_roundtrip_proof || true

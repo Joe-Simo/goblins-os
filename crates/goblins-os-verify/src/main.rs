@@ -5440,8 +5440,18 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-live-ibus-runtime-render-proof",
+            "text-shortcuts-live-ibus-runtime-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-candidate-bubble-render-screenshot",
             "31-text-shortcuts-candidate-bubble-render.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-live-ibus-runtime-render-screenshot",
+            "32-text-shortcuts-live-ibus-runtime-render.png",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -5494,6 +5504,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "unknown word stays pass-through",
         ),
         contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-final-runtime-proof",
+            "focused-field callback",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-core-readiness-deferred",
+            "core_readiness_flip=deferred",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-firewall-live-toggle-proof",
             "/proof/firewall-live-toggle",
@@ -5540,8 +5560,18 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-textshortcuts-live-ibus-runtime-render-proof",
+            "/proof/text-shortcuts-live-ibus-runtime-render",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-captures-textshortcuts-candidate-bubble-render-screenshot",
             "31-text-shortcuts-candidate-bubble-render",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-references-textshortcuts-live-ibus-runtime-render-screenshot",
+            "32-text-shortcuts-live-ibus-runtime-render.png",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5920,6 +5950,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-textshortcuts-live-ibus-runtime-render-proof-json",
+            "text-shortcuts-live-ibus-runtime-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-writes-keyboard-shortcuts-roundtrip-proof-json",
             "keyboard-shortcuts-roundtrip-proof.json",
         ),
@@ -5987,6 +6022,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-bubble-render-proof",
             "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render screenshot proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-runtime-render-proof",
+            "HONESTY GUARD: missing or failing Text Shortcuts live IBus runtime/render proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6077,6 +6117,36 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-bubble-render-surface",
             "\"rendered_candidate_surface\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-runtime-render-screenshot",
+            "\"screenshot\": \"32-text-shortcuts-live-ibus-runtime-render.png\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-runtime-render-surface",
+            "\"surface\": \"goblins-textshortcuts-live-ibus-runtime-render\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-focused-callback",
+            "\"focused_field_callback\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-text-input-v3",
+            "\"text_input_v3_commit\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-rendered-accept-bubble",
+            "\"rendered_accept_bubble\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-core-readiness-deferred",
+            "\"core_readiness_flip\": \"deferred\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6232,6 +6302,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-textshortcuts-candidate-bubble-render-proof",
             "text_shortcuts_candidate_bubble_render_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-textshortcuts-live-ibus-runtime-render-proof",
+            "text_shortcuts_live_ibus_runtime_render_proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6640,6 +6715,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-textshortcuts-live-ibus-runtime-render-proof",
+            "text_shortcuts_live_ibus_runtime_render_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-keyboard-shortcuts-roundtrip-proof",
             "keyboard_shortcuts_roundtrip_proof_passes",
         ),
@@ -6783,8 +6863,18 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-textshortcuts-live-ibus-runtime-render-proof-filename",
+            "text-shortcuts-live-ibus-runtime-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-textshortcuts-candidate-bubble-render-screenshot-filename",
             "31-text-shortcuts-candidate-bubble-render.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-textshortcuts-live-ibus-runtime-render-screenshot-filename",
+            "32-text-shortcuts-live-ibus-runtime-render.png",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -7063,6 +7153,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-textshortcuts-live-ibus-runtime-render-proof",
+            "text_shortcuts_live_ibus_runtime_render_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-requires-keyboard-shortcuts-roundtrip-proof",
             "keyboard_shortcuts_roundtrip_proof_passes",
         ),
@@ -7130,6 +7225,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-textshortcuts-candidate-bubble-render-proof",
             "Text Shortcuts candidate bubble render screenshot checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-textshortcuts-live-ibus-runtime-render-proof",
+            "Text Shortcuts live IBus runtime/render checked",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),

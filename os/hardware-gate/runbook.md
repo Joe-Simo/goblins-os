@@ -149,6 +149,7 @@ the release media that was booted:
   "text_shortcuts_candidate_bubble_layout_proof": "text-shortcuts-candidate-bubble-layout-proof.json",
   "text_shortcuts_candidate_bubble_render_intent_proof": "text-shortcuts-candidate-bubble-render-intent-proof.json",
   "text_shortcuts_candidate_bubble_render_proof": "text-shortcuts-candidate-bubble-render-proof.json",
+  "text_shortcuts_live_ibus_runtime_render_proof": "text-shortcuts-live-ibus-runtime-render-proof.json",
   "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json",
   "input_sources_roundtrip_proof": "input-sources-roundtrip-proof.json",
   "focus_arm_roundtrip_proof": "focus-arm-roundtrip-proof.json",
@@ -250,6 +251,19 @@ rejects the run unless the proof links the screenshot to the
 `runtime_ready_claim=false`. This proves qemu captured the rendered proof
 surface; it still does not mark the live IBus overlay, focused-field callback,
 or Wayland text-input-v3 bubble as shipped.
+
+The final live IBus runtime/render gate is
+`text-shortcuts-live-ibus-runtime-render-proof.json` plus
+`32-text-shortcuts-live-ibus-runtime-render.png`. It must run in the installed
+GNOME/Wayland session with the active `goblins-textshortcuts` IBus engine and
+`wtype`, then reject the run unless the proof records a focused-field callback,
+a Wayland `text-input-v3` commit, normal expansion to `onmyway.`, pass-through
+of `hello.`, password-purpose refusal, the rendered Goblins accept bubble,
+`gos-text-shortcuts-candidate`, Inter, and
+`core_readiness_flip=deferred`. This is the only gate allowed to set
+`rendered_bubble_ready_claim=true`, `live_overlay_claim=true`, and
+`runtime_ready_claim=true`; the core readiness flip still stays deferred until
+the qemu artifact is reviewed deliberately.
 
 The keyboard-shortcuts gate is `keyboard-shortcuts-roundtrip-proof.json`. It
 posts to `/v1/keyboard/shortcuts/binding` to set the owned `window-hud` shortcut
@@ -386,6 +400,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Text Shortcuts candidate bubble layout result, including `text-shortcuts-candidate-bubble-layout-proof.json`
 - Text Shortcuts candidate bubble render intent result, including `text-shortcuts-candidate-bubble-render-intent-proof.json`
 - Text Shortcuts candidate bubble render screenshot result, including `text-shortcuts-candidate-bubble-render-proof.json` and `31-text-shortcuts-candidate-bubble-render.png`
+- Text Shortcuts live IBus runtime/render result, including `text-shortcuts-live-ibus-runtime-render-proof.json` and `32-text-shortcuts-live-ibus-runtime-render.png`
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
 - Focus arm roundtrip result, including `focus-arm-roundtrip-proof.json`

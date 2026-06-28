@@ -139,6 +139,7 @@ TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-b
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-layout-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-render-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-render-proof.json"
+TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF="$RUN_DIR/text-shortcuts-live-ibus-runtime-render-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="$RUN_DIR/keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="$RUN_DIR/input-sources-roundtrip-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="$RUN_DIR/focus-arm-roundtrip-proof.json"
@@ -291,6 +292,28 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF"
   echo "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render screenshot proof at $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF"
   exit 4
 fi
+if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"route": "/v1/text-shortcuts"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"surface": "goblins-textshortcuts-live-ibus-runtime-render"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"input_driver": "wtype"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"active_engine": "goblins-textshortcuts"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"normal_actual": "onmyway."' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"passthrough_actual": "hello."' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"password_refusal": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"focused_field_callback": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"text_input_v3_commit": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"rendered_accept_bubble": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"screenshot": "32-text-shortcuts-live-ibus-runtime-render.png"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"style_class": "gos-text-shortcuts-candidate"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"font_family": "Inter"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"rendered_bubble_ready_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"live_overlay_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"runtime_ready_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"core_readiness_flip": "deferred"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || [ ! -s "$RUN_DIR/32-text-shortcuts-live-ibus-runtime-render.png" ]; then
+  echo "HONESTY GUARD: missing or failing Text Shortcuts live IBus runtime/render proof at $TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"
+  exit 4
+fi
 if ! grep -Fq '"status": "pass"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
   || ! grep -Fq '"shortcut_route": "/v1/keyboard/shortcuts/binding"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
   || ! grep -Fq '"modifier_route": "/v1/keyboard/modifier-remap"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
@@ -441,6 +464,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "text_shortcuts_candidate_bubble_layout_proof":"text-shortcuts-candidate-bubble-layout-proof.json",
           "text_shortcuts_candidate_bubble_render_intent_proof":"text-shortcuts-candidate-bubble-render-intent-proof.json",
           "text_shortcuts_candidate_bubble_render_proof":"text-shortcuts-candidate-bubble-render-proof.json",
+          "text_shortcuts_live_ibus_runtime_render_proof":"text-shortcuts-live-ibus-runtime-render-proof.json",
           "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
           "input_sources_roundtrip_proof":"input-sources-roundtrip-proof.json",
           "focus_arm_roundtrip_proof":"focus-arm-roundtrip-proof.json",

@@ -738,7 +738,13 @@ def _key_request(keyval: int, state: int, ibus: Any) -> dict[str, Any]:
 
 
 def _unicode_for_keyval(keyval: int, ibus: Any) -> str | None:
-    codepoint = int(ibus.keyval_to_unicode(keyval))
+    unicode_value = ibus.keyval_to_unicode(keyval)
+    if isinstance(unicode_value, str):
+        if len(unicode_value) != 1:
+            return None
+        codepoint = ord(unicode_value)
+    else:
+        codepoint = int(unicode_value)
     if codepoint < 0x20 or codepoint > 0x10FFFF:
         return None
     return chr(codepoint)
@@ -844,7 +850,23 @@ def _run_self_test() -> None:
                 return 0
             return keyval
 
+    class FakeStringIbus:
+        ModifierType = FakeModifierType
+
+        @staticmethod
+        def keyval_to_unicode(keyval: int) -> str:
+            if keyval == 0xFF0D:
+                return ""
+            return chr(keyval)
+
     assert _key_request(ord("o"), 0, FakeIbus) == {
+        "type": "key",
+        "keyval": ord("o"),
+        "unicode": "o",
+        "pressed": True,
+        "command_modifier_active": False,
+    }
+    assert _key_request(ord("o"), 0, FakeStringIbus) == {
         "type": "key",
         "keyval": ord("o"),
         "unicode": "o",
@@ -858,6 +880,7 @@ def _run_self_test() -> None:
         "command_modifier_active"
     ] is True
     assert _key_request(0xFF0D, 0, FakeIbus)["unicode"] is None
+    assert _key_request(0xFF0D, 0, FakeStringIbus)["unicode"] is None
     assert _content_purpose_request("content-purpose-changed", 9) == {
         "type": "content-purpose-changed",
         "purpose": 9,

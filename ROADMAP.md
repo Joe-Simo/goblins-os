@@ -1546,9 +1546,29 @@ This is still source/harness-gated and does **not** prove a live qemu session,
 Wayland `text-input-v3`, a reviewed live rendered accept bubble, or mark Text
 Shortcuts shipped.
 
+Current Text Shortcuts Fedora 44 GI unicode compatibility continuation:
+hardware-gate run `28336457879` at `87762b0` passed the hosted runner KVM
+prerequisite but failed during the bootc image build before the VM launched.
+The installed `goblins-textshortcuts-ibus --gi-adapter-contract-self-test`
+exposed that Fedora 44 PyGObject/IBus returns a one-character string (`"o"`)
+from `IBus.keyval_to_unicode`, while the adapter only accepted integer
+codepoints. The adapter now accepts both integer codepoints and single-character
+strings, keeps empty/non-single strings as `None`, and extends the pure
+adapter self-test with a string-returning fake IBus binding. Local proof for
+this unblock: `python3 -m py_compile
+os/goblins-os-textshortcuts/goblins-textshortcuts-ibus`,
+`python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus --self-test`,
+`cargo test -p goblins-os-textshortcuts-engine`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and a
+Fedora 44 container probe that imported `gi.repository.IBus` and showed
+`IBus.keyval_to_unicode(ord("o"))` returns `str 'o'` while the patched
+`_key_request` emits `"unicode": "o"` and Enter still emits `None`. This is
+still source/image-gated and does **not** prove the live qemu IBus session or
+mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
-   run the display-backed hardware gate for the new Text Shortcuts live
+   rerun the display-backed hardware gate for the new Text Shortcuts live
    runtime/render path and inspect
    `text-shortcuts-live-ibus-runtime-render-proof.json` plus
    `32-text-shortcuts-live-ibus-runtime-render.png` only if the session reaches

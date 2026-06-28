@@ -25,6 +25,7 @@ proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-o
 proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-frame?$1" >/dev/null 2>&1 || true; }
 proof_keyboard_shortcuts_roundtrip(){ curl -s "http://$H/proof/keyboard-shortcuts-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_input_sources_roundtrip(){ curl -s "http://$H/proof/input-sources-roundtrip?$1" >/dev/null 2>&1 || true; }
+proof_focus_arm_roundtrip(){ curl -s "http://$H/proof/focus-arm-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_preview_open_render(){ curl -s "http://$H/proof/preview-open-render?$1" >/dev/null 2>&1 || true; }
 json_field(){
   python3 - "$1" "$2" <<'PY'
@@ -39,6 +40,18 @@ try:
         print("true" if value else "false")
     else:
         print(value)
+except Exception:
+    print("")
+PY
+}
+gsettings_string_value(){
+  python3 - "$1" <<'PY'
+import ast
+import sys
+
+try:
+    value = ast.literal_eval(sys.argv[1])
+    print(value if isinstance(value, str) else "")
 except Exception:
     print("")
 PY
@@ -546,6 +559,122 @@ input_sources_roundtrip_proof(){
   proof_input_sources_roundtrip "status=pass&source_route=/v1/input/sources&switch_route=/v1/input/switch-next&test_sources=xkb-us,xkb-gb&set_http=200&set_ok=true&sources_gsettings_readback=true&current_before_switch=0&switch_http=200&switch_ok=true&switch_switched=true&current_after_switch=1&restore_sources=true&restore_current=true&roundtrip_restored=true"
   return 0
 }
+restore_focus_roundtrip_state(){
+  local original_modes="$1"
+  local original_active="$2"
+  local original_armed="$3"
+  local original_restore="$4"
+  local original_banners="$5"
+
+  [ -n "$original_modes" ] && gsettings set org.goblins.os.focus modes "$original_modes" >/dev/null 2>&1 || true
+  gsettings set org.goblins.os.focus active-mode "$original_active" >/dev/null 2>&1 || true
+  [ -n "$original_armed" ] && gsettings set org.goblins.os.focus armed-by-schedule "$original_armed" >/dev/null 2>&1 || true
+  gsettings set org.goblins.os.focus restore-banners "$original_restore" >/dev/null 2>&1 || true
+  [ -n "$original_banners" ] && gsettings set org.gnome.desktop.notifications show-banners "$original_banners" >/dev/null 2>&1 || true
+}
+focus_arm_roundtrip_proof(){
+  local status_file=/tmp/gate-focus-status.json
+  local activate_file=/tmp/gate-focus-activate.json
+  local deactivate_file=/tmp/gate-focus-deactivate.json
+  local original_modes original_active_raw original_active original_armed original_restore_raw original_restore original_banners
+  local status_code available activate_code activate_ok activate_active active_after_activate
+  local armed_after_activate restore_after_activate banners_after_activate
+  local deactivate_code deactivate_ok deactivate_active active_after_deactivate
+  local armed_after_deactivate restore_after_deactivate banners_after_deactivate
+  local modes_after_restore active_after_restore armed_after_restore restore_after_restore banners_after_restore
+  local original_focus_state_restored original_notification_banners_restored
+
+  for _ in $(seq 1 60); do
+    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+
+  original_modes="$(gsettings get org.goblins.os.focus modes 2>/dev/null || true)"
+  original_active_raw="$(gsettings get org.goblins.os.focus active-mode 2>/dev/null || true)"
+  original_active="$(gsettings_string_value "$original_active_raw")"
+  original_armed="$(gsettings get org.goblins.os.focus armed-by-schedule 2>/dev/null || true)"
+  original_restore_raw="$(gsettings get org.goblins.os.focus restore-banners 2>/dev/null || true)"
+  original_restore="$(gsettings_string_value "$original_restore_raw")"
+  original_banners="$(gsettings get org.gnome.desktop.notifications show-banners 2>/dev/null || true)"
+  if [ -z "$original_modes" ] || [ -z "$original_active_raw" ] || [ -z "$original_armed" ] || [ -z "$original_restore_raw" ] || [ -z "$original_banners" ]; then
+    proof_focus_arm_roundtrip "status=fail&stage=baseline&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&schema=org.goblins.os.focus"
+    return 1
+  fi
+
+  if ! gsettings set org.goblins.os.focus modes '[{"id":"gate-work","name":"Gate Work"}]' >/dev/null 2>&1 \
+    || ! gsettings set org.goblins.os.focus active-mode '' >/dev/null 2>&1 \
+    || ! gsettings set org.goblins.os.focus armed-by-schedule false >/dev/null 2>&1 \
+    || ! gsettings set org.goblins.os.focus restore-banners '' >/dev/null 2>&1 \
+    || ! gsettings set org.gnome.desktop.notifications show-banners true >/dev/null 2>&1; then
+    restore_focus_roundtrip_state "$original_modes" "$original_active" "$original_armed" "$original_restore" "$original_banners"
+    proof_focus_arm_roundtrip "status=fail&stage=seed&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&test_mode=gate-work&test_mode_configured=false"
+    return 1
+  fi
+
+  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/focus/status" || true)
+  available=$(json_field "$status_file" available)
+  if [ "$status_code" != "200" ] || [ "$available" != "true" ]; then
+    restore_focus_roundtrip_state "$original_modes" "$original_active" "$original_armed" "$original_restore" "$original_banners"
+    proof_focus_arm_roundtrip "status=fail&stage=status&status_route=/v1/focus/status&status_http=${status_code:-000}&available=${available:-missing}&test_mode=gate-work"
+    return 1
+  fi
+
+  activate_code=$(curl -s -o "$activate_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"mode":"gate-work"}' \
+    "$LIVE_URL/v1/focus/activate" || true)
+  activate_ok=$(json_field "$activate_file" ok)
+  activate_active=$(json_field "$activate_file" active_mode)
+  active_after_activate="$(gsettings_string_value "$(gsettings get org.goblins.os.focus active-mode 2>/dev/null || true)")"
+  armed_after_activate="$(gsettings get org.goblins.os.focus armed-by-schedule 2>/dev/null || true)"
+  restore_after_activate="$(gsettings_string_value "$(gsettings get org.goblins.os.focus restore-banners 2>/dev/null || true)")"
+  banners_after_activate="$(gsettings get org.gnome.desktop.notifications show-banners 2>/dev/null || true)"
+  if [ "$activate_code" != "200" ] || [ "$activate_ok" != "true" ] || [ "$activate_active" != "gate-work" ] \
+    || [ "$active_after_activate" != "gate-work" ] || [ "$armed_after_activate" != "false" ] \
+    || [ "$restore_after_activate" != "true" ] || [ "$banners_after_activate" != "false" ]; then
+    restore_focus_roundtrip_state "$original_modes" "$original_active" "$original_armed" "$original_restore" "$original_banners"
+    proof_focus_arm_roundtrip "status=fail&stage=activate&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&test_mode=gate-work&activate_http=${activate_code:-000}&activate_ok=${activate_ok:-missing}&activate_active_mode=${activate_active:-missing}&active_mode_gsettings_readback=${active_after_activate:-missing}&armed_by_schedule_after_activate=${armed_after_activate:-missing}&restore_banners_after_activate=${restore_after_activate:-missing}&notification_banners_after_activate=${banners_after_activate:-missing}"
+    return 1
+  fi
+
+  deactivate_code=$(curl -s -o "$deactivate_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{}' \
+    "$LIVE_URL/v1/focus/deactivate" || true)
+  deactivate_ok=$(json_field "$deactivate_file" ok)
+  deactivate_active=$(json_field "$deactivate_file" active_mode)
+  active_after_deactivate="$(gsettings_string_value "$(gsettings get org.goblins.os.focus active-mode 2>/dev/null || true)")"
+  armed_after_deactivate="$(gsettings get org.goblins.os.focus armed-by-schedule 2>/dev/null || true)"
+  restore_after_deactivate="$(gsettings_string_value "$(gsettings get org.goblins.os.focus restore-banners 2>/dev/null || true)")"
+  banners_after_deactivate="$(gsettings get org.gnome.desktop.notifications show-banners 2>/dev/null || true)"
+  if [ "$deactivate_code" != "200" ] || [ "$deactivate_ok" != "true" ] || [ -n "$deactivate_active" ] \
+    || [ -n "$active_after_deactivate" ] || [ "$armed_after_deactivate" != "false" ] \
+    || [ -n "$restore_after_deactivate" ] || [ "$banners_after_deactivate" != "true" ]; then
+    restore_focus_roundtrip_state "$original_modes" "$original_active" "$original_armed" "$original_restore" "$original_banners"
+    proof_focus_arm_roundtrip "status=fail&stage=deactivate&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&test_mode=gate-work&deactivate_http=${deactivate_code:-000}&deactivate_ok=${deactivate_ok:-missing}&deactivate_active_mode=${deactivate_active:-missing}&active_mode_after_deactivate=${active_after_deactivate:-missing}&armed_by_schedule_after_deactivate=${armed_after_deactivate:-missing}&restore_banners_after_deactivate=${restore_after_deactivate:-missing}&notification_banners_after_deactivate=${banners_after_deactivate:-missing}"
+    return 1
+  fi
+
+  restore_focus_roundtrip_state "$original_modes" "$original_active" "$original_armed" "$original_restore" "$original_banners"
+  modes_after_restore="$(gsettings get org.goblins.os.focus modes 2>/dev/null || true)"
+  active_after_restore="$(gsettings_string_value "$(gsettings get org.goblins.os.focus active-mode 2>/dev/null || true)")"
+  armed_after_restore="$(gsettings get org.goblins.os.focus armed-by-schedule 2>/dev/null || true)"
+  restore_after_restore="$(gsettings_string_value "$(gsettings get org.goblins.os.focus restore-banners 2>/dev/null || true)")"
+  banners_after_restore="$(gsettings get org.gnome.desktop.notifications show-banners 2>/dev/null || true)"
+  original_focus_state_restored=false
+  original_notification_banners_restored=false
+  [ "$modes_after_restore" = "$original_modes" ] && [ "$active_after_restore" = "$original_active" ] \
+    && [ "$armed_after_restore" = "$original_armed" ] && [ "$restore_after_restore" = "$original_restore" ] \
+    && original_focus_state_restored=true
+  [ "$banners_after_restore" = "$original_banners" ] && original_notification_banners_restored=true
+  if [ "$original_focus_state_restored" != "true" ] || [ "$original_notification_banners_restored" != "true" ]; then
+    proof_focus_arm_roundtrip "status=fail&stage=restore&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&test_mode=gate-work&original_focus_state_restored=$original_focus_state_restored&original_notification_banners_restored=$original_notification_banners_restored&roundtrip_restored=false"
+    return 1
+  fi
+
+  proof_focus_arm_roundtrip "status=pass&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&status_http=200&available=true&test_mode=gate-work&test_mode_configured=true&baseline_active_mode=&baseline_banners=true&activate_http=200&activate_ok=true&activate_active_mode=gate-work&active_mode_gsettings_readback=gate-work&armed_by_schedule_after_activate=false&restore_banners_after_activate=true&notification_banners_after_activate=false&deactivate_http=200&deactivate_ok=true&deactivate_active_mode=&active_mode_after_deactivate=&armed_by_schedule_after_deactivate=false&restore_banners_after_deactivate=&notification_banners_after_deactivate=true&original_focus_state_restored=true&original_notification_banners_restored=true&roundtrip_restored=true&mode_crud_claim=false&schedule_claim=false&per_app_breakthroughs_claim=false"
+  return 0
+}
 preview_open_render_proof(){
   local preview_pdf=/usr/share/goblins-os/proof/preview-open-render.pdf
   local preview_png=/usr/share/goblins-os/proof/preview-open-render.png
@@ -653,6 +782,7 @@ text_shortcuts_overlay_intent_proof || true
 text_shortcuts_candidate_bubble_frame_proof || true
 keyboard_shortcuts_roundtrip_proof || true
 input_sources_roundtrip_proof || true
+focus_arm_roundtrip_proof || true
 preview_open_render_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----

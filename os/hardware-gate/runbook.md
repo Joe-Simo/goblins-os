@@ -220,6 +220,17 @@ existing IME/input-source write and switch bridges in qemu without depending on
 a CJK engine being active and without marking the Settings input-source UI
 render shipped.
 
+The Focus arm gate is `focus-arm-roundtrip-proof.json`, linked from
+`proof-manifest.json` as `focus_arm_roundtrip_proof`. It saves the current
+Goblins Focus mode state and GNOME notification banner preference, seeds a
+deterministic `gate-work` mode, posts `/v1/focus/activate`, verifies
+`active-mode=gate-work`, `armed-by-schedule=false`, the saved banner snapshot,
+and `show-banners=false`, then posts `/v1/focus/deactivate`, verifies the active
+mode and restore snapshot are cleared and banners return to true, and finally
+restores the original Focus and notification state before signoff. This proves
+the existing arm/disarm bridge in qemu; it does not claim mode CRUD, schedule
+timers, or per-app breakthrough behavior shipped.
+
 The Preview open/render gate is `preview-open-render-proof.json`, linked from
 `proof-manifest.json` as `preview_open_render_proof`. It queries
 `/v1/preview/status`, verifies Papers/Loupe are available through the core
@@ -316,6 +327,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Text Shortcuts candidate bubble frame result, including `text-shortcuts-candidate-bubble-frame-proof.json`
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
+- Focus arm roundtrip result, including `focus-arm-roundtrip-proof.json`
 - Preview open/render result, including `preview-open-render-proof.json`, `29-preview-pdf-open.png`, and `30-preview-image-open.png`
 - install destination, formatting/root filesystem, bootloader/EFI, and dual-boot preservation result
 - for custom formatting, encryption, separate `/home`, LUKS/LVM, TPM2 LUKS, ext4, or btrfs, show an advanced storage summary before writes

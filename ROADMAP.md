@@ -368,6 +368,27 @@ scoped `git diff --check`, and the Rust 1.88 GTK container
 goblins-os-control-center/native-desktop -- -D warnings` from a minimal temp
 workspace.
 
+Current Focus live-write proof continuation: the display-backed VM capture
+harness now requires `focus-arm-roundtrip-proof.json` before signoff. Inside the
+installed session it saves Focus + notification banner state, seeds a
+deterministic `gate-work` mode, posts `/v1/focus/activate`, verifies
+`active-mode` and banner snapshot/read-back, posts `/v1/focus/deactivate`,
+verifies Focus is off and banners are restored, restores the original state, and
+links the proof in `proof-manifest.json`. `close-signoff.sh`,
+`verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing
+proof, and the proof explicitly keeps mode CRUD, schedule, and per-app
+breakthrough claims false. This is source-gated proof plumbing only; no live
+qemu run has produced the artifact yet, and Focus remains `in-progress`. Local
+source gates for this pass: `python3 -m py_compile
+os/hardware-gate/capture-harness/drive-capture.py`,
+`bash -n os/hardware-gate/capture-harness/in-session-orchestrator.sh
+os/hardware-gate/capture-harness/run-capture.sh
+os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh`,
+`cargo fmt --all --check`, `cargo test -p goblins-os-verify`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (2308)**, and
+`git diff --check`.
+
 Current Migration continuation: the copy-job/progress and preference-import
 planner substrates are now source-gated but not shipped. Core exposes
 `/v1/migration/start` and `/v1/migration/progress`; start reuses the validated
@@ -1596,6 +1617,7 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - [x] **Menu-bar active Focus indicator source-gated (CI/qemu-pending):** `goblins-menubar` reads the system `org.goblins.os.focus` schema, hides when Focus is off or the active id is not in configured modes, shows only the configured active mode name, and opens Settings ▸ Notifications on click. The desktop render harness now captures `59b-menubar-focus-$suffix.png` after seeding a deterministic `work` mode and active state, then restores Focus to off. It performs no writes and makes no live timer/write claim. **Not shipped** until GNOME Shell render and live Focus state proof land.
 - [x] **Control Center Focus tile source-gated (CI/qemu-pending):** Control Center fetches `/v1/focus/status`, renders a read-only Focus tile from core-reported configured modes, opens Settings ▸ Notifications for changes, and does not call Focus write routes. The render harness now seeds a deterministic `work` / `Deep Work` mode, captures `37b-control-center-focus.png` and `39b-control-center-focus-dark.png`, then restores Focus to off. It creates no sample/default modes in the product path and makes no schedule/timer/live-write claim. **Not shipped** until reviewed Control Center GTK pixels and live Focus proof land.
 - [x] **Mode/schedule CRUD substrate source-gated (CI/qemu-pending):** core exposes `/v1/focus/mode` and `/v1/focus/schedule`, validates Focus ids/names/weekdays/time windows, upserts/deletes only through the Goblins Focus schema, refuses deletion of the active mode, and refuses deletion of a mode that schedules still reference. No default/sample modes are created, no per-app breakthrough policy is applied, and no Settings editor/render proof is claimed.
+- [x] **Live arm/disarm hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `focus-arm-roundtrip-proof.json`, posts `/v1/focus/activate` and `/v1/focus/deactivate` against a deterministic `gate-work` mode, verifies `active-mode` read-back, notification banner snapshot/silence/restore behavior, original state restoration, and explicit `mode_crud_claim=false`, `schedule_claim=false`, and `per_app_breakthroughs_claim=false`. The proof is linked from `proof-manifest.json`, and `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. No live qemu run has produced the proof yet.
 - [ ] **Surfaces + per-app breakthroughs (deferred):** per-app breakthrough via the `notifications.rs` helper and the `SettingsPanel::Focus` editor for mode/schedule CRUD. (Drops iCloud/location/Smart Activation — absent, never stubbed.)
 - **Packages:** none.
 - **gsettings/dconf:** DRIVES `org.gnome.desktop.notifications show-banners` (already allowlisted as `ShowBanners`) + per-app `…notifications.application` enable/show-banners. OWN a new `org.goblins.os.focus` schema (active-mode, modes JSON, schedules JSON, armed-by-schedule, restore-banners, restore-apps), compiled like the wm schema; dconf-seed default modes so first boot is non-empty (active-mode='', schedules='[]').

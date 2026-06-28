@@ -54,6 +54,7 @@ TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="input-sources-roundtrip-proof.json"
+FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
 
 check() {
@@ -227,6 +228,7 @@ screenshot_run_is_complete() {
   text_shortcuts_candidate_bubble_frame_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" || return 1
   keyboard_shortcuts_roundtrip_proof_passes "$run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" || return 1
   input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF" || return 1
+  focus_arm_roundtrip_proof_passes "$run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF" || return 1
   preview_open_render_proof_passes "$run_dir/$PREVIEW_OPEN_RENDER_PROOF" || return 1
   return 0
 }
@@ -280,6 +282,7 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest" \
     && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest" \
+    && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest"
 }
 
@@ -449,6 +452,38 @@ input_sources_roundtrip_proof_passes() {
     && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
+focus_arm_roundtrip_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/focus/status"' "$proof" \
+    && rg -q '"activate_route"[[:space:]]*:[[:space:]]*"/v1/focus/activate"' "$proof" \
+    && rg -q '"deactivate_route"[[:space:]]*:[[:space:]]*"/v1/focus/deactivate"' "$proof" \
+    && rg -q '"test_mode"[[:space:]]*:[[:space:]]*"gate-work"' "$proof" \
+    && rg -q '"test_mode_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"activate_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"activate_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"activate_active_mode"[[:space:]]*:[[:space:]]*"gate-work"' "$proof" \
+    && rg -q '"active_mode_gsettings_readback"[[:space:]]*:[[:space:]]*"gate-work"' "$proof" \
+    && rg -q '"armed_by_schedule_after_activate"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"restore_banners_after_activate"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"notification_banners_after_activate"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"deactivate_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"deactivate_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"deactivate_active_mode"[[:space:]]*:[[:space:]]*""' "$proof" \
+    && rg -q '"active_mode_after_deactivate"[[:space:]]*:[[:space:]]*""' "$proof" \
+    && rg -q '"armed_by_schedule_after_deactivate"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"restore_banners_after_deactivate"[[:space:]]*:[[:space:]]*""' "$proof" \
+    && rg -q '"notification_banners_after_deactivate"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"original_focus_state_restored"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"original_notification_banners_restored"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"mode_crud_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"schedule_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"per_app_breakthroughs_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+}
+
 preview_open_render_proof_passes() {
   local proof="$1"
 
@@ -525,6 +560,10 @@ print_missing_screenshot_paths() {
   fi
   if ! input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF"; then
     echo "  $run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF"
+    missing=1
+  fi
+  if ! focus_arm_roundtrip_proof_passes "$run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF"; then
+    echo "  $run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF"
     missing=1
   fi
   if ! preview_open_render_proof_passes "$run_dir/$PREVIEW_OPEN_RENDER_PROOF"; then
@@ -659,6 +698,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $INPUT_SOURCES_ROUNDTRIP_PROOF (missing or Input sources roundtrip proof failed)"
     missing=1
   fi
+  if focus_arm_roundtrip_proof_passes "$run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF"; then
+    echo "[PASS] $FOCUS_ARM_ROUNDTRIP_PROOF"
+  else
+    echo "[FAIL] $FOCUS_ARM_ROUNDTRIP_PROOF (missing or Focus arm roundtrip proof failed)"
+    missing=1
+  fi
   if preview_open_render_proof_passes "$run_dir/$PREVIEW_OPEN_RENDER_PROOF"; then
     echo "[PASS] $PREVIEW_OPEN_RENDER_PROOF"
   else
@@ -715,6 +760,7 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$INPUT_SOURCES_ROUNDTRIP_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$FOCUS_ARM_ROUNDTRIP_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$PREVIEW_OPEN_RENDER_PROOF
 EOF
 }
@@ -773,6 +819,7 @@ signoff_block_required_proof_is_complete() {
   signoff_block_contains "$block" "^- Text Shortcuts candidate bubble frame checked: yes" || return 1
   signoff_block_contains "$block" "^- Keyboard shortcuts roundtrip checked: yes" || return 1
   signoff_block_contains "$block" "^- Input sources roundtrip checked: yes" || return 1
+  signoff_block_contains "$block" "^- Focus arm roundtrip checked: yes" || return 1
   signoff_block_contains "$block" "^- Preview open/render checked: yes" || return 1
   signoff_block_contains "$block" "^- Gaming readiness checked: yes" || return 1
   signoff_block_contains "$block" "^- Install storage/bootloader/dual-boot checked: yes" || return 1
@@ -991,6 +1038,7 @@ check "installed self-test checks system status route" "rg -q '/v1/ai/system-sta
 check "core input sources expose narrow write route and encoder" "rg -q '/v1/input/sources' crates/goblins-os-core/src/main.rs && rg -q 'normalize_input_sources' crates/goblins-os-core/src/input.rs && rg -q 'encode_input_sources' crates/goblins-os-core/src/input.rs"
 check "settings input sources expose reorder and remove write controls" "rg -q 'input_source_action_button' crates/goblins-os-settings/src/main.rs && rg -q 'reordered_input_sources' crates/goblins-os-settings/src/main.rs && rg -q 'input_sources_without' crates/goblins-os-settings/src/main.rs && rg -q '/v1/input/sources' crates/goblins-os-settings/src/main.rs"
 check "hardware gate requires Input sources roundtrip proof" "rg -q 'input-sources-roundtrip-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/input-sources-roundtrip' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/input/sources' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/input/switch-next' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'test_sources=xkb-us,xkb-gb' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sources_gsettings_readback=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'switch_switched=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'restore_sources=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'Input sources roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
+check "hardware gate requires Focus arm roundtrip proof" "rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/focus-arm-roundtrip' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/focus/status' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/focus/activate' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/focus/deactivate' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'active_mode_gsettings_readback=gate-work' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'notification_banners_after_activate=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'original_notification_banners_restored=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'mode_crud_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'Focus arm roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "hardware gate requires Preview open/render proof" "rg -q 'preview-open-render-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/preview-open-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/preview/status' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/preview/open' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'org.gnome.Papers.desktop' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'org.gnome.Loupe.desktop' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '29-preview-pdf-open.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '30-preview-image-open.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'unsupported_rejected=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'Preview open/render checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "IME CJK engine packages are source-gated" "rg -q 'ibus-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/libpinyin.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/anthy.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/hangul.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so' os/bootc/Containerfile && rg -q 'CJK engine packages' crates/goblins-os-settings/src/main.rs"
 check "core keyboard rebinding exposes allowlisted write routes" "rg -q '/v1/keyboard/shortcuts/binding' crates/goblins-os-core/src/main.rs && rg -q '/v1/keyboard/modifier-remap' crates/goblins-os-core/src/main.rs && rg -q 'shortcut_conflict' crates/goblins-os-core/src/shortcuts.rs && rg -q 'remap_caps_lock_options' crates/goblins-os-core/src/shortcuts.rs"
@@ -1019,6 +1067,7 @@ check "settings interaction render captures firewall toggle failure" "rg -q 'cap
 check "capture harness proves live firewall polkit toggle path" "rg -q '/proof/firewall-live-toggle' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/firewall/enabled' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'disable_active=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'enable_active=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists live firewall proof" "rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'require_proofs' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing live firewall toggle proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture driver persists Preview open/render proof" "rg -q 'preview-open-render-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'preview-open-render' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Preview open/render proof' os/hardware-gate/capture-harness/run-capture.sh"
+check "capture driver persists Focus arm roundtrip proof" "rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'focus-arm-roundtrip' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Focus arm roundtrip proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts session plumbing without runtime claim" "rg -q '/proof/text-shortcuts-session-enable' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'org.goblins.OS.IBus.service' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ibus engine goblins-textshortcuts' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'core_runtime_loop_available=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts session proof" "rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-session-enable' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts session-enable proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts live keystrokes through focused GTK fields" "rg -q '/proof/text-shortcuts-live-keystroke' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof normal' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof password' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof dismiss' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof passthrough' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wtype -- \"omw\\.\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wtype -- \"hello\\.\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wtype -P Escape -p Escape' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'password_refusal=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismiss_no_commit=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'passthrough_unchanged=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
@@ -1039,6 +1088,7 @@ check "hardware gate requires Text Shortcuts candidate metadata proof in signoff
 check "hardware gate requires Text Shortcuts overlay intent proof in signoff" "rg -q 'text_shortcuts_overlay_intent_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts overlay intent checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-overlay-intent-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts candidate bubble frame proof in signoff" "rg -q 'text_shortcuts_candidate_bubble_frame_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate bubble frame checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-bubble-frame-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Preview open/render proof in signoff" "rg -q 'preview_open_render_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Preview open/render checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'preview-open-render-proof.json' os/hardware-gate/runbook.md"
+check "hardware gate requires Focus arm roundtrip proof in signoff" "rg -q 'focus_arm_roundtrip_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Focus arm roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/runbook.md"
 check "core AI safe setting route requires policy and confirmation" "rg -Fq 'policy_state_for_control(\"settings-control\")' crates/goblins-os-core/src/ai.rs && rg -q 'StatusCode::PRECONDITION_REQUIRED' crates/goblins-os-core/src/ai.rs && rg -Fq 'audit_ai_action(\"change-safe-setting\"' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route has narrow allowlist" "rg -q 'appearance.color-scheme, accessibility.reduce-motion, or notifications.show-banners' crates/goblins-os-core/src/ai.rs && rg -q 'safe_setting_change_rejects_arbitrary_settings_and_wrong_values' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route reuses settings wrappers" "rg -q 'apply_ai_color_scheme' crates/goblins-os-core/src/appearance.rs && rg -q 'apply_ai_reduce_motion' crates/goblins-os-core/src/accessibility.rs && rg -q 'apply_ai_notification_banners' crates/goblins-os-core/src/notifications.rs"
@@ -1241,6 +1291,12 @@ if [ -f "$SIGNOFF" ]; then
       echo "[PASS] Latest signoff run records Preview open/render proof"
     else
       echo "[FAIL] Latest signoff run missing Preview open/render proof"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+    if echo "$LATEST_RUN_BLOCK" | rg -q "^- Focus arm roundtrip checked: yes"; then
+      echo "[PASS] Latest signoff run records Focus arm roundtrip proof"
+    else
+      echo "[FAIL] Latest signoff run missing Focus arm roundtrip proof"
       FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
     if echo "$LATEST_RUN_BLOCK" | rg -q "^- Gaming readiness checked: yes"; then

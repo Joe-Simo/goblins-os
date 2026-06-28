@@ -28,6 +28,7 @@ REQUIRED_PROOFS = (
     "text-shortcuts-candidate-bubble-frame",
     "keyboard-shortcuts-roundtrip",
     "input-sources-roundtrip",
+    "focus-arm-roundtrip",
     "preview-open-render",
 )
 PROOF_FILENAMES = {
@@ -39,6 +40,7 @@ PROOF_FILENAMES = {
     "text-shortcuts-candidate-bubble-frame": "text-shortcuts-candidate-bubble-frame-proof.json",
     "keyboard-shortcuts-roundtrip": "keyboard-shortcuts-roundtrip-proof.json",
     "input-sources-roundtrip": "input-sources-roundtrip-proof.json",
+    "focus-arm-roundtrip": "focus-arm-roundtrip-proof.json",
     "preview-open-render": "preview-open-render-proof.json",
 }
 

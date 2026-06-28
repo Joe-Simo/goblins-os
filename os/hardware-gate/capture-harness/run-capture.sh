@@ -138,6 +138,7 @@ TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="$RUN_DIR/text-shortcuts-overlay-intent-proo
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-frame-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="$RUN_DIR/keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="$RUN_DIR/input-sources-roundtrip-proof.json"
+FOCUS_ARM_ROUNDTRIP_PROOF="$RUN_DIR/focus-arm-roundtrip-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="$RUN_DIR/preview-open-render-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
@@ -268,6 +269,35 @@ if ! grep -Fq '"status": "pass"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
   echo "HONESTY GUARD: missing or failing Input sources roundtrip proof at $INPUT_SOURCES_ROUNDTRIP_PROOF"
   exit 4
 fi
+if ! grep -Fq '"status": "pass"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"status_route": "/v1/focus/status"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"activate_route": "/v1/focus/activate"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"deactivate_route": "/v1/focus/deactivate"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"test_mode": "gate-work"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"test_mode_configured": "true"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"activate_http": "200"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"activate_ok": "true"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"activate_active_mode": "gate-work"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"active_mode_gsettings_readback": "gate-work"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"armed_by_schedule_after_activate": "false"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"restore_banners_after_activate": "true"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"notification_banners_after_activate": "false"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"deactivate_http": "200"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"deactivate_ok": "true"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"deactivate_active_mode": ""' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"active_mode_after_deactivate": ""' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"armed_by_schedule_after_deactivate": "false"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"restore_banners_after_deactivate": ""' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"notification_banners_after_deactivate": "true"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"original_focus_state_restored": "true"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"original_notification_banners_restored": "true"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"roundtrip_restored": "true"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"mode_crud_claim": "false"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"schedule_claim": "false"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
+  || ! grep -Fq '"per_app_breakthroughs_claim": "false"' "$FOCUS_ARM_ROUNDTRIP_PROOF"; then
+  echo "HONESTY GUARD: missing or failing Focus arm roundtrip proof at $FOCUS_ARM_ROUNDTRIP_PROOF"
+  exit 4
+fi
 if ! grep -Fq '"status": "pass"' "$PREVIEW_OPEN_RENDER_PROOF" \
   || ! grep -Fq '"status_route": "/v1/preview/status"' "$PREVIEW_OPEN_RENDER_PROOF" \
   || ! grep -Fq '"route": "/v1/preview/open"' "$PREVIEW_OPEN_RENDER_PROOF" \
@@ -332,6 +362,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "text_shortcuts_candidate_bubble_frame_proof":"text-shortcuts-candidate-bubble-frame-proof.json",
           "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
           "input_sources_roundtrip_proof":"input-sources-roundtrip-proof.json",
+          "focus_arm_roundtrip_proof":"focus-arm-roundtrip-proof.json",
           "preview_open_render_proof":"preview-open-render-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)

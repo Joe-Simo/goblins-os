@@ -81,6 +81,7 @@ TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="input-sources-roundtrip-proof.json"
+FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
 GAMING_SCREENSHOT_STATUS="not checked"
 INSTALL_STORAGE_STATUS="not checked"
@@ -94,6 +95,7 @@ TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="not checked"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="not checked"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS="not checked"
 INPUT_SOURCES_ROUNDTRIP_STATUS="not checked"
+FOCUS_ARM_ROUNDTRIP_STATUS="not checked"
 PREVIEW_OPEN_RENDER_STATUS="not checked"
 RUNTIME_ENGINE_MODE="${RUNTIME_ENGINE_MODE:-}"
 RUNTIME_ENGINE_SOURCE="${RUNTIME_ENGINE_SOURCE:-}"
@@ -285,6 +287,7 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest" \
     && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest" \
+    && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest"
 }
 
@@ -452,6 +455,38 @@ input_sources_roundtrip_proof_passes() {
     && rg -q '"restore_sources"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"restore_current"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof"
+}
+
+focus_arm_roundtrip_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/focus/status"' "$proof" \
+    && rg -q '"activate_route"[[:space:]]*:[[:space:]]*"/v1/focus/activate"' "$proof" \
+    && rg -q '"deactivate_route"[[:space:]]*:[[:space:]]*"/v1/focus/deactivate"' "$proof" \
+    && rg -q '"test_mode"[[:space:]]*:[[:space:]]*"gate-work"' "$proof" \
+    && rg -q '"test_mode_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"activate_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"activate_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"activate_active_mode"[[:space:]]*:[[:space:]]*"gate-work"' "$proof" \
+    && rg -q '"active_mode_gsettings_readback"[[:space:]]*:[[:space:]]*"gate-work"' "$proof" \
+    && rg -q '"armed_by_schedule_after_activate"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"restore_banners_after_activate"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"notification_banners_after_activate"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"deactivate_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"deactivate_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"deactivate_active_mode"[[:space:]]*:[[:space:]]*""' "$proof" \
+    && rg -q '"active_mode_after_deactivate"[[:space:]]*:[[:space:]]*""' "$proof" \
+    && rg -q '"armed_by_schedule_after_deactivate"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"restore_banners_after_deactivate"[[:space:]]*:[[:space:]]*""' "$proof" \
+    && rg -q '"notification_banners_after_deactivate"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"original_focus_state_restored"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"original_notification_banners_restored"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"mode_crud_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"schedule_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"per_app_breakthroughs_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
 }
 
 preview_open_render_proof_passes() {
@@ -674,7 +709,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! screenshot_manifest_matches_iso "$SCREENSHOT_DIR/proof-manifest.json"; then
     fail "Screenshot proof manifest missing or not tied to this architecture ISO: $SCREENSHOT_DIR/proof-manifest.json"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
+    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
     exit 1
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
@@ -717,6 +752,11 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Expected live /v1/input/sources and /v1/input/switch-next writes, gsettings read-back, and source/current restore before signoff."
     exit 1
   fi
+  if ! focus_arm_roundtrip_proof_passes "$SCREENSHOT_DIR/$FOCUS_ARM_ROUNDTRIP_PROOF"; then
+    fail "Focus arm roundtrip proof missing or failed: $SCREENSHOT_DIR/$FOCUS_ARM_ROUNDTRIP_PROOF"
+    fail "Expected live /v1/focus/activate and /v1/focus/deactivate writes, active-mode/banner read-back, notification restore, and no mode/schedule/per-app breakthrough claims before signoff."
+    exit 1
+  fi
   if ! preview_open_render_proof_passes "$SCREENSHOT_DIR/$PREVIEW_OPEN_RENDER_PROOF"; then
     fail "Preview open/render proof missing or failed: $SCREENSHOT_DIR/$PREVIEW_OPEN_RENDER_PROOF"
     fail "Expected /v1/preview/status readiness, /v1/preview/open PDF/image launches, Papers/Loupe defaults, rendered screenshot frames, and unsupported-file rejection before signoff."
@@ -731,6 +771,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   log "Text Shortcuts candidate-bubble-frame proof passed."
   log "Keyboard shortcuts roundtrip proof passed."
   log "Input sources roundtrip proof passed."
+  log "Focus arm roundtrip proof passed."
   log "Preview open/render proof passed."
   GAMING_SCREENSHOT_STATUS="yes (screenshots ${GAMING_SCREENSHOTS[*]} present)"
   INSTALL_STORAGE_STATUS="yes (screenshots ${INSTALL_STORAGE_SCREENSHOTS[*]} present)"
@@ -743,6 +784,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF: adapter accept-bubble frames present; rendered bubble still gated false)"
   KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS="yes ($KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF: shortcut + Caps Lock writes round-tripped and restored)"
   INPUT_SOURCES_ROUNDTRIP_STATUS="yes ($INPUT_SOURCES_ROUNDTRIP_PROOF: input source set + switch writes round-tripped and restored)"
+  FOCUS_ARM_ROUNDTRIP_STATUS="yes ($FOCUS_ARM_ROUNDTRIP_PROOF: Focus activate/deactivate writes round-tripped and notification banners restored)"
   PREVIEW_OPEN_RENDER_STATUS="yes ($PREVIEW_OPEN_RENDER_PROOF: Papers PDF and Loupe image windows opened/rendered in display-backed VM)"
 else
   warn "SCREENSHOT_DIR not set; proof screenshot presence check skipped."
@@ -812,6 +854,7 @@ if [ "$VERIFY_STATUS" = "pass" ] \
   && [[ "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS" == yes* ]] \
   && [[ "$KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$INPUT_SOURCES_ROUNDTRIP_STATUS" == yes* ]] \
+  && [[ "$FOCUS_ARM_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$PREVIEW_OPEN_RENDER_STATUS" == yes* ]] \
   && [ "$ISO_PATH" != "not-found" ] \
   && [ "$ISO_SHA" != "not-found" ] \
@@ -863,6 +906,7 @@ cat >> "$OUT" <<EOF2
 - Text Shortcuts candidate bubble frame checked: ${TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS}
 - Keyboard shortcuts roundtrip checked: ${KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS}
 - Input sources roundtrip checked: ${INPUT_SOURCES_ROUNDTRIP_STATUS}
+- Focus arm roundtrip checked: ${FOCUS_ARM_ROUNDTRIP_STATUS}
 - Preview open/render checked: ${PREVIEW_OPEN_RENDER_STATUS}
 - Gaming readiness checked: ${GAMING_SCREENSHOT_STATUS}
 - Install storage/bootloader/dual-boot checked: ${INSTALL_STORAGE_STATUS}

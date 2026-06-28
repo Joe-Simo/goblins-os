@@ -8999,6 +8999,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-migration-sources-route",
+            "/v1/migration/sources",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-migration-copy-plan-route",
             "/v1/migration/copy-plan",
         ),
@@ -9011,6 +9016,61 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/migration.rs"),
             "core-migration-copy-plan-builder",
             "build_migration_copy_plan",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-sources-builder",
+            "build_migration_sources",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/install_targets.rs"),
+            "core-migration-reuses-install-target-sysfs-scan",
+            "scan_migration_source_partitions_in",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-source-readability-classifier",
+            "migration_filesystem_readability",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-source-scan-fixture-test",
+            "migration_sources_classify_sysfs_partitions_without_mounting",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-sources-mountinfo-read",
+            "/proc/self/mountinfo",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-sources-partial-scan-report",
+            "scan_errors",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-sources-partial-flag",
+            "partial",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-source-apfs-disabled-copy",
+            "Goblins can't read this disk's format (APFS).",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-sources-no-live-mount-claim",
+            "executes_live_mount: false",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-sources-no-live-copy-claim",
+            "executes_live_copy: false",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-sources-honest-scan-copy",
+            "Migration source scan is ready. No disks were mounted and no files were copied by this source scan.",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/migration.rs"),

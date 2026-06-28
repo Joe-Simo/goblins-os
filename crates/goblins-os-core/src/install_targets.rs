@@ -260,6 +260,24 @@ pub struct ExistingSystem {
     preservation: String,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct MigrationSourcePartitionProbe {
+    pub(crate) disk_id: String,
+    pub(crate) disk_path: String,
+    pub(crate) partition_path: String,
+    pub(crate) model: String,
+    pub(crate) size_gb: u64,
+    pub(crate) removable: bool,
+    pub(crate) rotational: bool,
+    pub(crate) metadata: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MigrationSourcePartitionScan {
+    pub(crate) probes: Vec<MigrationSourcePartitionProbe>,
+    pub(crate) scan_errors: Vec<String>,
+}
+
 #[derive(Serialize, Clone)]
 pub struct InstallRecommendation {
     title: String,
@@ -1049,6 +1067,43 @@ fn scan_install_targets(bootc: &BootcInstallStatus) -> Vec<InstallTarget> {
     scan_install_targets_in(Path::new(&sys_block), bootc)
 }
 
+pub(crate) fn scan_migration_source_partitions() -> MigrationSourcePartitionScan {
+    let sys_block =
+        env::var("GOBLINS_OS_SYS_BLOCK_DIR").unwrap_or_else(|_| DEFAULT_SYS_BLOCK.into());
+    scan_migration_source_partitions_in(Path::new(&sys_block))
+}
+
+pub(crate) fn scan_migration_source_partitions_in(
+    sys_block: &Path,
+) -> MigrationSourcePartitionScan {
+    let Ok(entries) = fs::read_dir(sys_block) else {
+        return MigrationSourcePartitionScan {
+            probes: Vec::new(),
+            scan_errors: vec![format!(
+                "Migration source scan could not read block devices at {}.",
+                sys_block.display()
+            )],
+        };
+    };
+
+    let mut scan = MigrationSourcePartitionScan::default();
+    for entry in entries {
+        match entry {
+            Ok(entry) => match build_migration_source_partition_probes(&entry.path()) {
+                Ok(probes) => scan.probes.extend(probes),
+                Err(error) => scan.scan_errors.push(error),
+            },
+            Err(error) => scan.scan_errors.push(format!(
+                "Migration source scan skipped a block-device entry: {error}"
+            )),
+        }
+    }
+    let mut probes = scan.probes;
+    probes.sort_by(|a, b| a.partition_path.cmp(&b.partition_path));
+    scan.probes = probes;
+    scan
+}
+
 fn scan_install_targets_in(sys_block: &Path, bootc: &BootcInstallStatus) -> Vec<InstallTarget> {
     let Ok(entries) = fs::read_dir(sys_block) else {
         return Vec::new();
@@ -1152,6 +1207,49 @@ fn skip_block_device(name: &str) -> bool {
         || name.starts_with("zram")
         || name.starts_with("dm-")
         || name.starts_with("md")
+}
+
+fn build_migration_source_partition_probes(
+    sys_path: &Path,
+) -> Result<Vec<MigrationSourcePartitionProbe>, String> {
+    let Some(name) = sys_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+    else {
+        return Ok(Vec::new());
+    };
+    if skip_block_device(&name) {
+        return Ok(Vec::new());
+    }
+
+    let partitions = block_partitions(sys_path, &name)
+        .map_err(|error| format!("Migration source scan could not read /dev/{name}: {error}"))?;
+    let size_gb = sectors_to_gib(read_u64(sys_path.join("size")).unwrap_or(0));
+    let removable = read_u64(sys_path.join("removable")).unwrap_or(0) == 1;
+    let rotational = read_u64(sys_path.join("queue/rotational")).unwrap_or(0) == 1;
+    let model = read_trimmed(sys_path.join("device/model"))
+        .or_else(|| read_trimmed(sys_path.join("device/name")))
+        .unwrap_or_else(|| "Unknown block device".to_string());
+    let disk_path = format!("/dev/{name}");
+
+    Ok(partitions
+        .into_iter()
+        .map(|partition| {
+            let partition_name = partition.trim_start_matches("/dev/");
+            let sys_partition_path = sys_path.join(partition_name);
+            let metadata = partition_metadata(&sys_partition_path, &partition);
+            MigrationSourcePartitionProbe {
+                disk_id: name.clone(),
+                disk_path: disk_path.clone(),
+                partition_path: partition,
+                model: model.clone(),
+                size_gb,
+                removable,
+                rotational,
+                metadata,
+            }
+        })
+        .collect())
 }
 
 fn block_partitions(sys_path: &Path, disk_name: &str) -> Result<Vec<String>, String> {

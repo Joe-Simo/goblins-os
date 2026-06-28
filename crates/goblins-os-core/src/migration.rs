@@ -9,10 +9,12 @@
 //! streaming, and the installer page are the deliberate CI/qemu follow-up.
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Component, Path, PathBuf},
 };
 
+use crate::install_targets::{scan_migration_source_partitions, MigrationSourcePartitionProbe};
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +93,44 @@ pub struct MigrationCapabilities {
     categories: Vec<MigrationCategory>,
     allowlisted_preferences: Vec<&'static str>,
     detail: String,
+}
+
+#[derive(Serialize)]
+pub struct MigrationSources {
+    source: &'static str,
+    sources: Vec<MigrationSource>,
+    partial: bool,
+    scan_errors: Vec<String>,
+    executes_live_mount: bool,
+    executes_live_copy: bool,
+    detail: String,
+}
+
+#[derive(Serialize)]
+pub struct MigrationSource {
+    id: String,
+    device: String,
+    disk_id: String,
+    disk: String,
+    disk_model: String,
+    disk_size_gb: u64,
+    removable: bool,
+    rotational: bool,
+    filesystem: String,
+    label: Option<String>,
+    mounted_at: Option<String>,
+    readable: bool,
+    disabled_reason: Option<String>,
+    read_only_mount_plan: Option<MigrationReadOnlyMountPlan>,
+}
+
+#[derive(Serialize)]
+pub struct MigrationReadOnlyMountPlan {
+    device: String,
+    read_only: bool,
+    executes_live_mount: bool,
+    argv: Vec<String>,
+    note: String,
 }
 
 #[derive(Deserialize)]
@@ -177,6 +217,10 @@ pub async fn migration_capabilities() -> Json<MigrationCapabilities> {
     Json(build_migration_capabilities())
 }
 
+pub async fn migration_sources() -> Json<MigrationSources> {
+    Json(build_migration_sources())
+}
+
 pub async fn migration_copy_plan(
     Json(request): Json<MigrationCopyPlanRequest>,
 ) -> (StatusCode, Json<MigrationCopyPlanOutcome>) {
@@ -226,6 +270,225 @@ pub async fn migration_estimate(
             }),
         ),
     }
+}
+
+fn build_migration_sources() -> MigrationSources {
+    let ntfs = driver_present("ntfs-3g") || driver_present("mount.ntfs-3g");
+    let exfat = driver_present("exfatprogs")
+        || driver_present("mount.exfat")
+        || driver_present("exfatfsck")
+        || driver_present("fsck.exfat");
+    let scan = scan_migration_source_partitions();
+    let scan_errors = scan.scan_errors;
+    let partial = !scan_errors.is_empty();
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    let mounted_partitions = partition_mounts_from_mountinfo(&mountinfo);
+    let sources =
+        build_migration_sources_from_probes(scan.probes, &mounted_partitions, ntfs, exfat);
+    let detail = if partial {
+        "Migration source scan is ready but partial. No disks were mounted and no files were copied by this source scan. Review scan_errors before selecting a source.".to_string()
+    } else if sources.is_empty() {
+        "Migration source scan is ready. No disks were mounted and no files were copied by this source scan. No migration source partitions were found.".to_string()
+    } else {
+        "Migration source scan is ready. No disks were mounted and no files were copied by this source scan. Readable unmounted sources include a read-only mount plan for the CI/qemu first-boot job.".to_string()
+    };
+
+    MigrationSources {
+        source: "goblins-os-core",
+        sources,
+        partial,
+        scan_errors,
+        executes_live_mount: false,
+        executes_live_copy: false,
+        detail,
+    }
+}
+
+fn build_migration_sources_from_probes(
+    probes: Vec<MigrationSourcePartitionProbe>,
+    mounted_partitions: &BTreeMap<String, String>,
+    ntfs: bool,
+    exfat: bool,
+) -> Vec<MigrationSource> {
+    probes
+        .into_iter()
+        .map(|probe| migration_source_from_probe(probe, mounted_partitions, ntfs, exfat))
+        .collect()
+}
+
+fn migration_source_from_probe(
+    probe: MigrationSourcePartitionProbe,
+    mounted_partitions: &BTreeMap<String, String>,
+    ntfs: bool,
+    exfat: bool,
+) -> MigrationSource {
+    let filesystem = migration_probe_filesystem(&probe);
+    let label = migration_probe_label(&probe);
+    let mounted_at = mounted_partitions.get(&probe.partition_path).cloned();
+    let readability = migration_filesystem_readability(&filesystem, ntfs, exfat);
+    let read_only_mount_plan = if readability.readable && mounted_at.is_none() {
+        Some(read_only_mount_plan(&probe.partition_path))
+    } else {
+        None
+    };
+
+    MigrationSource {
+        id: probe.partition_path.trim_start_matches("/dev/").to_string(),
+        device: probe.partition_path,
+        disk_id: probe.disk_id,
+        disk: probe.disk_path,
+        disk_model: probe.model,
+        disk_size_gb: probe.size_gb,
+        removable: probe.removable,
+        rotational: probe.rotational,
+        filesystem,
+        label,
+        mounted_at,
+        readable: readability.readable,
+        disabled_reason: readability.disabled_reason,
+        read_only_mount_plan,
+    }
+}
+
+struct MigrationFilesystemReadability {
+    readable: bool,
+    disabled_reason: Option<String>,
+}
+
+fn migration_filesystem_readability(
+    filesystem: &str,
+    ntfs: bool,
+    exfat: bool,
+) -> MigrationFilesystemReadability {
+    let normalized = filesystem.to_ascii_lowercase();
+    match normalized.as_str() {
+        "ext2" | "ext3" | "ext4" | "btrfs" | "xfs" | "vfat" | "fat" | "fat16" | "fat32"
+        | "msdos" => MigrationFilesystemReadability {
+            readable: true,
+            disabled_reason: None,
+        },
+        "ntfs" | "bitlocker" => {
+            if ntfs {
+                MigrationFilesystemReadability {
+                    readable: true,
+                    disabled_reason: None,
+                }
+            } else {
+                MigrationFilesystemReadability {
+                    readable: false,
+                    disabled_reason: Some(
+                        "Goblins can't read this Windows disk until ntfs-3g is installed."
+                            .to_string(),
+                    ),
+                }
+            }
+        }
+        "exfat" => {
+            if exfat {
+                MigrationFilesystemReadability {
+                    readable: true,
+                    disabled_reason: None,
+                }
+            } else {
+                MigrationFilesystemReadability {
+                    readable: false,
+                    disabled_reason: Some(
+                        "Goblins can't read this exFAT disk until exfatprogs is installed."
+                            .to_string(),
+                    ),
+                }
+            }
+        }
+        "apfs" | "hfs" | "hfsplus" | "hfs+" => MigrationFilesystemReadability {
+            readable: false,
+            disabled_reason: Some("Goblins can't read this disk's format (APFS).".to_string()),
+        },
+        "" | "unknown" => MigrationFilesystemReadability {
+            readable: false,
+            disabled_reason: Some(
+                "Goblins can't read this disk until its filesystem is identified.".to_string(),
+            ),
+        },
+        other => MigrationFilesystemReadability {
+            readable: false,
+            disabled_reason: Some(format!(
+                "Goblins can't read this disk's filesystem ({other}) yet."
+            )),
+        },
+    }
+}
+
+fn migration_probe_filesystem(probe: &MigrationSourcePartitionProbe) -> String {
+    metadata_value(&probe.metadata, &["TYPE", "ID_FS_TYPE"])
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn migration_probe_label(probe: &MigrationSourcePartitionProbe) -> Option<String> {
+    metadata_value(
+        &probe.metadata,
+        &["LABEL", "ID_FS_LABEL", "PARTLABEL", "PARTNAME"],
+    )
+    .map(ToString::to_string)
+}
+
+fn metadata_value<'a>(metadata: &'a BTreeMap<String, String>, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| metadata.get(*key).map(String::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn read_only_mount_plan(device: &str) -> MigrationReadOnlyMountPlan {
+    MigrationReadOnlyMountPlan {
+        device: device.to_string(),
+        read_only: true,
+        executes_live_mount: false,
+        argv: vec![
+            "udisksctl".to_string(),
+            "mount".to_string(),
+            "-b".to_string(),
+            device.to_string(),
+            "-o".to_string(),
+            "ro".to_string(),
+        ],
+        note: "Plan only. The live first-boot job must execute and verify the read-only mount in CI/qemu.".to_string(),
+    }
+}
+
+fn partition_mounts_from_mountinfo(text: &str) -> BTreeMap<String, String> {
+    text.lines()
+        .filter_map(parse_mountinfo_partition)
+        .collect::<BTreeMap<_, _>>()
+}
+
+fn parse_mountinfo_partition(line: &str) -> Option<(String, String)> {
+    let (before_separator, after_separator) = line.split_once(" - ")?;
+    let mount_point = before_separator.split_whitespace().nth(4)?;
+    let source = after_separator.split_whitespace().nth(1)?;
+    if !source.starts_with("/dev/") {
+        return None;
+    }
+    Some((
+        source.to_string(),
+        decode_mountinfo_path(mount_point).unwrap_or_else(|| mount_point.to_string()),
+    ))
+}
+
+fn decode_mountinfo_path(value: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        let code = [chars.next()?, chars.next()?, chars.next()?];
+        let octal = code.iter().collect::<String>();
+        let byte = u8::from_str_radix(&octal, 8).ok()?;
+        out.push(byte as char);
+    }
+    Some(out)
 }
 
 fn build_migration_capabilities() -> MigrationCapabilities {
@@ -627,8 +890,10 @@ fn driver_present(binary: &str) -> bool {
 mod tests {
     use super::{
         build_migration_capabilities, build_migration_copy_plan, build_migration_estimate,
-        filesystem_table, MigrationCopyPlanRequest, MigrationEstimateRequest,
+        build_migration_sources_from_probes, filesystem_table, partition_mounts_from_mountinfo,
+        MigrationCopyPlanRequest, MigrationEstimateRequest,
     };
+    use crate::install_targets::scan_migration_source_partitions_in;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -704,6 +969,82 @@ mod tests {
             .allowlisted_preferences
             .iter()
             .any(|key| key.contains("dconf")));
+    }
+
+    #[test]
+    fn migration_sources_classify_sysfs_partitions_without_mounting() {
+        let root = temp_migration_root("source-scan");
+        let disk = root.join("sda");
+        fs::create_dir_all(disk.join("queue")).unwrap();
+        fs::create_dir_all(disk.join("device")).unwrap();
+        fs::write(disk.join("size"), "268435456\n").unwrap();
+        fs::write(disk.join("removable"), "1\n").unwrap();
+        fs::write(disk.join("queue/rotational"), "1\n").unwrap();
+        fs::write(disk.join("device/model"), "Migration Source Disk\n").unwrap();
+
+        for (name, metadata) in [
+            (
+                "sda1",
+                "DEVNAME=sda1\nDEVTYPE=partition\nTYPE=ext4\nLABEL=Old Home\n",
+            ),
+            (
+                "sda2",
+                "DEVNAME=sda2\nDEVTYPE=partition\nTYPE=apfs\nPARTLABEL=Macintosh HD\n",
+            ),
+            (
+                "sda3",
+                "DEVNAME=sda3\nDEVTYPE=partition\nTYPE=exfat\nLABEL=Camera Archive\n",
+            ),
+        ] {
+            let partition = disk.join(name);
+            fs::create_dir_all(&partition).unwrap();
+            fs::write(partition.join("partition"), "1\n").unwrap();
+            fs::write(partition.join("uevent"), metadata).unwrap();
+        }
+
+        let scan = scan_migration_source_partitions_in(&root);
+        assert!(scan.scan_errors.is_empty());
+        let mounted = partition_mounts_from_mountinfo(
+            "31 25 8:1 / /run/media/goblin/Old\\040Home rw,relatime - ext4 /dev/sda1 rw\n",
+        );
+        let sources = build_migration_sources_from_probes(scan.probes, &mounted, true, true);
+        fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(sources.len(), 3);
+        let ext4 = sources
+            .iter()
+            .find(|source| source.device == "/dev/sda1")
+            .unwrap();
+        assert!(ext4.readable);
+        assert_eq!(
+            ext4.mounted_at.as_deref(),
+            Some("/run/media/goblin/Old Home")
+        );
+        assert!(ext4.read_only_mount_plan.is_none());
+
+        let apfs = sources
+            .iter()
+            .find(|source| source.device == "/dev/sda2")
+            .unwrap();
+        assert!(!apfs.readable);
+        assert_eq!(
+            apfs.disabled_reason.as_deref(),
+            Some("Goblins can't read this disk's format (APFS).")
+        );
+        assert!(apfs.read_only_mount_plan.is_none());
+
+        let exfat = sources
+            .iter()
+            .find(|source| source.device == "/dev/sda3")
+            .unwrap();
+        let plan = exfat.read_only_mount_plan.as_ref().unwrap();
+        assert!(exfat.readable);
+        assert!(plan.read_only);
+        assert!(!plan.executes_live_mount);
+        assert_eq!(
+            plan.argv,
+            vec!["udisksctl", "mount", "-b", "/dev/sda3", "-o", "ro"]
+        );
     }
 
     #[test]

@@ -26,6 +26,7 @@ RUNTIME_PATH = "/usr/libexec/goblins-os/goblins-textshortcuts-engine"
 RESPONSE_TIMEOUT_SECONDS = 0.35
 CAPABILITY_TIMEOUT_SECONDS = 3.0
 ADAPTER_PATH = "/usr/libexec/goblins-os/goblins-textshortcuts-ibus"
+OVERLAY_INTENT_PROOF_SURFACE = "goblins-textshortcuts-ibus-adapter-overlay-intent"
 TEXT_SHORTCUTS_CONFIG_DIR = "goblins-os"
 TEXT_SHORTCUTS_CONFIG_FILE = "text-shortcuts.json"
 MAX_SHORTCUTS = 500
@@ -647,6 +648,136 @@ def _special_key_protocol_event(keyval: int) -> dict[str, Any]:
     }
 
 
+def _overlay_intent_proof_payload(intents: list[dict[str, Any]]) -> dict[str, Any]:
+    show_count = sum(1 for intent in intents if intent.get("action") == "show-candidate")
+    hide_count = sum(1 for intent in intents if intent.get("action") == "hide-candidate")
+    return {
+        "status": "pass",
+        "surface": OVERLAY_INTENT_PROOF_SURFACE,
+        "intents": intents,
+        "show_count": show_count,
+        "hide_count": hide_count,
+        "rendered_bubble_ready_claim": False,
+        "live_overlay_claim": False,
+        "runtime_ready_claim": False,
+    }
+
+
+def _assert_overlay_intent(intent: dict[str, Any] | None, action: str, reason: str) -> dict[str, Any]:
+    assert intent is not None
+    assert intent["action"] == action
+    assert intent["replacement"] == "on my way"
+    assert intent["accept_on"] == "word-boundary"
+    assert intent["dismiss_key"] == "Escape"
+    assert intent["reason"] == reason
+    assert intent["rendered_bubble_ready_claim"] is False
+    assert intent["live_overlay_claim"] is False
+    assert intent["runtime_ready_claim"] is False
+    return dict(intent)
+
+
+def _run_overlay_intent_self_test() -> dict[str, Any]:
+    class FakeTarget:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def update_preedit_text(self, text: str, cursor_pos: int, visible: bool) -> None:
+            self.calls.append(("update", text, cursor_pos, visible))
+
+        def hide_preedit_text(self) -> None:
+            self.calls.append(("hide",))
+
+        def delete_surrounding_text(self, offset: int, n_chars: int) -> None:
+            self.calls.append(("delete", offset, n_chars))
+
+        def commit_text(self, text: str) -> None:
+            self.calls.append(("commit", text))
+
+    intents: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        table_path = os.path.join(tmpdir, "text-shortcuts.json")
+        with open(table_path, "w", encoding="utf-8") as table_file:
+            json.dump([{"replace": "omw", "with": "on my way"}], table_file)
+
+        target = FakeTarget()
+        candidate_state = CandidateMetadataState()
+        table_bridge = ShortcutTableBridge(table_path)
+        runtime = RuntimeBridge(response_timeout=CAPABILITY_TIMEOUT_SECONDS)
+        try:
+            _send_table_changed_if_needed(
+                table_bridge,
+                runtime,
+                target,
+                lambda text: text,
+                candidate_state,
+            )
+            for character in "omw":
+                response = runtime.send(_key_protocol_event(character))
+                _apply_response_operations(
+                    target,
+                    response,
+                    lambda text: text,
+                    candidate_state,
+                )
+            intents.append(
+                _assert_overlay_intent(
+                    candidate_state.last_overlay_intent,
+                    "show-candidate",
+                    "candidate-visible",
+                )
+            )
+            response = runtime.send(_special_key_protocol_event(0xFF1B))
+            _apply_response_operations(target, response, lambda text: text, candidate_state)
+            intents.append(
+                _assert_overlay_intent(
+                    candidate_state.last_overlay_intent,
+                    "hide-candidate",
+                    "dismissed",
+                )
+            )
+
+            target.calls.clear()
+            for character in "omw":
+                response = runtime.send(_key_protocol_event(character))
+                _apply_response_operations(
+                    target,
+                    response,
+                    lambda text: text,
+                    candidate_state,
+                )
+            intents.append(
+                _assert_overlay_intent(
+                    candidate_state.last_overlay_intent,
+                    "show-candidate",
+                    "candidate-visible",
+                )
+            )
+            response = runtime.send(_key_protocol_event(" "))
+            _apply_response_operations(target, response, lambda text: text, candidate_state)
+            intents.append(
+                _assert_overlay_intent(
+                    candidate_state.last_overlay_intent,
+                    "hide-candidate",
+                    "committed",
+                )
+            )
+
+            runtime.send({"type": "focus-in", "purpose": 9})
+            target.calls.clear()
+            for character in "omw ":
+                response = runtime.send(_key_protocol_event(character))
+                _apply_response_operations(target, response, lambda text: text, candidate_state)
+            assert target.calls == []
+            assert candidate_state.current is None
+        finally:
+            runtime.close()
+
+    payload = _overlay_intent_proof_payload(intents)
+    assert payload["show_count"] == 2
+    assert payload["hide_count"] == 2
+    return payload
+
+
 def _run_runtime_self_test() -> None:
     class FakeTarget:
         def __init__(self) -> None:
@@ -882,11 +1013,15 @@ def _run_ibus() -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Goblins OS Text Shortcuts IBus adapter")
     parser.add_argument("--capability-check", action="store_true")
+    parser.add_argument("--overlay-intent-self-test", action="store_true")
     parser.add_argument("--runtime-self-test", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
     if args.capability_check:
         print(json.dumps(capability_payload(), sort_keys=True))
+        return 0
+    if args.overlay_intent_self_test:
+        print(json.dumps(_run_overlay_intent_self_test(), sort_keys=True))
         return 0
     if args.runtime_self_test:
         _run_runtime_self_test()

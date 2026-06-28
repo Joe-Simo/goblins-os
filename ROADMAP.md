@@ -1048,6 +1048,29 @@ python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus
 live IBus overlay, focused-field callback, Wayland text-input-v3 bubble, or mark
 Text Shortcuts shipped.
 
+Current Text Shortcuts overlay-intent proof-log continuation: the adapter now
+has `--overlay-intent-self-test`, which launches the real Rust `--stdio` child,
+drives candidate show, Escape dismiss, candidate show again, boundary commit,
+and a password-purpose refusal, then emits JSON proof for the non-rendering
+overlay intent contract. The image build stores that proof at
+`/tmp/goblins-textshortcuts-overlay-intent.json` and asserts `status=pass`,
+`surface=goblins-textshortcuts-ibus-adapter-overlay-intent`, `show_count=2`,
+`hide_count=2`, `reason=dismissed`, `reason=committed`, and
+`live_overlay_claim=false`; `goblins-os-verify` pins both the adapter command and
+the Containerfile assertions. Local gates: `cargo build -p
+goblins-os-textshortcuts-engine`, `python3 -m py_compile
+os/goblins-os-textshortcuts/goblins-textshortcuts-ibus`, `python3
+os/goblins-os-textshortcuts/goblins-textshortcuts-ibus --self-test`,
+`GOBLINS_TEXTSHORTCUTS_ENGINE="$PWD/target/debug/goblins-textshortcuts-engine"
+python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus
+--runtime-self-test`, `GOBLINS_TEXTSHORTCUTS_ENGINE="$PWD/target/debug/goblins-textshortcuts-engine"
+python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus
+--overlay-intent-self-test`, `cargo fmt --all --check`, `cargo clippy
+--workspace -- -D warnings`, `cargo test --workspace`, and
+`goblins-os-verify --source-root .` -> **blocked=0 (1977)**. This is still
+CI/qemu-pending and does **not** prove a live IBus overlay, focused-field
+callback, Wayland text-input-v3 bubble, or mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining

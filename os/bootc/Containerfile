@@ -410,6 +410,14 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && python3 -m py_compile /usr/libexec/goblins-os/goblins-textshortcuts-ibus \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --self-test \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --runtime-self-test \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --overlay-intent-self-test > /tmp/goblins-textshortcuts-overlay-intent.json \
+    && grep -q '"status": "pass"' /tmp/goblins-textshortcuts-overlay-intent.json \
+    && grep -q '"surface": "goblins-textshortcuts-ibus-adapter-overlay-intent"' /tmp/goblins-textshortcuts-overlay-intent.json \
+    && grep -q '"show_count": 2' /tmp/goblins-textshortcuts-overlay-intent.json \
+    && grep -q '"hide_count": 2' /tmp/goblins-textshortcuts-overlay-intent.json \
+    && grep -q '"reason": "dismissed"' /tmp/goblins-textshortcuts-overlay-intent.json \
+    && grep -q '"reason": "committed"' /tmp/goblins-textshortcuts-overlay-intent.json \
+    && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-overlay-intent.json \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"adapter_contract_ready": true' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"runtime_ready_claim": false' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \

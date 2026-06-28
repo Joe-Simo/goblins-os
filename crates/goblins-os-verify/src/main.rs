@@ -8896,6 +8896,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-runs-textshortcuts-ibus-adapter-overlay-intent-self-test",
+            "goblins-textshortcuts-ibus --overlay-intent-self-test",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-overlay-intent-proof",
+            "goblins-textshortcuts-overlay-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-overlay-intent-pass",
+            "grep -q '\"status\": \"pass\"' /tmp/goblins-textshortcuts-overlay-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-overlay-live-claim-false",
+            "grep -q '\"live_overlay_claim\": false' /tmp/goblins-textshortcuts-overlay-intent.json",
+        ),
+        container_contains_check(
+            root,
             "bootc-runs-textshortcuts-ibus-adapter-capability-check",
             "goblins-textshortcuts-ibus --capability-check",
         ),
@@ -9036,6 +9056,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-overlay-intent-self-test",
+            "def _run_overlay_intent_self_test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-overlay-intent-proof-surface",
+            "goblins-textshortcuts-ibus-adapter-overlay-intent",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-overlay-intent-ledger",
             "last_overlay_intent",
         ),
@@ -9053,6 +9083,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-overlay-hide-on-commit",
             "\"reason\": \"committed\"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-overlay-intent-proof-counts",
+            "\"show_count\": show_count",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),

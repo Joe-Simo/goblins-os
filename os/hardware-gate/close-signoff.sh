@@ -63,10 +63,15 @@ INSTALL_STORAGE_SCREENSHOTS=(
   "27-dual-boot-preserve-existing-os.png"
   "28-bootloader-efi-summary.png"
 )
+PREVIEW_SCREENSHOTS=(
+  "29-preview-pdf-open.png"
+  "30-preview-image-open.png"
+)
 SCREENSHOT_REQUIRED=(
   "${BASE_SCREENSHOTS[@]}"
   "${GAMING_SCREENSHOTS[@]}"
   "${INSTALL_STORAGE_SCREENSHOTS[@]}"
+  "${PREVIEW_SCREENSHOTS[@]}"
 )
 FIREWALL_LIVE_TOGGLE_PROOF="firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_SESSION_ENABLE_PROOF="text-shortcuts-session-enable-proof.json"
@@ -76,6 +81,7 @@ TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="input-sources-roundtrip-proof.json"
+PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
 GAMING_SCREENSHOT_STATUS="not checked"
 INSTALL_STORAGE_STATUS="not checked"
 RELEASE_EVIDENCE_STATUS="not checked"
@@ -88,6 +94,7 @@ TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="not checked"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="not checked"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS="not checked"
 INPUT_SOURCES_ROUNDTRIP_STATUS="not checked"
+PREVIEW_OPEN_RENDER_STATUS="not checked"
 RUNTIME_ENGINE_MODE="${RUNTIME_ENGINE_MODE:-}"
 RUNTIME_ENGINE_SOURCE="${RUNTIME_ENGINE_SOURCE:-}"
 RUNTIME_ENGINE_CONFIG="${RUNTIME_ENGINE_CONFIG:-}"
@@ -277,7 +284,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest" \
     && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
-    && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest"
+    && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest" \
+    && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -444,6 +452,38 @@ input_sources_roundtrip_proof_passes() {
     && rg -q '"restore_sources"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"restore_current"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof"
+}
+
+preview_open_render_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/preview/status"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/preview/open"' "$proof" \
+    && rg -q '"status_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"xdg_open"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"papers"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"loupe"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"pdf_default"[[:space:]]*:[[:space:]]*"org.gnome.Papers.desktop"' "$proof" \
+    && rg -q '"image_default"[[:space:]]*:[[:space:]]*"org.gnome.Loupe.desktop"' "$proof" \
+    && rg -q '"jpeg_default"[[:space:]]*:[[:space:]]*"org.gnome.Loupe.desktop"' "$proof" \
+    && rg -q '"pdf_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"pdf_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"pdf_kind"[[:space:]]*:[[:space:]]*"pdf"' "$proof" \
+    && rg -q '"pdf_process"[[:space:]]*:[[:space:]]*"papers"' "$proof" \
+    && rg -q '"pdf_screenshot"[[:space:]]*:[[:space:]]*"29-preview-pdf-open\.png"' "$proof" \
+    && rg -q '"rendered_pdf_frame"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"image_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"image_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"image_kind"[[:space:]]*:[[:space:]]*"image"' "$proof" \
+    && rg -q '"image_process"[[:space:]]*:[[:space:]]*"loupe"' "$proof" \
+    && rg -q '"image_screenshot"[[:space:]]*:[[:space:]]*"30-preview-image-open\.png"' "$proof" \
+    && rg -q '"rendered_image_frame"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"unsupported_http"[[:space:]]*:[[:space:]]*"400"' "$proof" \
+    && rg -q '"unsupported_ok"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"unsupported_rejected"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
 validate_runtime_proof_fields() {
@@ -634,7 +674,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! screenshot_manifest_matches_iso "$SCREENSHOT_DIR/proof-manifest.json"; then
     fail "Screenshot proof manifest missing or not tied to this architecture ISO: $SCREENSHOT_DIR/proof-manifest.json"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, and input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF."
+    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
     exit 1
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
@@ -677,6 +717,11 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Expected live /v1/input/sources and /v1/input/switch-next writes, gsettings read-back, and source/current restore before signoff."
     exit 1
   fi
+  if ! preview_open_render_proof_passes "$SCREENSHOT_DIR/$PREVIEW_OPEN_RENDER_PROOF"; then
+    fail "Preview open/render proof missing or failed: $SCREENSHOT_DIR/$PREVIEW_OPEN_RENDER_PROOF"
+    fail "Expected /v1/preview/status readiness, /v1/preview/open PDF/image launches, Papers/Loupe defaults, rendered screenshot frames, and unsupported-file rejection before signoff."
+    exit 1
+  fi
   log "All required screenshot proof PNGs and proof manifest passed."
   log "Firewall live toggle proof passed."
   log "Text Shortcuts session-enable proof passed."
@@ -686,6 +731,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   log "Text Shortcuts candidate-bubble-frame proof passed."
   log "Keyboard shortcuts roundtrip proof passed."
   log "Input sources roundtrip proof passed."
+  log "Preview open/render proof passed."
   GAMING_SCREENSHOT_STATUS="yes (screenshots ${GAMING_SCREENSHOTS[*]} present)"
   INSTALL_STORAGE_STATUS="yes (screenshots ${INSTALL_STORAGE_SCREENSHOTS[*]} present)"
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
@@ -697,6 +743,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF: adapter accept-bubble frames present; rendered bubble still gated false)"
   KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS="yes ($KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF: shortcut + Caps Lock writes round-tripped and restored)"
   INPUT_SOURCES_ROUNDTRIP_STATUS="yes ($INPUT_SOURCES_ROUNDTRIP_PROOF: input source set + switch writes round-tripped and restored)"
+  PREVIEW_OPEN_RENDER_STATUS="yes ($PREVIEW_OPEN_RENDER_PROOF: Papers PDF and Loupe image windows opened/rendered in display-backed VM)"
 else
   warn "SCREENSHOT_DIR not set; proof screenshot presence check skipped."
 fi
@@ -765,6 +812,7 @@ if [ "$VERIFY_STATUS" = "pass" ] \
   && [[ "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS" == yes* ]] \
   && [[ "$KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$INPUT_SOURCES_ROUNDTRIP_STATUS" == yes* ]] \
+  && [[ "$PREVIEW_OPEN_RENDER_STATUS" == yes* ]] \
   && [ "$ISO_PATH" != "not-found" ] \
   && [ "$ISO_SHA" != "not-found" ] \
   && proof_field_is_real "$RUNTIME_ENGINE_MODE" \
@@ -815,6 +863,7 @@ cat >> "$OUT" <<EOF2
 - Text Shortcuts candidate bubble frame checked: ${TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS}
 - Keyboard shortcuts roundtrip checked: ${KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS}
 - Input sources roundtrip checked: ${INPUT_SOURCES_ROUNDTRIP_STATUS}
+- Preview open/render checked: ${PREVIEW_OPEN_RENDER_STATUS}
 - Gaming readiness checked: ${GAMING_SCREENSHOT_STATUS}
 - Install storage/bootloader/dual-boot checked: ${INSTALL_STORAGE_STATUS}
 - Current project completion status: ${PROJECT_COMPLETION_STATUS}

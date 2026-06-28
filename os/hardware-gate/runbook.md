@@ -220,6 +220,18 @@ existing IME/input-source write and switch bridges in qemu without depending on
 a CJK engine being active and without marking the Settings input-source UI
 render shipped.
 
+The Preview open/render gate is `preview-open-render-proof.json`, linked from
+`proof-manifest.json` as `preview_open_render_proof`. It queries
+`/v1/preview/status`, verifies Papers/Loupe are available through the core
+status contract, verifies `xdg-mime` defaults for PDF/PNG/JPEG point to
+`org.gnome.Papers.desktop` and `org.gnome.Loupe.desktop`, opens the installed
+fixtures at `/usr/share/goblins-os/proof/preview-open-render.{pdf,png}` through
+`/v1/preview/open`, waits for the real `papers` and `loupe` processes, captures
+`29-preview-pdf-open.png` and `30-preview-image-open.png`, and confirms an
+unsupported `.txt` fixture is rejected with HTTP 400. This proves the installed
+desktop open path in a display-backed qemu session; it does not mark Preview
+shipped until the qemu artifacts are reviewed.
+
 Capture exactly at minimum these names:
 1. `01-installer.png` — ISO boot + installer launch
 2. `02-install-network.png` — installer network/progress
@@ -248,6 +260,8 @@ Capture exactly at minimum these names:
 25. `26-install-storage-summary.png` — storage summary showing formatting/root filesystem before writing changes
 26. `27-dual-boot-preserve-existing-os.png` — the native installer's Open advanced storage path or the desktop Install Goblins OS Beside Another OS entry, followed by Custom/manual storage or Reclaim Space showing Goblins OS installed into unallocated free space or a dedicated disk while existing Windows, macOS/APFS, Linux, other OS, recovery, and EFI partitions are preserved
 27. `28-bootloader-efi-summary.png` — bootloader/EFI target summary before beginning install
+28. `29-preview-pdf-open.png` — Papers showing the installed Preview proof PDF opened through `/v1/preview/open`
+29. `30-preview-image-open.png` — Loupe showing the installed Preview proof PNG opened through `/v1/preview/open`
 
 Suggested installed-session commands for the gaming screenshots:
 
@@ -302,6 +316,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Text Shortcuts candidate bubble frame result, including `text-shortcuts-candidate-bubble-frame-proof.json`
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
+- Preview open/render result, including `preview-open-render-proof.json`, `29-preview-pdf-open.png`, and `30-preview-image-open.png`
 - install destination, formatting/root filesystem, bootloader/EFI, and dual-boot preservation result
 - for custom formatting, encryption, separate `/home`, LUKS/LVM, TPM2 LUKS, ext4, or btrfs, show an advanced storage summary before writes
 - if dual boot is tested, show the Open advanced storage action or Install Goblins OS Beside Another OS desktop entry, Custom/manual storage or Reclaim Space, the free-space/dedicated-disk target, the backup/free-space preparation note, and the untouched existing OS/recovery/EFI partitions

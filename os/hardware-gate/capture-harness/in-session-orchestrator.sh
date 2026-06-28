@@ -25,6 +25,7 @@ proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-o
 proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-frame?$1" >/dev/null 2>&1 || true; }
 proof_keyboard_shortcuts_roundtrip(){ curl -s "http://$H/proof/keyboard-shortcuts-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_input_sources_roundtrip(){ curl -s "http://$H/proof/input-sources-roundtrip?$1" >/dev/null 2>&1 || true; }
+proof_preview_open_render(){ curl -s "http://$H/proof/preview-open-render?$1" >/dev/null 2>&1 || true; }
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -41,6 +42,22 @@ try:
 except Exception:
     print("")
 PY
+}
+json_path_payload(){
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+print(json.dumps({"path": sys.argv[1]}))
+PY
+}
+wait_process(){
+  local process="$1"
+  for _ in $(seq 1 30); do
+    pgrep -x "$process" >/dev/null 2>&1 && return 0
+    sleep 0.5
+  done
+  return 1
 }
 firewall_live_toggle_proof(){
   local status_file=/tmp/gate-firewall-status.json
@@ -529,6 +546,92 @@ input_sources_roundtrip_proof(){
   proof_input_sources_roundtrip "status=pass&source_route=/v1/input/sources&switch_route=/v1/input/switch-next&test_sources=xkb-us,xkb-gb&set_http=200&set_ok=true&sources_gsettings_readback=true&current_before_switch=0&switch_http=200&switch_ok=true&switch_switched=true&current_after_switch=1&restore_sources=true&restore_current=true&roundtrip_restored=true"
   return 0
 }
+preview_open_render_proof(){
+  local preview_pdf=/usr/share/goblins-os/proof/preview-open-render.pdf
+  local preview_png=/usr/share/goblins-os/proof/preview-open-render.png
+  local preview_txt=/usr/share/goblins-os/proof/preview-open-render.txt
+  local status_file=/tmp/gate-preview-status.json
+  local pdf_file=/tmp/gate-preview-open-pdf.json
+  local image_file=/tmp/gate-preview-open-image.json
+  local unsupported_file=/tmp/gate-preview-open-unsupported.json
+  local status_code pdf_code image_code unsupported_code
+  local available xdg_open papers loupe pdf_default image_default jpeg_default
+  local pdf_ok pdf_kind image_ok image_kind unsupported_ok
+
+  pkill -x papers 2>/dev/null || true
+  pkill -x loupe 2>/dev/null || true
+
+  for _ in $(seq 1 60); do
+    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+
+  if [ ! -r "$preview_pdf" ] || [ ! -r "$preview_png" ] || [ ! -r "$preview_txt" ]; then
+    proof_preview_open_render "status=fail&stage=fixtures&status_route=/v1/preview/status&route=/v1/preview/open&pdf_fixture=$preview_pdf&image_fixture=$preview_png"
+    return 1
+  fi
+
+  pdf_default="$(xdg-mime query default application/pdf 2>/dev/null || true)"
+  image_default="$(xdg-mime query default image/png 2>/dev/null || true)"
+  jpeg_default="$(xdg-mime query default image/jpeg 2>/dev/null || true)"
+  if [ "$pdf_default" != "org.gnome.Papers.desktop" ] || [ "$image_default" != "org.gnome.Loupe.desktop" ] || [ "$jpeg_default" != "org.gnome.Loupe.desktop" ]; then
+    proof_preview_open_render "status=fail&stage=xdg-mime&status_route=/v1/preview/status&route=/v1/preview/open&pdf_default=${pdf_default:-missing}&image_default=${image_default:-missing}&jpeg_default=${jpeg_default:-missing}"
+    return 1
+  fi
+
+  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/preview/status" || true)
+  available=$(json_field "$status_file" available)
+  xdg_open=$(json_field "$status_file" xdg_open_available)
+  papers=$(json_field "$status_file" papers_available)
+  loupe=$(json_field "$status_file" loupe_available)
+  if [ "$status_code" != "200" ] || [ "$available" != "true" ] || [ "$xdg_open" != "true" ] || [ "$papers" != "true" ] || [ "$loupe" != "true" ]; then
+    proof_preview_open_render "status=fail&stage=status&status_route=/v1/preview/status&route=/v1/preview/open&status_http=${status_code:-000}&available=${available:-missing}&xdg_open=${xdg_open:-missing}&papers=${papers:-missing}&loupe=${loupe:-missing}&pdf_default=$pdf_default&image_default=$image_default"
+    return 1
+  fi
+
+  pdf_code=$(curl -s -o "$pdf_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d "$(json_path_payload "$preview_pdf")" \
+    "$LIVE_URL/v1/preview/open" || true)
+  pdf_ok=$(json_field "$pdf_file" ok)
+  pdf_kind=$(json_field "$pdf_file" kind)
+  if [ "$pdf_code" != "200" ] || [ "$pdf_ok" != "true" ] || [ "$pdf_kind" != "pdf" ] || ! wait_process papers; then
+    proof_preview_open_render "status=fail&stage=pdf-open&status_route=/v1/preview/status&route=/v1/preview/open&status_http=200&available=true&xdg_open=true&papers=true&loupe=true&pdf_default=$pdf_default&image_default=$image_default&pdf_http=${pdf_code:-000}&pdf_ok=${pdf_ok:-missing}&pdf_kind=${pdf_kind:-missing}"
+    pkill -x papers 2>/dev/null || true
+    return 1
+  fi
+  sleep 5
+  sig 29-preview-pdf-open
+  pkill -x papers 2>/dev/null || true
+
+  image_code=$(curl -s -o "$image_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d "$(json_path_payload "$preview_png")" \
+    "$LIVE_URL/v1/preview/open" || true)
+  image_ok=$(json_field "$image_file" ok)
+  image_kind=$(json_field "$image_file" kind)
+  if [ "$image_code" != "200" ] || [ "$image_ok" != "true" ] || [ "$image_kind" != "image" ] || ! wait_process loupe; then
+    proof_preview_open_render "status=fail&stage=image-open&status_route=/v1/preview/status&route=/v1/preview/open&status_http=200&available=true&xdg_open=true&papers=true&loupe=true&pdf_default=$pdf_default&image_default=$image_default&pdf_http=200&pdf_ok=true&pdf_kind=pdf&image_http=${image_code:-000}&image_ok=${image_ok:-missing}&image_kind=${image_kind:-missing}&pdf_screenshot=29-preview-pdf-open.png&rendered_pdf_frame=true"
+    pkill -x loupe 2>/dev/null || true
+    return 1
+  fi
+  sleep 5
+  sig 30-preview-image-open
+  pkill -x loupe 2>/dev/null || true
+
+  unsupported_code=$(curl -s -o "$unsupported_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d "$(json_path_payload "$preview_txt")" \
+    "$LIVE_URL/v1/preview/open" || true)
+  unsupported_ok=$(json_field "$unsupported_file" ok)
+  if [ "$unsupported_code" != "400" ] || [ "$unsupported_ok" = "true" ]; then
+    proof_preview_open_render "status=fail&stage=unsupported&status_route=/v1/preview/status&route=/v1/preview/open&status_http=200&available=true&xdg_open=true&papers=true&loupe=true&pdf_default=$pdf_default&image_default=$image_default&pdf_http=200&pdf_ok=true&pdf_kind=pdf&image_http=200&image_ok=true&image_kind=image&unsupported_http=${unsupported_code:-000}&unsupported_ok=${unsupported_ok:-missing}&pdf_screenshot=29-preview-pdf-open.png&image_screenshot=30-preview-image-open.png&rendered_pdf_frame=true&rendered_image_frame=true"
+    return 1
+  fi
+
+  proof_preview_open_render "status=pass&status_route=/v1/preview/status&route=/v1/preview/open&status_http=200&available=true&xdg_open=true&papers=true&loupe=true&pdf_default=org.gnome.Papers.desktop&image_default=org.gnome.Loupe.desktop&jpeg_default=org.gnome.Loupe.desktop&pdf_http=200&pdf_ok=true&pdf_kind=pdf&pdf_process=papers&pdf_screenshot=29-preview-pdf-open.png&rendered_pdf_frame=true&image_http=200&image_ok=true&image_kind=image&image_process=loupe&image_screenshot=30-preview-image-open.png&rendered_image_frame=true&unsupported_http=400&unsupported_ok=false&unsupported_rejected=true"
+  return 0
+}
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication
 # is single-instance, so relaunching the same binary (e.g. the installer with a new
@@ -550,6 +653,7 @@ text_shortcuts_overlay_intent_proof || true
 text_shortcuts_candidate_bubble_frame_proof || true
 keyboard_shortcuts_roundtrip_proof || true
 input_sources_roundtrip_proof || true
+preview_open_render_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
 FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device

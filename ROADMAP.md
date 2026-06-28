@@ -418,9 +418,14 @@ asserts both packages, and `/usr/share/applications/mimeapps.list` defaults PDFs
 to Papers and common image formats to Loupe. The installed-image self-test now
 exercises `/v1/preview/status`, opens a temporary PDF and image through
 `/v1/preview/open`, and asserts an unsupported file is rejected honestly. This is
-source-gated open-contract proof only: live double-click behavior, PDF/image
-viewer pixels, and themed GTK app render remain CI/qemu-pending before Preview
-can ship.
+source-gated open-contract proof only. The display-backed hardware gate now also
+requires `preview-open-render-proof.json`, linked from `proof-manifest.json` as
+`preview_open_render_proof`, after opening installed PDF/PNG fixtures through
+`/v1/preview/open`, waiting for real Papers/Loupe processes, capturing
+`29-preview-pdf-open.png` and `30-preview-image-open.png`, and rejecting an
+unsupported `.txt` fixture. This proof plumbing is source-gated only: reviewed
+qemu artifacts with those screenshots, live double-click behavior, and themed
+GTK app render remain CI/qemu-pending before Preview can ship.
 
 Current Fingerprint continuation: package/PAM/status substrate is now
 source-gated but not shipped. Fedora 44 repo metadata and a clean
@@ -1451,6 +1456,7 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 ### `in-progress` PDF / image Preview viewer
 - [x] **Package/default-app substrate source-gated (CI/qemu-pending):** Fedora 44 repo metadata confirms `papers` (`/usr/bin/papers`, `org.gnome.Papers.desktop`) and `loupe` (`/usr/bin/loupe`, `org.gnome.Loupe.desktop`). The bootc image installs and `rpm -q`/`command -v` asserts both packages, and `os/applications/mimeapps.list` makes PDFs open in Papers and common image formats open in Loupe. This is not shipped until CI/qemu proves the installed desktop entries, MIME open behavior, and themed render.
 - [x] **Open/status substrate source-gated (CI/qemu-pending):** core exposes `/v1/preview/status` and `/v1/preview/open`, validates only absolute local PDF/PostScript/common image files, requires `xdg-open` plus Papers/Loupe before launch, and hands files to the desktop default viewer without reading file contents or claiming rendered proof. Host tests cover the extension allowlist and honest missing-viewer states; the installed-image self-test now checks status readiness, opens temporary PDF/image files through the route, and rejects an unsupported file honestly. `goblins-os-verify` and the hardware gate check the route + xdg-open + selftest contract. This is not shipped until CI/qemu proves installed-image MIME open behavior and themed render.
+- [x] **Display-backed open/render proof hook source-gated (CI/qemu-pending):** the hardware-gate capture harness now requires `preview-open-render-proof.json`, opens installed `/usr/share/goblins-os/proof/preview-open-render.{pdf,png}` fixtures through `/v1/preview/open`, verifies Papers/Loupe MIME defaults and viewer processes, captures `29-preview-pdf-open.png` and `30-preview-image-open.png`, rejects an unsupported `.txt` fixture, links the proof in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. No live qemu run has produced reviewed artifacts yet.
 - [ ] Open any PDF/image as the default viewer (macOS Preview altitude — view, page, basic annotate; not a deep editor). The Goblins markup editor already covers screenshot annotation; this fills the "double-click a PDF" gap.
 - **Approach:** themed_gnome_fallback (deep long tail — a stock GNOME viewer branded via `os/gtk-4.0/gtk.css`, not a custom build) for v1; a Goblins-native viewer is a later option.
 - **Packages:** `papers` (GNOME Documents, verified in Fedora 44 repo metadata; `evince` is not used here) + `loupe` (GNOME Image Viewer, verified in Fedora 44 repo metadata).

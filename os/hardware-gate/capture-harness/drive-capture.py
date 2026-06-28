@@ -28,6 +28,7 @@ REQUIRED_PROOFS = (
     "text-shortcuts-candidate-bubble-frame",
     "keyboard-shortcuts-roundtrip",
     "input-sources-roundtrip",
+    "preview-open-render",
 )
 PROOF_FILENAMES = {
     "firewall-live-toggle": "firewall-live-toggle-proof.json",
@@ -38,6 +39,7 @@ PROOF_FILENAMES = {
     "text-shortcuts-candidate-bubble-frame": "text-shortcuts-candidate-bubble-frame-proof.json",
     "keyboard-shortcuts-roundtrip": "keyboard-shortcuts-roundtrip-proof.json",
     "input-sources-roundtrip": "input-sources-roundtrip-proof.json",
+    "preview-open-render": "preview-open-render-proof.json",
 }
 
 CMAP = {c: (c, False) for c in "abcdefghijklmnopqrstuvwxyz0123456789"}

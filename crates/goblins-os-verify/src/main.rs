@@ -5434,6 +5434,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-preview-open-render-proof",
+            "preview-open-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-preview-open-render-screenshots",
+            "29-preview-pdf-open.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-preview-open-render-image-screenshot",
+            "30-preview-image-open.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-candidate-no-live-overlay-claim",
             "live_overlay_claim=false",
         ),
@@ -5489,6 +5504,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-preview-open-render-proof",
+            "/proof/preview-open-render",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-uses-firewall-toggle-route",
             "/v1/firewall/enabled",
         ),
@@ -5516,6 +5536,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-uses-input-switch-next-route",
             "/v1/input/switch-next",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-uses-preview-status-route",
+            "/v1/preview/status",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-uses-preview-open-route",
+            "/v1/preview/open",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5653,6 +5683,41 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "restore_sources=true",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-preview-verifies-papers-default",
+            "org.gnome.Papers.desktop",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-preview-verifies-loupe-default",
+            "org.gnome.Loupe.desktop",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-preview-captures-pdf-screenshot",
+            "sig 29-preview-pdf-open",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-preview-captures-image-screenshot",
+            "sig 30-preview-image-open",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-preview-records-rendered-pdf-frame",
+            "rendered_pdf_frame=true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-preview-records-rendered-image-frame",
+            "rendered_image_frame=true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-preview-rejects-unsupported-file",
+            "unsupported_rejected=true",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-requires-proof-signals",
             "require_proofs",
@@ -5698,6 +5763,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "input-sources-roundtrip-proof.json",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-preview-open-render-proof-json",
+            "preview-open-render-proof.json",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-firewall-proof",
             "HONESTY GUARD: missing or failing live firewall toggle proof",
@@ -5736,6 +5806,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-input-sources-roundtrip-proof",
             "HONESTY GUARD: missing or failing Input sources roundtrip proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-preview-open-render-proof",
+            "HONESTY GUARD: missing or failing Preview open/render proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -5803,6 +5878,31 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "\"restore_sources\": \"true\"",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-preview-papers-default",
+            "\"pdf_default\": \"org.gnome.Papers.desktop\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-preview-loupe-default",
+            "\"image_default\": \"org.gnome.Loupe.desktop\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-preview-pdf-screenshot",
+            "\"pdf_screenshot\": \"29-preview-pdf-open.png\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-preview-image-screenshot",
+            "\"image_screenshot\": \"30-preview-image-open.png\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-preview-unsupported-rejection",
+            "\"unsupported_rejected\": \"true\"",
+        ),
+        contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-textshortcuts-passthrough-proof",
             "passthrough_unchanged",
@@ -5866,6 +5966,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-input-sources-roundtrip-proof",
             "input_sources_roundtrip_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-preview-open-render-proof",
+            "preview_open_render_proof",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -6242,6 +6347,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "shipping-status-requires-input-sources-roundtrip-proof",
             "input_sources_roundtrip_proof_passes",
         ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-preview-open-render-proof",
+            "preview_open_render_proof_passes",
+        ),
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "screenshot_run_is_complete",
@@ -6256,6 +6366,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "screenshot_run_is_complete",
+            "shipping-status-complete-run-requires-preview-open-render-proof",
+            r#"preview_open_render_proof_passes "$run_dir/$PREVIEW_OPEN_RENDER_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "print_missing_screenshot_paths",
             "shipping-status-missing-list-includes-keyboard-shortcuts-roundtrip-proof",
             r#"echo "  $run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF""#,
@@ -6265,6 +6381,18 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "print_missing_screenshot_paths",
             "shipping-status-missing-list-includes-input-sources-roundtrip-proof",
             r#"echo "  $run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "print_missing_screenshot_paths",
+            "shipping-status-missing-list-includes-preview-open-render-proof",
+            r#"echo "  $run_dir/$PREVIEW_OPEN_RENDER_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "signoff_block_required_proof_is_complete",
+            "shipping-status-signoff-requires-preview-open-render-proof",
+            r#"signoff_block_contains "$block" "^- Preview open/render checked: yes" || return 1"#,
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6300,6 +6428,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-input-sources-roundtrip-proof-filename",
             "input-sources-roundtrip-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-preview-open-render-proof-filename",
+            "preview-open-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-preview-pdf-screenshot-filename",
+            "29-preview-pdf-open.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-preview-image-screenshot-filename",
+            "30-preview-image-open.png",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6438,6 +6581,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-signoff-requires-preview-open-render-proof-row",
+            "Preview open/render checked: yes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-signoff-completion-consistency",
             "declares completion before required proof is present",
         ),
@@ -6523,6 +6671,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-preview-open-render-proof",
+            "preview_open_render_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-firewall-live-toggle-proof",
             "Firewall live toggle checked",
         ),
@@ -6560,6 +6713,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-input-sources-roundtrip-proof",
             "Input sources roundtrip checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-preview-open-render-proof",
+            "Preview open/render checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-preview-open-render-status-completes-project",
+            r#"[[ "$PREVIEW_OPEN_RENDER_STATUS" == yes* ]]"#,
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -9161,6 +9324,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/bootc/Containerfile"),
             "preview-package-desktop-entries-asserted",
             "org.gnome.Papers.desktop",
+        ),
+        contains_check(
+            root.join("os/bootc/generate-preview-proof-fixtures.py"),
+            "preview-proof-fixture-generator-creates-pdf",
+            "preview-open-render.pdf",
+        ),
+        contains_check(
+            root.join("os/bootc/generate-preview-proof-fixtures.py"),
+            "preview-proof-fixture-generator-creates-png",
+            "preview-open-render.png",
+        ),
+        contains_check(
+            root.join("os/bootc/generate-preview-proof-fixtures.py"),
+            "preview-proof-fixture-generator-creates-unsupported-txt",
+            "preview-open-render.txt",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "preview-proof-fixture-generator-installed",
+            "generate-preview-proof-fixtures.py",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "preview-proof-fixtures-asserted",
+            "/usr/share/goblins-os/proof/preview-open-render.pdf",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),

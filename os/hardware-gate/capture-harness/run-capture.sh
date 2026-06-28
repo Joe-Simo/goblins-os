@@ -138,6 +138,7 @@ TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="$RUN_DIR/text-shortcuts-overlay-intent-proo
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-frame-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="$RUN_DIR/keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="$RUN_DIR/input-sources-roundtrip-proof.json"
+PREVIEW_OPEN_RENDER_PROOF="$RUN_DIR/preview-open-render-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
@@ -267,6 +268,35 @@ if ! grep -Fq '"status": "pass"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
   echo "HONESTY GUARD: missing or failing Input sources roundtrip proof at $INPUT_SOURCES_ROUNDTRIP_PROOF"
   exit 4
 fi
+if ! grep -Fq '"status": "pass"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"status_route": "/v1/preview/status"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"route": "/v1/preview/open"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"status_http": "200"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"available": "true"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"xdg_open": "true"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"papers": "true"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"loupe": "true"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"pdf_default": "org.gnome.Papers.desktop"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"image_default": "org.gnome.Loupe.desktop"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"jpeg_default": "org.gnome.Loupe.desktop"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"pdf_http": "200"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"pdf_ok": "true"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"pdf_kind": "pdf"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"pdf_process": "papers"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"pdf_screenshot": "29-preview-pdf-open.png"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"rendered_pdf_frame": "true"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"image_http": "200"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"image_ok": "true"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"image_kind": "image"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"image_process": "loupe"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"image_screenshot": "30-preview-image-open.png"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"rendered_image_frame": "true"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"unsupported_http": "400"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"unsupported_ok": "false"' "$PREVIEW_OPEN_RENDER_PROOF" \
+  || ! grep -Fq '"unsupported_rejected": "true"' "$PREVIEW_OPEN_RENDER_PROOF"; then
+  echo "HONESTY GUARD: missing or failing Preview open/render proof at $PREVIEW_OPEN_RENDER_PROOF"
+  exit 4
+fi
 
 # HONESTY GUARD: refuse to write a signoff for a run whose surfaces aren't all
 # distinct. GNOME 42+ returns AccessDenied to scripted screenshots (org.gnome.
@@ -302,6 +332,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "text_shortcuts_candidate_bubble_frame_proof":"text-shortcuts-candidate-bubble-frame-proof.json",
           "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
           "input_sources_roundtrip_proof":"input-sources-roundtrip-proof.json",
+          "preview_open_render_proof":"preview-open-render-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY

@@ -307,6 +307,7 @@ COPY os/systemd/goblins-os-model-cache.service /usr/lib/systemd/system/goblins-o
 COPY os/systemd-system/ /usr/lib/systemd/system/
 COPY --chmod=0755 os/bootc/goblins-os-firewall /usr/libexec/goblins-os/goblins-os-firewall
 COPY os/bootc/60-goblins-os-firewall.rules /etc/polkit-1/rules.d/60-goblins-os-firewall.rules
+COPY --chmod=0755 os/bootc/generate-preview-proof-fixtures.py /usr/libexec/goblins-os/generate-preview-proof-fixtures.py
 COPY os/session/goblins-os-session /usr/libexec/goblins-os/goblins-os-session
 COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.desktop
 COPY os/gnome-session/goblins-os.session /usr/share/gnome-session/sessions/goblins-os.session
@@ -354,6 +355,11 @@ RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
         desktop-file-validate "${launcher_desktop}"; \
         grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-install-game-launcher ' "${launcher_desktop}"; \
       done
+RUN /usr/libexec/goblins-os/generate-preview-proof-fixtures.py \
+    && rm -f /usr/libexec/goblins-os/generate-preview-proof-fixtures.py \
+    && test -s /usr/share/goblins-os/proof/preview-open-render.pdf \
+    && test -s /usr/share/goblins-os/proof/preview-open-render.png \
+    && test -s /usr/share/goblins-os/proof/preview-open-render.txt
 COPY os/brand/ /usr/share/goblins-os/brand/
 COPY os/themes/ /usr/share/themes/
 COPY os/gnome-shell-extensions/ /usr/share/gnome-shell/extensions/

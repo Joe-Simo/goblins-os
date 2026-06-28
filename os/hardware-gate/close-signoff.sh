@@ -80,6 +80,7 @@ TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF="text-shortcuts-candidate-bubble-layout-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF="text-shortcuts-candidate-bubble-render-intent-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="input-sources-roundtrip-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
@@ -96,6 +97,7 @@ TEXT_SHORTCUTS_CANDIDATE_STATUS="not checked"
 TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="not checked"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="not checked"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_STATUS="not checked"
+TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_STATUS="not checked"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS="not checked"
 INPUT_SOURCES_ROUNDTRIP_STATUS="not checked"
 FOCUS_ARM_ROUNDTRIP_STATUS="not checked"
@@ -290,6 +292,7 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_layout_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF"'"' "$manifest" \
+    && rg -q '"text_shortcuts_candidate_bubble_render_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
@@ -434,6 +437,32 @@ text_shortcuts_candidate_bubble_layout_proof_passes() {
     && rg -q '"right_edge_clamped"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"bottom_edge_flipped"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"hidden_frame_collapses"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
+    && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
+    && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+}
+
+text_shortcuts_candidate_bubble_render_intent_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-accept-bubble-render-intent"' "$proof" \
+    && rg -q '"adapter_self_test"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"frame_surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-accept-bubble-frame"' "$proof" \
+    && rg -q '"layout_surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-accept-bubble-layout"' "$proof" \
+    && rg -q '"render_intent_count"[[:space:]]*:[[:space:]]*"8"' "$proof" \
+    && rg -q '"show_intent_count"[[:space:]]*:[[:space:]]*"4"' "$proof" \
+    && rg -q '"hide_intent_count"[[:space:]]*:[[:space:]]*"4"' "$proof" \
+    && rg -q '"dismissed_intent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"committed_intent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"focus_out_hide"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"sensitive_hide"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"pass_through_unchanged"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"sink_failure_fail_open"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
     && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
     && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
@@ -758,7 +787,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! screenshot_manifest_matches_iso "$SCREENSHOT_DIR/proof-manifest.json"; then
     fail "Screenshot proof manifest missing or not tied to this architecture ISO: $SCREENSHOT_DIR/proof-manifest.json"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
+    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
     exit 1
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
@@ -796,6 +825,11 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Expected the installed adapter candidate-bubble-layout self-test to record layout count, visible count, right-edge clamp, bottom-edge flip, hide-frame collapse, Inter font, and no rendered/live/runtime readiness claims."
     exit 1
   fi
+  if ! text_shortcuts_candidate_bubble_render_intent_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"; then
+    fail "Text Shortcuts candidate-bubble-render-intent proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"
+    fail "Expected the installed adapter candidate-bubble-render-intent self-test to record show/hide render intents, focus-out and sensitive hides, pass-through unchanged behavior, fail-open sink handling, Inter font, and no rendered/live/runtime readiness claims."
+    exit 1
+  fi
   if ! keyboard_shortcuts_roundtrip_proof_passes "$SCREENSHOT_DIR/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"; then
     fail "Keyboard shortcuts roundtrip proof missing or failed: $SCREENSHOT_DIR/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"
     fail "Expected live /v1/keyboard/shortcuts/binding and /v1/keyboard/modifier-remap writes, gsettings read-back, and reset/restore before signoff."
@@ -829,6 +863,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   log "Text Shortcuts overlay-intent proof passed."
   log "Text Shortcuts candidate-bubble-frame proof passed."
   log "Text Shortcuts candidate-bubble-layout proof passed."
+  log "Text Shortcuts candidate-bubble-render-intent proof passed."
   log "Keyboard shortcuts roundtrip proof passed."
   log "Input sources roundtrip proof passed."
   log "Focus arm roundtrip proof passed."
@@ -844,6 +879,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="yes ($TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF: adapter show/hide overlay intents present; live overlay still gated false)"
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF: adapter accept-bubble frames present; rendered bubble still gated false)"
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF: adapter accept-bubble layouts present; rendered bubble still gated false)"
+  TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF: adapter render intents present; rendered bubble still gated false)"
   KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS="yes ($KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF: shortcut + Caps Lock writes round-tripped and restored)"
   INPUT_SOURCES_ROUNDTRIP_STATUS="yes ($INPUT_SOURCES_ROUNDTRIP_PROOF: input source set + switch writes round-tripped and restored)"
   FOCUS_ARM_ROUNDTRIP_STATUS="yes ($FOCUS_ARM_ROUNDTRIP_PROOF: Focus activate/deactivate writes round-tripped and notification banners restored)"
@@ -916,6 +952,7 @@ if [ "$VERIFY_STATUS" = "pass" ] \
   && [[ "$TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS" == yes* ]] \
   && [[ "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS" == yes* ]] \
   && [[ "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_STATUS" == yes* ]] \
+  && [[ "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_STATUS" == yes* ]] \
   && [[ "$KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$INPUT_SOURCES_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$FOCUS_ARM_ROUNDTRIP_STATUS" == yes* ]] \
@@ -970,6 +1007,7 @@ cat >> "$OUT" <<EOF2
 - Text Shortcuts overlay intent checked: ${TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS}
 - Text Shortcuts candidate bubble frame checked: ${TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS}
 - Text Shortcuts candidate bubble layout checked: ${TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_STATUS}
+- Text Shortcuts candidate bubble render intent checked: ${TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_STATUS}
 - Keyboard shortcuts roundtrip checked: ${KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS}
 - Input sources roundtrip checked: ${INPUT_SOURCES_ROUNDTRIP_STATUS}
 - Focus arm roundtrip checked: ${FOCUS_ARM_ROUNDTRIP_STATUS}

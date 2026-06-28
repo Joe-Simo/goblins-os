@@ -53,6 +53,7 @@ TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF="text-shortcuts-candidate-bubble-layout-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF="text-shortcuts-candidate-bubble-render-intent-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="input-sources-roundtrip-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
@@ -229,6 +230,7 @@ screenshot_run_is_complete() {
   text_shortcuts_overlay_intent_proof_passes "$run_dir/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF" || return 1
   text_shortcuts_candidate_bubble_frame_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" || return 1
   text_shortcuts_candidate_bubble_layout_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" || return 1
+  text_shortcuts_candidate_bubble_render_intent_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" || return 1
   keyboard_shortcuts_roundtrip_proof_passes "$run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" || return 1
   input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF" || return 1
   focus_arm_roundtrip_proof_passes "$run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF" || return 1
@@ -285,6 +287,7 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_layout_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF"'"' "$manifest" \
+    && rg -q '"text_shortcuts_candidate_bubble_render_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
@@ -429,6 +432,32 @@ text_shortcuts_candidate_bubble_layout_proof_passes() {
     && rg -q '"right_edge_clamped"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"bottom_edge_flipped"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"hidden_frame_collapses"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
+    && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
+    && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+}
+
+text_shortcuts_candidate_bubble_render_intent_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-accept-bubble-render-intent"' "$proof" \
+    && rg -q '"adapter_self_test"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"frame_surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-accept-bubble-frame"' "$proof" \
+    && rg -q '"layout_surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-accept-bubble-layout"' "$proof" \
+    && rg -q '"render_intent_count"[[:space:]]*:[[:space:]]*"8"' "$proof" \
+    && rg -q '"show_intent_count"[[:space:]]*:[[:space:]]*"4"' "$proof" \
+    && rg -q '"hide_intent_count"[[:space:]]*:[[:space:]]*"4"' "$proof" \
+    && rg -q '"dismissed_intent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"committed_intent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"focus_out_hide"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"sensitive_hide"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"pass_through_unchanged"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"sink_failure_fail_open"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
     && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
     && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
@@ -607,6 +636,10 @@ print_missing_screenshot_paths() {
     echo "  $run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF"
     missing=1
   fi
+  if ! text_shortcuts_candidate_bubble_render_intent_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"; then
+    echo "  $run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"
+    missing=1
+  fi
   if ! keyboard_shortcuts_roundtrip_proof_passes "$run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"; then
     echo "  $run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"
     missing=1
@@ -749,6 +782,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF (missing or Text Shortcuts candidate-bubble-layout proof failed)"
     missing=1
   fi
+  if text_shortcuts_candidate_bubble_render_intent_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"; then
+    echo "[PASS] $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"
+  else
+    echo "[FAIL] $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF (missing or Text Shortcuts candidate-bubble-render-intent proof failed)"
+    missing=1
+  fi
   if keyboard_shortcuts_roundtrip_proof_passes "$run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"; then
     echo "[PASS] $KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"
   else
@@ -828,6 +867,7 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$INPUT_SOURCES_ROUNDTRIP_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$FOCUS_ARM_ROUNDTRIP_PROOF
@@ -888,6 +928,8 @@ signoff_block_required_proof_is_complete() {
   signoff_block_contains "$block" "^- Text Shortcuts candidate metadata checked: yes" || return 1
   signoff_block_contains "$block" "^- Text Shortcuts overlay intent checked: yes" || return 1
   signoff_block_contains "$block" "^- Text Shortcuts candidate bubble frame checked: yes" || return 1
+  signoff_block_contains "$block" "^- Text Shortcuts candidate bubble layout checked: yes" || return 1
+  signoff_block_contains "$block" "^- Text Shortcuts candidate bubble render intent checked: yes" || return 1
   signoff_block_contains "$block" "^- Keyboard shortcuts roundtrip checked: yes" || return 1
   signoff_block_contains "$block" "^- Input sources roundtrip checked: yes" || return 1
   signoff_block_contains "$block" "^- Focus arm roundtrip checked: yes" || return 1
@@ -1158,8 +1200,11 @@ check "capture harness proves Text Shortcuts candidate bubble frame without live
 check "capture driver persists Text Shortcuts candidate bubble frame proof" "rg -q 'text-shortcuts-candidate-bubble-frame-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-bubble-frame' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-frame proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts candidate bubble layout without live render claim" "rg -q '/proof/text-shortcuts-candidate-bubble-layout' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--candidate-bubble-layout-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-accept-bubble-layout' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'frame_surface=goblins-textshortcuts-accept-bubble-frame' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'layout_count=4' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'visible_layout_count=3' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'right_edge_clamped=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'bottom_edge_flipped=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hidden_frame_collapses=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'style_class=gos-text-shortcuts-candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'font_family=Inter' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts candidate bubble layout proof" "rg -q 'text-shortcuts-candidate-bubble-layout-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-bubble-layout' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-layout proof' os/hardware-gate/capture-harness/run-capture.sh"
+check "capture harness proves Text Shortcuts candidate bubble render intent without live render claim" "rg -q '/proof/text-shortcuts-candidate-bubble-render-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--candidate-bubble-render-intent-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-accept-bubble-render-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'frame_surface=goblins-textshortcuts-accept-bubble-frame' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'layout_surface=goblins-textshortcuts-accept-bubble-layout' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'render_intent_count=8' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'show_intent_count=4' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hide_intent_count=4' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'focus_out_hide=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sensitive_hide=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'pass_through_unchanged=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sink_failure_fail_open=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'style_class=gos-text-shortcuts-candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'font_family=Inter' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "capture driver persists Text Shortcuts candidate bubble render intent proof" "rg -q 'text-shortcuts-candidate-bubble-render-intent-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-bubble-render-intent' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render-intent proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "Text Shortcuts accept-bubble frame contract is source-gated" "rg -q -- '--candidate-bubble-frame-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-accept-bubble-frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-candidate-bubble-frame.json' os/bootc/Containerfile && rg -q 'show_frame_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'hide_frame_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'dismissed_frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'committed_frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'sensitive_field_refusal' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'gos-text-shortcuts-candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'rendered_bubble_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'live_overlay_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'runtime_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile"
 check "Text Shortcuts accept-bubble layout contract is source-gated" "rg -q -- '--candidate-bubble-layout-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-accept-bubble-layout' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-candidate-bubble-layout.json' os/bootc/Containerfile && rg -q 'layout_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'visible_layout_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'right_edge_clamped' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'bottom_edge_flipped' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'hidden_frame_collapses' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'gos-text-shortcuts-candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'font_family' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'rendered_bubble_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'live_overlay_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'runtime_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile"
+check "Text Shortcuts accept-bubble render-intent bridge is source-gated" "rg -q -- '--candidate-bubble-render-intent-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-accept-bubble-render-intent' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'CandidateBubbleRenderIntentController' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -q 'CandidateBubbleRenderIntentSink' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -q '_apply_response_operations_with_render_intent' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -q 'goblins-textshortcuts-candidate-bubble-render-intent.json' os/bootc/Containerfile && rg -q 'render_intent_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'show_intent_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'hide_intent_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'focus_out_hide' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'sensitive_hide' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'pass_through_unchanged' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'sink_failure_fail_open' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'gos-text-shortcuts-candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'font_family' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'rendered_bubble_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'live_overlay_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'runtime_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile"
 check "capture harness prints qemu diagnostics on startup failure" "rg -q 'QEMU startup diagnostics' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'qemu.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'serial.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'last connection error' os/hardware-gate/capture-harness/drive-capture.py"
 check "hardware gate requires live firewall proof in signoff" "rg -q 'firewall_live_toggle_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Firewall live toggle checked' os/hardware-gate/close-signoff.sh && rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts session proof in signoff" "rg -q 'text_shortcuts_session_enable_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts session enablement checked' os/hardware-gate/close-signoff.sh && rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/runbook.md"
@@ -1168,6 +1213,7 @@ check "hardware gate requires Text Shortcuts candidate metadata proof in signoff
 check "hardware gate requires Text Shortcuts overlay intent proof in signoff" "rg -q 'text_shortcuts_overlay_intent_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts overlay intent checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-overlay-intent-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts candidate bubble frame proof in signoff" "rg -q 'text_shortcuts_candidate_bubble_frame_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate bubble frame checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-bubble-frame-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts candidate bubble layout proof in signoff" "rg -q 'text_shortcuts_candidate_bubble_layout_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate bubble layout checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-bubble-layout-proof.json' os/hardware-gate/runbook.md"
+check "hardware gate requires Text Shortcuts candidate bubble render intent proof in signoff" "rg -q 'text_shortcuts_candidate_bubble_render_intent_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate bubble render intent checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-bubble-render-intent-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Preview open/render proof in signoff" "rg -q 'preview_open_render_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Preview open/render checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'preview-open-render-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Focus arm roundtrip proof in signoff" "rg -q 'focus_arm_roundtrip_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Focus arm roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires App privacy revoke proof in signoff" "rg -q 'app_privacy_revoke_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'App privacy revoke checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'app-privacy-revoke-proof.json' os/hardware-gate/runbook.md"

@@ -5430,6 +5430,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-candidate-bubble-render-intent-proof",
+            "text-shortcuts-candidate-bubble-render-intent-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-keyboard-shortcuts-roundtrip-proof",
             "keyboard-shortcuts-roundtrip-proof.json",
         ),
@@ -5512,6 +5517,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-textshortcuts-candidate-bubble-layout-proof",
             "/proof/text-shortcuts-candidate-bubble-layout",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-textshortcuts-candidate-bubble-render-intent-proof",
+            "/proof/text-shortcuts-candidate-bubble-render-intent",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5710,8 +5720,18 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-runs-textshortcuts-candidate-bubble-render-intent-self-test",
+            "--candidate-bubble-render-intent-self-test",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-checks-textshortcuts-candidate-bubble-frame-style",
             "style_class=gos-text-shortcuts-candidate",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-checks-textshortcuts-candidate-bubble-render-intent-count",
+            "render_intent_count=8",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5870,6 +5890,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-textshortcuts-candidate-bubble-render-intent-proof-json",
+            "text-shortcuts-candidate-bubble-render-intent-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-writes-keyboard-shortcuts-roundtrip-proof-json",
             "keyboard-shortcuts-roundtrip-proof.json",
         ),
@@ -5927,6 +5952,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-bubble-layout-proof",
             "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-layout proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-render-intent-proof",
+            "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render-intent proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -5997,6 +6027,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-bubble-layout-collapse",
             "\"hidden_frame_collapses\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-render-intent-count",
+            "\"render_intent_count\": \"8\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-render-intent-fail-open",
+            "\"sink_failure_fail_open\": \"true\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6142,6 +6182,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-textshortcuts-candidate-bubble-layout-proof",
             "text_shortcuts_candidate_bubble_layout_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-textshortcuts-candidate-bubble-render-intent-proof",
+            "text_shortcuts_candidate_bubble_render_intent_proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6540,6 +6585,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-textshortcuts-candidate-bubble-render-intent-proof",
+            "text_shortcuts_candidate_bubble_render_intent_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-keyboard-shortcuts-roundtrip-proof",
             "keyboard_shortcuts_roundtrip_proof_passes",
         ),
@@ -6670,6 +6720,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-textshortcuts-candidate-bubble-layout-proof-filename",
             "text-shortcuts-candidate-bubble-layout-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-textshortcuts-candidate-bubble-render-intent-proof-filename",
+            "text-shortcuts-candidate-bubble-render-intent-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6938,6 +6993,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-textshortcuts-candidate-bubble-render-intent-proof",
+            "text_shortcuts_candidate_bubble_render_intent_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-requires-keyboard-shortcuts-roundtrip-proof",
             "keyboard_shortcuts_roundtrip_proof_passes",
         ),
@@ -6995,6 +7055,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-textshortcuts-candidate-bubble-layout-proof",
             "Text Shortcuts candidate bubble layout checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-textshortcuts-candidate-bubble-render-intent-proof",
+            "Text Shortcuts candidate bubble render intent checked",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -10582,6 +10647,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-runs-textshortcuts-candidate-bubble-render-intent-self-test",
+            "goblins-textshortcuts-ibus --candidate-bubble-render-intent-self-test",
+        ),
+        container_contains_check(
+            root,
             "bootc-requires-textshortcuts-overlay-intent-proof",
             "goblins-textshortcuts-overlay-intent.json",
         ),
@@ -10594,6 +10664,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-requires-textshortcuts-candidate-bubble-layout-proof",
             "goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-proof",
+            "goblins-textshortcuts-candidate-bubble-render-intent.json",
         ),
         container_contains_check(
             root,
@@ -10662,6 +10737,76 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-surface",
+            "grep -q '\"surface\": \"goblins-textshortcuts-accept-bubble-render-intent\"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-frame-surface",
+            "grep -q '\"frame_surface\": \"goblins-textshortcuts-accept-bubble-frame\"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-layout-surface",
+            "grep -q '\"layout_surface\": \"goblins-textshortcuts-accept-bubble-layout\"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-count",
+            "grep -q '\"render_intent_count\": 8' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-show-count",
+            "grep -q '\"show_intent_count\": 4' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-hide-count",
+            "grep -q '\"hide_intent_count\": 4' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-dismiss",
+            "grep -q '\"dismissed_intent\": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-commit",
+            "grep -q '\"committed_intent\": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-focus-out",
+            "grep -q '\"focus_out_hide\": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-sensitive-hide",
+            "grep -q '\"sensitive_hide\": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-pass-through",
+            "grep -q '\"pass_through_unchanged\": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-fail-open",
+            "grep -q '\"sink_failure_fail_open\": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-style",
+            "grep -q '\"style_class\": \"gos-text-shortcuts-candidate\"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-render-intent-font",
+            "grep -q '\"font_family\": \"Inter\"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
             "bootc-requires-textshortcuts-candidate-bubble-frame-sensitive-refusal",
             "grep -q '\"sensitive_field_refusal\": true' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
         ),
@@ -10699,6 +10844,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-keeps-textshortcuts-candidate-bubble-layout-runtime-claim-false",
             "grep -q '\"runtime_ready_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-candidate-bubble-render-intent-render-claim-false",
+            "grep -q '\"rendered_bubble_ready_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-candidate-bubble-render-intent-live-claim-false",
+            "grep -q '\"live_overlay_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-candidate-bubble-render-intent-runtime-claim-false",
+            "grep -q '\"runtime_ready_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
         ),
         container_contains_check(
             root,
@@ -10862,6 +11022,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-surface",
+            "goblins-textshortcuts-accept-bubble-render-intent",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-bubble-frame-builder",
             "def _candidate_bubble_frame_from_intent",
         ),
@@ -10882,6 +11047,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-controller",
+            "class CandidateBubbleRenderIntentController",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-sink",
+            "class CandidateBubbleRenderIntentSink",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-apply-wrapper",
+            "def _apply_response_operations_with_render_intent",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-self-test",
+            "def _run_candidate_bubble_render_intent_self_test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-bubble-frame-style",
             "gos-text-shortcuts-candidate",
         ),
@@ -10897,6 +11082,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-cli",
+            "--candidate-bubble-render-intent-self-test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-bubble-layout-clamps-right-edge",
             "\"right_edge_clamped\": edge_layout[\"clamped_x\"] is True",
         ),
@@ -10909,6 +11099,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-bubble-layout-collapses-hide-frame",
             "\"hidden_frame_collapses\": hidden_layout[\"visible\"] is False",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-counts",
+            "\"render_intent_count\": len(sink.records)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-focus-out",
+            "\"focus_out_hide\": focus_out_hide",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-sensitive-hide",
+            "\"sensitive_hide\": sensitive_hide",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-pass-through",
+            "\"pass_through_unchanged\": pass_through_unchanged",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-render-intent-fail-open",
+            "\"sink_failure_fail_open\": sink_failure_fail_open",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
@@ -10944,6 +11159,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-live-retains-candidate-state",
             "self._candidate_state = CandidateMetadataState()",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-live-retains-render-intent-controller",
+            "self._candidate_render = CandidateBubbleRenderIntentController()",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-live-clears-render-intent-controller",
+            "self._candidate_render.clear(self._candidate_state",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),

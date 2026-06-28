@@ -147,6 +147,7 @@ the release media that was booted:
   "text_shortcuts_overlay_intent_proof": "text-shortcuts-overlay-intent-proof.json",
   "text_shortcuts_candidate_bubble_frame_proof": "text-shortcuts-candidate-bubble-frame-proof.json",
   "text_shortcuts_candidate_bubble_layout_proof": "text-shortcuts-candidate-bubble-layout-proof.json",
+  "text_shortcuts_candidate_bubble_render_intent_proof": "text-shortcuts-candidate-bubble-render-intent-proof.json",
   "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json",
   "input_sources_roundtrip_proof": "input-sources-roundtrip-proof.json",
   "focus_arm_roundtrip_proof": "focus-arm-roundtrip-proof.json",
@@ -218,6 +219,20 @@ collapse, the `gos-text-shortcuts-candidate` style contract, Inter font, and
 `runtime_ready_claim=false`. This still does not prove a live rendered accept
 bubble, focused-field callback, or Wayland text-input-v3 bubble; it only keeps
 the deterministic layout contract from drifting before live overlay proof exists.
+
+The candidate-bubble-render-intent gate is
+`text-shortcuts-candidate-bubble-render-intent-proof.json`. It runs the installed
+`goblins-textshortcuts-ibus --candidate-bubble-render-intent-self-test` adapter
+contract and rejects the run unless it records the
+`goblins-textshortcuts-accept-bubble-render-intent` surface, the frame and layout
+source surfaces, eight render intents, four show intents, four hide intents,
+dismissed and committed intents, focus-out hide, sensitive-field hide,
+pass-through unchanged behavior, fail-open sink handling, the
+`gos-text-shortcuts-candidate` style contract, Inter font, and
+`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
+`runtime_ready_claim=false`. This still does not prove a live rendered accept
+bubble, focused-field callback, or Wayland text-input-v3 bubble; it only keeps
+the render-intent bridge from drifting before live overlay proof exists.
 
 The keyboard-shortcuts gate is `keyboard-shortcuts-roundtrip-proof.json`. It
 posts to `/v1/keyboard/shortcuts/binding` to set the owned `window-hud` shortcut
@@ -352,6 +367,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Text Shortcuts overlay intent result, including `text-shortcuts-overlay-intent-proof.json`
 - Text Shortcuts candidate bubble frame result, including `text-shortcuts-candidate-bubble-frame-proof.json`
 - Text Shortcuts candidate bubble layout result, including `text-shortcuts-candidate-bubble-layout-proof.json`
+- Text Shortcuts candidate bubble render intent result, including `text-shortcuts-candidate-bubble-render-intent-proof.json`
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
 - Focus arm roundtrip result, including `focus-arm-roundtrip-proof.json`

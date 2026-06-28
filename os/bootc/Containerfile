@@ -458,6 +458,25 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
     && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
     && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --candidate-bubble-render-intent-self-test > /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"status": "pass"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"surface": "goblins-textshortcuts-accept-bubble-render-intent"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"frame_surface": "goblins-textshortcuts-accept-bubble-frame"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"layout_surface": "goblins-textshortcuts-accept-bubble-layout"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"render_intent_count": 8' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"show_intent_count": 4' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"hide_intent_count": 4' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"dismissed_intent": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"committed_intent": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"focus_out_hide": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"sensitive_hide": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"pass_through_unchanged": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"sink_failure_fail_open": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"style_class": "gos-text-shortcuts-candidate"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"font_family": "Inter"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"adapter_contract_ready": true' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"runtime_ready_claim": false' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \

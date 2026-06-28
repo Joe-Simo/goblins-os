@@ -29,6 +29,7 @@ ADAPTER_PATH = "/usr/libexec/goblins-os/goblins-textshortcuts-ibus"
 OVERLAY_INTENT_PROOF_SURFACE = "goblins-textshortcuts-ibus-adapter-overlay-intent"
 ACCEPT_BUBBLE_FRAME_SURFACE = "goblins-textshortcuts-accept-bubble-frame"
 ACCEPT_BUBBLE_LAYOUT_SURFACE = "goblins-textshortcuts-accept-bubble-layout"
+ACCEPT_BUBBLE_RENDER_INTENT_SURFACE = "goblins-textshortcuts-accept-bubble-render-intent"
 ACCEPT_BUBBLE_STYLE_CLASS = "gos-text-shortcuts-candidate"
 ACCEPT_BUBBLE_TEXT_STYLE_CLASS = "gos-text-shortcuts-candidate-text"
 ACCEPT_BUBBLE_HINT_STYLE_CLASS = "gos-text-shortcuts-candidate-hint"
@@ -455,6 +456,85 @@ class CandidateMetadataState:
             self.last_overlay_intent = None
 
 
+class CandidateBubbleRenderIntentSink:
+    def publish(self, intent: dict[str, Any]) -> None:
+        del intent
+
+
+class RecordingCandidateBubbleRenderIntentSink(CandidateBubbleRenderIntentSink):
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    def publish(self, intent: dict[str, Any]) -> None:
+        self.records.append(intent)
+
+
+class CandidateBubbleRenderIntentController:
+    def __init__(
+        self,
+        sink: CandidateBubbleRenderIntentSink | None = None,
+        anchor_provider: Callable[[], dict[str, Any] | None] | None = None,
+        monitor_provider: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> None:
+        self._sink = sink or CandidateBubbleRenderIntentSink()
+        self._anchor_provider = anchor_provider or (lambda: None)
+        self._monitor_provider = monitor_provider or (lambda: None)
+
+    def emit_state(self, candidate_state: CandidateMetadataState | None) -> None:
+        if candidate_state is None:
+            return
+        self.emit_overlay_intent(candidate_state.last_overlay_intent)
+
+    def clear(self, candidate_state: CandidateMetadataState, reason: str) -> None:
+        candidate_state.clear(reason)
+        self.emit_state(candidate_state)
+
+    def emit_overlay_intent(self, overlay_intent: dict[str, Any] | None) -> None:
+        if overlay_intent is None:
+            return
+        frame = _candidate_bubble_frame_from_intent(overlay_intent)
+        if frame is None:
+            return
+        layout = self._layout_for_frame(frame)
+        record = {
+            "surface": ACCEPT_BUBBLE_RENDER_INTENT_SURFACE,
+            "frame_surface": ACCEPT_BUBBLE_FRAME_SURFACE,
+            "layout_surface": ACCEPT_BUBBLE_LAYOUT_SURFACE,
+            "action": frame["action"],
+            "replacement": frame["replacement"],
+            "accept_on": "word-boundary",
+            "accept_keys": ["Space", "Return"],
+            "dismiss_key": "Escape",
+            "reason": frame["reason"],
+            "style_class": ACCEPT_BUBBLE_STYLE_CLASS,
+            "text_style_class": ACCEPT_BUBBLE_TEXT_STYLE_CLASS,
+            "hint_style_class": ACCEPT_BUBBLE_HINT_STYLE_CLASS,
+            "font_family": "Inter",
+            "frame": frame,
+            "layout": layout,
+            "has_layout": layout is not None,
+            "rendered_bubble_ready_claim": False,
+            "live_overlay_claim": False,
+            "runtime_ready_claim": False,
+        }
+        try:
+            self._sink.publish(record)
+        except Exception as error:  # pragma: no cover - defensive GI boundary.
+            print(
+                f"goblins-textshortcuts-ibus: render intent sink failed: {error}",
+                file=sys.stderr,
+            )
+
+    def _layout_for_frame(self, frame: dict[str, Any]) -> dict[str, Any] | None:
+        if frame.get("action") == "hide-candidate":
+            return _candidate_bubble_layout_from_frame(frame, {}, {})
+        anchor = self._anchor_provider()
+        monitor = self._monitor_provider()
+        if anchor is None or monitor is None:
+            return None
+        return _candidate_bubble_layout_from_frame(frame, anchor, monitor)
+
+
 class RuntimeBridge:
     def __init__(
         self,
@@ -578,15 +658,17 @@ def _send_table_changed_if_needed(
     target: Any,
     text_factory: Callable[[str], Any],
     candidate_state: CandidateMetadataState | None = None,
+    render_controller: CandidateBubbleRenderIntentController | None = None,
 ) -> None:
     request = table_bridge.maybe_changed_request()
     if request is None:
         return
-    _apply_response_operations(
+    _apply_response_operations_with_render_intent(
         target,
         runtime_bridge.send(request),
         text_factory,
         candidate_state,
+        render_controller,
     )
 
 
@@ -620,6 +702,18 @@ def _apply_response_operations(
             )
         elif operation_type == "commit-text":
             target.commit_text(text_factory(str(operation.get("text", ""))))
+
+
+def _apply_response_operations_with_render_intent(
+    target: Any,
+    response: dict[str, Any],
+    text_factory: Callable[[str], Any],
+    candidate_state: CandidateMetadataState | None = None,
+    render_controller: CandidateBubbleRenderIntentController | None = None,
+) -> None:
+    _apply_response_operations(target, response, text_factory, candidate_state)
+    if render_controller is not None:
+        render_controller.emit_state(candidate_state)
 
 
 def _run_self_test() -> None:
@@ -1037,6 +1131,238 @@ def _run_candidate_bubble_layout_self_test() -> dict[str, Any]:
     return payload
 
 
+def _run_candidate_bubble_render_intent_self_test() -> dict[str, Any]:
+    class FakeTarget:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def update_preedit_text(self, text: str, cursor_pos: int, visible: bool) -> None:
+            self.calls.append(("update", text, cursor_pos, visible))
+
+        def hide_preedit_text(self) -> None:
+            self.calls.append(("hide",))
+
+        def delete_surrounding_text(self, offset: int, n_chars: int) -> None:
+            self.calls.append(("delete", offset, n_chars))
+
+        def commit_text(self, text: str) -> None:
+            self.calls.append(("commit", text))
+
+    class FailingSink(CandidateBubbleRenderIntentSink):
+        def publish(self, intent: dict[str, Any]) -> None:
+            del intent
+            raise RuntimeError("sink unavailable")
+
+    def apply_response(
+        target: FakeTarget,
+        response: dict[str, Any],
+        state: CandidateMetadataState,
+        controller: CandidateBubbleRenderIntentController,
+    ) -> None:
+        _apply_response_operations_with_render_intent(
+            target,
+            response,
+            lambda text: text,
+            state,
+            controller,
+        )
+
+    def type_candidate(
+        runtime: RuntimeBridge,
+        target: FakeTarget,
+        state: CandidateMetadataState,
+        controller: CandidateBubbleRenderIntentController,
+    ) -> None:
+        for character in "omw":
+            apply_response(
+                target,
+                runtime.send(_key_protocol_event(character)),
+                state,
+                controller,
+            )
+        assert state.current is not None
+        assert state.last_overlay_intent is not None
+        assert state.last_overlay_intent["action"] == "show-candidate"
+
+    sink = RecordingCandidateBubbleRenderIntentSink()
+    controller = CandidateBubbleRenderIntentController(
+        sink=sink,
+        anchor_provider=lambda: _rect(120, 140, 1, 22),
+        monitor_provider=lambda: _rect(0, 0, 800, 600),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        table_path = os.path.join(tmpdir, "text-shortcuts.json")
+        with open(table_path, "w", encoding="utf-8") as table_file:
+            json.dump([{"replace": "omw", "with": "on my way"}], table_file)
+
+        target = FakeTarget()
+        candidate_state = CandidateMetadataState()
+        table_bridge = ShortcutTableBridge(table_path)
+        runtime = RuntimeBridge(response_timeout=CAPABILITY_TIMEOUT_SECONDS)
+        try:
+            _send_table_changed_if_needed(
+                table_bridge,
+                runtime,
+                target,
+                lambda text: text,
+                candidate_state,
+                controller,
+            )
+
+            type_candidate(runtime, target, candidate_state, controller)
+            assert target.calls == [("update", "on my way", 9, True)]
+            apply_response(
+                target,
+                runtime.send(_special_key_protocol_event(0xFF1B)),
+                candidate_state,
+                controller,
+            )
+            assert sink.records[-1]["action"] == "hide-candidate"
+            assert sink.records[-1]["reason"] == "dismissed"
+
+            target.calls.clear()
+            type_candidate(runtime, target, candidate_state, controller)
+            apply_response(
+                target,
+                runtime.send(_key_protocol_event(" ")),
+                candidate_state,
+                controller,
+            )
+            assert target.calls == [
+                ("update", "on my way", 9, True),
+                ("delete", -3, 3),
+                ("commit", "on my way "),
+                ("hide",),
+            ]
+            assert sink.records[-1]["action"] == "hide-candidate"
+            assert sink.records[-1]["reason"] == "committed"
+
+            target.calls.clear()
+            type_candidate(runtime, target, candidate_state, controller)
+            before_focus_out = len(sink.records)
+            apply_response(
+                target,
+                runtime.send({"type": "focus-out"}),
+                candidate_state,
+                controller,
+            )
+            focus_out_hide = (
+                len(sink.records) == before_focus_out + 1
+                and sink.records[-1]["action"] == "hide-candidate"
+            )
+
+            apply_response(
+                target,
+                runtime.send(_content_purpose_request("focus-in", 0)),
+                candidate_state,
+                controller,
+            )
+            target.calls.clear()
+            type_candidate(runtime, target, candidate_state, controller)
+            before_sensitive = len(sink.records)
+            apply_response(
+                target,
+                runtime.send(_content_purpose_request("content-purpose-changed", 9)),
+                candidate_state,
+                controller,
+            )
+            sensitive_hide = (
+                len(sink.records) == before_sensitive + 1
+                and sink.records[-1]["action"] == "hide-candidate"
+            )
+
+            target.calls.clear()
+            before_passthrough = len(sink.records)
+            for character in "omw ":
+                response = runtime.send(_key_protocol_event(character))
+                assert response.get("handled") is False
+                apply_response(target, response, candidate_state, controller)
+            pass_through_unchanged = (
+                len(sink.records) == before_passthrough and target.calls == []
+            )
+        finally:
+            runtime.close()
+
+    failing_target = FakeTarget()
+    failing_state = CandidateMetadataState()
+    failing_controller = CandidateBubbleRenderIntentController(
+        sink=FailingSink(),
+        anchor_provider=lambda: _rect(120, 140, 1, 22),
+        monitor_provider=lambda: _rect(0, 0, 800, 600),
+    )
+    _apply_response_operations_with_render_intent(
+        failing_target,
+        {
+            "handled": False,
+            "operations": [
+                {
+                    "type": "update-preedit-text",
+                    "text": "on my way",
+                    "cursor_pos": 9,
+                    "visible": True,
+                }
+            ],
+            "candidate": {
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            },
+        },
+        lambda text: text,
+        failing_state,
+        failing_controller,
+    )
+    sink_failure_fail_open = failing_target.calls == [("update", "on my way", 9, True)]
+
+    show_count = sum(
+        1 for intent in sink.records if intent.get("action") == "show-candidate"
+    )
+    hide_count = sum(
+        1 for intent in sink.records if intent.get("action") == "hide-candidate"
+    )
+    payload = {
+        "status": "pass",
+        "surface": ACCEPT_BUBBLE_RENDER_INTENT_SURFACE,
+        "frame_surface": ACCEPT_BUBBLE_FRAME_SURFACE,
+        "layout_surface": ACCEPT_BUBBLE_LAYOUT_SURFACE,
+        "render_intents": sink.records,
+        "render_intent_count": len(sink.records),
+        "show_intent_count": show_count,
+        "hide_intent_count": hide_count,
+        "dismissed_intent": any(
+            intent.get("reason") == "dismissed" for intent in sink.records
+        ),
+        "committed_intent": any(
+            intent.get("reason") == "committed" for intent in sink.records
+        ),
+        "focus_out_hide": focus_out_hide,
+        "sensitive_hide": sensitive_hide,
+        "pass_through_unchanged": pass_through_unchanged,
+        "sink_failure_fail_open": sink_failure_fail_open,
+        "style_class": ACCEPT_BUBBLE_STYLE_CLASS,
+        "font_family": "Inter",
+        "rendered_bubble_ready_claim": False,
+        "live_overlay_claim": False,
+        "runtime_ready_claim": False,
+    }
+    assert payload["render_intent_count"] == 8
+    assert payload["show_intent_count"] == 4
+    assert payload["hide_intent_count"] == 4
+    assert payload["dismissed_intent"] is True
+    assert payload["committed_intent"] is True
+    assert payload["focus_out_hide"] is True
+    assert payload["sensitive_hide"] is True
+    assert payload["pass_through_unchanged"] is True
+    assert payload["sink_failure_fail_open"] is True
+    assert all(intent["has_layout"] is True for intent in sink.records)
+    assert payload["rendered_bubble_ready_claim"] is False
+    assert payload["live_overlay_claim"] is False
+    assert payload["runtime_ready_claim"] is False
+    return payload
+
+
 def _run_overlay_intent_self_test() -> dict[str, Any]:
     class FakeTarget:
         def __init__(self) -> None:
@@ -1286,6 +1612,7 @@ def _run_ibus() -> int:
             self._bridge = RuntimeBridge()
             self._table = ShortcutTableBridge()
             self._candidate_state = CandidateMetadataState()
+            self._candidate_render = CandidateBubbleRenderIntentController()
 
         def do_focus_in(self) -> None:
             _send_table_changed_if_needed(
@@ -1294,37 +1621,42 @@ def _run_ibus() -> int:
                 self,
                 IBus.Text.new_from_string,
                 self._candidate_state,
+                self._candidate_render,
             )
-            _apply_response_operations(
+            _apply_response_operations_with_render_intent(
                 self,
                 self._bridge.send(_content_purpose_request("focus-in", self._purpose())),
                 IBus.Text.new_from_string,
                 self._candidate_state,
+                self._candidate_render,
             )
 
         def do_focus_out(self) -> None:
-            _apply_response_operations(
+            _apply_response_operations_with_render_intent(
                 self,
                 self._bridge.send({"type": "focus-out"}),
                 IBus.Text.new_from_string,
                 self._candidate_state,
+                self._candidate_render,
             )
 
         def do_reset(self) -> None:
-            _apply_response_operations(
+            _apply_response_operations_with_render_intent(
                 self,
                 self._bridge.send({"type": "reset"}),
                 IBus.Text.new_from_string,
                 self._candidate_state,
+                self._candidate_render,
             )
 
         def do_set_content_type(self, purpose: int, hints: int) -> None:
             del hints
-            _apply_response_operations(
+            _apply_response_operations_with_render_intent(
                 self,
                 self._bridge.send(_content_purpose_request("content-purpose-changed", purpose)),
                 IBus.Text.new_from_string,
                 self._candidate_state,
+                self._candidate_render,
             )
 
         def do_process_key_event(self, keyval: int, keycode: int, state: int) -> bool:
@@ -1335,18 +1667,20 @@ def _run_ibus() -> int:
                 self,
                 IBus.Text.new_from_string,
                 self._candidate_state,
+                self._candidate_render,
             )
             response = self._bridge.send(_key_request(keyval, state, IBus))
-            _apply_response_operations(
+            _apply_response_operations_with_render_intent(
                 self,
                 response,
                 IBus.Text.new_from_string,
                 self._candidate_state,
+                self._candidate_render,
             )
             return bool(response.get("handled", False))
 
         def do_destroy(self) -> None:
-            self._candidate_state.clear("destroyed")
+            self._candidate_render.clear(self._candidate_state, "destroyed")
             self._bridge.close()
             super().do_destroy()
 
@@ -1374,6 +1708,7 @@ def _run_ibus() -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Goblins OS Text Shortcuts IBus adapter")
     parser.add_argument("--capability-check", action="store_true")
+    parser.add_argument("--candidate-bubble-render-intent-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-layout-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-frame-self-test", action="store_true")
     parser.add_argument("--overlay-intent-self-test", action="store_true")
@@ -1382,6 +1717,9 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.capability_check:
         print(json.dumps(capability_payload(), sort_keys=True))
+        return 0
+    if args.candidate_bubble_render_intent_self_test:
+        print(json.dumps(_run_candidate_bubble_render_intent_self_test(), sort_keys=True))
         return 0
     if args.candidate_bubble_layout_self_test:
         print(json.dumps(_run_candidate_bubble_layout_self_test(), sort_keys=True))

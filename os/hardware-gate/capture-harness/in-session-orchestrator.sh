@@ -24,6 +24,7 @@ proof_text_shortcuts_candidate(){ curl -s "http://$H/proof/text-shortcuts-candid
 proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-overlay-intent?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-frame?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_layout(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-layout?$1" >/dev/null 2>&1 || true; }
+proof_text_shortcuts_candidate_bubble_render_intent(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-render-intent?$1" >/dev/null 2>&1 || true; }
 proof_keyboard_shortcuts_roundtrip(){ curl -s "http://$H/proof/keyboard-shortcuts-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_input_sources_roundtrip(){ curl -s "http://$H/proof/input-sources-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_focus_arm_roundtrip(){ curl -s "http://$H/proof/focus-arm-roundtrip?$1" >/dev/null 2>&1 || true; }
@@ -463,6 +464,63 @@ text_shortcuts_candidate_bubble_layout_proof(){
   fi
 
   proof_text_shortcuts_candidate_bubble_layout "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-accept-bubble-layout&adapter_self_test=pass&frame_surface=goblins-textshortcuts-accept-bubble-frame&layout_count=4&visible_layout_count=3&right_edge_clamped=true&bottom_edge_flipped=true&hidden_frame_collapses=true&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
+  return 0
+}
+
+text_shortcuts_candidate_bubble_render_intent_proof(){
+  local intent_file=/tmp/gate-text-shortcuts-candidate-bubble-render-intent.json
+  local status surface frame_surface layout_surface render_count show_count hide_count
+  local dismissed_intent committed_intent focus_out_hide sensitive_hide
+  local pass_through_unchanged sink_failure_fail_open style_class font_family
+  local rendered_claim live_claim runtime_claim
+
+  rm -f "$intent_file"
+  if ! /usr/libexec/goblins-os/goblins-textshortcuts-ibus --candidate-bubble-render-intent-self-test > "$intent_file" 2>/tmp/gate-text-shortcuts-candidate-bubble-render-intent.log; then
+    proof_text_shortcuts_candidate_bubble_render_intent "status=fail&stage=adapter-candidate-bubble-render-intent-self-test&surface=goblins-textshortcuts-accept-bubble-render-intent"
+    return 1
+  fi
+
+  status="$(json_field "$intent_file" status)"
+  surface="$(json_field "$intent_file" surface)"
+  frame_surface="$(json_field "$intent_file" frame_surface)"
+  layout_surface="$(json_field "$intent_file" layout_surface)"
+  render_count="$(json_field "$intent_file" render_intent_count)"
+  show_count="$(json_field "$intent_file" show_intent_count)"
+  hide_count="$(json_field "$intent_file" hide_intent_count)"
+  dismissed_intent="$(json_field "$intent_file" dismissed_intent)"
+  committed_intent="$(json_field "$intent_file" committed_intent)"
+  focus_out_hide="$(json_field "$intent_file" focus_out_hide)"
+  sensitive_hide="$(json_field "$intent_file" sensitive_hide)"
+  pass_through_unchanged="$(json_field "$intent_file" pass_through_unchanged)"
+  sink_failure_fail_open="$(json_field "$intent_file" sink_failure_fail_open)"
+  style_class="$(json_field "$intent_file" style_class)"
+  font_family="$(json_field "$intent_file" font_family)"
+  rendered_claim="$(json_field "$intent_file" rendered_bubble_ready_claim)"
+  live_claim="$(json_field "$intent_file" live_overlay_claim)"
+  runtime_claim="$(json_field "$intent_file" runtime_ready_claim)"
+  if [ "$status" != "pass" ] \
+    || [ "$surface" != "goblins-textshortcuts-accept-bubble-render-intent" ] \
+    || [ "$frame_surface" != "goblins-textshortcuts-accept-bubble-frame" ] \
+    || [ "$layout_surface" != "goblins-textshortcuts-accept-bubble-layout" ] \
+    || [ "$render_count" != "8" ] \
+    || [ "$show_count" != "4" ] \
+    || [ "$hide_count" != "4" ] \
+    || [ "$dismissed_intent" != "true" ] \
+    || [ "$committed_intent" != "true" ] \
+    || [ "$focus_out_hide" != "true" ] \
+    || [ "$sensitive_hide" != "true" ] \
+    || [ "$pass_through_unchanged" != "true" ] \
+    || [ "$sink_failure_fail_open" != "true" ] \
+    || [ "$style_class" != "gos-text-shortcuts-candidate" ] \
+    || [ "$font_family" != "Inter" ] \
+    || [ "$rendered_claim" != "false" ] \
+    || [ "$live_claim" != "false" ] \
+    || [ "$runtime_claim" != "false" ]; then
+    proof_text_shortcuts_candidate_bubble_render_intent "status=fail&stage=candidate-bubble-render-intent-fields&surface=${surface:-missing}&render_intent_count=${render_count:-missing}&show_intent_count=${show_count:-missing}&hide_intent_count=${hide_count:-missing}&focus_out_hide=${focus_out_hide:-missing}&sensitive_hide=${sensitive_hide:-missing}&pass_through_unchanged=${pass_through_unchanged:-missing}&sink_failure_fail_open=${sink_failure_fail_open:-missing}&rendered_bubble_ready_claim=${rendered_claim:-missing}&live_overlay_claim=${live_claim:-missing}&runtime_ready_claim=${runtime_claim:-missing}"
+    return 1
+  fi
+
+  proof_text_shortcuts_candidate_bubble_render_intent "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-accept-bubble-render-intent&adapter_self_test=pass&frame_surface=goblins-textshortcuts-accept-bubble-frame&layout_surface=goblins-textshortcuts-accept-bubble-layout&render_intent_count=8&show_intent_count=4&hide_intent_count=4&dismissed_intent=true&committed_intent=true&focus_out_hide=true&sensitive_hide=true&pass_through_unchanged=true&sink_failure_fail_open=true&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
   return 0
 }
 keyboard_shortcuts_roundtrip_proof(){
@@ -939,6 +997,7 @@ text_shortcuts_candidate_metadata_proof || true
 text_shortcuts_overlay_intent_proof || true
 text_shortcuts_candidate_bubble_frame_proof || true
 text_shortcuts_candidate_bubble_layout_proof || true
+text_shortcuts_candidate_bubble_render_intent_proof || true
 keyboard_shortcuts_roundtrip_proof || true
 input_sources_roundtrip_proof || true
 focus_arm_roundtrip_proof || true

@@ -1432,6 +1432,32 @@ the capture/signoff/shipping scripts, scoped `git diff --check`,
 live rendered accept bubble, focused field callback, Wayland text-input-v3
 bubble, or mark Text Shortcuts shipped.
 
+Current Text Shortcuts accept-bubble render-intent continuation: the Python IBus
+adapter now emits deterministic `goblins-textshortcuts-accept-bubble-render-intent`
+records from the existing overlay-intent, frame, and layout contracts into an
+injectable fail-open sink. The source contract proves show/hide render intents
+for visible candidates, Escape dismiss, word-boundary commit, focus-out cleanup,
+sensitive-field hide, pass-through unchanged behavior, the Goblins candidate
+style, Inter, and keeps `rendered_bubble_ready_claim=false`,
+`live_overlay_claim=false`, and `runtime_ready_claim=false`. The boot image runs
+`goblins-textshortcuts-ibus --candidate-bubble-render-intent-self-test` and
+rejects the proof unless it records 8 render intents, 4 show intents, 4 hide
+intents, dismissed/committed/focus-out/sensitive hide coverage, and sink-failure
+fail-open behavior. The display-backed VM capture contract now also requires
+`text-shortcuts-candidate-bubble-render-intent-proof.json`; the in-session
+orchestrator posts it from the installed adapter self-test, `drive-capture.py`
+persists it, `run-capture.sh`/`close-signoff.sh`/`verify-shipping-status.sh` and
+`goblins-os-verify` all reject missing or failing proof, and the runbook names
+the artifact. Local gates for this pass: Python pycompile for the adapter and
+capture driver, `bash -n` for the capture/signoff/shipping scripts, all existing
+adapter overlay/frame/layout/runtime/self tests plus the new render-intent
+self-test against the local Rust engine, `git diff --check`,
+`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, and `goblins-os-verify --source-root .` ->
+**blocked=0 (2407)**. This is still CI/qemu-pending and does **not** prove a
+live rendered accept bubble, focused field callback, Wayland text-input-v3
+bubble, or mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -1813,6 +1839,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **IBus accept-bubble frame contract source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --candidate-bubble-frame-self-test` now converts the adapter's overlay intents into deterministic `goblins-textshortcuts-accept-bubble-frame` show/hide frames for the existing `gos-text-shortcuts-candidate` renderer surface, proves dismissed and committed hide frames plus sensitive-field refusal, and keeps `rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and `runtime_ready_claim=false`. The Containerfile and verifier require the proof. This still does not prove a live rendered accept bubble.
 - [x] **IBus accept-bubble layout contract source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --candidate-bubble-layout-self-test` derives deterministic layout records from the accept-bubble frames, proves below-cursor placement, right-edge clamp, bottom-edge flip, hide-frame collapse, Inter, and the `gos-text-shortcuts-candidate` style contract while keeping `rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and `runtime_ready_claim=false`. The Containerfile, `goblins-os-verify`, and shipping-status gate require the proof. This still does not prove a live rendered accept bubble.
 - [x] **IBus accept-bubble layout hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now requires `text-shortcuts-candidate-bubble-layout-proof.json`, generated from the installed adapter's `--candidate-bubble-layout-self-test`, and rejects signoff unless it records the layout/frame surfaces, four layout records, three visible layouts, right-edge clamp, bottom-edge flip, hide-frame collapse, Inter, the Goblins candidate style class, and false rendered/live/runtime readiness claims. This is still not live rendered overlay proof and does not mark Text Shortcuts shipped.
+- [x] **IBus accept-bubble render-intent bridge + hardware proof hook source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --candidate-bubble-render-intent-self-test` now drives the adapter through the real Rust stdio runtime and proves deterministic render-intent records sourced from the overlay/frame/layout contracts, including dismiss, commit, focus-out hide, sensitive-field hide, pass-through unchanged behavior, fail-open sink handling, Inter, and the `gos-text-shortcuts-candidate` style contract while keeping `rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and `runtime_ready_claim=false`. The Containerfile, `goblins-os-verify`, shipping-status gate, close-signoff, runbook, and display-backed VM capture harness now require `text-shortcuts-candidate-bubble-render-intent-proof.json`. This still does not prove a live rendered accept bubble.
 - [ ] **Live IBus runtime/render ship proof (deferred, XL/highest-risk):** prove the installed `goblins-textshortcuts` IBus engine loop in a real GNOME/Wayland session, focused-field preedit/commit over `text-input-v3`, pass-through by default, password-field refusal in-session, and the rendered accept bubble. The optional model-gated autocorrect tier remains resource-gated.
 - **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (web-verified for Fedora 44 and asserted with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
 - **gsettings/dconf:** `org.freedesktop.ibus.general preload-engines` (+`goblins-textshortcuts`); `org.gnome.desktop.input-sources sources=[('ibus','goblins-textshortcuts')]`, `per-window=false`; dconf seed in `10-goblins-os-desktop`. The replacement table itself is **JSON** under `~/.config/goblins-os/text-shortcuts.json`, written only through the core bridge — not a gsetting.

@@ -9347,6 +9347,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-protocol-candidate-metadata",
+            "pub candidate: Option<RuntimeProtocolCandidate>",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-bubble-ready-honesty",
+            "rendered_bubble_ready_claim: false",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-adapter-selftest-candidate-metadata",
+            "\"rendered_bubble_ready_claim\": False",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-runtime-dismiss-candidate",
             "EngineAction::DismissCandidate =>",
         ),

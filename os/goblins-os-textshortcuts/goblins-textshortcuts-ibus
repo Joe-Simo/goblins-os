@@ -474,12 +474,19 @@ def _run_runtime_self_test() -> None:
         try:
             _send_table_changed_if_needed(table_bridge, runtime, target, lambda text: text)
             for character in "omw":
+                response = runtime.send(_key_protocol_event(character))
                 _apply_response_operations(
                     target,
-                    runtime.send(_key_protocol_event(character)),
+                    response,
                     lambda text: text,
                 )
             assert target.calls == [("update", "on my way", 9, True)]
+            assert response.get("candidate") == {
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            }
             response = runtime.send(_special_key_protocol_event(0xFF1B))
             assert response.get("handled") is True
             _apply_response_operations(target, response, lambda text: text)
@@ -490,12 +497,15 @@ def _run_runtime_self_test() -> None:
 
             target.calls.clear()
             for character in "omw":
+                response = runtime.send(_key_protocol_event(character))
                 _apply_response_operations(
                     target,
-                    runtime.send(_key_protocol_event(character)),
+                    response,
                     lambda text: text,
                 )
             assert target.calls == [("update", "on my way", 9, True)]
+            assert response.get("candidate", {}).get("replacement") == "on my way"
+            assert response.get("candidate", {}).get("rendered_bubble_ready_claim") is False
             response = runtime.send(_key_protocol_event(" "))
             assert response.get("handled") is True
             _apply_response_operations(target, response, lambda text: text)

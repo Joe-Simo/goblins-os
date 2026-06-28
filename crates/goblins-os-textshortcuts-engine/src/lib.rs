@@ -1003,7 +1003,17 @@ pub struct RuntimeProtocolResponse {
     pub handled: bool,
     pub operations: Vec<RuntimeProtocolOperation>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<RuntimeProtocolCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RuntimeProtocolCandidate {
+    pub replacement: String,
+    pub accept_on: String,
+    pub dismiss_key: String,
+    pub rendered_bubble_ready_claim: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1026,13 +1036,15 @@ pub enum RuntimeProtocolOperation {
 
 impl RuntimeProtocolResponse {
     fn from_decision(decision: IbusRuntimeDecision) -> Self {
+        let operations: Vec<RuntimeProtocolOperation> = decision
+            .operations()
+            .iter()
+            .map(RuntimeProtocolOperation::from)
+            .collect();
         Self {
             handled: decision.key_handled(),
-            operations: decision
-                .operations()
-                .iter()
-                .map(RuntimeProtocolOperation::from)
-                .collect(),
+            candidate: runtime_candidate_from_operations(&operations),
+            operations,
             error: None,
         }
     }
@@ -1041,9 +1053,30 @@ impl RuntimeProtocolResponse {
         Self {
             handled: false,
             operations: Vec::new(),
+            candidate: None,
             error: Some(message.into()),
         }
     }
+}
+
+fn runtime_candidate_from_operations(
+    operations: &[RuntimeProtocolOperation],
+) -> Option<RuntimeProtocolCandidate> {
+    operations.iter().find_map(|operation| {
+        let RuntimeProtocolOperation::UpdatePreeditText { text, visible, .. } = operation else {
+            return None;
+        };
+        if *visible {
+            Some(RuntimeProtocolCandidate {
+                replacement: text.clone(),
+                accept_on: "word-boundary".to_string(),
+                dismiss_key: "Escape".to_string(),
+                rendered_bubble_ready_claim: false,
+            })
+        } else {
+            None
+        }
+    })
 }
 
 impl From<&IbusOperation> for RuntimeProtocolOperation {
@@ -1269,6 +1302,7 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         RuntimeProtocolResponse {
             handled: false,
             operations: Vec::new(),
+            candidate: None,
             error: None,
         },
     )?;
@@ -1282,6 +1316,12 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
                 cursor_pos: 9,
                 visible: true,
             }],
+            candidate: Some(RuntimeProtocolCandidate {
+                replacement: "on my way".to_string(),
+                accept_on: "word-boundary".to_string(),
+                dismiss_key: "Escape".to_string(),
+                rendered_bubble_ready_claim: false,
+            }),
             error: None,
         },
     )?;
@@ -1291,6 +1331,7 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         RuntimeProtocolResponse {
             handled: true,
             operations: vec![RuntimeProtocolOperation::HidePreeditText],
+            candidate: None,
             error: None,
         },
     )?;
@@ -1309,6 +1350,7 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
                 },
                 RuntimeProtocolOperation::HidePreeditText,
             ],
+            candidate: None,
             error: None,
         },
     )?;
@@ -1318,6 +1360,7 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         RuntimeProtocolResponse {
             handled: false,
             operations: Vec::new(),
+            candidate: None,
             error: None,
         },
     )

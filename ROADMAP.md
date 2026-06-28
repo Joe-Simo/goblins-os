@@ -960,6 +960,23 @@ runs without the pass-through proof fields. This is still CI/qemu-pending and
 does **not** prove the live Wayland/IBus path locally or mark Text Shortcuts
 shipped.
 
+Current Text Shortcuts candidate-metadata continuation: the Rust stdio runtime
+now includes a `candidate` object only on visible preedit responses, carrying
+the replacement text, `accept_on=word-boundary`, `dismiss_key=Escape`, and
+`rendered_bubble_ready_claim=false`. The Python IBus adapter still ignores that
+metadata for live behavior, but its runtime self-test now verifies the real Rust
+stdio child emits it before Escape dismiss and boundary commit. This gives the
+future accept-bubble render a stable protocol contract without claiming a live
+rendered bubble, focused-field callback, or text-input-v3 proof. Local gates:
+`cargo fmt --all --check`, `cargo test -p goblins-os-textshortcuts-engine -- --nocapture`,
+`python3 -m py_compile os/goblins-os-textshortcuts/goblins-textshortcuts-ibus`,
+`python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus --self-test`,
+`cargo run -p goblins-os-textshortcuts-engine -- --stdio-self-test`,
+`GOBLINS_TEXTSHORTCUTS_ENGINE="$PWD/target/debug/goblins-textshortcuts-engine" python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus --runtime-self-test`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` -> **blocked=0 (1940)**. This is still
+CI/qemu-pending and does **not** mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining

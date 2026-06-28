@@ -9162,6 +9162,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-keychain-collections-route",
+            "/v1/keychain/collections",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/keychain.rs"),
+            "core-keychain-uses-secret-service-collections",
+            "org.freedesktop.Secret.Service",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/keychain.rs"),
+            "core-keychain-never-returns-secret-values-copy",
+            "Secret values are never returned by Goblins OS.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-fetches-keychain-collections",
+            "/v1/keychain/collections",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keychain-collections-row",
+            "append_keychain_collections",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keychain-never-displays-secret-values",
+            "Secret values are never displayed in Settings.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-app-privacy-status-route",
             "/v1/app-privacy/status",
         ),

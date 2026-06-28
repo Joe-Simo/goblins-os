@@ -127,6 +127,7 @@ struct SettingsState {
     window_management: Option<WindowManagementStatus>,
     shortcuts: Option<ShortcutsStatus>,
     keychain: Option<KeychainStatus>,
+    keychain_collections: Option<KeychainCollectionsStatus>,
     fingerprint: Option<FingerprintStatus>,
     app_privacy: Option<AppPrivacyStatus>,
 }
@@ -183,6 +184,29 @@ struct KeychainStatus {
     secret_service_available: bool,
     manager_app_available: bool,
     detail: String,
+}
+
+/// Read-only Secret Service collection metadata from `GET /v1/keychain/collections`.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct KeychainCollectionsStatus {
+    available: bool,
+    collections: Vec<KeychainCollectionStatus>,
+    detail: String,
+}
+
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct KeychainCollectionStatus {
+    label: String,
+    locked: Option<bool>,
+    item_count: Option<usize>,
 }
 
 /// Read-only Fingerprint unlock capability from `GET /v1/fingerprint/status`.
@@ -3285,6 +3309,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             window_management: None,
             shortcuts: None,
             keychain: None,
+            keychain_collections: None,
             fingerprint: None,
             app_privacy: None,
         };
@@ -3327,6 +3352,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         window_management: get_core_json(&config.core_url, "/v1/window-management/status").ok(),
         shortcuts: get_core_json(&config.core_url, "/v1/shortcuts/status").ok(),
         keychain: get_core_json(&config.core_url, "/v1/keychain/status").ok(),
+        keychain_collections: get_core_json(&config.core_url, "/v1/keychain/collections").ok(),
         fingerprint: get_core_json(&config.core_url, "/v1/fingerprint/status").ok(),
         app_privacy: get_core_json(&config.core_url, "/v1/app-privacy/status").ok(),
     }
@@ -5713,6 +5739,7 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
             "Waiting for OS storage status from Goblins OS.",
         )),
     }
+    append_keychain_collections(panel, state);
 
     panel.append(&label("Device unlock", &["gos-subsection-title"]));
     match &state.fingerprint {
@@ -5728,6 +5755,100 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
         "Session lock",
         "The Goblins OS session gate keeps the desktop locked until you unlock it. Sign-in and password policy are owned by the system and are not adjustable here.",
     ));
+}
+
+fn keychain_collections_state(status: &KeychainCollectionsStatus) -> (&'static str, bool) {
+    if !status.available {
+        return ("unavailable", false);
+    }
+    if status.collections.is_empty() {
+        return ("empty", true);
+    }
+    if status
+        .collections
+        .iter()
+        .any(|collection| collection.locked == Some(true))
+    {
+        return ("locked", false);
+    }
+    ("available", true)
+}
+
+fn keychain_collections_detail(status: &KeychainCollectionsStatus) -> String {
+    if !status.available {
+        return format!(
+            "{} Secret values are never displayed in Settings.",
+            status.detail
+        );
+    }
+    let count = status.collections.len();
+    let summary = match count {
+        0 => "No saved password collections are reported.".to_string(),
+        1 => "1 saved password collection is reported.".to_string(),
+        _ => format!("{count} saved password collections are reported."),
+    };
+    format!(
+        "{} {} Secret values are never displayed in Settings.",
+        status.detail, summary
+    )
+}
+
+fn keychain_collection_detail(collection: &KeychainCollectionStatus) -> String {
+    format!(
+        "{} {} Secret values are never displayed in Settings.",
+        keychain_collection_lock_label(collection.locked),
+        keychain_collection_item_label(collection.item_count)
+    )
+}
+
+fn keychain_collection_lock_label(locked: Option<bool>) -> &'static str {
+    match locked {
+        Some(true) => "Locked.",
+        Some(false) => "Unlocked.",
+        None => "Lock state is waiting.",
+    }
+}
+
+fn keychain_collection_item_label(item_count: Option<usize>) -> String {
+    match item_count {
+        Some(1) => "1 saved item reported.".to_string(),
+        Some(count) => format!("{count} saved items reported."),
+        None => "Saved-item count is waiting.".to_string(),
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_keychain_collections(panel: &gtk4::Box, state: &SettingsState) {
+    let Some(status) = &state.keychain_collections else {
+        panel.append(&system_row(
+            "Passwords & Keys",
+            "Waiting for keychain collection metadata from Goblins OS.",
+        ));
+        return;
+    };
+
+    let (state_label, ready) = keychain_collections_state(status);
+    panel.append(&health_row(
+        "Passwords & Keys",
+        state_label,
+        ready,
+        &keychain_collections_detail(status),
+    ));
+    for collection in status.collections.iter().take(4) {
+        panel.append(&system_row(
+            &collection.label,
+            &keychain_collection_detail(collection),
+        ));
+    }
+    if status.collections.len() > 4 {
+        panel.append(&system_row(
+            "More keychain collections",
+            &format!(
+                "{} additional collections are hidden until the full passwords browser is qemu-proven.",
+                status.collections.len() - 4
+            ),
+        ));
+    }
 }
 
 fn fingerprint_security_label(status: &FingerprintStatus) -> (String, bool) {
@@ -23578,6 +23699,54 @@ mod tests {
         assert_eq!(
             super::fingerprint_security_label(&status),
             ("configured".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn keychain_collection_copy_is_metadata_only() {
+        let unavailable = super::KeychainCollectionsStatus {
+            available: false,
+            collections: Vec::new(),
+            detail: "Secret Service is unavailable.".to_string(),
+        };
+        assert_eq!(
+            super::keychain_collections_state(&unavailable),
+            ("unavailable", false)
+        );
+        assert!(super::keychain_collections_detail(&unavailable)
+            .contains("Secret values are never displayed in Settings"));
+
+        let locked = super::KeychainCollectionsStatus {
+            available: true,
+            collections: vec![super::KeychainCollectionStatus {
+                label: "Login keyring".to_string(),
+                locked: Some(true),
+                item_count: Some(2),
+            }],
+            detail: "1 keychain collection reported. Metadata only.".to_string(),
+        };
+        assert_eq!(
+            super::keychain_collections_state(&locked),
+            ("locked", false)
+        );
+        let detail = super::keychain_collection_detail(&locked.collections[0]);
+        assert!(detail.contains("Locked."));
+        assert!(detail.contains("2 saved items"));
+        assert!(detail.contains("Secret values are never displayed in Settings"));
+        assert!(!detail.contains("password value"));
+
+        let available = super::KeychainCollectionsStatus {
+            available: true,
+            collections: vec![super::KeychainCollectionStatus {
+                label: "Login keyring".to_string(),
+                locked: Some(false),
+                item_count: Some(1),
+            }],
+            detail: "1 keychain collection reported. Metadata only.".to_string(),
+        };
+        assert_eq!(
+            super::keychain_collections_state(&available),
+            ("available", true)
         );
     }
 

@@ -269,6 +269,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/focus/tick", post(focus::focus_tick))
         .route("/v1/keychain/status", get(keychain::keychain_status))
         .route(
+            "/v1/keychain/collections",
+            get(keychain::keychain_collections),
+        )
+        .route(
             "/v1/text-shortcuts",
             get(text_shortcuts::text_shortcuts_status).post(text_shortcuts::set_text_shortcuts),
         )

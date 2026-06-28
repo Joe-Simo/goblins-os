@@ -11254,6 +11254,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "this._settings.bind('enabled', this, 'checked'",
         ),
         contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-waiting-render-proof-hook",
+            "showWaitingRenderProof",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-render-proof-false-capture-claim",
+            "captureRuntimeReadyClaim: false",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-extension-render-proof-false-transcription-claim",
+            "transcriptionReadyClaim: false",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "live-captions-desktop-render-proof-hook",
+            "58-live-captions-waiting-$suffix.png",
+        ),
+        contains_check(
             root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/stylesheet.css"),
             "live-captions-extension-inter",
             "font-family: \"Inter\"",

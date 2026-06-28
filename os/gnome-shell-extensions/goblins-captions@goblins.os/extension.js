@@ -143,6 +143,17 @@ export default class GoblinsLiveCaptions extends Extension {
         this._reposition();
     }
 
+    showWaitingRenderProof() {
+        this.showStatus(WAITING_COPY);
+        return {
+            proof: 'waiting-overlay-only',
+            waitingCopy: WAITING_COPY,
+            captureRuntimeReadyClaim: false,
+            transcriptionReadyClaim: false,
+            liveCaptionTextClaim: false,
+        };
+    }
+
     showCaption(text) {
         if (!this._overlay || !text)
             return;

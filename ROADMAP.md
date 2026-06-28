@@ -548,6 +548,22 @@ targeted `cargo test -p goblins-os-settings live_captions -- --nocapture`,
 `git diff --check`. Live monitor capture, transcription stream, overlay render,
 and Quick Settings render proof remain CI/qemu-pending.
 
+Current Live Captions waiting-overlay render-hook continuation: the existing
+hidden-by-default shell extension now exposes a deterministic
+`showWaitingRenderProof()` hook for the desktop render harness. The hook renders
+only the honest "waiting for the local caption stream" capsule and returns false
+capture/transcription/live-caption-text claims. `render-desktop.sh` now captures
+`58-live-captions-waiting-$suffix.png` in light/dark after the Switch Control
+overlay capture, then hides the overlay. This is source-gated only; no local
+GTK/shell render is claimed from macOS, and CI/qemu still must produce and review
+the artifact pixels before Live Captions can ship. Local source gates for this
+pass: `node --check
+os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js`, `bash -n
+os/bootc/render-desktop.sh os/hardware-gate/verify-shipping-status.sh`,
+`git diff --check`, `cargo fmt --all --check`, `cargo clippy --workspace -- -D
+warnings`, `cargo test --workspace`, and `goblins-os-verify --source-root .` →
+**blocked=0 (2208)**.
+
 Current Visual Look Up continuation: the region-capture card surface is now
 source-gated but not shipped. The new `goblins-os-visual-lookup` crate checks
 `/v1/vision/status` before any capture, requires a loopback local core URL, uses
@@ -1627,6 +1643,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **Quick Settings toggle source-gated (CI/qemu-pending):** the shell extension registers a GNOME Quick Settings `SystemIndicator`/`QuickToggle` bound to the existing `enabled` key. The toggle exposes only the already-honest waiting overlay; it does not start capture, add an RPM, add a shortcut, or claim live captions.
 - [x] **Settings Live Captions row source-gated (CI/qemu-pending):** Settings ▸ Accessibility fetches `/v1/live-captions/status` and mirrors readiness/configuration in a read-only row. It states captioning stays local, keeps the toggle boundary in Quick Settings, and does not claim live capture/transcription or add a Settings write.
 - [x] **PipeWire capture-plan contract source-gated (CI/qemu-pending):** core now owns a pure `pw-dump` monitor-source parser and stable `pw-record --target <monitor> --rate 16000 --channels 1 --format s16 <chunk.wav>` argv builder for the future engine. The status JSON exposes the deterministic capture plan while keeping `runtime_ready_claim=false`, `capture_runtime_ready=false`, and `transcription_ready_claim=false`; command presence alone cannot make Live Captions active. Settings displays that boundary. The image asserts `pw-record` and `pw-dump` from the already-installed `pipewire-utils`; no Whisper package/model, daemon, capture stream, or caption text is claimed.
+- [x] **Waiting-overlay desktop render hook source-gated (CI/qemu-pending):** `goblins-captions@goblins.os` exposes `showWaitingRenderProof()` for the existing desktop render harness, and `render-desktop.sh` captures `58-live-captions-waiting-$suffix.png` in light/dark. The hook renders only the waiting capsule and keeps capture/transcription/live-caption claims false. Pixel proof remains CI/qemu-pending.
 - [ ] **Live capture/transcribe/menu proof (deferred, L):** implement/prove the privileged capture loop, real transcription stream, rendered Quick Settings control/overlay behavior, and a non-conflicting shortcut if one is added. The feature remains `in-progress`.
 - **Packages:** existing `pipewire-utils` is now asserted for `pw-record` and `pw-dump`. `whisper-cpp`/`whisper-cpp-devel` exist in Fedora 44 as `1.8.1-2.fc44`, but the current repoquery proof did **not** find a `whisper-cli` binary provider; do not add an RPM or `command -v whisper-cli` gate until the CLI provider is proven. **Do NOT** depend on `whisper-stream` (SDL2, often unpackaged, mic-via-SDL — wrong tool).
 - **gsettings/dconf:** NEW `org.goblins.shell.extensions.captions` (enabled, toggle-captions `['<Super><Alt>c']`, source system|microphone|both, auto-hide, keep-onscreen, text-size, position) + a `30-captions` seed shipping installed-but-off (`enabled=false`).

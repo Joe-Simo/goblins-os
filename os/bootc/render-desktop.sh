@@ -290,6 +290,14 @@ render_scheme() {
   sleep 0.9
   shoot "57-switch-control-point-$suffix.png"
   shell_eval "globalThis.goblinsSwitchControl.hide(); 'switch-control-hidden';" || true
+  sleep 0.3
+
+  # Live Captions proof: render the honest waiting overlay only. This does not
+  # start capture, stream transcription, or claim caption text.
+  shell_eval "globalThis.goblinsLiveCaptions.showWaitingRenderProof(); 'live-captions-waiting';" || return 1
+  sleep 0.9
+  shoot "58-live-captions-waiting-$suffix.png"
+  shell_eval "globalThis.goblinsLiveCaptions.hide(); 'live-captions-hidden';" || true
 
   pkill -f "/usr/libexec/goblins-os/goblins-os-shell" 2>/dev/null || true
   pkill -f "/usr/libexec/goblins-os/goblins-os-settings" 2>/dev/null || true

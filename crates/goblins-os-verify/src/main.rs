@@ -9031,6 +9031,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-overlay-intent",
+            "def _candidate_overlay_intent",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-overlay-intent-ledger",
+            "last_overlay_intent",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-overlay-no-live-claim",
+            "\"live_overlay_claim\": False",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-overlay-hide-on-dismiss",
+            "\"reason\": \"dismissed\"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-overlay-hide-on-commit",
+            "\"reason\": \"committed\"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-false-render-claim",
             "rendered_bubble_ready_claim is not False",
         ),

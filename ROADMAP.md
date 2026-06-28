@@ -1030,6 +1030,24 @@ os/hardware-gate/capture-harness/drive-capture.py`, `cargo fmt --all --check`,
 CI/qemu-pending and does **not** prove a live IBus overlay, focused-field
 callback, Wayland text-input-v3 bubble, or mark Text Shortcuts shipped.
 
+Current Text Shortcuts adapter-overlay intent continuation: the Python IBus
+adapter now turns retained candidate metadata into a host-tested non-rendering
+overlay intent ledger. It records `show-candidate` when a visible candidate
+arrives, records `hide-candidate` with `reason=dismissed` or `reason=committed`
+when Escape or boundary commit clears it, and every intent carries
+`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
+`runtime_ready_claim=false`. The live adapter still renders no bubble and still
+applies only IBus preedit/delete/commit/hide operations. Local gates:
+`cargo build -p goblins-os-textshortcuts-engine`, `python3 -m py_compile
+os/goblins-os-textshortcuts/goblins-textshortcuts-ibus`, `python3
+os/goblins-os-textshortcuts/goblins-textshortcuts-ibus --self-test`,
+`GOBLINS_TEXTSHORTCUTS_ENGINE="$PWD/target/debug/goblins-textshortcuts-engine"
+python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus
+--runtime-self-test`, `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `goblins-os-verify --source-root .`
+-> **blocked=0 (1970)**. This is still CI/qemu-pending and does **not** prove a
+live IBus overlay, focused-field callback, Wayland text-input-v3 bubble, or mark
+Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining

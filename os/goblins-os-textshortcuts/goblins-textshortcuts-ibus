@@ -174,15 +174,78 @@ def _candidate_metadata_from_response(response: dict[str, Any]) -> dict[str, Any
     }
 
 
+def _candidate_clear_reason(response: dict[str, Any]) -> str:
+    operations = response.get("operations", [])
+    if not isinstance(operations, list):
+        return "cleared"
+    operation_types = {
+        operation.get("type")
+        for operation in operations
+        if isinstance(operation, dict) and isinstance(operation.get("type"), str)
+    }
+    if "commit-text" in operation_types:
+        return "committed"
+    if "hide-preedit-text" in operation_types and response.get("handled") is True:
+        return "dismissed"
+    if "hide-preedit-text" in operation_types:
+        return "hidden"
+    return "cleared"
+
+
+def _candidate_overlay_intent(
+    action: str,
+    metadata: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "action": action,
+        "replacement": metadata["replacement"],
+        "accept_on": metadata["accept_on"],
+        "dismiss_key": metadata["dismiss_key"],
+        "reason": reason,
+        "rendered_bubble_ready_claim": False,
+        "live_overlay_claim": False,
+        "runtime_ready_claim": False,
+    }
+
+
 class CandidateMetadataState:
     def __init__(self) -> None:
         self.current: dict[str, Any] | None = None
+        self.last_overlay_intent: dict[str, Any] | None = None
 
     def observe_response(self, response: dict[str, Any]) -> None:
-        self.current = _candidate_metadata_from_response(response)
-
-    def clear(self) -> None:
+        previous = self.current
+        candidate = _candidate_metadata_from_response(response)
+        if candidate is not None:
+            self.current = candidate
+            self.last_overlay_intent = _candidate_overlay_intent(
+                "show-candidate",
+                candidate,
+                "candidate-visible",
+            )
+            return
         self.current = None
+        if previous is not None:
+            self.last_overlay_intent = _candidate_overlay_intent(
+                "hide-candidate",
+                previous,
+                _candidate_clear_reason(response),
+            )
+        else:
+            self.last_overlay_intent = None
+
+    def clear(self, reason: str = "cleared") -> None:
+        previous = self.current
+        self.current = None
+        if previous is not None:
+            self.last_overlay_intent = _candidate_overlay_intent(
+                "hide-candidate",
+                previous,
+                reason,
+            )
+        else:
+            self.last_overlay_intent = None
 
 
 class RuntimeBridge:
@@ -429,6 +492,67 @@ def _run_self_test() -> None:
             self.calls.append(("commit", text))
 
     target = FakeTarget()
+    candidate_state = CandidateMetadataState()
+    _apply_response_operations(
+        target,
+        {
+            "handled": False,
+            "operations": [
+                {
+                    "type": "update-preedit-text",
+                    "text": "on my way",
+                    "cursor_pos": 9,
+                    "visible": True,
+                }
+            ],
+            "candidate": {
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            },
+        },
+        lambda text: text,
+        candidate_state,
+    )
+    assert candidate_state.current == {
+        "replacement": "on my way",
+        "accept_on": "word-boundary",
+        "dismiss_key": "Escape",
+        "rendered_bubble_ready_claim": False,
+    }
+    assert candidate_state.last_overlay_intent == {
+        "action": "show-candidate",
+        "replacement": "on my way",
+        "accept_on": "word-boundary",
+        "dismiss_key": "Escape",
+        "reason": "candidate-visible",
+        "rendered_bubble_ready_claim": False,
+        "live_overlay_claim": False,
+        "runtime_ready_claim": False,
+    }
+    _apply_response_operations(
+        target,
+        {
+            "handled": True,
+            "operations": [{"type": "hide-preedit-text"}],
+        },
+        lambda text: text,
+        candidate_state,
+    )
+    assert candidate_state.current is None
+    assert candidate_state.last_overlay_intent == {
+        "action": "hide-candidate",
+        "replacement": "on my way",
+        "accept_on": "word-boundary",
+        "dismiss_key": "Escape",
+        "reason": "dismissed",
+        "rendered_bubble_ready_claim": False,
+        "live_overlay_claim": False,
+        "runtime_ready_claim": False,
+    }
+
+    target = FakeTarget()
     _apply_response_operations(
         target,
         {
@@ -578,6 +702,16 @@ def _run_runtime_self_test() -> None:
                 "dismiss_key": "Escape",
                 "rendered_bubble_ready_claim": False,
             }
+            assert candidate_state.last_overlay_intent == {
+                "action": "show-candidate",
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "reason": "candidate-visible",
+                "rendered_bubble_ready_claim": False,
+                "live_overlay_claim": False,
+                "runtime_ready_claim": False,
+            }
             response = runtime.send(_special_key_protocol_event(0xFF1B))
             assert response.get("handled") is True
             _apply_response_operations(target, response, lambda text: text, candidate_state)
@@ -586,6 +720,16 @@ def _run_runtime_self_test() -> None:
                 ("hide",),
             ]
             assert candidate_state.current is None
+            assert candidate_state.last_overlay_intent == {
+                "action": "hide-candidate",
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "reason": "dismissed",
+                "rendered_bubble_ready_claim": False,
+                "live_overlay_claim": False,
+                "runtime_ready_claim": False,
+            }
 
             target.calls.clear()
             for character in "omw":
@@ -600,6 +744,9 @@ def _run_runtime_self_test() -> None:
             assert response.get("candidate", {}).get("replacement") == "on my way"
             assert response.get("candidate", {}).get("rendered_bubble_ready_claim") is False
             assert candidate_state.current is not None
+            assert candidate_state.last_overlay_intent is not None
+            assert candidate_state.last_overlay_intent["action"] == "show-candidate"
+            assert candidate_state.last_overlay_intent["live_overlay_claim"] is False
             response = runtime.send(_key_protocol_event(" "))
             assert response.get("handled") is True
             _apply_response_operations(target, response, lambda text: text, candidate_state)
@@ -610,6 +757,16 @@ def _run_runtime_self_test() -> None:
                 ("hide",),
             ]
             assert candidate_state.current is None
+            assert candidate_state.last_overlay_intent == {
+                "action": "hide-candidate",
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "reason": "committed",
+                "rendered_bubble_ready_claim": False,
+                "live_overlay_claim": False,
+                "runtime_ready_claim": False,
+            }
 
             target.calls.clear()
             runtime.send({"type": "focus-in", "purpose": 9})
@@ -697,7 +854,7 @@ def _run_ibus() -> int:
             return bool(response.get("handled", False))
 
         def do_destroy(self) -> None:
-            self._candidate_state.clear()
+            self._candidate_state.clear("destroyed")
             self._bridge.close()
             super().do_destroy()
 

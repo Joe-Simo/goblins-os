@@ -1,9 +1,11 @@
 use std::{
+    collections::HashMap,
     env,
     error::Error,
     fmt, fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock},
 };
 
 const BINARIES: &[&str] = &[
@@ -2441,6 +2443,8 @@ fn source_secret_scan_check(root: &Path) -> Check {
     }
 }
 
+const SECRET_SCAN_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
 fn scan_source_for_secrets(root: &Path, dir: &Path, hits: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -2452,8 +2456,20 @@ fn scan_source_for_secrets(root: &Path, dir: &Path, hits: &mut Vec<String>) {
         if should_skip_secret_scan_path(relative) {
             continue;
         }
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             scan_source_for_secrets(root, &path, hits);
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.len() > SECRET_SCAN_MAX_FILE_BYTES {
             continue;
         }
         let Ok(text) = fs::read_to_string(&path) else {
@@ -8525,6 +8541,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-self-test-dismisses-with-escape",
+            "_special_key_protocol_event(0xFF1B)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-capability-check",
             "--capability-check",
         ),
@@ -8731,6 +8752,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-key-escape-dismiss-mapping",
+            "IBUS_KEY_ESCAPE => InputEvent::DismissCandidate",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-runtime-pipeline",
             "pub struct IbusTextShortcutsRuntime",
         ),
@@ -8923,6 +8949,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-runtime-preedit-candidate",
             "IbusOperation::UpdatePreeditText",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-dismiss-candidate",
+            "EngineAction::DismissCandidate =>",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-runtime-dismiss-handles-escape",
+            "IbusRuntimeDecision::handled(vec![IbusOperation::HidePreeditText])",
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
@@ -9816,8 +9852,20 @@ fn desktop_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
         .map(str::trim)
 }
 
+static READ_CACHE: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+
 fn read_to_string(path: impl AsRef<Path>) -> String {
-    fs::read_to_string(path).unwrap_or_default()
+    let path = path.as_ref().to_path_buf();
+    let cache = READ_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut cache) = cache.lock() else {
+        return fs::read_to_string(path).unwrap_or_default();
+    };
+    if let Some(text) = cache.get(&path) {
+        return text.clone();
+    }
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    cache.insert(path, text.clone());
+    text
 }
 
 fn ready(id: &str, detail: &str) -> Check {

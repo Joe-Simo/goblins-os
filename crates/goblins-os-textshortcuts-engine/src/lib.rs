@@ -785,6 +785,7 @@ pub enum InputEvent {
     Character(char),
     Boundary(char),
     Backspace,
+    DismissCandidate,
     Reset,
     Other,
 }
@@ -852,8 +853,10 @@ pub fn input_event_from_ibus_key(event: IbusKeyEvent) -> InputEvent {
         IBUS_KEY_BACKSPACE => InputEvent::Backspace,
         IBUS_KEY_TAB => InputEvent::Boundary('\t'),
         IBUS_KEY_RETURN => InputEvent::Boundary('\n'),
-        IBUS_KEY_ESCAPE | IBUS_KEY_LEFT | IBUS_KEY_UP | IBUS_KEY_RIGHT | IBUS_KEY_DOWN
-        | IBUS_KEY_DELETE => InputEvent::Reset,
+        IBUS_KEY_ESCAPE => InputEvent::DismissCandidate,
+        IBUS_KEY_LEFT | IBUS_KEY_UP | IBUS_KEY_RIGHT | IBUS_KEY_DOWN | IBUS_KEY_DELETE => {
+            InputEvent::Reset
+        }
         _ => event
             .unicode
             .filter(|value| !value.is_control())
@@ -870,6 +873,7 @@ pub enum EngineAction {
         replacement: String,
     },
     ClearCandidate,
+    DismissCandidate,
     CommitReplacement {
         delete_previous_chars: usize,
         text: String,
@@ -938,6 +942,9 @@ pub fn ibus_runtime_decision(action: EngineAction) -> IbusRuntimeDecision {
         }
         EngineAction::ClearCandidate => {
             IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
+        }
+        EngineAction::DismissCandidate => {
+            IbusRuntimeDecision::handled(vec![IbusOperation::HidePreeditText])
         }
         EngineAction::CommitReplacement {
             delete_previous_chars,
@@ -1216,6 +1223,10 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         r#"{"type":"key","keyval":111,"unicode":"o","pressed":true,"command_modifier_active":false}"#,
         r#"{"type":"key","keyval":109,"unicode":"m","pressed":true,"command_modifier_active":false}"#,
         r#"{"type":"key","keyval":119,"unicode":"w","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":65307,"unicode":null,"pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":111,"unicode":"o","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":109,"unicode":"m","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":119,"unicode":"w","pressed":true,"command_modifier_active":false}"#,
         r#"{"type":"key","keyval":32,"unicode":" ","pressed":true,"command_modifier_active":false}"#,
         r#"{"type":"focus-in","purpose":9}"#,
         r#"{"type":"key","keyval":111,"unicode":"o","pressed":true,"command_modifier_active":false}"#,
@@ -1246,9 +1257,9 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    if responses.len() != 10 {
+    if responses.len() != 14 {
         return Err(RuntimeProtocolSelfTestError::UnexpectedResponseCount {
-            expected: 10,
+            expected: 14,
             actual: responses.len(),
         });
     }
@@ -1275,8 +1286,17 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         },
     )?;
     expect_protocol_response(
-        "boundary-commit",
+        "escape-dismiss",
         &responses[4],
+        RuntimeProtocolResponse {
+            handled: true,
+            operations: vec![RuntimeProtocolOperation::HidePreeditText],
+            error: None,
+        },
+    )?;
+    expect_protocol_response(
+        "boundary-commit",
+        &responses[8],
         RuntimeProtocolResponse {
             handled: true,
             operations: vec![
@@ -1294,7 +1314,7 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
     )?;
     expect_protocol_response(
         "pin-pass-through",
-        &responses[9],
+        &responses[13],
         RuntimeProtocolResponse {
             handled: false,
             operations: Vec::new(),
@@ -1463,6 +1483,31 @@ pub fn run_text_shortcuts_keystroke_self_test() -> Result<(), KeystrokeSelfTestE
         }]),
     )?;
     expect_keystroke_decision(
+        "escape-dismiss",
+        runtime.handle_event(IbusRuntimeEvent::Key(IbusKeyEvent::new(
+            IBUS_KEY_ESCAPE,
+            None,
+            true,
+            false,
+        ))),
+        IbusRuntimeDecision::handled(vec![IbusOperation::HidePreeditText]),
+    )?;
+    expect_keystroke_decision(
+        "post-dismiss-boundary-pass-through",
+        runtime.handle_event(IbusRuntimeEvent::Key(char_key_event_for_self_test(' '))),
+        IbusRuntimeDecision::pass_through(),
+    )?;
+    let candidate = type_runtime_text_for_self_test(&mut runtime, "omw");
+    expect_keystroke_decision(
+        "candidate-preedit-after-dismiss",
+        candidate,
+        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
+            text: "on my way".to_string(),
+            cursor_pos: 9,
+            visible: true,
+        }]),
+    )?;
+    expect_keystroke_decision(
         "boundary-commit",
         runtime.handle_event(IbusRuntimeEvent::Key(char_key_event_for_self_test(' '))),
         IbusRuntimeDecision::handled(vec![
@@ -1563,6 +1608,7 @@ impl EngineState {
             InputEvent::Character(value) => self.handle_character(value, table),
             InputEvent::Boundary(value) => self.handle_boundary(value, table),
             InputEvent::Backspace => self.handle_backspace(table),
+            InputEvent::DismissCandidate => self.dismiss_candidate(),
             InputEvent::Reset => self.clear_candidate(),
             InputEvent::Other => EngineAction::PassThrough,
         }
@@ -1623,6 +1669,17 @@ impl EngineState {
         self.candidate_visible = false;
         if had_candidate {
             EngineAction::ClearCandidate
+        } else {
+            EngineAction::PassThrough
+        }
+    }
+
+    fn dismiss_candidate(&mut self) -> EngineAction {
+        let had_candidate = self.candidate_visible;
+        self.current_word.clear();
+        self.candidate_visible = false;
+        if had_candidate {
+            EngineAction::DismissCandidate
         } else {
             EngineAction::PassThrough
         }
@@ -1867,6 +1924,25 @@ mod tests {
     }
 
     #[test]
+    fn escape_dismisses_visible_candidate_without_commit() {
+        let table = table();
+        let mut state = EngineState::default();
+        assert!(matches!(
+            type_chars(&mut state, "omw", &table),
+            EngineAction::ShowCandidate { .. }
+        ));
+        assert_eq!(
+            state.handle_event(ContentPurpose::Normal, InputEvent::DismissCandidate, &table),
+            EngineAction::DismissCandidate
+        );
+        assert_eq!(state.current_word(), "");
+        assert_eq!(
+            state.handle_event(ContentPurpose::Normal, InputEvent::Boundary(' '), &table),
+            EngineAction::PassThrough
+        );
+    }
+
+    #[test]
     fn sensitive_content_purposes_never_replace() {
         let table = table();
         for purpose in [
@@ -1949,7 +2025,6 @@ mod tests {
     #[test]
     fn ibus_key_events_reset_on_navigation_and_command_modifiers() {
         for keyval in [
-            IBUS_KEY_ESCAPE,
             IBUS_KEY_LEFT,
             IBUS_KEY_UP,
             IBUS_KEY_RIGHT,
@@ -1964,6 +2039,14 @@ mod tests {
         assert_eq!(
             input_event_from_ibus_key(IbusKeyEvent::new('w' as u32, Some('w'), true, true)),
             InputEvent::Reset
+        );
+    }
+
+    #[test]
+    fn ibus_key_events_normalize_escape_as_candidate_dismiss() {
+        assert_eq!(
+            input_event_from_ibus_key(IbusKeyEvent::new(IBUS_KEY_ESCAPE, None, true, false)),
+            InputEvent::DismissCandidate
         );
     }
 
@@ -2047,6 +2130,15 @@ mod tests {
     }
 
     #[test]
+    fn ibus_adapter_dismisses_candidate_by_handling_escape() {
+        let decision = ibus_runtime_decision(EngineAction::DismissCandidate);
+        assert_eq!(
+            decision,
+            IbusRuntimeDecision::handled(vec![IbusOperation::HidePreeditText])
+        );
+    }
+
+    #[test]
     fn ibus_runtime_pipeline_shows_candidate_then_commits_replacement() {
         let mut runtime = IbusTextShortcutsRuntime::new(table());
         let candidate = type_ibus_chars(&mut runtime, "omw");
@@ -2094,6 +2186,28 @@ mod tests {
             IbusRuntimeDecision::pass_through()
         );
         assert_eq!(runtime.current_word(), "");
+    }
+
+    #[test]
+    fn ibus_runtime_pipeline_handles_escape_only_for_visible_candidate() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert_eq!(
+            runtime.handle_key(IbusKeyEvent::new(IBUS_KEY_ESCAPE, None, true, false)),
+            IbusRuntimeDecision::pass_through()
+        );
+        assert!(matches!(
+            type_ibus_chars(&mut runtime, "omw").operations(),
+            [IbusOperation::UpdatePreeditText { .. }]
+        ));
+        assert_eq!(
+            runtime.handle_key(IbusKeyEvent::new(IBUS_KEY_ESCAPE, None, true, false)),
+            IbusRuntimeDecision::handled(vec![IbusOperation::HidePreeditText])
+        );
+        assert_eq!(runtime.current_word(), "");
+        assert_eq!(
+            runtime.handle_key(ibus_char(' ')),
+            IbusRuntimeDecision::pass_through()
+        );
     }
 
     #[test]

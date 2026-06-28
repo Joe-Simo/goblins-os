@@ -436,6 +436,16 @@ def _key_protocol_event(character: str) -> dict[str, Any]:
     }
 
 
+def _special_key_protocol_event(keyval: int) -> dict[str, Any]:
+    return {
+        "type": "key",
+        "keyval": keyval,
+        "unicode": None,
+        "pressed": True,
+        "command_modifier_active": False,
+    }
+
+
 def _run_runtime_self_test() -> None:
     class FakeTarget:
         def __init__(self) -> None:
@@ -463,6 +473,22 @@ def _run_runtime_self_test() -> None:
         runtime = RuntimeBridge(response_timeout=CAPABILITY_TIMEOUT_SECONDS)
         try:
             _send_table_changed_if_needed(table_bridge, runtime, target, lambda text: text)
+            for character in "omw":
+                _apply_response_operations(
+                    target,
+                    runtime.send(_key_protocol_event(character)),
+                    lambda text: text,
+                )
+            assert target.calls == [("update", "on my way", 9, True)]
+            response = runtime.send(_special_key_protocol_event(0xFF1B))
+            assert response.get("handled") is True
+            _apply_response_operations(target, response, lambda text: text)
+            assert target.calls == [
+                ("update", "on my way", 9, True),
+                ("hide",),
+            ]
+
+            target.calls.clear()
             for character in "omw":
                 _apply_response_operations(
                     target,

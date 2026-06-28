@@ -804,6 +804,30 @@ python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus
 `goblins-os-verify --source-root .` -> **blocked=0 (1835)**. This is still
 CI/qemu-pending and does **not** mark Text Shortcuts shipped.
 
+Current Text Shortcuts accept-bubble dismiss continuation: Escape now maps to a
+dedicated candidate-dismiss event instead of the generic navigation reset. The
+engine handles Escape only when a candidate is visible, hides preedit without
+committing, clears the pending trigger, and otherwise passes Escape through. The
+Rust keystroke and stdio self-tests cover this path, and the Python adapter
+runtime self-test drives the real Rust `--stdio` child through the same Escape
+protocol. This remains source-gated only: it does **not** prove a live IBus bus,
+focused-field callbacks, text-input-v3 commits, password-field refusal in-session,
+or the rendered accept bubble. This pass also hardens `goblins-os-verify` so its
+source scan skips non-regular/large generated files and caches repeated
+source-file reads; this keeps the required verifier gate usable on dirty local
+worktrees without weakening source assertions. Local gates: `cargo build -p
+goblins-os-textshortcuts-engine`, `python3 -m py_compile
+os/goblins-os-textshortcuts/goblins-textshortcuts-ibus`, `python3
+os/goblins-os-textshortcuts/goblins-textshortcuts-ibus --self-test`,
+`GOBLINS_TEXTSHORTCUTS_ENGINE="$PWD/target/debug/goblins-textshortcuts-engine"
+python3 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus
+--runtime-self-test`, `cargo run -p goblins-os-textshortcuts-engine --
+--keystroke-self-test`, `cargo run -p goblins-os-textshortcuts-engine --
+--stdio-self-test`, `cargo fmt --all --check`, `cargo clippy --workspace -- -D
+warnings`, `cargo test --workspace`, scoped `git diff --check` over the changed
+files, and `goblins-os-verify --source-root .` -> **blocked=0 (1839)**. This is
+still CI/qemu-pending and does **not** mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -1143,6 +1167,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **IBus adapter capability handshake source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --capability-check` proves the installed adapter can run the Rust `--stdio-self-test` contract and reports `adapter_contract_ready=true`, while keeping `ready=false` and `runtime_ready_claim=false`. The image build checks both the contract and the false runtime claim. This still does not prove live IBus callbacks, focused-field commits, password-field refusal in-session, or the accept bubble.
 - [x] **IBus adapter table-reload bridge source-gated (CI/qemu-pending):** the adapter reads the curated table JSON, sanitizes it before sending, and emits a stdio `table-changed` request on first use and file-content changes so the Rust runtime can hide stale preedit and use current shortcuts. This still does not prove a live IBus session, file monitor, focused-field commits, password-field refusal in-session, or the accept bubble.
 - [x] **IBus adapter runtime self-test source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --runtime-self-test` launches the real Rust `--stdio` child through the Python bridge, proves table-change + key-event preedit/commit operations, and proves PIN-purpose pass-through with no operations. The image build runs it. This still does not prove a live IBus bus, focused-field commits, password-field refusal in-session, or the accept bubble.
+- [x] **IBus accept-bubble dismiss contract source-gated (CI/qemu-pending):** Escape now normalizes to a dedicated candidate-dismiss event, handles the key only when a candidate is visible, hides preedit without committing, and stays pass-through otherwise. The Rust keystroke/stdio self-tests and Python adapter runtime self-test cover the contract. This still does not prove the live IBus bus, focused-field callbacks, or rendered accept bubble.
 - [x] **Autocorrect capability gate source-gated (CI/qemu-pending):** `/v1/text-shortcuts` now reports a disabled autocorrect capability that becomes resource-available only when a local model path or Hunspell dictionary is present, and Settings shows a read-only Autocorrect row. This still does not add packages, enable a toggle, ship a model, or perform live autocorrect.
 - [x] **IBus session seed source-gated (CI/qemu-pending):** the Goblins session starts a user `ibus-daemon`, seeds the `goblins-textshortcuts` IBus source and preload engine in dconf, and removes the old forced simple GTK/QT/XIM overrides without setting `GTK_IM_MODULE=ibus` globally. Core still keeps runtime readiness false until qemu proves the session service, active input source, adapter callbacks, and safe replacement commits.
 - [x] **IBus session-enable hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now requires `text-shortcuts-session-enable-proof.json` before signoff, proving the installed session service/source/preload/active-engine path and adapter self-test while explicitly keeping core `engine_available=false` and `runtime_loop_available=false`. This does not prove live keystroke replacement, adapter callbacks from a focused text field, password-field refusal in-session, or the accept bubble.

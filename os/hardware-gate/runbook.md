@@ -163,10 +163,11 @@ proof remains a separate qemu gate.
 The keystroke gate is `text-shortcuts-live-keystroke-proof.json`. It launches the
 Goblins shell's proof-only GTK field, drives it through the Wayland `wtype` path,
 and rejects the run unless a normal entry expands `omw.` to `onmyway.`, an
-Escape dismiss without a replacement commit leaves a normal entry at `omw`, and a
-password-purpose entry keeps `omw.` unchanged. This is the first live text-input
-proof; it still keeps the Settings/Core runtime-ready claim disabled until the
-qemu artifact is reviewed and the feature is flipped deliberately.
+unknown word stays pass-through as `hello.`, an Escape dismiss without a
+replacement commit leaves a normal entry at `omw`, and a password-purpose entry
+keeps `omw.` unchanged. This is the first live text-input proof; it still keeps
+the Settings/Core runtime-ready claim disabled until the qemu artifact is
+reviewed and the feature is flipped deliberately.
 
 Capture exactly at minimum these names:
 1. `01-installer.png` — ISO boot + installer launch

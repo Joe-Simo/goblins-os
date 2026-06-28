@@ -5199,6 +5199,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "Escape dismiss without a",
         ),
         contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-passthrough-proof",
+            "unknown word stays pass-through",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-firewall-live-toggle-proof",
             "/proof/firewall-live-toggle",
@@ -5247,6 +5252,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-opens-textshortcuts-dismiss-proof",
             "goblins-os-shell\" --text-shortcuts-proof dismiss",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-opens-textshortcuts-passthrough-proof",
+            "goblins-os-shell\" --text-shortcuts-proof passthrough",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-drives-textshortcuts-passthrough",
+            "wtype -- \"hello.\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-checks-textshortcuts-passthrough-unchanged",
+            "passthrough_unchanged=true",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5302,6 +5322,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-dismiss-proof",
             "\"dismiss_no_commit\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-passthrough-proof",
+            "\"passthrough_unchanged\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-textshortcuts-passthrough-proof",
+            "passthrough_unchanged",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-textshortcuts-passthrough-proof",
+            "passthrough_unchanged",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -9069,6 +9104,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-shell/src/main.rs"),
             "shell-textshortcuts-proof-password-purpose",
             "gtk::InputPurpose::Password",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-passthrough-field",
+            "TextShortcutsProofMode::Passthrough",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-passthrough-placeholder",
+            "Type hello.",
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),

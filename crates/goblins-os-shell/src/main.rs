@@ -375,6 +375,7 @@ enum StandaloneTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TextShortcutsProofMode {
     Normal,
+    Passthrough,
     Password,
     Dismiss,
 }
@@ -412,6 +413,7 @@ fn standalone_target_from_args(args: impl Iterator<Item = String>) -> Option<Sta
 fn text_shortcuts_proof_mode(mode: &str) -> Option<TextShortcutsProofMode> {
     match mode {
         "normal" => Some(TextShortcutsProofMode::Normal),
+        "passthrough" => Some(TextShortcutsProofMode::Passthrough),
         "password" => Some(TextShortcutsProofMode::Password),
         "dismiss" => Some(TextShortcutsProofMode::Dismiss),
         _ => None,
@@ -2545,6 +2547,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
 
         let title = match mode {
             TextShortcutsProofMode::Normal => "Text Shortcuts proof field",
+            TextShortcutsProofMode::Passthrough => "Pass-through proof field",
             TextShortcutsProofMode::Password => "Password-field refusal proof",
             TextShortcutsProofMode::Dismiss => "Escape-dismiss proof",
         };
@@ -2554,6 +2557,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         entry.set_hexpand(true);
         entry.set_input_purpose(match mode {
             TextShortcutsProofMode::Normal => gtk::InputPurpose::FreeForm,
+            TextShortcutsProofMode::Passthrough => gtk::InputPurpose::FreeForm,
             TextShortcutsProofMode::Password => gtk::InputPurpose::Password,
             TextShortcutsProofMode::Dismiss => gtk::InputPurpose::FreeForm,
         });
@@ -2562,6 +2566,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         }
         entry.set_placeholder_text(Some(match mode {
             TextShortcutsProofMode::Normal => "Type omw.",
+            TextShortcutsProofMode::Passthrough => "Type hello.",
             TextShortcutsProofMode::Password => "Password field",
             TextShortcutsProofMode::Dismiss => "Type omw, then press Escape",
         }));
@@ -3133,6 +3138,16 @@ mod tests {
             ),
             Some(StandaloneTarget::TextShortcutsProof(
                 TextShortcutsProofMode::Password
+            ))
+        );
+        assert_eq!(
+            standalone_target_from_args(
+                ["--text-shortcuts-proof", "passthrough"]
+                    .map(String::from)
+                    .into_iter()
+            ),
+            Some(StandaloneTarget::TextShortcutsProof(
+                TextShortcutsProofMode::Passthrough
             ))
         );
         assert_eq!(

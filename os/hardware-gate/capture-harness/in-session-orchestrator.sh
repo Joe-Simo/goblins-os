@@ -158,13 +158,14 @@ text_shortcuts_live_keystroke_proof(){
   local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/goblins-os"
   local table_file="$config_dir/text-shortcuts.json"
   local normal_file=/tmp/gate-text-shortcuts-normal.txt
+  local passthrough_file=/tmp/gate-text-shortcuts-passthrough.txt
   local password_file=/tmp/gate-text-shortcuts-password.txt
   local dismiss_file=/tmp/gate-text-shortcuts-dismiss.txt
-  local normal_actual password_actual dismiss_actual normal_pid password_pid dismiss_pid active_engine
+  local normal_actual passthrough_actual password_actual dismiss_actual normal_pid passthrough_pid password_pid dismiss_pid active_engine
 
   mkdir -p "$config_dir"
   printf '[{"replace":"omw","with":"onmyway"}]\n' > "$table_file"
-  rm -f "$normal_file" "$password_file" "$dismiss_file"
+  rm -f "$normal_file" "$passthrough_file" "$password_file" "$dismiss_file"
 
   pkill -f goblins-textshortcuts-ibus 2>/dev/null || true
   pkill -f goblins-textshortcuts-engine 2>/dev/null || true
@@ -196,6 +197,26 @@ text_shortcuts_live_keystroke_proof(){
   wait "$normal_pid" 2>/dev/null || true
   if [ "$normal_actual" != "onmyway." ]; then
     proof_text_shortcuts_live "status=fail&stage=normal-readback&input_driver=wtype&active_engine=goblins-textshortcuts&normal_expected=onmyway.&normal_actual=${normal_actual:-missing}"
+    return 1
+  fi
+
+  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$passthrough_file" "$B/goblins-os-shell" --text-shortcuts-proof passthrough >/tmp/gate-text-shortcuts-passthrough.log 2>&1 &
+  passthrough_pid=$!
+  sleep 4
+  if ! wtype -- "hello." >/dev/null 2>&1; then
+    kill "$passthrough_pid" 2>/dev/null || true
+    proof_text_shortcuts_live "status=fail&stage=passthrough-wtype&input_driver=wtype&active_engine=goblins-textshortcuts&passthrough_input=hello."
+    return 1
+  fi
+  for _ in $(seq 1 20); do
+    passthrough_actual="$(cat "$passthrough_file" 2>/dev/null || true)"
+    [ "$passthrough_actual" = "hello." ] && break
+    sleep 0.5
+  done
+  kill "$passthrough_pid" 2>/dev/null || true
+  wait "$passthrough_pid" 2>/dev/null || true
+  if [ "$passthrough_actual" != "hello." ]; then
+    proof_text_shortcuts_live "status=fail&stage=passthrough-readback&input_driver=wtype&active_engine=goblins-textshortcuts&passthrough_expected=hello.&passthrough_actual=${passthrough_actual:-missing}&passthrough_unchanged=false"
     return 1
   fi
 
@@ -245,7 +266,7 @@ text_shortcuts_live_keystroke_proof(){
     return 1
   fi
 
-  proof_text_shortcuts_live "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-proof&input_driver=wtype&active_engine=goblins-textshortcuts&normal_trigger=omw.&normal_expected=onmyway.&normal_actual=onmyway.&dismiss_trigger=omw&dismiss_key=Escape&dismiss_expected=omw&dismiss_actual=omw&dismiss_no_commit=true&password_expected=omw.&password_actual=omw.&password_refusal=true&runtime_ready_claim=false"
+  proof_text_shortcuts_live "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-proof&input_driver=wtype&active_engine=goblins-textshortcuts&normal_trigger=omw.&normal_expected=onmyway.&normal_actual=onmyway.&passthrough_input=hello.&passthrough_expected=hello.&passthrough_actual=hello.&passthrough_unchanged=true&dismiss_trigger=omw&dismiss_key=Escape&dismiss_expected=omw&dismiss_actual=omw&dismiss_no_commit=true&password_expected=omw.&password_actual=omw.&password_refusal=true&runtime_ready_claim=false"
   return 0
 }
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)

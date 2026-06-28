@@ -46,8 +46,8 @@ hardware run").
    engine, adapter self-test, and core runtime-honesty signal in place. The live
    Text Shortcuts keystroke proof writes
    `text-shortcuts-live-keystroke-proof.json` after driving a focused GTK Entry
-   with `wtype`; it must observe normal expansion, Escape dismiss without a
-   replacement commit, and password-field refusal.
+   with `wtype`; it must observe normal expansion, unknown-word pass-through,
+   Escape dismiss without a replacement commit, and password-field refusal.
 7. The host writes `proof-manifest.json` (architecture, iso path, iso_sha256,
    captured_at, screenshot_run_dir, firewall proof filename, Text Shortcuts
    session proof filename, Text Shortcuts live keystroke proof filename) and runs

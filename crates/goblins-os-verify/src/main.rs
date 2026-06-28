@@ -9014,6 +9014,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-migration-preference-plan-route",
+            "/v1/migration/preference-plan",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-migration-copy-plan-route",
             "/v1/migration/copy-plan",
         ),
@@ -9086,6 +9091,51 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/migration.rs"),
             "core-migration-progress-no-live-copy-claim",
             "executes_live_copy: false",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-preference-plan-builder",
+            "build_migration_preference_plan",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-preference-plan-copy",
+            "Migration preference import plan is ready. No preferences were written by this source substrate.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-preference-dconf-parser",
+            "parse_dconf_dump",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-preference-allowlist",
+            "migration_preference_target",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-preference-unknown-skip",
+            "Preference is not in the Goblins OS migration allowlist.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-preference-wallpaper-copy-evidence",
+            "wallpaper_destination_uri_from_copied_paths",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-preference-wallpaper-skip",
+            "Wallpaper file was not present in the copied-path evidence.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-preference-schema-gate",
+            "available_schemas: Option<Vec<String>>",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/migration.rs"),
+            "core-migration-preference-no-live-import-claim",
+            "executes_preference_import: false",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),

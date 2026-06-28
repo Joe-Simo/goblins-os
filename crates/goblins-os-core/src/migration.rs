@@ -15,7 +15,11 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use crate::install_targets::{scan_migration_source_partitions, MigrationSourcePartitionProbe};
+use crate::{
+    accessibility::normalized_text_scale,
+    appearance::normalize_color_scheme,
+    install_targets::{scan_migration_source_partitions, MigrationSourcePartitionProbe},
+};
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +70,8 @@ const MIGRATION_LEDGER_DIR: &str = ".local/share/goblins-os/migration";
 const MAX_ESTIMATE_ENTRIES: u64 = 250_000;
 const MIGRATION_COPY_EXECUTION_BLOCKED: &str =
     "Live migration copy execution is CI/qemu-gated; this source substrate did not run rsync.";
+const INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
+const BACKGROUND_SCHEMA: &str = "org.gnome.desktop.background";
 
 #[derive(Clone, Copy)]
 struct MigrationCategorySpec {
@@ -157,6 +163,15 @@ pub struct MigrationStartRequest {
     execute: Option<bool>,
 }
 
+#[derive(Deserialize)]
+pub struct MigrationPreferencePlanRequest {
+    source_root: String,
+    destination_home: String,
+    dconf_dump: String,
+    copied_paths: Vec<String>,
+    available_schemas: Option<Vec<String>>,
+}
+
 #[derive(Serialize)]
 pub struct MigrationCopyPlanOutcome {
     ok: bool,
@@ -181,6 +196,13 @@ pub struct MigrationStartOutcome {
 }
 
 #[derive(Serialize)]
+pub struct MigrationPreferencePlanOutcome {
+    ok: bool,
+    text: String,
+    plan: Option<MigrationPreferencePlan>,
+}
+
+#[derive(Serialize)]
 pub struct MigrationCopyPlan {
     source_root: String,
     destination_home: String,
@@ -191,6 +213,30 @@ pub struct MigrationCopyPlan {
     skipped_ledger: String,
     allowlisted_preferences: Vec<&'static str>,
     executes_live_copy: bool,
+}
+
+#[derive(Serialize)]
+pub struct MigrationPreferencePlan {
+    source_root: String,
+    destination_home: String,
+    writes: Vec<MigrationPreferenceWritePlan>,
+    skipped: Vec<MigrationPreferenceSkip>,
+    executes_preference_import: bool,
+}
+
+#[derive(Serialize)]
+pub struct MigrationPreferenceWritePlan {
+    id: &'static str,
+    schema: &'static str,
+    key: &'static str,
+    value: String,
+    gsettings_argv: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MigrationPreferenceSkip {
+    path: String,
+    reason: String,
 }
 
 #[derive(Serialize)]
@@ -346,6 +392,29 @@ pub async fn migration_progress() -> Json<MigrationCopyProgress> {
     Json(refresh_migration_copy_progress_from_logs(
         current_migration_copy_progress(),
     ))
+}
+
+pub async fn migration_preference_plan(
+    Json(request): Json<MigrationPreferencePlanRequest>,
+) -> (StatusCode, Json<MigrationPreferencePlanOutcome>) {
+    match build_migration_preference_plan(request) {
+        Ok(plan) => (
+            StatusCode::OK,
+            Json(MigrationPreferencePlanOutcome {
+                ok: true,
+                text: "Migration preference import plan is ready. No preferences were written by this source substrate.".to_string(),
+                plan: Some(plan),
+            }),
+        ),
+        Err(text) => (
+            StatusCode::BAD_REQUEST,
+            Json(MigrationPreferencePlanOutcome {
+                ok: false,
+                text,
+                plan: None,
+            }),
+        ),
+    }
 }
 
 fn current_migration_copy_progress() -> MigrationCopyProgress {
@@ -581,6 +650,452 @@ fn parse_migration_ledger_counts(lines: &[&str]) -> (u64, u64) {
 
 fn count_migration_skipped_ledger_entries(lines: &[&str]) -> u64 {
     lines.iter().filter(|line| !line.trim().is_empty()).count() as u64
+}
+
+#[derive(Clone)]
+struct DconfEntry {
+    section: String,
+    key: String,
+    value: String,
+}
+
+fn build_migration_preference_plan(
+    request: MigrationPreferencePlanRequest,
+) -> Result<MigrationPreferencePlan, String> {
+    let source_root = normalize_absolute_dir(&request.source_root, "source root")?;
+    let destination_home = normalize_absolute_dir(&request.destination_home, "destination home")?;
+    let schema_gate = request.available_schemas.as_ref().map(|schemas| {
+        schemas
+            .iter()
+            .map(|schema| schema.trim())
+            .collect::<Vec<_>>()
+    });
+    let (entries, mut skipped) = parse_dconf_dump(&request.dconf_dump);
+    let mut writes = Vec::new();
+    let mut last_by_path = BTreeMap::new();
+    for entry in entries {
+        last_by_path.insert(dconf_entry_path(&entry.section, &entry.key), entry);
+    }
+
+    for (path, entry) in last_by_path {
+        match plan_migration_preference(
+            &source_root,
+            &destination_home,
+            &request.copied_paths,
+            schema_gate.as_deref(),
+            &path,
+            &entry,
+        ) {
+            PreferencePlanDecision::Write(write) => writes.push(write),
+            PreferencePlanDecision::Skip(skip) => skipped.push(skip),
+        }
+    }
+
+    Ok(MigrationPreferencePlan {
+        source_root,
+        destination_home,
+        writes,
+        skipped,
+        executes_preference_import: false,
+    })
+}
+
+enum PreferencePlanDecision {
+    Write(MigrationPreferenceWritePlan),
+    Skip(MigrationPreferenceSkip),
+}
+
+fn plan_migration_preference(
+    source_root: &str,
+    destination_home: &str,
+    copied_paths: &[String],
+    available_schemas: Option<&[&str]>,
+    path: &str,
+    entry: &DconfEntry,
+) -> PreferencePlanDecision {
+    let Some((schema, key)) = migration_preference_target(&entry.section, &entry.key) else {
+        return PreferencePlanDecision::Skip(MigrationPreferenceSkip {
+            path: path.to_string(),
+            reason: "Preference is not in the Goblins OS migration allowlist.".to_string(),
+        });
+    };
+    if let Some(schemas) = available_schemas {
+        if !schemas.contains(&schema) {
+            return PreferencePlanDecision::Skip(MigrationPreferenceSkip {
+                path: path.to_string(),
+                reason: format!("Schema {schema} is not available in this session."),
+            });
+        }
+    }
+
+    match (schema, key) {
+        (INTERFACE_SCHEMA, "color-scheme") => {
+            let normalized = normalize_color_scheme(entry.value.trim().trim_matches('\''));
+            if normalized == "invalid" {
+                return PreferencePlanDecision::Skip(MigrationPreferenceSkip {
+                    path: path.to_string(),
+                    reason: "Color scheme value is not supported.".to_string(),
+                });
+            }
+            PreferencePlanDecision::Write(migration_preference_write(
+                "color-scheme",
+                schema,
+                key,
+                normalized.to_string(),
+                normalized.to_string(),
+            ))
+        }
+        (INTERFACE_SCHEMA, "text-scaling-factor") => {
+            let Ok(scale) = entry.value.trim().parse::<f64>() else {
+                return PreferencePlanDecision::Skip(MigrationPreferenceSkip {
+                    path: path.to_string(),
+                    reason: "Text scaling factor is not a number.".to_string(),
+                });
+            };
+            let normalized = normalized_text_scale(scale);
+            let value = format_gsettings_f64(normalized);
+            PreferencePlanDecision::Write(migration_preference_write(
+                "text-scaling-factor",
+                schema,
+                key,
+                value.clone(),
+                value,
+            ))
+        }
+        (INTERFACE_SCHEMA, "enable-animations") => {
+            let Some(enabled) = parse_dconf_bool(&entry.value) else {
+                return PreferencePlanDecision::Skip(MigrationPreferenceSkip {
+                    path: path.to_string(),
+                    reason: "Animation preference is not a boolean.".to_string(),
+                });
+            };
+            let value = enabled.to_string();
+            PreferencePlanDecision::Write(migration_preference_write(
+                "enable-animations",
+                schema,
+                key,
+                value.clone(),
+                value,
+            ))
+        }
+        (BACKGROUND_SCHEMA, "picture-uri" | "picture-uri-dark") => {
+            let Some(uri) = parse_dconf_string(&entry.value) else {
+                return PreferencePlanDecision::Skip(MigrationPreferenceSkip {
+                    path: path.to_string(),
+                    reason: "Wallpaper URI is not a string.".to_string(),
+                });
+            };
+            let Some(destination_uri) = wallpaper_destination_uri_from_copied_paths(
+                source_root,
+                destination_home,
+                copied_paths,
+                &uri,
+            ) else {
+                return PreferencePlanDecision::Skip(MigrationPreferenceSkip {
+                    path: path.to_string(),
+                    reason: "Wallpaper file was not present in the copied-path evidence."
+                        .to_string(),
+                });
+            };
+            PreferencePlanDecision::Write(migration_preference_write(
+                "background-picture-uri",
+                schema,
+                key,
+                destination_uri.clone(),
+                quote_gvariant_string(&destination_uri),
+            ))
+        }
+        _ => PreferencePlanDecision::Skip(MigrationPreferenceSkip {
+            path: path.to_string(),
+            reason: "Preference is not in the Goblins OS migration allowlist.".to_string(),
+        }),
+    }
+}
+
+fn migration_preference_target(section: &str, key: &str) -> Option<(&'static str, &'static str)> {
+    match (section.trim_matches('/'), key.trim()) {
+        ("org/gnome/desktop/interface", "color-scheme") => Some((INTERFACE_SCHEMA, "color-scheme")),
+        ("org/gnome/desktop/interface", "text-scaling-factor") => {
+            Some((INTERFACE_SCHEMA, "text-scaling-factor"))
+        }
+        ("org/gnome/desktop/interface", "enable-animations") => {
+            Some((INTERFACE_SCHEMA, "enable-animations"))
+        }
+        ("org/gnome/desktop/background", "picture-uri") => Some((BACKGROUND_SCHEMA, "picture-uri")),
+        ("org/gnome/desktop/background", "picture-uri-dark") => {
+            Some((BACKGROUND_SCHEMA, "picture-uri-dark"))
+        }
+        _ => None,
+    }
+}
+
+fn migration_preference_write(
+    id: &'static str,
+    schema: &'static str,
+    key: &'static str,
+    value: String,
+    gsettings_value: String,
+) -> MigrationPreferenceWritePlan {
+    MigrationPreferenceWritePlan {
+        id,
+        schema,
+        key,
+        value,
+        gsettings_argv: vec![
+            "gsettings".to_string(),
+            "set".to_string(),
+            schema.to_string(),
+            key.to_string(),
+            gsettings_value,
+        ],
+    }
+}
+
+fn parse_dconf_dump(dump: &str) -> (Vec<DconfEntry>, Vec<MigrationPreferenceSkip>) {
+    let mut section: Option<String> = None;
+    let mut entries = Vec::new();
+    let mut skipped = Vec::new();
+    for (index, line) in dump.lines().enumerate() {
+        let line_no = index + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(raw_section) = trimmed
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+        {
+            if is_valid_dconf_section(raw_section) {
+                section = Some(raw_section.trim_matches('/').to_string());
+            } else {
+                section = None;
+                skipped.push(MigrationPreferenceSkip {
+                    path: format!("line:{line_no}"),
+                    reason: "dconf section is malformed.".to_string(),
+                });
+            }
+            continue;
+        }
+        let Some(current_section) = section.as_ref() else {
+            skipped.push(MigrationPreferenceSkip {
+                path: format!("line:{line_no}"),
+                reason: "dconf key appeared before a section.".to_string(),
+            });
+            continue;
+        };
+        let Some((key, value)) = trimmed.split_once('=') else {
+            skipped.push(MigrationPreferenceSkip {
+                path: format!("line:{line_no}"),
+                reason: "dconf line is not a key=value entry.".to_string(),
+            });
+            continue;
+        };
+        let key = key.trim();
+        if !is_valid_dconf_key(key) {
+            skipped.push(MigrationPreferenceSkip {
+                path: format!("line:{line_no}"),
+                reason: "dconf key is malformed.".to_string(),
+            });
+            continue;
+        }
+        entries.push(DconfEntry {
+            section: current_section.clone(),
+            key: key.to_string(),
+            value: value.trim().to_string(),
+        });
+    }
+    (entries, skipped)
+}
+
+fn is_valid_dconf_section(section: &str) -> bool {
+    let trimmed = section.trim_matches('/');
+    !trimmed.is_empty()
+        && trimmed
+            .split('/')
+            .all(|part| !part.is_empty() && part.chars().all(is_dconf_name_char))
+}
+
+fn is_valid_dconf_key(key: &str) -> bool {
+    !key.is_empty() && key.chars().all(is_dconf_name_char)
+}
+
+fn is_dconf_name_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')
+}
+
+fn dconf_entry_path(section: &str, key: &str) -> String {
+    format!("/{}/{}", section.trim_matches('/'), key)
+}
+
+fn parse_dconf_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let quoted = trimmed
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))?;
+    let mut out = String::new();
+    let mut chars = quoted.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            out.push(chars.next()?);
+        } else {
+            out.push(ch);
+        }
+    }
+    Some(out)
+}
+
+fn parse_dconf_bool(value: &str) -> Option<bool> {
+    match value.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn format_gsettings_f64(value: f64) -> String {
+    let mut formatted = format!("{value:.2}");
+    while formatted.contains('.') && formatted.ends_with('0') {
+        formatted.pop();
+    }
+    if formatted.ends_with('.') {
+        formatted.push('0');
+    }
+    formatted
+}
+
+fn wallpaper_destination_uri_from_copied_paths(
+    source_root: &str,
+    destination_home: &str,
+    copied_paths: &[String],
+    source_uri: &str,
+) -> Option<String> {
+    let source_path = file_uri_to_path(source_uri)?;
+    let relative = wallpaper_relative_path(source_root, destination_home, &source_path)?;
+    if !copied_paths.iter().any(|copied_path| {
+        copied_path_relative(source_root, destination_home, copied_path).as_deref()
+            == Some(relative.as_str())
+    }) {
+        return None;
+    }
+    let destination_path = join_absolute(destination_home, &relative, "");
+    Some(path_to_file_uri(&destination_path))
+}
+
+fn wallpaper_relative_path(
+    source_root: &str,
+    destination_home: &str,
+    path: &str,
+) -> Option<String> {
+    relative_from_root(source_root, path)
+        .or_else(|| relative_from_root(destination_home, path))
+        .or_else(|| relative_from_known_home_dir(path))
+}
+
+fn copied_path_relative(
+    source_root: &str,
+    destination_home: &str,
+    copied_path: &str,
+) -> Option<String> {
+    let trimmed = copied_path.trim();
+    let path = file_uri_to_path(trimmed).unwrap_or_else(|| trimmed.to_string());
+    relative_from_root(source_root, &path)
+        .or_else(|| relative_from_root(destination_home, &path))
+        .or_else(|| normalize_relative_path(&path))
+}
+
+fn relative_from_root(root: &str, path: &str) -> Option<String> {
+    let root = trim_trailing_slashes(root);
+    let path = trim_trailing_slashes(path);
+    let relative = path.strip_prefix(&format!("{root}/"))?;
+    normalize_relative_path(relative)
+}
+
+fn relative_from_known_home_dir(path: &str) -> Option<String> {
+    let components = Path::new(path)
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str().map(ToString::to_string),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let start = components.iter().position(|part| {
+        matches!(
+            part.as_str(),
+            "Desktop" | "Documents" | "Downloads" | "Music" | "Pictures" | "Videos"
+        )
+    })?;
+    normalize_relative_path(&components[start..].join("/"))
+}
+
+fn normalize_relative_path(path: &str) -> Option<String> {
+    let path = Path::new(path.trim());
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(value) => parts.push(value.to_str()?.to_string()),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+fn file_uri_to_path(uri: &str) -> Option<String> {
+    let raw_path = uri.trim().strip_prefix("file://")?;
+    if !raw_path.starts_with('/') {
+        return None;
+    }
+    percent_decode_utf8(raw_path)
+}
+
+fn path_to_file_uri(path: &str) -> String {
+    format!("file://{}", percent_encode_path(path))
+}
+
+fn percent_decode_utf8(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hi = *bytes.get(index + 1)?;
+            let lo = *bytes.get(index + 2)?;
+            out.push(hex_value(hi)? * 16 + hex_value(lo)?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_encode_path(path: &str) -> String {
+    path.as_bytes().iter().fold(String::new(), |mut out, byte| {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'/' | b'-' | b'_' | b'.' | b'~') {
+            out.push(*byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+        out
+    })
+}
+
+fn quote_gvariant_string(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("'{escaped}'")
 }
 
 fn build_migration_sources() -> MigrationSources {
@@ -1203,11 +1718,13 @@ fn driver_present(binary: &str) -> bool {
 mod tests {
     use super::{
         build_migration_capabilities, build_migration_copy_plan, build_migration_estimate,
-        build_migration_sources_from_probes, build_migration_start_response, filesystem_table,
-        migration_progress_from_exit, migration_progress_from_rsync_lines,
-        parse_migration_ledger_counts, parse_rsync_progress_line, partition_mounts_from_mountinfo,
+        build_migration_preference_plan, build_migration_sources_from_probes,
+        build_migration_start_response, filesystem_table, migration_progress_from_exit,
+        migration_progress_from_rsync_lines, parse_migration_ledger_counts,
+        parse_rsync_progress_line, partition_mounts_from_mountinfo,
         refresh_migration_copy_progress_from_logs, MigrationCopyPlanRequest, MigrationCopyProgress,
-        MigrationCopyState, MigrationEstimateRequest, MigrationStartRequest,
+        MigrationCopyState, MigrationEstimateRequest, MigrationPreferencePlanRequest,
+        MigrationStartRequest, BACKGROUND_SCHEMA, INTERFACE_SCHEMA,
         MIGRATION_COPY_EXECUTION_BLOCKED,
     };
     use crate::install_targets::scan_migration_source_partitions_in;
@@ -1533,6 +2050,120 @@ mod tests {
 
         assert_eq!(copied, 1);
         assert_eq!(skipped, 3);
+    }
+
+    #[test]
+    fn migration_preference_plan_maps_allowlisted_dconf_keys_without_writes() {
+        let plan = build_migration_preference_plan(MigrationPreferencePlanRequest {
+            source_root: "/run/media/goblin/Old Home".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            dconf_dump: "[org/gnome/desktop/interface]\ncolor-scheme='prefer-dark'\ntext-scaling-factor=1.123\nenable-animations=false\n\n[org/gnome/desktop/background]\npicture-uri='file:///home/alex/Pictures/Wall%20One.jpg'\n".to_string(),
+            copied_paths: vec!["Pictures/Wall One.jpg".to_string()],
+            available_schemas: Some(vec![
+                INTERFACE_SCHEMA.to_string(),
+                BACKGROUND_SCHEMA.to_string(),
+            ]),
+        })
+        .unwrap();
+
+        assert!(!plan.executes_preference_import);
+        assert_eq!(plan.writes.len(), 4);
+        assert!(plan.skipped.is_empty());
+        assert!(plan
+            .writes
+            .iter()
+            .any(|write| write.key == "color-scheme" && write.value == "prefer-dark"));
+        assert!(plan
+            .writes
+            .iter()
+            .any(|write| write.key == "text-scaling-factor" && write.value == "1.1"));
+        assert!(plan
+            .writes
+            .iter()
+            .any(|write| write.key == "enable-animations" && write.value == "false"));
+        let wallpaper = plan
+            .writes
+            .iter()
+            .find(|write| write.key == "picture-uri")
+            .expect("wallpaper write");
+        assert_eq!(
+            wallpaper.value,
+            "file:///var/home/goblin/Pictures/Wall%20One.jpg"
+        );
+        assert_eq!(
+            wallpaper.gsettings_argv,
+            vec![
+                "gsettings",
+                "set",
+                BACKGROUND_SCHEMA,
+                "picture-uri",
+                "'file:///var/home/goblin/Pictures/Wall%20One.jpg'",
+            ]
+        );
+    }
+
+    #[test]
+    fn migration_preference_plan_skips_unknown_or_malformed_keys() {
+        let plan = build_migration_preference_plan(MigrationPreferencePlanRequest {
+            source_root: "/run/media/goblin/Old Home".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            dconf_dump: "orphan=true\n[org/gnome/desktop/interface]\nclock-format='24h'\ninvalid line\ncolor-scheme='sepia'\n".to_string(),
+            copied_paths: Vec::new(),
+            available_schemas: None,
+        })
+        .unwrap();
+
+        assert!(plan.writes.is_empty());
+        assert!(plan
+            .skipped
+            .iter()
+            .any(|skip| skip.reason.contains("before a section")));
+        assert!(plan.skipped.iter().any(|skip| skip
+            .reason
+            .contains("not in the Goblins OS migration allowlist")));
+        assert!(plan
+            .skipped
+            .iter()
+            .any(|skip| skip.reason.contains("not a key=value")));
+        assert!(plan
+            .skipped
+            .iter()
+            .any(|skip| skip.reason.contains("not supported")));
+    }
+
+    #[test]
+    fn migration_preference_plan_only_sets_wallpaper_when_destination_was_copied() {
+        let plan = build_migration_preference_plan(MigrationPreferencePlanRequest {
+            source_root: "/run/media/goblin/Old Home".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            dconf_dump: "[org/gnome/desktop/background]\npicture-uri='file:///home/alex/Pictures/wall.jpg'\n".to_string(),
+            copied_paths: vec!["Pictures/other.jpg".to_string()],
+            available_schemas: Some(vec![BACKGROUND_SCHEMA.to_string()]),
+        })
+        .unwrap();
+
+        assert!(plan.writes.is_empty());
+        assert_eq!(plan.skipped.len(), 1);
+        assert!(plan.skipped[0].reason.contains("copied-path evidence"));
+    }
+
+    #[test]
+    fn migration_preference_plan_reports_schema_unavailable_as_skipped() {
+        let plan = build_migration_preference_plan(MigrationPreferencePlanRequest {
+            source_root: "/run/media/goblin/Old Home".to_string(),
+            destination_home: "/var/home/goblin".to_string(),
+            dconf_dump: "[org/gnome/desktop/interface]\nenable-animations=true\n".to_string(),
+            copied_paths: Vec::new(),
+            available_schemas: Some(vec![BACKGROUND_SCHEMA.to_string()]),
+        })
+        .unwrap();
+
+        assert!(plan.writes.is_empty());
+        assert_eq!(plan.skipped.len(), 1);
+        assert!(plan.skipped[0]
+            .reason
+            .contains("org.gnome.desktop.interface is not available"));
+        assert!(!plan.executes_preference_import);
     }
 
     #[test]

@@ -422,7 +422,7 @@ fn parse_gsettings_string(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-fn normalize_color_scheme(value: &str) -> &'static str {
+pub(crate) fn normalize_color_scheme(value: &str) -> &'static str {
     match value.trim() {
         "light" | "prefer-light" => "prefer-light",
         "dark" | "prefer-dark" => "prefer-dark",

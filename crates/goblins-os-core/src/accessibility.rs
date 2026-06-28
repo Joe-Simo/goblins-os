@@ -712,7 +712,7 @@ fn accessibility_preference_success_detail(
     }
 }
 
-fn normalized_text_scale(scale: f64) -> f64 {
+pub(crate) fn normalized_text_scale(scale: f64) -> f64 {
     if !scale.is_finite() {
         return 1.0;
     }

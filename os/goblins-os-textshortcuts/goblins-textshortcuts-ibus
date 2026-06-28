@@ -148,6 +148,43 @@ class ShortcutTableBridge:
         return {"type": "table-changed", "shortcuts": shortcuts}
 
 
+def _candidate_metadata_from_response(response: dict[str, Any]) -> dict[str, Any] | None:
+    candidate = response.get("candidate")
+    if not isinstance(candidate, dict):
+        return None
+    replacement = candidate.get("replacement")
+    accept_on = candidate.get("accept_on")
+    dismiss_key = candidate.get("dismiss_key")
+    rendered_bubble_ready_claim = candidate.get("rendered_bubble_ready_claim")
+    if (
+        not isinstance(replacement, str)
+        or not replacement
+        or not isinstance(accept_on, str)
+        or accept_on != "word-boundary"
+        or not isinstance(dismiss_key, str)
+        or dismiss_key != "Escape"
+        or rendered_bubble_ready_claim is not False
+    ):
+        return None
+    return {
+        "replacement": replacement,
+        "accept_on": accept_on,
+        "dismiss_key": dismiss_key,
+        "rendered_bubble_ready_claim": False,
+    }
+
+
+class CandidateMetadataState:
+    def __init__(self) -> None:
+        self.current: dict[str, Any] | None = None
+
+    def observe_response(self, response: dict[str, Any]) -> None:
+        self.current = _candidate_metadata_from_response(response)
+
+    def clear(self) -> None:
+        self.current = None
+
+
 class RuntimeBridge:
     def __init__(
         self,
@@ -270,18 +307,27 @@ def _send_table_changed_if_needed(
     runtime_bridge: RuntimeBridge,
     target: Any,
     text_factory: Callable[[str], Any],
+    candidate_state: CandidateMetadataState | None = None,
 ) -> None:
     request = table_bridge.maybe_changed_request()
     if request is None:
         return
-    _apply_response_operations(target, runtime_bridge.send(request), text_factory)
+    _apply_response_operations(
+        target,
+        runtime_bridge.send(request),
+        text_factory,
+        candidate_state,
+    )
 
 
 def _apply_response_operations(
     target: Any,
     response: dict[str, Any],
     text_factory: Callable[[str], Any],
+    candidate_state: CandidateMetadataState | None = None,
 ) -> None:
+    if candidate_state is not None:
+        candidate_state.observe_response(response)
     operations = response.get("operations", [])
     if not isinstance(operations, list):
         return
@@ -340,6 +386,31 @@ def _run_self_test() -> None:
         "type": "content-purpose-changed",
         "purpose": 9,
     }
+    assert _candidate_metadata_from_response(
+        {
+            "candidate": {
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            }
+        }
+    ) == {
+        "replacement": "on my way",
+        "accept_on": "word-boundary",
+        "dismiss_key": "Escape",
+        "rendered_bubble_ready_claim": False,
+    }
+    assert _candidate_metadata_from_response(
+        {
+            "candidate": {
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": True,
+            }
+        }
+    ) is None
 
     class FakeTarget:
         def __init__(self) -> None:
@@ -373,6 +444,12 @@ def _run_self_test() -> None:
                 {"type": "commit-text", "text": "On my way!"},
                 {"type": "hide-preedit-text"},
             ],
+            "candidate": {
+                "replacement": "On my way!",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            },
         },
         lambda text: text,
     )
@@ -469,16 +546,24 @@ def _run_runtime_self_test() -> None:
             json.dump([{"replace": "omw", "with": "on my way"}], table_file)
 
         target = FakeTarget()
+        candidate_state = CandidateMetadataState()
         table_bridge = ShortcutTableBridge(table_path)
         runtime = RuntimeBridge(response_timeout=CAPABILITY_TIMEOUT_SECONDS)
         try:
-            _send_table_changed_if_needed(table_bridge, runtime, target, lambda text: text)
+            _send_table_changed_if_needed(
+                table_bridge,
+                runtime,
+                target,
+                lambda text: text,
+                candidate_state,
+            )
             for character in "omw":
                 response = runtime.send(_key_protocol_event(character))
                 _apply_response_operations(
                     target,
                     response,
                     lambda text: text,
+                    candidate_state,
                 )
             assert target.calls == [("update", "on my way", 9, True)]
             assert response.get("candidate") == {
@@ -487,13 +572,20 @@ def _run_runtime_self_test() -> None:
                 "dismiss_key": "Escape",
                 "rendered_bubble_ready_claim": False,
             }
+            assert candidate_state.current == {
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            }
             response = runtime.send(_special_key_protocol_event(0xFF1B))
             assert response.get("handled") is True
-            _apply_response_operations(target, response, lambda text: text)
+            _apply_response_operations(target, response, lambda text: text, candidate_state)
             assert target.calls == [
                 ("update", "on my way", 9, True),
                 ("hide",),
             ]
+            assert candidate_state.current is None
 
             target.calls.clear()
             for character in "omw":
@@ -502,27 +594,31 @@ def _run_runtime_self_test() -> None:
                     target,
                     response,
                     lambda text: text,
+                    candidate_state,
                 )
             assert target.calls == [("update", "on my way", 9, True)]
             assert response.get("candidate", {}).get("replacement") == "on my way"
             assert response.get("candidate", {}).get("rendered_bubble_ready_claim") is False
+            assert candidate_state.current is not None
             response = runtime.send(_key_protocol_event(" "))
             assert response.get("handled") is True
-            _apply_response_operations(target, response, lambda text: text)
+            _apply_response_operations(target, response, lambda text: text, candidate_state)
             assert target.calls == [
                 ("update", "on my way", 9, True),
                 ("delete", -3, 3),
                 ("commit", "on my way "),
                 ("hide",),
             ]
+            assert candidate_state.current is None
 
             target.calls.clear()
             runtime.send({"type": "focus-in", "purpose": 9})
             for character in "omw ":
                 response = runtime.send(_key_protocol_event(character))
                 assert response.get("handled") is False
-                _apply_response_operations(target, response, lambda text: text)
+                _apply_response_operations(target, response, lambda text: text, candidate_state)
             assert target.calls == []
+            assert candidate_state.current is None
         finally:
             runtime.close()
 
@@ -540,6 +636,7 @@ def _run_ibus() -> int:
             super().__init__()
             self._bridge = RuntimeBridge()
             self._table = ShortcutTableBridge()
+            self._candidate_state = CandidateMetadataState()
 
         def do_focus_in(self) -> None:
             _send_table_changed_if_needed(
@@ -547,18 +644,39 @@ def _run_ibus() -> int:
                 self._bridge,
                 self,
                 IBus.Text.new_from_string,
+                self._candidate_state,
             )
-            self._bridge.send(_content_purpose_request("focus-in", self._purpose()))
+            _apply_response_operations(
+                self,
+                self._bridge.send(_content_purpose_request("focus-in", self._purpose())),
+                IBus.Text.new_from_string,
+                self._candidate_state,
+            )
 
         def do_focus_out(self) -> None:
-            self._bridge.send({"type": "focus-out"})
+            _apply_response_operations(
+                self,
+                self._bridge.send({"type": "focus-out"}),
+                IBus.Text.new_from_string,
+                self._candidate_state,
+            )
 
         def do_reset(self) -> None:
-            self._bridge.send({"type": "reset"})
+            _apply_response_operations(
+                self,
+                self._bridge.send({"type": "reset"}),
+                IBus.Text.new_from_string,
+                self._candidate_state,
+            )
 
         def do_set_content_type(self, purpose: int, hints: int) -> None:
             del hints
-            self._bridge.send(_content_purpose_request("content-purpose-changed", purpose))
+            _apply_response_operations(
+                self,
+                self._bridge.send(_content_purpose_request("content-purpose-changed", purpose)),
+                IBus.Text.new_from_string,
+                self._candidate_state,
+            )
 
         def do_process_key_event(self, keyval: int, keycode: int, state: int) -> bool:
             del keycode
@@ -567,16 +685,19 @@ def _run_ibus() -> int:
                 self._bridge,
                 self,
                 IBus.Text.new_from_string,
+                self._candidate_state,
             )
             response = self._bridge.send(_key_request(keyval, state, IBus))
             _apply_response_operations(
                 self,
                 response,
                 IBus.Text.new_from_string,
+                self._candidate_state,
             )
             return bool(response.get("handled", False))
 
         def do_destroy(self) -> None:
+            self._candidate_state.clear()
             self._bridge.close()
             super().do_destroy()
 

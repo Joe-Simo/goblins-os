@@ -8941,6 +8941,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-metadata-parser",
+            "def _candidate_metadata_from_response",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-state",
+            "class CandidateMetadataState",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-false-render-claim",
+            "rendered_bubble_ready_claim is not False",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-live-retains-candidate-state",
+            "self._candidate_state = CandidateMetadataState()",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-capability-check",
             "--capability-check",
         ),

@@ -110,6 +110,7 @@ struct SettingsState {
     voice: Option<VoiceStatus>,
     switch_control: Option<SwitchControlStatus>,
     sound_recognition: Option<SoundRecognitionStatus>,
+    live_captions: Option<LiveCaptionsStatus>,
     codex: Option<CodexStatus>,
     appearance: Option<AppearanceStatus>,
     network: Option<NetworkStatus>,
@@ -1086,6 +1087,34 @@ struct SoundRecognitionCategory {
     description: String,
 }
 
+/// Live Captions status from Goblins OS. Settings mirrors readiness only; the
+/// shell Quick Settings toggle owns the overlay enablement until qemu proves the
+/// live capture/transcription loop.
+#[derive(Clone, Deserialize)]
+struct LiveCaptionsStatus {
+    schema_available: bool,
+    enabled: bool,
+    available: bool,
+    active: bool,
+    offline_safe: bool,
+    audio_source: String,
+    text_size: String,
+    position: String,
+    auto_hide: bool,
+    keep_onscreen: bool,
+    stt_runtime: LiveCaptionsCapability,
+    stt_model: LiveCaptionsCapability,
+    pipewire: LiveCaptionsCapability,
+    capture: LiveCaptionsCapability,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct LiveCaptionsCapability {
+    ready: bool,
+    detail: String,
+}
+
 #[derive(Clone, Deserialize)]
 struct WindowManagementStatus {
     #[allow(dead_code)]
@@ -1345,6 +1374,86 @@ fn sound_recognition_state(status: &SoundRecognitionStatus) -> (&'static str, bo
         return ("ready", true);
     }
     ("waiting", false)
+}
+
+fn live_captions_state(status: &LiveCaptionsStatus) -> (&'static str, bool) {
+    if !status.schema_available {
+        return ("unavailable", false);
+    }
+    if status.active {
+        return ("captioning", true);
+    }
+    if !status.enabled {
+        return ("off", false);
+    }
+    if status.available {
+        return ("ready", true);
+    }
+    ("waiting", false)
+}
+
+fn live_captions_status_detail(status: &LiveCaptionsStatus) -> String {
+    let locality = if status.offline_safe {
+        "Captioning stays local."
+    } else {
+        "Captioning locality is not reported by this session."
+    };
+    if status.available {
+        format!("{} {}", status.detail, locality)
+    } else {
+        format!(
+            "{} {} Runtime: {} Model: {} PipeWire: {} Capture: {}",
+            status.detail,
+            locality,
+            status.stt_runtime.detail,
+            status.stt_model.detail,
+            status.pipewire.detail,
+            status.capture.detail
+        )
+    }
+}
+
+fn live_captions_config_detail(status: &LiveCaptionsStatus) -> String {
+    format!(
+        "Source: {}. Size: {}. Position: {}. Auto-hide: {}. Keep on screen: {}. Toggle lives in Quick Settings; Settings mirrors status only until CI/qemu proves the live overlay.",
+        live_captions_audio_source_label(&status.audio_source),
+        live_captions_text_size_label(&status.text_size),
+        live_captions_position_label(&status.position),
+        live_captions_bool_label(status.auto_hide),
+        live_captions_bool_label(status.keep_onscreen)
+    )
+}
+
+fn live_captions_audio_source_label(value: &str) -> &'static str {
+    match value {
+        "microphone" => "microphone",
+        "both" => "system audio and microphone",
+        _ => "system audio",
+    }
+}
+
+fn live_captions_text_size_label(value: &str) -> &'static str {
+    match value {
+        "small" => "small",
+        "large" => "large",
+        _ => "medium",
+    }
+}
+
+fn live_captions_position_label(value: &str) -> &'static str {
+    match value {
+        "top" => "top",
+        "floating" => "floating",
+        _ => "bottom",
+    }
+}
+
+fn live_captions_bool_label(value: bool) -> &'static str {
+    if value {
+        "enabled"
+    } else {
+        "disabled"
+    }
 }
 
 fn sound_recognition_status_detail(status: &SoundRecognitionStatus) -> String {
@@ -3159,6 +3268,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             voice: None,
             switch_control: None,
             sound_recognition: None,
+            live_captions: None,
             codex: None,
             appearance: None,
             network: None,
@@ -3200,6 +3310,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         switch_control: get_core_json(&config.core_url, "/v1/accessibility/switch-control/status")
             .ok(),
         sound_recognition: get_core_json(&config.core_url, "/v1/sound-recognition/status").ok(),
+        live_captions: get_core_json(&config.core_url, "/v1/live-captions/status").ok(),
         codex: get_core_json(&config.core_url, "/v1/codex/status").ok(),
         appearance: get_core_json(&config.core_url, "/v1/appearance/status").ok(),
         network: get_core_json(&config.core_url, "/v1/network/status").ok(),
@@ -7083,6 +7194,7 @@ fn build_accessibility(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_assistive_technology_settings(panel, state);
     append_switch_control_settings(panel, state);
+    append_live_captions_settings(panel, state);
     append_sound_recognition_settings(panel, state);
     append_motion_preference(panel, state);
     append_text_scale_preference(panel, state);
@@ -12573,6 +12685,54 @@ fn append_switch_control_settings(panel: &gtk4::Box, state: &SettingsState) {
         milliseconds_label,
         normalized_switch_debounce_ms,
         move |value| set_switch_control_number(&core_url, "debounce-ms", value),
+    ));
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_live_captions_settings(panel: &gtk4::Box, state: &SettingsState) {
+    panel.append(&label("Live Captions", &["gos-subsection-title"]));
+    let Some(status) = &state.live_captions else {
+        panel.append(&system_row(
+            "Live Captions",
+            "Waiting for Live Captions status.",
+        ));
+        return;
+    };
+
+    let (state_label, ready) = live_captions_state(status);
+    panel.append(&health_row(
+        "Live Captions",
+        state_label,
+        ready,
+        &live_captions_status_detail(status),
+    ));
+    panel.append(&health_row(
+        "Local STT runtime",
+        ready_word(status.stt_runtime.ready),
+        status.stt_runtime.ready,
+        &status.stt_runtime.detail,
+    ));
+    panel.append(&health_row(
+        "Speech model",
+        ready_word(status.stt_model.ready),
+        status.stt_model.ready,
+        &status.stt_model.detail,
+    ));
+    panel.append(&health_row(
+        "PipeWire audio",
+        ready_word(status.pipewire.ready),
+        status.pipewire.ready,
+        &status.pipewire.detail,
+    ));
+    panel.append(&health_row(
+        "Caption capture",
+        ready_word(status.capture.ready),
+        status.capture.ready,
+        &status.capture.detail,
+    ));
+    panel.append(&system_row(
+        "Caption overlay",
+        &live_captions_config_detail(status),
     ));
 }
 
@@ -20829,6 +20989,70 @@ fn test_sound_recognition_status(
 }
 
 #[cfg(test)]
+fn test_live_captions_status(
+    schema_available: bool,
+    enabled: bool,
+    available: bool,
+    active: bool,
+) -> LiveCaptionsStatus {
+    LiveCaptionsStatus {
+        schema_available,
+        enabled,
+        available,
+        active,
+        offline_safe: true,
+        audio_source: "system".to_string(),
+        text_size: "medium".to_string(),
+        position: "bottom".to_string(),
+        auto_hide: false,
+        keep_onscreen: true,
+        stt_runtime: LiveCaptionsCapability {
+            ready: available,
+            detail: if available {
+                "Local Whisper runtime is ready.".to_string()
+            } else {
+                "Local Whisper runtime not found.".to_string()
+            },
+        },
+        stt_model: LiveCaptionsCapability {
+            ready: available,
+            detail: if available {
+                "Speech model is ready.".to_string()
+            } else {
+                "No Whisper model in /var/lib/goblins-os/voice/stt.".to_string()
+            },
+        },
+        pipewire: LiveCaptionsCapability {
+            ready: available,
+            detail: if available {
+                "PipeWire system-audio capture is ready.".to_string()
+            } else {
+                "PipeWire audio routing is not ready in this session.".to_string()
+            },
+        },
+        capture: LiveCaptionsCapability {
+            ready: available,
+            detail: if available {
+                "pw-record capture is ready.".to_string()
+            } else {
+                "pw-record capture is not ready.".to_string()
+            },
+        },
+        detail: if !schema_available {
+            "Live Captions is unavailable here (its preferences schema is not installed)."
+                .to_string()
+        } else if !enabled {
+            "Live Captions is off. Captions stay local and start only after you turn them on."
+                .to_string()
+        } else if active {
+            "Live Captions is ready to caption local audio on this device.".to_string()
+        } else {
+            "Add a speech model to turn on Live Captions, and make sure PipeWire system-audio capture is ready.".to_string()
+        },
+    }
+}
+
+#[cfg(test)]
 fn test_policy_status(profile: &str, locked: bool) -> PolicyStatus {
     PolicyStatus {
         generated_at: "test-generated-at".to_string(),
@@ -24864,6 +25088,31 @@ mod tests {
         assert!(category.contains("Doorbell is selected"));
         assert!(category.contains("on-device only"));
         assert!(category.contains("Do not rely on it in emergencies"));
+    }
+
+    #[test]
+    fn live_captions_copy_stays_local_and_truthful() {
+        let unavailable = super::test_live_captions_status(false, false, false, false);
+        assert_eq!(
+            super::live_captions_state(&unavailable),
+            ("unavailable", false)
+        );
+
+        let off = super::test_live_captions_status(true, false, false, false);
+        assert_eq!(super::live_captions_state(&off), ("off", false));
+        assert!(super::live_captions_status_detail(&off).contains("Captioning stays local"));
+
+        let waiting = super::test_live_captions_status(true, true, false, false);
+        assert_eq!(super::live_captions_state(&waiting), ("waiting", false));
+        let waiting_detail = super::live_captions_status_detail(&waiting);
+        assert!(waiting_detail.contains("Add a speech model"));
+        assert!(waiting_detail.contains("PipeWire"));
+
+        let active = super::test_live_captions_status(true, true, true, true);
+        assert_eq!(super::live_captions_state(&active), ("captioning", true));
+        let config = super::live_captions_config_detail(&active);
+        assert!(config.contains("Quick Settings"));
+        assert!(config.contains("CI/qemu proves the live overlay"));
     }
 
     #[test]

@@ -496,6 +496,20 @@ CI/qemu still must prove the shell extension render, menu/shortcut control,
 system-audio capture, transcription stream, and overlay behavior before Live
 Captions can ship.
 
+Current Live Captions Settings continuation: Settings ▸ Accessibility now
+fetches `/v1/live-captions/status` and renders a read-only Live Captions row
+with runtime/model/PipeWire/capture readiness, local-captioning copy, and the
+explicit boundary that the toggle lives in Quick Settings until CI/qemu proves
+the live overlay. It does not add capture, STT, a package, or a Settings write.
+Local source gates for this Settings row: `cargo test -p goblins-os-settings
+live_captions`, `cargo fmt -p goblins-os-settings -p goblins-os-verify
+--check`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (2036)**, `git diff
+--check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and the Rust
+1.88 GTK container `cargo clippy -p goblins-os-settings --features
+goblins-os-settings/native-desktop -- -D warnings`. GTK render, Quick Settings
+render, live stream, and capture/transcription behavior remain CI/qemu-pending.
+
 Current Visual Look Up continuation: the region-capture card surface is now
 source-gated but not shipped. The new `goblins-os-visual-lookup` crate checks
 `/v1/vision/status` before any capture, requires a loopback local core URL, uses
@@ -1504,6 +1518,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **Status/config substrate shipped** (`crates/goblins-os-core/src/live_captions.rs` + `/v1/live-captions/status`, NEW `org.goblins.shell.extensions.captions` gschema via `os/glib-schemas/`, dconf-seeded off): STT runtime/model/PipeWire/capture capability gates, caption config normalizers (source, text size, position, auto-hide, keep-onscreen), Whisper argv builder, and VAD/RMS segment helpers are pure + host-tested. Live capture/transcription remains CI/qemu-pending.
 - [x] **Overlay + stream contract source-gated (CI/qemu-pending):** `/v1/captions/status` aliases the status substrate and `/v1/captions/stream` returns an honest SSE status event; `goblins-captions@goblins.os` is installed/enabled in the Goblins shell mode but hidden by default through the existing disabled schema. If explicitly enabled before the live engine exists, it shows "Live Captions are waiting for the local caption stream" rather than fake captions. Node syntax, gschema dry-run, host tests, and verifier gates are green; qemu render and live stream remain pending.
 - [x] **Quick Settings toggle source-gated (CI/qemu-pending):** the shell extension registers a GNOME Quick Settings `SystemIndicator`/`QuickToggle` bound to the existing `enabled` key. The toggle exposes only the already-honest waiting overlay; it does not start capture, add an RPM, add a shortcut, or claim live captions.
+- [x] **Settings Live Captions row source-gated (CI/qemu-pending):** Settings ▸ Accessibility fetches `/v1/live-captions/status` and mirrors readiness/configuration in a read-only row. It states captioning stays local, keeps the toggle boundary in Quick Settings, and does not claim live capture/transcription or add a Settings write.
 - [ ] **Live capture/transcribe/menu proof (deferred, L):** implement/prove the privileged capture loop, real transcription stream, rendered Quick Settings control/overlay behavior, and a non-conflicting shortcut if one is added. The feature remains `in-progress`.
 - **Packages:** `whisper-cpp`/`whisper-cpp-devel` exist in Fedora 44 as `1.8.1-2.fc44`, but the current repoquery proof did **not** find a `whisper-cli` binary provider; do not add an RPM or `command -v whisper-cli` gate until the CLI provider is proven. **Do NOT** depend on `whisper-stream` (SDL2, often unpackaged, mic-via-SDL — wrong tool).
 - **gsettings/dconf:** NEW `org.goblins.shell.extensions.captions` (enabled, toggle-captions `['<Super><Alt>c']`, source system|microphone|both, auto-hide, keep-onscreen, text-size, position) + a `30-captions` seed shipping installed-but-off (`enabled=false`).

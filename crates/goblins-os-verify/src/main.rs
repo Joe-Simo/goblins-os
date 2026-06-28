@@ -10423,6 +10423,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-fetches-live-captions-status",
+            "/v1/live-captions/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-live-captions-row",
+            "append_live_captions_settings",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-live-captions-quick-settings-boundary",
+            "Toggle lives in Quick Settings",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-live-captions-local-copy",
+            "Captioning stays local.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-privacy-app-permissions",
             "App permissions",
         ),

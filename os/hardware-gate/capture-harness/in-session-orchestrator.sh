@@ -22,6 +22,7 @@ proof_text_shortcuts(){ curl -s "http://$H/proof/text-shortcuts-session-enable?$
 proof_text_shortcuts_live(){ curl -s "http://$H/proof/text-shortcuts-live-keystroke?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate(){ curl -s "http://$H/proof/text-shortcuts-candidate-metadata?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-overlay-intent?$1" >/dev/null 2>&1 || true; }
+proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-frame?$1" >/dev/null 2>&1 || true; }
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -330,6 +331,61 @@ text_shortcuts_overlay_intent_proof(){
   proof_text_shortcuts_overlay_intent "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-ibus-adapter-overlay-intent&adapter_self_test=pass&show_count=2&hide_count=2&dismissed_reason=true&committed_reason=true&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
   return 0
 }
+text_shortcuts_candidate_bubble_frame_proof(){
+  local frame_file=/tmp/gate-text-shortcuts-candidate-bubble-frame.json
+  local status surface show_count hide_count dismissed_frame committed_frame
+  local replacement accept_on dismiss_key style_class text_style_class hint_style_class
+  local font_family sensitive_refusal rendered_claim live_claim runtime_claim
+
+  rm -f "$frame_file"
+  if ! /usr/libexec/goblins-os/goblins-textshortcuts-ibus --candidate-bubble-frame-self-test > "$frame_file" 2>/tmp/gate-text-shortcuts-candidate-bubble-frame.log; then
+    proof_text_shortcuts_candidate_bubble_frame "status=fail&stage=adapter-candidate-bubble-frame-self-test&surface=goblins-textshortcuts-accept-bubble-frame"
+    return 1
+  fi
+
+  status="$(json_field "$frame_file" status)"
+  surface="$(json_field "$frame_file" surface)"
+  show_count="$(json_field "$frame_file" show_frame_count)"
+  hide_count="$(json_field "$frame_file" hide_frame_count)"
+  dismissed_frame="$(json_field "$frame_file" dismissed_frame)"
+  committed_frame="$(json_field "$frame_file" committed_frame)"
+  replacement="$(json_field "$frame_file" replacement)"
+  accept_on="$(json_field "$frame_file" accept_on)"
+  dismiss_key="$(json_field "$frame_file" dismiss_key)"
+  style_class="$(json_field "$frame_file" style_class)"
+  text_style_class="$(json_field "$frame_file" text_style_class)"
+  hint_style_class="$(json_field "$frame_file" hint_style_class)"
+  font_family="$(json_field "$frame_file" font_family)"
+  sensitive_refusal="$(json_field "$frame_file" sensitive_field_refusal)"
+  rendered_claim="$(json_field "$frame_file" rendered_bubble_ready_claim)"
+  live_claim="$(json_field "$frame_file" live_overlay_claim)"
+  runtime_claim="$(json_field "$frame_file" runtime_ready_claim)"
+  if [ "$status" != "pass" ] \
+    || [ "$surface" != "goblins-textshortcuts-accept-bubble-frame" ] \
+    || [ "$show_count" != "2" ] \
+    || [ "$hide_count" != "2" ] \
+    || [ "$dismissed_frame" != "true" ] \
+    || [ "$committed_frame" != "true" ] \
+    || [ "$replacement" != "on my way" ] \
+    || [ "$accept_on" != "word-boundary" ] \
+    || [ "$dismiss_key" != "Escape" ] \
+    || [ "$style_class" != "gos-text-shortcuts-candidate" ] \
+    || [ "$text_style_class" != "gos-text-shortcuts-candidate-text" ] \
+    || [ "$hint_style_class" != "gos-text-shortcuts-candidate-hint" ] \
+    || [ "$font_family" != "Inter" ] \
+    || [ "$sensitive_refusal" != "true" ] \
+    || [ "$rendered_claim" != "false" ] \
+    || [ "$live_claim" != "false" ] \
+    || [ "$runtime_claim" != "false" ] \
+    || ! grep -Fq '"Space"' "$frame_file" \
+    || ! grep -Fq '"Return"' "$frame_file"; then
+    proof_text_shortcuts_candidate_bubble_frame "status=fail&stage=candidate-bubble-frame-fields&surface=${surface:-missing}&show_frame_count=${show_count:-missing}&hide_frame_count=${hide_count:-missing}&rendered_bubble_ready_claim=${rendered_claim:-missing}&live_overlay_claim=${live_claim:-missing}&runtime_ready_claim=${runtime_claim:-missing}"
+    return 1
+  fi
+
+  proof_text_shortcuts_candidate_bubble_frame "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-accept-bubble-frame&adapter_self_test=pass&show_frame_count=2&hide_frame_count=2&dismissed_frame=true&committed_frame=true&replacement=on%20my%20way&accept_on=word-boundary&accept_keys=Space,Return&dismiss_key=Escape&style_class=gos-text-shortcuts-candidate&text_style_class=gos-text-shortcuts-candidate-text&hint_style_class=gos-text-shortcuts-candidate-hint&font_family=Inter&sensitive_field_refusal=true&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
+  return 0
+}
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication
 # is single-instance, so relaunching the same binary (e.g. the installer with a new
@@ -348,6 +404,7 @@ text_shortcuts_session_enable_proof || true
 text_shortcuts_live_keystroke_proof || true
 text_shortcuts_candidate_metadata_proof || true
 text_shortcuts_overlay_intent_proof || true
+text_shortcuts_candidate_bubble_frame_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
 FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device

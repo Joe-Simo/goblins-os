@@ -135,6 +135,7 @@ TEXT_SHORTCUTS_PROOF="$RUN_DIR/text-shortcuts-session-enable-proof.json"
 TEXT_SHORTCUTS_LIVE_PROOF="$RUN_DIR/text-shortcuts-live-keystroke-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_PROOF="$RUN_DIR/text-shortcuts-candidate-metadata-proof.json"
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="$RUN_DIR/text-shortcuts-overlay-intent-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-frame-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
@@ -205,6 +206,28 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF" \
   echo "HONESTY GUARD: missing or failing Text Shortcuts overlay-intent proof at $TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"
   exit 4
 fi
+if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"surface": "goblins-textshortcuts-accept-bubble-frame"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"adapter_self_test": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"show_frame_count": "2"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"hide_frame_count": "2"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"dismissed_frame": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"committed_frame": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"replacement": "on my way"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"accept_on": "word-boundary"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"accept_keys": "Space,Return"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"dismiss_key": "Escape"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"style_class": "gos-text-shortcuts-candidate"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"text_style_class": "gos-text-shortcuts-candidate-text"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"hint_style_class": "gos-text-shortcuts-candidate-hint"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"font_family": "Inter"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"sensitive_field_refusal": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"rendered_bubble_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"live_overlay_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
+  || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"; then
+  echo "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-frame proof at $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"
+  exit 4
+fi
 
 # HONESTY GUARD: refuse to write a signoff for a run whose surfaces aren't all
 # distinct. GNOME 42+ returns AccessDenied to scripted screenshots (org.gnome.
@@ -237,6 +260,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "text_shortcuts_live_keystroke_proof":"text-shortcuts-live-keystroke-proof.json",
           "text_shortcuts_candidate_metadata_proof":"text-shortcuts-candidate-metadata-proof.json",
           "text_shortcuts_overlay_intent_proof":"text-shortcuts-overlay-intent-proof.json",
+          "text_shortcuts_candidate_bubble_frame_proof":"text-shortcuts-candidate-bubble-frame-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY

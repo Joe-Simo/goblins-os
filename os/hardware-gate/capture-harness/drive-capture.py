@@ -25,6 +25,7 @@ REQUIRED_PROOFS = (
     "text-shortcuts-live-keystroke",
     "text-shortcuts-candidate-metadata",
     "text-shortcuts-overlay-intent",
+    "text-shortcuts-candidate-bubble-frame",
 )
 PROOF_FILENAMES = {
     "firewall-live-toggle": "firewall-live-toggle-proof.json",
@@ -32,6 +33,7 @@ PROOF_FILENAMES = {
     "text-shortcuts-live-keystroke": "text-shortcuts-live-keystroke-proof.json",
     "text-shortcuts-candidate-metadata": "text-shortcuts-candidate-metadata-proof.json",
     "text-shortcuts-overlay-intent": "text-shortcuts-overlay-intent-proof.json",
+    "text-shortcuts-candidate-bubble-frame": "text-shortcuts-candidate-bubble-frame-proof.json",
 }
 
 CMAP = {c: (c, False) for c in "abcdefghijklmnopqrstuvwxyz0123456789"}

@@ -49,6 +49,7 @@ TEXT_SHORTCUTS_SESSION_ENABLE_PROOF="text-shortcuts-session-enable-proof.json"
 TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF="text-shortcuts-live-keystroke-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof.json"
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
 
 check() {
   local label="$1"
@@ -218,6 +219,7 @@ screenshot_run_is_complete() {
   text_shortcuts_live_keystroke_proof_passes "$run_dir/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF" || return 1
   text_shortcuts_candidate_metadata_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF" || return 1
   text_shortcuts_overlay_intent_proof_passes "$run_dir/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF" || return 1
+  text_shortcuts_candidate_bubble_frame_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" || return 1
   return 0
 }
 
@@ -266,7 +268,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_session_enable_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_live_keystroke_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_metadata_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"'"' "$manifest" \
-    && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest"
+    && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest" \
+    && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -366,6 +369,32 @@ text_shortcuts_overlay_intent_proof_passes() {
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
 }
 
+text_shortcuts_candidate_bubble_frame_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-accept-bubble-frame"' "$proof" \
+    && rg -q '"adapter_self_test"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"show_frame_count"[[:space:]]*:[[:space:]]*"2"' "$proof" \
+    && rg -q '"hide_frame_count"[[:space:]]*:[[:space:]]*"2"' "$proof" \
+    && rg -q '"dismissed_frame"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"committed_frame"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"replacement"[[:space:]]*:[[:space:]]*"on my way"' "$proof" \
+    && rg -q '"accept_on"[[:space:]]*:[[:space:]]*"word-boundary"' "$proof" \
+    && rg -q '"accept_keys"[[:space:]]*:[[:space:]]*"Space,Return"' "$proof" \
+    && rg -q '"dismiss_key"[[:space:]]*:[[:space:]]*"Escape"' "$proof" \
+    && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
+    && rg -q '"text_style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate-text"' "$proof" \
+    && rg -q '"hint_style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate-hint"' "$proof" \
+    && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
+    && rg -q '"sensitive_field_refusal"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+}
+
 print_missing_screenshot_paths() {
   local run_dir="$1"
   local missing=0
@@ -398,6 +427,10 @@ print_missing_screenshot_paths() {
   fi
   if ! text_shortcuts_overlay_intent_proof_passes "$run_dir/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"; then
     echo "  $run_dir/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"
+    missing=1
+  fi
+  if ! text_shortcuts_candidate_bubble_frame_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"; then
+    echo "  $run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"
     missing=1
   fi
   return "$missing"
@@ -510,6 +543,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF (missing or Text Shortcuts overlay-intent proof failed)"
     missing=1
   fi
+  if text_shortcuts_candidate_bubble_frame_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"; then
+    echo "[PASS] $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"
+  else
+    echo "[FAIL] $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF (missing or Text Shortcuts candidate-bubble-frame proof failed)"
+    missing=1
+  fi
   return "$missing"
 }
 
@@ -557,6 +596,7 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF
 EOF
 }
 
@@ -611,6 +651,7 @@ signoff_block_required_proof_is_complete() {
   signoff_block_contains "$block" "^- Text Shortcuts live keystrokes checked: yes" || return 1
   signoff_block_contains "$block" "^- Text Shortcuts candidate metadata checked: yes" || return 1
   signoff_block_contains "$block" "^- Text Shortcuts overlay intent checked: yes" || return 1
+  signoff_block_contains "$block" "^- Text Shortcuts candidate bubble frame checked: yes" || return 1
   signoff_block_contains "$block" "^- Gaming readiness checked: yes" || return 1
   signoff_block_contains "$block" "^- Install storage/bootloader/dual-boot checked: yes" || return 1
   return 0
@@ -803,11 +844,11 @@ check "sound recognition decision contract is source-gated" "rg -q 'evaluate_sou
 check "live captions overlay is source-gated" "rg -q '/v1/captions/stream' crates/goblins-os-core/src/main.rs && rg -q 'text/event-stream' crates/goblins-os-core/src/live_captions.rs && test -f os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js && rg -q 'waiting for the local caption stream' os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js && rg -q 'font-family: \"Inter\"' os/gnome-shell-extensions/goblins-captions@goblins.os/stylesheet.css && rg -q 'goblins-captions@goblins.os' os/gnome-shell-modes/goblins-os.json"
 check "settings live captions row is source-gated" "rg -q '/v1/live-captions/status' crates/goblins-os-settings/src/main.rs && rg -q 'append_live_captions_settings' crates/goblins-os-settings/src/main.rs && rg -q 'Toggle lives in Quick Settings' crates/goblins-os-settings/src/main.rs && rg -q 'Captioning stays local.' crates/goblins-os-settings/src/main.rs"
 check "preview viewer packages and defaults are source-gated" "rg -q 'papers' os/bootc/Containerfile && rg -q 'loupe' os/bootc/Containerfile && rg -q 'command -v papers' os/bootc/Containerfile && rg -q 'command -v loupe' os/bootc/Containerfile && test -f os/applications/mimeapps.list && rg -q 'application/pdf=org.gnome.Papers.desktop' os/applications/mimeapps.list && rg -q 'image/png=org.gnome.Loupe.desktop' os/applications/mimeapps.list && rg -q 'image/jpeg=org.gnome.Loupe.desktop' os/applications/mimeapps.list"
-check "preview open substrate is source-gated" "rg -q '/v1/preview/status' crates/goblins-os-core/src/main.rs && rg -q '/v1/preview/open' crates/goblins-os-core/src/main.rs && rg -q 'Command::new(\"xdg-open\")' crates/goblins-os-core/src/preview.rs && rg -q 'Papers for PDFs and Loupe for images' crates/goblins-os-core/src/preview.rs && rg -q 'It never reads file contents or claims rendered proof.' crates/goblins-os-core/src/preview.rs"
+check "preview open substrate is source-gated" "rg -q '/v1/preview/status' crates/goblins-os-core/src/main.rs && rg -q '/v1/preview/open' crates/goblins-os-core/src/main.rs && rg -Fq 'Command::new(\"xdg-open\")' crates/goblins-os-core/src/preview.rs && rg -q 'Papers for PDFs and Loupe for images' crates/goblins-os-core/src/preview.rs && rg -q 'It never reads file contents or claims rendered proof.' crates/goblins-os-core/src/preview.rs"
 check "fingerprint unlock substrate is source-gated" "rg -q '/v1/fingerprint/status' crates/goblins-os-core/src/main.rs && rg -q 'authselect_has_fingerprint' crates/goblins-os-core/src/fingerprint.rs && rg -q 'net.reactivated.Fprint.service' crates/goblins-os-core/src/fingerprint.rs && rg -q 'password remains available' crates/goblins-os-core/src/fingerprint.rs && rg -q 'authselect enable-feature with-fingerprint' os/bootc/Containerfile && rg -q 'pam_fprintd.so' os/bootc/Containerfile && rg -q 'fprintd-pam' os/bootc/Containerfile && rg -q 'Fingerprint unlock' crates/goblins-os-settings/src/main.rs"
 check "keychain collection metadata is source-gated" "rg -q '/v1/keychain/collections' crates/goblins-os-core/src/main.rs crates/goblins-os-settings/src/main.rs && rg -q 'org.freedesktop.Secret.Service' crates/goblins-os-core/src/keychain.rs && rg -q 'Secret values are never returned by Goblins OS' crates/goblins-os-core/src/keychain.rs && rg -q 'Secret values are never displayed in Settings' crates/goblins-os-settings/src/main.rs && ! rg -q 'GetSecrets' crates/goblins-os-core/src/keychain.rs"
-check "personal hotspot write substrate is source-gated" "rg -q '/v1/hotspot/enabled' crates/goblins-os-core/src/main.rs && rg -q 'policy_state_for_control(\"settings-control\")' crates/goblins-os-core/src/hotspot.rs && rg -q 'dnsmasq_present' crates/goblins-os-core/src/hotspot.rs && rg -q 'Connect to the internet over Ethernet to share it over Wi-Fi.' crates/goblins-os-core/src/hotspot.rs && rg -q 'sanitize_hotspot_error' crates/goblins-os-core/src/hotspot.rs && rg -q 'dnsmasq' os/bootc/Containerfile && rg -q 'command -v dnsmasq' os/bootc/Containerfile && rg -q 'append_hotspot_management' crates/goblins-os-settings/src/main.rs && rg -q 'hotspot_settings_inputs' crates/goblins-os-settings/src/main.rs && rg -q 'Passwords are used once to configure the hotspot and are never shown here.' crates/goblins-os-settings/src/main.rs && rg -q 'connected_clients_known' crates/goblins-os-core/src/hotspot.rs && rg -q 'parse_dnsmasq_leases' crates/goblins-os-core/src/hotspot.rs && rg -q 'Connected devices' crates/goblins-os-settings/src/main.rs"
-check "switch control overlay is source-gated" "test -f os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q \"const SCHEMA_ID = 'org.goblins.os.a11y.switch-control';\" os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q \"import('gi://Atspi')\" os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'This window has no scannable controls - using point scan.' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'Point selection needs live qemu proof before pointer injection is enabled.' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'font-family: \"Inter\"' os/gnome-shell-extensions/goblins-switch@goblins.os/stylesheet.css && rg -q 'goblins-switch@goblins.os' os/gnome-shell-modes/goblins-os.json && rg -q 'goblins-switch@goblins.os' os/dconf/db/local.d/10-goblins-os-desktop"
+check "personal hotspot write substrate is source-gated" "rg -q '/v1/hotspot/enabled' crates/goblins-os-core/src/main.rs && rg -Fq 'policy_state_for_control(\"settings-control\")' crates/goblins-os-core/src/hotspot.rs && rg -q 'dnsmasq_present' crates/goblins-os-core/src/hotspot.rs && rg -q 'Connect to the internet over Ethernet to share it over Wi-Fi.' crates/goblins-os-core/src/hotspot.rs && rg -q 'sanitize_hotspot_error' crates/goblins-os-core/src/hotspot.rs && rg -q 'dnsmasq' os/bootc/Containerfile && rg -q 'command -v dnsmasq' os/bootc/Containerfile && rg -q 'append_hotspot_management' crates/goblins-os-settings/src/main.rs && rg -q 'hotspot_settings_inputs' crates/goblins-os-settings/src/main.rs && rg -q 'Passwords are used once to configure the hotspot and are never shown here.' crates/goblins-os-settings/src/main.rs && rg -q 'connected_clients_known' crates/goblins-os-core/src/hotspot.rs && rg -q 'parse_dnsmasq_leases' crates/goblins-os-core/src/hotspot.rs && rg -q 'Connected devices' crates/goblins-os-settings/src/main.rs"
+check "switch control overlay is source-gated" "test -f os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q \"const SCHEMA_ID = 'org.goblins.os.a11y.switch-control';\" os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -Fq \"import('gi://Atspi')\" os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'This window has no scannable controls - using point scan.' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'Point selection needs live qemu proof before pointer injection is enabled.' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'font-family: \"Inter\"' os/gnome-shell-extensions/goblins-switch@goblins.os/stylesheet.css && rg -q 'goblins-switch@goblins.os' os/gnome-shell-modes/goblins-os.json && rg -q 'goblins-switch@goblins.os' os/dconf/db/local.d/10-goblins-os-desktop"
 check "switch control desktop render hook is source-gated" "rg -q 'showPointScanDemo' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q '57-switch-control-point-\$suffix.png' os/bootc/render-desktop.sh && rg -q 'showPointScanDemo' os/bootc/render-desktop.sh"
 check "settings notification AI copy preserves privacy boundary" "rg -q \"only that notification's title, body, app, and chosen action label\" crates/goblins-os-settings/src/main.rs"
 check "launcher search uses native accessible icon" "rg -Fq 'gtk::Image::from_icon_name(\"system-search-symbolic\")' crates/goblins-os-launcher/src/main.rs && rg -q 'Search Goblins OS' crates/goblins-os-launcher/src/main.rs && ! rg -q 'telephone-recorder' crates/goblins-os-launcher/src/main.rs"
@@ -835,7 +876,7 @@ check "Migration preference import plan is source-gated" "rg -q '/v1/migration/p
 check "core Focus exposes arm disarm and tick routes" "rg -q '/v1/focus/activate' crates/goblins-os-core/src/main.rs && rg -q '/v1/focus/deactivate' crates/goblins-os-core/src/main.rs && rg -q '/v1/focus/tick' crates/goblins-os-core/src/main.rs"
 check "core Focus mode and schedule CRUD is source-gated" "rg -q '/v1/focus/mode' crates/goblins-os-core/src/main.rs && rg -q '/v1/focus/schedule' crates/goblins-os-core/src/main.rs && rg -q 'Delete schedules that use this Focus mode before deleting the mode.' crates/goblins-os-core/src/focus.rs && rg -q 'Focus schedules must be saved with a configured mode.' crates/goblins-os-core/src/focus.rs"
 check "settings Focus controls source-gated" "rg -q '/v1/focus/status' crates/goblins-os-settings/src/main.rs && rg -q '/v1/focus/activate' crates/goblins-os-settings/src/main.rs && rg -q '/v1/focus/deactivate' crates/goblins-os-settings/src/main.rs && rg -q 'append_focus_settings' crates/goblins-os-settings/src/main.rs"
-check "menu-bar Focus indicator source-gated" "rg -q 'org.goblins.os.focus' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -q 'changed::active-mode' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -q 'modes.find(entry => entry.id === activeMode)' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -q -- '--panel=notifications' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -q '.goblins-focus-indicator' os/gnome-shell-extensions/goblins-menubar@goblins.os/stylesheet.css"
+check "menu-bar Focus indicator source-gated" "rg -q 'org.goblins.os.focus' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -q 'changed::active-mode' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -Fq 'modes.find(entry => entry.id === activeMode)' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -q -- '--panel=notifications' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -q '.goblins-focus-indicator' os/gnome-shell-extensions/goblins-menubar@goblins.os/stylesheet.css"
 check "control center Focus tile source-gated" "rg -Fq '/v1/focus/status' crates/goblins-os-control-center/src/main.rs && ! rg -Fq '/v1/focus/activate' crates/goblins-os-control-center/src/main.rs && ! rg -Fq '/v1/focus/deactivate' crates/goblins-os-control-center/src/main.rs && rg -Fq -- '--panel=notifications' crates/goblins-os-control-center/src/main.rs && rg -Fq 'status.modes' crates/goblins-os-control-center/src/main.rs && rg -Fq 'No Focus modes are configured yet.' crates/goblins-os-control-center/src/main.rs && rg -Fq 'Focus status is unavailable because Goblins OS core did not respond.' crates/goblins-os-control-center/src/main.rs && rg -Fq 'focus_tile_copy' crates/goblins-os-control-center/src/main.rs"
 check "core Focus snapshots notification banners through bridge" "rg -q 'restore-banners' crates/goblins-os-core/src/focus.rs os/glib-schemas/org.goblins.os.focus.gschema.xml && rg -q 'apply_notification_banners' crates/goblins-os-core/src/focus.rs crates/goblins-os-core/src/notifications.rs && rg -q 'read_notification_banners' crates/goblins-os-core/src/focus.rs crates/goblins-os-core/src/notifications.rs"
 check "Focus schedule timer is source-gated" "test -x os/focus/goblins-os-focus-tick && python3 -m py_compile os/focus/goblins-os-focus-tick && rg -q '/v1/focus/tick' os/focus/goblins-os-focus-tick && rg -q 'core URL must be local HTTP' os/focus/goblins-os-focus-tick && test -f os/systemd-user/org.goblins.OS.FocusTick.service && test -f os/systemd-user/org.goblins.OS.FocusTick.timer && rg -q 'ExecStart=/usr/libexec/goblins-os/goblins-os-focus-tick' os/systemd-user/org.goblins.OS.FocusTick.service && rg -q 'OnCalendar=minutely' os/systemd-user/org.goblins.OS.FocusTick.timer && rg -q 'Wants=org.goblins.OS.FocusTick.timer' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'COPY --chmod=0755 os/focus/goblins-os-focus-tick /usr/libexec/goblins-os/goblins-os-focus-tick' os/bootc/Containerfile && rg -q 'command -v python3' os/bootc/Containerfile && rg -q 'os/focus/' os/release/source-tree-manifest.toml"
@@ -855,6 +896,8 @@ check "capture harness proves Text Shortcuts candidate metadata without live ove
 check "capture driver persists Text Shortcuts candidate metadata proof" "rg -q 'text-shortcuts-candidate-metadata-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-metadata' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate metadata proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts overlay intent without live overlay claim" "rg -q '/proof/text-shortcuts-overlay-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--overlay-intent-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-ibus-adapter-overlay-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'show_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hide_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismissed_reason=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'committed_reason=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts overlay intent proof" "rg -q 'text-shortcuts-overlay-intent-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-overlay-intent' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts overlay-intent proof' os/hardware-gate/capture-harness/run-capture.sh"
+check "capture harness proves Text Shortcuts candidate bubble frame without live render claim" "rg -q '/proof/text-shortcuts-candidate-bubble-frame' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--candidate-bubble-frame-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-accept-bubble-frame' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'show_frame_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hide_frame_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'style_class=gos-text-shortcuts-candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'font_family=Inter' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sensitive_field_refusal=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "capture driver persists Text Shortcuts candidate bubble frame proof" "rg -q 'text-shortcuts-candidate-bubble-frame-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-bubble-frame' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-frame proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "Text Shortcuts accept-bubble frame contract is source-gated" "rg -q -- '--candidate-bubble-frame-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-accept-bubble-frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-candidate-bubble-frame.json' os/bootc/Containerfile && rg -q 'show_frame_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'hide_frame_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'dismissed_frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'committed_frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'sensitive_field_refusal' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'gos-text-shortcuts-candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'rendered_bubble_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'live_overlay_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'runtime_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile"
 check "capture harness prints qemu diagnostics on startup failure" "rg -q 'QEMU startup diagnostics' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'qemu.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'serial.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'last connection error' os/hardware-gate/capture-harness/drive-capture.py"
 check "hardware gate requires live firewall proof in signoff" "rg -q 'firewall_live_toggle_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Firewall live toggle checked' os/hardware-gate/close-signoff.sh && rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/runbook.md"
@@ -862,6 +905,7 @@ check "hardware gate requires Text Shortcuts session proof in signoff" "rg -q 't
 check "hardware gate requires Text Shortcuts live keystroke proof in signoff" "rg -q 'text_shortcuts_live_keystroke_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts live keystrokes checked' os/hardware-gate/close-signoff.sh && rg -q 'text-shortcuts-live-keystroke-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts candidate metadata proof in signoff" "rg -q 'text_shortcuts_candidate_metadata_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate metadata checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-metadata-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts overlay intent proof in signoff" "rg -q 'text_shortcuts_overlay_intent_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts overlay intent checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-overlay-intent-proof.json' os/hardware-gate/runbook.md"
+check "hardware gate requires Text Shortcuts candidate bubble frame proof in signoff" "rg -q 'text_shortcuts_candidate_bubble_frame_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate bubble frame checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-bubble-frame-proof.json' os/hardware-gate/runbook.md"
 check "core AI safe setting route requires policy and confirmation" "rg -Fq 'policy_state_for_control(\"settings-control\")' crates/goblins-os-core/src/ai.rs && rg -q 'StatusCode::PRECONDITION_REQUIRED' crates/goblins-os-core/src/ai.rs && rg -Fq 'audit_ai_action(\"change-safe-setting\"' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route has narrow allowlist" "rg -q 'appearance.color-scheme, accessibility.reduce-motion, or notifications.show-banners' crates/goblins-os-core/src/ai.rs && rg -q 'safe_setting_change_rejects_arbitrary_settings_and_wrong_values' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route reuses settings wrappers" "rg -q 'apply_ai_color_scheme' crates/goblins-os-core/src/appearance.rs && rg -q 'apply_ai_reduce_motion' crates/goblins-os-core/src/accessibility.rs && rg -q 'apply_ai_notification_banners' crates/goblins-os-core/src/notifications.rs"

@@ -5338,6 +5338,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-candidate-bubble-frame-proof",
+            "text-shortcuts-candidate-bubble-frame-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-candidate-no-live-overlay-claim",
             "live_overlay_claim=false",
         ),
@@ -5375,6 +5380,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-textshortcuts-overlay-intent-proof",
             "/proof/text-shortcuts-overlay-intent",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-textshortcuts-candidate-bubble-frame-proof",
+            "/proof/text-shortcuts-candidate-bubble-frame",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5462,6 +5472,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "live_overlay_claim=false",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-runs-textshortcuts-candidate-bubble-frame-self-test",
+            "--candidate-bubble-frame-self-test",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-checks-textshortcuts-candidate-bubble-frame-style",
+            "style_class=gos-text-shortcuts-candidate",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-keeps-textshortcuts-candidate-bubble-render-claim-false",
+            "rendered_bubble_ready_claim=false",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-requires-proof-signals",
             "require_proofs",
@@ -5492,6 +5517,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "text-shortcuts-overlay-intent-proof.json",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-textshortcuts-candidate-bubble-frame-proof-json",
+            "text-shortcuts-candidate-bubble-frame-proof.json",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-firewall-proof",
             "HONESTY GUARD: missing or failing live firewall toggle proof",
@@ -5518,6 +5548,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-frame-proof",
+            "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-frame proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-replacement",
             "\"candidate_replacement\": \"on my way\"",
         ),
@@ -5530,6 +5565,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-overlay-intent-counts",
             "\"show_count\": \"2\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-frame-counts",
+            "\"show_frame_count\": \"2\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-frame-style",
+            "\"style_class\": \"gos-text-shortcuts-candidate\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -5590,6 +5635,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-textshortcuts-overlay-intent-proof",
             "text_shortcuts_overlay_intent_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-textshortcuts-candidate-bubble-frame-proof",
+            "text_shortcuts_candidate_bubble_frame_proof",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -5953,6 +6003,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-textshortcuts-candidate-bubble-frame-proof",
+            "text_shortcuts_candidate_bubble_frame_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-firewall-proof-filename",
             "firewall-live-toggle-proof.json",
         ),
@@ -5970,6 +6025,31 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-textshortcuts-candidate-metadata-proof-filename",
             "text-shortcuts-candidate-metadata-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-textshortcuts-candidate-bubble-frame-proof-filename",
+            "text-shortcuts-candidate-bubble-frame-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-preview-uses-fixed-string-xdg-open-check",
+            r#"rg -Fq 'Command::new(\"xdg-open\")'"#,
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-hotspot-uses-fixed-string-policy-check",
+            r#"rg -Fq 'policy_state_for_control(\"settings-control\")'"#,
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-switch-uses-fixed-string-atspi-check",
+            r#"rg -Fq \"import('gi://Atspi')\""#,
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-focus-uses-fixed-string-mode-check",
+            "rg -Fq 'modes.find(entry => entry.id === activeMode)'",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6158,6 +6238,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-textshortcuts-candidate-bubble-frame-proof",
+            "text_shortcuts_candidate_bubble_frame_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-firewall-live-toggle-proof",
             "Firewall live toggle checked",
         ),
@@ -6180,6 +6265,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-textshortcuts-overlay-intent-proof",
             "Text Shortcuts overlay intent checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-textshortcuts-candidate-bubble-frame-proof",
+            "Text Shortcuts candidate bubble frame checked",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),

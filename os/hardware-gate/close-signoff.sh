@@ -73,6 +73,7 @@ TEXT_SHORTCUTS_SESSION_ENABLE_PROOF="text-shortcuts-session-enable-proof.json"
 TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF="text-shortcuts-live-keystroke-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof.json"
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
 GAMING_SCREENSHOT_STATUS="not checked"
 INSTALL_STORAGE_STATUS="not checked"
 RELEASE_EVIDENCE_STATUS="not checked"
@@ -82,6 +83,7 @@ TEXT_SHORTCUTS_SESSION_STATUS="not checked"
 TEXT_SHORTCUTS_KEYSTROKE_STATUS="not checked"
 TEXT_SHORTCUTS_CANDIDATE_STATUS="not checked"
 TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="not checked"
+TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="not checked"
 RUNTIME_ENGINE_MODE="${RUNTIME_ENGINE_MODE:-}"
 RUNTIME_ENGINE_SOURCE="${RUNTIME_ENGINE_SOURCE:-}"
 RUNTIME_ENGINE_CONFIG="${RUNTIME_ENGINE_CONFIG:-}"
@@ -268,7 +270,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_session_enable_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_live_keystroke_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_metadata_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"'"' "$manifest" \
-    && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest"
+    && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest" \
+    && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -363,6 +366,32 @@ text_shortcuts_overlay_intent_proof_passes() {
     && rg -q '"hide_count"[[:space:]]*:[[:space:]]*"2"' "$proof" \
     && rg -q '"dismissed_reason"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"committed_reason"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+}
+
+text_shortcuts_candidate_bubble_frame_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-accept-bubble-frame"' "$proof" \
+    && rg -q '"adapter_self_test"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"show_frame_count"[[:space:]]*:[[:space:]]*"2"' "$proof" \
+    && rg -q '"hide_frame_count"[[:space:]]*:[[:space:]]*"2"' "$proof" \
+    && rg -q '"dismissed_frame"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"committed_frame"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"replacement"[[:space:]]*:[[:space:]]*"on my way"' "$proof" \
+    && rg -q '"accept_on"[[:space:]]*:[[:space:]]*"word-boundary"' "$proof" \
+    && rg -q '"accept_keys"[[:space:]]*:[[:space:]]*"Space,Return"' "$proof" \
+    && rg -q '"dismiss_key"[[:space:]]*:[[:space:]]*"Escape"' "$proof" \
+    && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
+    && rg -q '"text_style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate-text"' "$proof" \
+    && rg -q '"hint_style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate-hint"' "$proof" \
+    && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
+    && rg -q '"sensitive_field_refusal"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
     && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
@@ -556,7 +585,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! screenshot_manifest_matches_iso "$SCREENSHOT_DIR/proof-manifest.json"; then
     fail "Screenshot proof manifest missing or not tied to this architecture ISO: $SCREENSHOT_DIR/proof-manifest.json"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, and text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF."
+    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, and text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF."
     exit 1
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
@@ -584,12 +613,18 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Expected the installed adapter overlay-intent self-test to record show_count=2, hide_count=2, dismissed and committed hide reasons, and no rendered/live/runtime readiness claims."
     exit 1
   fi
+  if ! text_shortcuts_candidate_bubble_frame_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"; then
+    fail "Text Shortcuts candidate-bubble-frame proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"
+    fail "Expected the installed adapter candidate-bubble-frame self-test to record show/hide frames, style classes, Inter font, sensitive-field refusal, and no rendered/live/runtime readiness claims."
+    exit 1
+  fi
   log "All required screenshot proof PNGs and proof manifest passed."
   log "Firewall live toggle proof passed."
   log "Text Shortcuts session-enable proof passed."
   log "Text Shortcuts live keystroke proof passed."
   log "Text Shortcuts candidate metadata proof passed."
   log "Text Shortcuts overlay-intent proof passed."
+  log "Text Shortcuts candidate-bubble-frame proof passed."
   GAMING_SCREENSHOT_STATUS="yes (screenshots ${GAMING_SCREENSHOTS[*]} present)"
   INSTALL_STORAGE_STATUS="yes (screenshots ${INSTALL_STORAGE_SCREENSHOTS[*]} present)"
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
@@ -598,6 +633,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes ($TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF: normal expansion, pass-through, Escape dismiss, and password refusal via wtype)"
   TEXT_SHORTCUTS_CANDIDATE_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF: candidate metadata present; rendered bubble still gated false)"
   TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="yes ($TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF: adapter show/hide overlay intents present; live overlay still gated false)"
+  TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF: adapter accept-bubble frames present; rendered bubble still gated false)"
 else
   warn "SCREENSHOT_DIR not set; proof screenshot presence check skipped."
 fi
@@ -663,6 +699,7 @@ if [ "$VERIFY_STATUS" = "pass" ] \
   && [[ "$TEXT_SHORTCUTS_KEYSTROKE_STATUS" == yes* ]] \
   && [[ "$TEXT_SHORTCUTS_CANDIDATE_STATUS" == yes* ]] \
   && [[ "$TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS" == yes* ]] \
+  && [[ "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS" == yes* ]] \
   && [ "$ISO_PATH" != "not-found" ] \
   && [ "$ISO_SHA" != "not-found" ] \
   && proof_field_is_real "$RUNTIME_ENGINE_MODE" \
@@ -710,6 +747,7 @@ cat >> "$OUT" <<EOF2
 - Text Shortcuts live keystrokes checked: ${TEXT_SHORTCUTS_KEYSTROKE_STATUS}
 - Text Shortcuts candidate metadata checked: ${TEXT_SHORTCUTS_CANDIDATE_STATUS}
 - Text Shortcuts overlay intent checked: ${TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS}
+- Text Shortcuts candidate bubble frame checked: ${TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS}
 - Gaming readiness checked: ${GAMING_SCREENSHOT_STATUS}
 - Install storage/bootloader/dual-boot checked: ${INSTALL_STORAGE_STATUS}
 - Current project completion status: ${PROJECT_COMPLETION_STATUS}

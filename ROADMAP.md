@@ -1249,6 +1249,20 @@ proof unless it records two show frames, two hide frames, dismissed and committe
 frames, sensitive-field refusal, and false render/live/runtime claims. This is
 still CI/qemu-pending and does **not** prove a live rendered accept bubble.
 
+Current Text Shortcuts accept-bubble frame hardware-proof continuation: the
+display-backed VM capture contract now also requires
+`text-shortcuts-candidate-bubble-frame-proof.json`. The in-session orchestrator
+runs the installed `goblins-textshortcuts-ibus
+--candidate-bubble-frame-self-test`, posts a proof only when the adapter records
+two show frames, two hide frames, dismissed and committed frames, the
+`gos-text-shortcuts-candidate` style contract, Inter font,
+sensitive-field refusal, and keeps `rendered_bubble_ready_claim=false`,
+`live_overlay_claim=false`, and `runtime_ready_claim=false`; `drive-capture.py`,
+`run-capture.sh`, `close-signoff.sh`, `verify-shipping-status.sh`, the runbook,
+and `goblins-os-verify` all require the new artifact. This is still
+CI/qemu-pending and does **not** prove a live rendered accept bubble, focused
+field callback, Wayland text-input-v3 bubble, or mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining

@@ -8567,6 +8567,71 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "gsettings set org.goblins.os.focus active-mode work",
         ),
         contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-today-launches-owned-binary",
+            "/usr/libexec/goblins-os/goblins-os-today",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-today-button-created",
+            "this._today = new PanelMenu.Button(0.0, 'Today', true);",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-today-added-to-panel",
+            "Main.panel.addToStatusArea('goblins-today', this._today, 1, 'right');",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-today-opens-on-click",
+            "_openToday()",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-today-spawns-owned-binary",
+            "_spawn([TODAY]",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-today-uses-local-time",
+            "GLib.DateTime.new_now_local().format",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-today-watches-clock-settings",
+            "changed::clock-format",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-today-cleans-timer",
+            "this._clearTodayClockTimer();",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/stylesheet.css"),
+            "menubar-today-date-style",
+            ".goblins-date-indicator",
+        ),
+        contains_check(
+            root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell-light.css"),
+            "menubar-today-light-mode-recolor",
+            ".goblins-date-indicator { color: #1a1a1f; }",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "menubar-today-desktop-render-proof-hook",
+            "59c-menubar-today-$suffix.png",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "menubar-today-render-seeds-clock-weekday",
+            "gsettings set org.gnome.desktop.interface clock-show-weekday true",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "menubar-today-render-seeds-clock-seconds",
+            "gsettings set org.gnome.desktop.interface clock-show-seconds false",
+        ),
+        contains_check(
             root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell-light.css"),
             "shell-light-overlay-recolors-panel",
             "#panel {",

@@ -652,7 +652,14 @@ theming, honest empty-state copy, and the installed-image render harness capture
 `122-today.png` / `123-today-dark.png` from the installed binary. Web verification
 found Fedora 44 has `gtk4-layer-shell-devel`, but upstream documents GTK4 layer
 shell as unsupported on GNOME Wayland, so this pass intentionally adds no new RPMs
-and does not claim right-edge layer-shell anchoring. Local source gates:
+and does not claim right-edge layer-shell anchoring. Current continuation adds a
+source-gated GNOME Shell menu-bar Today date button: `goblins-menubar` reads the
+stable GNOME clock preferences, formats a local-time label with `GLib.DateTime`,
+opens the installed `/usr/libexec/goblins-os/goblins-os-today` helper on click or
+touch, and cleans up its clock timer/signals on disable. The desktop render
+harness now seeds deterministic clock preferences and captures
+`59c-menubar-today-$suffix.png`; this is screenshot-hook plumbing only and does
+not claim a reviewed qemu render yet. Local source gates:
 `bash -n os/bootc/render-screens.sh os/hardware-gate/verify-shipping-status.sh`,
 `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, `goblins-os-verify --source-root .` →
@@ -660,9 +667,9 @@ and does not claim right-edge layer-shell anchoring. Local source gates:
 `cargo test -p goblins-os-today`, and the Rust 1.88
 GTK container
 `cargo clippy -p goblins-os-today --features goblins-os-today/native-desktop -- -D warnings`.
-CI/qemu still must prove the GTK render, GNOME Shell/menu-bar date entry,
-edge-open behavior, and any future live weather/calendar/brief integrations
-before Today/Widgets can ship.
+CI/qemu still must prove and review the GTK render, GNOME Shell/menu-bar date
+entry screenshot, edge-open behavior, and any future live weather/calendar/brief
+integrations before Today/Widgets can ship.
 
 Current Sound Recognition continuation: the Settings controls + write bridge are
 now source-gated but not shipped. Core exposes
@@ -1747,7 +1754,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 
 ### `in-progress` Desktop Widgets + Today view
 - [x] **Widget registry + layout substrate shipped** (`crates/goblins-os-core/src/today.rs` + `/v1/today/status` + `/v1/today/layout`, NEW `org.goblins.os.today` gschema via `os/glib-schemas/`): the glance-widget registry (each with its honest capability requirement — weather→location, brief→on-device model, calendar→account) and the layout model with pure `normalize_layout` (known-only, dedupe, preserve order) + `parse_gsettings_strv`, unit-tested (195 core tests). Honest-gated to a default layout when the schema is absent. `glib-compile-schemas` clean; clippy/fmt clean; route + schema verify gates.
-- [x] **Today panel surface source-gated (CI/qemu-pending):** the `goblins-os-today` GTK crate reads `/v1/today/status`, renders local Date/Clock cards with real local values, and renders Weather/Calendar/Daily Brief as honest empty states until location services, a calendar account, and a local model are actually available. The app uses shared Goblins UI theming, has a desktop launcher, a dconf seed for the default widget order, is copied into the image, and the render harness now captures `122-today.png` / `123-today-dark.png` from the installed binary. Web verification found `gtk4-layer-shell-devel` in Fedora 44, but upstream documents GTK4 layer shell is unsupported on GNOME Wayland; this source-gated pass therefore does **not** add layer-shell packages or claim right-edge shell anchoring. Menu-bar date button, edge-swipe, live weather/calendar/brief data, and reviewed pixel proof remain CI/qemu-pending.
+- [x] **Today panel surface + menu-bar button source-gated (CI/qemu-pending):** the `goblins-os-today` GTK crate reads `/v1/today/status`, renders local Date/Clock cards with real local values, and renders Weather/Calendar/Daily Brief as honest empty states until location services, a calendar account, and a local model are actually available. The app uses shared Goblins UI theming, has a desktop launcher, a dconf seed for the default widget order, is copied into the image, and the render harness now captures `122-today.png` / `123-today-dark.png` from the installed binary. The `goblins-menubar` shell extension also exposes a local-clock Today date button that launches the installed Today helper, and `render-desktop.sh` now captures `59c-menubar-today-$suffix.png` after seeding deterministic clock preferences. Web verification found `gtk4-layer-shell-devel` in Fedora 44, but upstream documents GTK4 layer shell is unsupported on GNOME Wayland; this source-gated pass therefore does **not** add layer-shell packages or claim right-edge shell anchoring. Edge-swipe, live weather/calendar/brief data, reviewed pixel proof, and any shipped status remain CI/qemu-pending.
 - **Packages:** **none in the source-gated GTK pass**. Do not add `gtk4-layer-shell` to the GNOME path until a GNOME-supported shell/portal strategy is proven. Future live weather/calendar work still needs exact Fedora 44 verification before adding `libgweather4`, `geoclue2`, or EDS packages.
 - **gsettings/dconf:** READ `color-scheme`/`clock-format`/`clock-show-weekday`/`clock-show-seconds`; `org.gnome.GWeather4` units + default-location; `org.gnome.system.location enabled` (honest-gate auto-location/weather). OWN a compiled `org.goblins.os.today` (layout `a(sy)`, enabled-widgets, brief-enabled, weather-location, open-on-edge-swipe, reduce-translucency-respected) + a `20-goblins-os-today` seed.
 - **Files:** `crates/goblins-os-today/{Cargo.toml,src/main.rs}` (NEW crate mirroring `goblins-os-control-center`; Today header + widget VBox, each widget returns a Goblins card with an honest empty state), workspace `Cargo.toml`, `os/bootc/Containerfile` (features + COPY binary + glib-compile-schemas **after** the gschema COPY), `os/glib-schemas/org.goblins.os.today.gschema.xml`, `os/dconf/db/local.d/20-goblins-os-today`, `…/goblins-menubar@goblins.os/extension.js` (future date/clock button + edge-swipe → spawn the binary), `os/applications/org.goblins.OS.Today.desktop`.

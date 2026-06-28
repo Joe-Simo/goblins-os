@@ -6,6 +6,7 @@
 import St from 'gi://St';
 import Gio from 'gi://Gio';
 import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -23,6 +24,7 @@ const LAUNCHER = '/usr/libexec/goblins-os/goblins-os-launcher';
 const SCREENSHOT_CONTEXT = '/usr/libexec/goblins-os/goblins-os-screenshot-context';
 const CONTROL_CENTER = '/usr/libexec/goblins-os/goblins-os-control-center';
 const SETTINGS = '/usr/libexec/goblins-os/goblins-os-settings';
+const TODAY = '/usr/libexec/goblins-os/goblins-os-today';
 const INPUT_SOURCES_SCHEMA = 'org.gnome.desktop.input-sources';
 const FOCUS_SCHEMA = 'org.goblins.os.focus';
 // Color-only overlay applied on top of the dark gnome-shell.css base when the
@@ -48,10 +50,10 @@ export default class GoblinsMenuBar extends Extension {
         // Position 0 in the left box: the very first item on the menu bar.
         Main.panel.addToStatusArea('goblins-mark', this._mark, 0, 'left');
 
-        // Right: Goblins AI, Focus (only when active), input source (only when
-        // there are multiple sources), then Control Center. The AI button is a
-        // compact command menu so system-wide assistant actions stay one
-        // menu-bar click away without crowding the top panel.
+        // Right: Goblins AI, Today, Focus (only when active), input source
+        // (only when there are multiple sources), then Control Center. The AI
+        // button is a compact command menu so system-wide assistant actions
+        // stay one menu-bar click away without crowding the top panel.
         this._ai = new PanelMenu.Button(0.0, 'Goblins AI');
         this._ai.add_child(new St.Icon({
             gicon: Gio.icon_new_for_string(AI_ICON),
@@ -64,7 +66,30 @@ export default class GoblinsMenuBar extends Extension {
         this._addVisualContextMenuItem();
         this._ai.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addAiMenuItem('Goblins AI Settings', [SETTINGS, '--panel=models']);
-        Main.panel.addToStatusArea('goblins-ai', this._ai, 1, 'right');
+        Main.panel.addToStatusArea('goblins-ai', this._ai, 2, 'right');
+
+        this._interfaceSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
+
+        this._today = new PanelMenu.Button(0.0, 'Today', true);
+        this._todayLabel = new St.Label({
+            text: 'Today',
+            style_class: 'goblins-date-indicator',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._today.add_child(this._todayLabel);
+        this._today.connect('button-press-event', () => {
+            this._openToday();
+            return Clutter.EVENT_STOP;
+        });
+        this._today.connect('touch-event', (_actor, event) => {
+            if (event.type() === Clutter.EventType.TOUCH_BEGIN) {
+                this._openToday();
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+        Main.panel.addToStatusArea('goblins-today', this._today, 1, 'right');
+        this._bindTodayClock();
 
         this._inputSource = new PanelMenu.Button(0.0, 'Input Source', true);
         this._inputSourceLabel = new St.Label({
@@ -74,7 +99,7 @@ export default class GoblinsMenuBar extends Extension {
         });
         this._inputSource.add_child(this._inputSourceLabel);
         this._inputSource.hide();
-        Main.panel.addToStatusArea('goblins-input-source', this._inputSource, 2, 'right');
+        Main.panel.addToStatusArea('goblins-input-source', this._inputSource, 3, 'right');
         this._bindInputSourceIndicator();
 
         this._focus = new PanelMenu.Button(0.0, 'Focus', true);
@@ -96,7 +121,7 @@ export default class GoblinsMenuBar extends Extension {
             return Clutter.EVENT_PROPAGATE;
         });
         this._focus.hide();
-        Main.panel.addToStatusArea('goblins-focus', this._focus, 3, 'right');
+        Main.panel.addToStatusArea('goblins-focus', this._focus, 4, 'right');
         this._bindFocusIndicator();
 
         this._control = new PanelMenu.Button(0.0, 'Control Center', true);
@@ -126,7 +151,6 @@ export default class GoblinsMenuBar extends Extension {
         // — no half-styled mix, no regression.
         this._lightChromeFile = Gio.File.new_for_path(LIGHT_CHROME_CSS);
         this._lightChromeLoaded = false;
-        this._interfaceSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
         this._schemeChangedId = this._interfaceSettings.connect(
             'changed::color-scheme',
             () => this._applySchemeChrome()
@@ -164,6 +188,93 @@ export default class GoblinsMenuBar extends Extension {
         } catch (error) {
             logError(error, 'goblins-menubar: failed to apply adaptive chrome stylesheet');
         }
+    }
+
+    _bindTodayClock() {
+        try {
+            this._todayClockChangedIds = [
+                this._interfaceSettings.connect(
+                    'changed::clock-format',
+                    () => this._restartTodayClock()
+                ),
+                this._interfaceSettings.connect(
+                    'changed::clock-show-weekday',
+                    () => this._restartTodayClock()
+                ),
+                this._interfaceSettings.connect(
+                    'changed::clock-show-seconds',
+                    () => this._restartTodayClock()
+                ),
+            ];
+            this._restartTodayClock();
+        } catch (error) {
+            this._todayLabel?.set_text('Today');
+            logError(error, 'goblins-menubar: Today clock settings unavailable');
+        }
+    }
+
+    _restartTodayClock() {
+        this._clearTodayClockTimer();
+        this._refreshTodayClock();
+        const intervalSeconds = this._todayClockShowsSeconds() ? 1 : 30;
+        this._todayClockTimeoutId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT,
+            intervalSeconds,
+            () => {
+                this._refreshTodayClock();
+                return GLib.SOURCE_CONTINUE;
+            }
+        );
+    }
+
+    _clearTodayClockTimer() {
+        if (this._todayClockTimeoutId) {
+            GLib.source_remove(this._todayClockTimeoutId);
+            this._todayClockTimeoutId = null;
+        }
+    }
+
+    _todayClockShowsSeconds() {
+        try {
+            return this._interfaceSettings.get_boolean('clock-show-seconds');
+        } catch (error) {
+            logError(error, 'goblins-menubar: failed to read clock seconds setting');
+        }
+        return false;
+    }
+
+    _refreshTodayClock() {
+        try {
+            this._todayLabel?.set_text(this._todayClockLabel());
+        } catch (error) {
+            this._todayLabel?.set_text('Today');
+            logError(error, 'goblins-menubar: failed to refresh Today clock');
+        }
+    }
+
+    _todayClockLabel() {
+        const clockFormat = this._interfaceSettings.get_string('clock-format');
+        const showWeekday = this._interfaceSettings.get_boolean('clock-show-weekday');
+        const showSeconds = this._interfaceSettings.get_boolean('clock-show-seconds');
+        const timePattern = clockFormat === '24h'
+            ? (showSeconds ? '%H:%M:%S' : '%H:%M')
+            : (showSeconds ? '%I:%M:%S %p' : '%I:%M %p');
+        const weekdayPrefix = showWeekday ? '%a ' : '';
+        const formatted = GLib.DateTime.new_now_local().format(`${weekdayPrefix}${timePattern}`) || 'Today';
+        return this._safeTodayClockLabel(formatted, clockFormat === '24h' ? 14 : 18);
+    }
+
+    _safeTodayClockLabel(value, maxChars) {
+        const text = String(value || '')
+            .replace(/[\r\n\t]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .replace(/\b0([1-9]:)/, '$1')
+            .trim();
+        if (!text)
+            return 'Today';
+        if (text.length <= maxChars)
+            return text;
+        return `${text.slice(0, Math.max(1, maxChars - 3))}...`;
     }
 
     _bindInputSourceIndicator() {
@@ -473,6 +584,10 @@ export default class GoblinsMenuBar extends Extension {
         this._spawn([CONTROL_CENTER], 'goblins-menubar: failed to open control center');
     }
 
+    _openToday() {
+        this._spawn([TODAY], 'goblins-menubar: failed to open Today');
+    }
+
     _openFocusSettings() {
         this._spawn([SETTINGS, '--panel=notifications'], 'goblins-menubar: failed to open Focus settings');
     }
@@ -512,6 +627,12 @@ export default class GoblinsMenuBar extends Extension {
             this._interfaceSettings.disconnect(this._schemeChangedId);
             this._schemeChangedId = null;
         }
+        if (this._todayClockChangedIds && this._interfaceSettings) {
+            for (const id of this._todayClockChangedIds)
+                this._interfaceSettings.disconnect(id);
+            this._todayClockChangedIds = null;
+        }
+        this._clearTodayClockTimer();
         if (this._inputSourcesChangedId && this._inputSourceSettings) {
             this._inputSourceSettings.disconnect(this._inputSourcesChangedId);
             this._inputSourcesChangedId = null;
@@ -559,6 +680,11 @@ export default class GoblinsMenuBar extends Extension {
             this._ai.destroy();
             this._ai = null;
         }
+        if (this._today) {
+            this._today.destroy();
+            this._today = null;
+        }
+        this._todayLabel = null;
         if (this._inputSource) {
             this._inputSource.destroy();
             this._inputSource = null;

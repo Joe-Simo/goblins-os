@@ -38,6 +38,15 @@
   min-width: 34px;
 }
 
+.goblins-date-indicator {
+  min-width: 58px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #f5f5f7;
+}
+
 /* The control-center button at the right of the menu bar — a monochrome sliders
    glyph. This base sheet inks it white for the dark glass panel; the light overlay
    re-colors it to #1a1a1f for the light frosted panel (it is symbolic, so CSS color

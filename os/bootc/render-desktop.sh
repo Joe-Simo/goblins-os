@@ -249,6 +249,22 @@ render_scheme() {
   gsettings set org.goblins.os.focus modes '[]' 2>/dev/null || true
   sleep 0.2
 
+  # Today menu-bar proof: seed deterministic GNOME clock preferences so the
+  # date/time button is visible and stable. This proves only the shell button
+  # render + launcher affordance; edge-swipe and live widget data remain gated.
+  clock_format="$(gsettings get org.gnome.desktop.interface clock-format 2>/dev/null || printf "'24h'")"
+  clock_weekday="$(gsettings get org.gnome.desktop.interface clock-show-weekday 2>/dev/null || printf "false")"
+  clock_seconds="$(gsettings get org.gnome.desktop.interface clock-show-seconds 2>/dev/null || printf "false")"
+  gsettings set org.gnome.desktop.interface clock-format '24h' || return 1
+  gsettings set org.gnome.desktop.interface clock-show-weekday true || return 1
+  gsettings set org.gnome.desktop.interface clock-show-seconds false || return 1
+  sleep 0.8
+  shoot "59c-menubar-today-$suffix.png"
+  gsettings set org.gnome.desktop.interface clock-format "$clock_format" 2>/dev/null || true
+  gsettings set org.gnome.desktop.interface clock-show-weekday "$clock_weekday" 2>/dev/null || true
+  gsettings set org.gnome.desktop.interface clock-show-seconds "$clock_seconds" 2>/dev/null || true
+  sleep 0.2
+
   # The native shell composited into the live desktop.
   GOBLINS_OS_THEME="$app_theme" \
   WAYLAND_DISPLAY="$WAYLAND_SOCK" GDK_BACKEND=wayland GSK_RENDERER=cairo \

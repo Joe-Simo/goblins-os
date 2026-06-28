@@ -136,6 +136,7 @@ TEXT_SHORTCUTS_LIVE_PROOF="$RUN_DIR/text-shortcuts-live-keystroke-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_PROOF="$RUN_DIR/text-shortcuts-candidate-metadata-proof.json"
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="$RUN_DIR/text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-frame-proof.json"
+TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-layout-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="$RUN_DIR/keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="$RUN_DIR/input-sources-roundtrip-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="$RUN_DIR/focus-arm-roundtrip-proof.json"
@@ -231,6 +232,23 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" 
   || ! grep -Fq '"live_overlay_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" \
   || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-frame proof at $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"
+  exit 4
+fi
+if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"surface": "goblins-textshortcuts-accept-bubble-layout"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"adapter_self_test": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"frame_surface": "goblins-textshortcuts-accept-bubble-frame"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"layout_count": "4"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"visible_layout_count": "3"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"right_edge_clamped": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"bottom_edge_flipped": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"hidden_frame_collapses": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"style_class": "gos-text-shortcuts-candidate"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"font_family": "Inter"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"rendered_bubble_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"live_overlay_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF" \
+  || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF"; then
+  echo "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-layout proof at $TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF"
   exit 4
 fi
 if ! grep -Fq '"status": "pass"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
@@ -380,6 +398,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "text_shortcuts_candidate_metadata_proof":"text-shortcuts-candidate-metadata-proof.json",
           "text_shortcuts_overlay_intent_proof":"text-shortcuts-overlay-intent-proof.json",
           "text_shortcuts_candidate_bubble_frame_proof":"text-shortcuts-candidate-bubble-frame-proof.json",
+          "text_shortcuts_candidate_bubble_layout_proof":"text-shortcuts-candidate-bubble-layout-proof.json",
           "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
           "input_sources_roundtrip_proof":"input-sources-roundtrip-proof.json",
           "focus_arm_roundtrip_proof":"focus-arm-roundtrip-proof.json",

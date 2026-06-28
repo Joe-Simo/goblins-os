@@ -23,6 +23,7 @@ proof_text_shortcuts_live(){ curl -s "http://$H/proof/text-shortcuts-live-keystr
 proof_text_shortcuts_candidate(){ curl -s "http://$H/proof/text-shortcuts-candidate-metadata?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-overlay-intent?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-frame?$1" >/dev/null 2>&1 || true; }
+proof_text_shortcuts_candidate_bubble_layout(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-layout?$1" >/dev/null 2>&1 || true; }
 proof_keyboard_shortcuts_roundtrip(){ curl -s "http://$H/proof/keyboard-shortcuts-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_input_sources_roundtrip(){ curl -s "http://$H/proof/input-sources-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_focus_arm_roundtrip(){ curl -s "http://$H/proof/focus-arm-roundtrip?$1" >/dev/null 2>&1 || true; }
@@ -417,6 +418,51 @@ text_shortcuts_candidate_bubble_frame_proof(){
   fi
 
   proof_text_shortcuts_candidate_bubble_frame "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-accept-bubble-frame&adapter_self_test=pass&show_frame_count=2&hide_frame_count=2&dismissed_frame=true&committed_frame=true&replacement=on%20my%20way&accept_on=word-boundary&accept_keys=Space,Return&dismiss_key=Escape&style_class=gos-text-shortcuts-candidate&text_style_class=gos-text-shortcuts-candidate-text&hint_style_class=gos-text-shortcuts-candidate-hint&font_family=Inter&sensitive_field_refusal=true&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
+  return 0
+}
+text_shortcuts_candidate_bubble_layout_proof(){
+  local layout_file=/tmp/gate-text-shortcuts-candidate-bubble-layout.json
+  local status surface frame_surface layout_count visible_layout_count
+  local right_edge_clamped bottom_edge_flipped hidden_frame_collapses
+  local style_class font_family rendered_claim live_claim runtime_claim
+
+  rm -f "$layout_file"
+  if ! /usr/libexec/goblins-os/goblins-textshortcuts-ibus --candidate-bubble-layout-self-test > "$layout_file" 2>/tmp/gate-text-shortcuts-candidate-bubble-layout.log; then
+    proof_text_shortcuts_candidate_bubble_layout "status=fail&stage=adapter-candidate-bubble-layout-self-test&surface=goblins-textshortcuts-accept-bubble-layout"
+    return 1
+  fi
+
+  status="$(json_field "$layout_file" status)"
+  surface="$(json_field "$layout_file" surface)"
+  frame_surface="$(json_field "$layout_file" frame_surface)"
+  layout_count="$(json_field "$layout_file" layout_count)"
+  visible_layout_count="$(json_field "$layout_file" visible_layout_count)"
+  right_edge_clamped="$(json_field "$layout_file" right_edge_clamped)"
+  bottom_edge_flipped="$(json_field "$layout_file" bottom_edge_flipped)"
+  hidden_frame_collapses="$(json_field "$layout_file" hidden_frame_collapses)"
+  style_class="$(json_field "$layout_file" style_class)"
+  font_family="$(json_field "$layout_file" font_family)"
+  rendered_claim="$(json_field "$layout_file" rendered_bubble_ready_claim)"
+  live_claim="$(json_field "$layout_file" live_overlay_claim)"
+  runtime_claim="$(json_field "$layout_file" runtime_ready_claim)"
+  if [ "$status" != "pass" ] \
+    || [ "$surface" != "goblins-textshortcuts-accept-bubble-layout" ] \
+    || [ "$frame_surface" != "goblins-textshortcuts-accept-bubble-frame" ] \
+    || [ "$layout_count" != "4" ] \
+    || [ "$visible_layout_count" != "3" ] \
+    || [ "$right_edge_clamped" != "true" ] \
+    || [ "$bottom_edge_flipped" != "true" ] \
+    || [ "$hidden_frame_collapses" != "true" ] \
+    || [ "$style_class" != "gos-text-shortcuts-candidate" ] \
+    || [ "$font_family" != "Inter" ] \
+    || [ "$rendered_claim" != "false" ] \
+    || [ "$live_claim" != "false" ] \
+    || [ "$runtime_claim" != "false" ]; then
+    proof_text_shortcuts_candidate_bubble_layout "status=fail&stage=candidate-bubble-layout-fields&surface=${surface:-missing}&layout_count=${layout_count:-missing}&visible_layout_count=${visible_layout_count:-missing}&right_edge_clamped=${right_edge_clamped:-missing}&bottom_edge_flipped=${bottom_edge_flipped:-missing}&hidden_frame_collapses=${hidden_frame_collapses:-missing}&rendered_bubble_ready_claim=${rendered_claim:-missing}&live_overlay_claim=${live_claim:-missing}&runtime_ready_claim=${runtime_claim:-missing}"
+    return 1
+  fi
+
+  proof_text_shortcuts_candidate_bubble_layout "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-accept-bubble-layout&adapter_self_test=pass&frame_surface=goblins-textshortcuts-accept-bubble-frame&layout_count=4&visible_layout_count=3&right_edge_clamped=true&bottom_edge_flipped=true&hidden_frame_collapses=true&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
   return 0
 }
 keyboard_shortcuts_roundtrip_proof(){
@@ -892,6 +938,7 @@ text_shortcuts_live_keystroke_proof || true
 text_shortcuts_candidate_metadata_proof || true
 text_shortcuts_overlay_intent_proof || true
 text_shortcuts_candidate_bubble_frame_proof || true
+text_shortcuts_candidate_bubble_layout_proof || true
 keyboard_shortcuts_roundtrip_proof || true
 input_sources_roundtrip_proof || true
 focus_arm_roundtrip_proof || true

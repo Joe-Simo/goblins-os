@@ -146,6 +146,7 @@ the release media that was booted:
   "text_shortcuts_candidate_metadata_proof": "text-shortcuts-candidate-metadata-proof.json",
   "text_shortcuts_overlay_intent_proof": "text-shortcuts-overlay-intent-proof.json",
   "text_shortcuts_candidate_bubble_frame_proof": "text-shortcuts-candidate-bubble-frame-proof.json",
+  "text_shortcuts_candidate_bubble_layout_proof": "text-shortcuts-candidate-bubble-layout-proof.json",
   "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json",
   "input_sources_roundtrip_proof": "input-sources-roundtrip-proof.json",
   "focus_arm_roundtrip_proof": "focus-arm-roundtrip-proof.json",
@@ -204,6 +205,19 @@ contract, Inter font, sensitive-field refusal, and
 `runtime_ready_claim=false`. This still does not prove a live rendered accept
 bubble; it keeps the frame contract from drifting before qemu-rendered IBus
 overlay proof exists.
+
+The candidate-bubble-layout gate is
+`text-shortcuts-candidate-bubble-layout-proof.json`. It runs the installed
+`goblins-textshortcuts-ibus --candidate-bubble-layout-self-test` adapter
+contract and rejects the run unless it records the
+`goblins-textshortcuts-accept-bubble-layout` surface, the
+`goblins-textshortcuts-accept-bubble-frame` source frame surface, four layout
+records, three visible layouts, right-edge clamp, bottom-edge flip, hide-frame
+collapse, the `gos-text-shortcuts-candidate` style contract, Inter font, and
+`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
+`runtime_ready_claim=false`. This still does not prove a live rendered accept
+bubble, focused-field callback, or Wayland text-input-v3 bubble; it only keeps
+the deterministic layout contract from drifting before live overlay proof exists.
 
 The keyboard-shortcuts gate is `keyboard-shortcuts-roundtrip-proof.json`. It
 posts to `/v1/keyboard/shortcuts/binding` to set the owned `window-hud` shortcut
@@ -337,6 +351,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Text Shortcuts candidate metadata result, including `text-shortcuts-candidate-metadata-proof.json`
 - Text Shortcuts overlay intent result, including `text-shortcuts-overlay-intent-proof.json`
 - Text Shortcuts candidate bubble frame result, including `text-shortcuts-candidate-bubble-frame-proof.json`
+- Text Shortcuts candidate bubble layout result, including `text-shortcuts-candidate-bubble-layout-proof.json`
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
 - Focus arm roundtrip result, including `focus-arm-roundtrip-proof.json`

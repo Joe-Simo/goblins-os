@@ -5425,6 +5425,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-candidate-bubble-layout-proof",
+            "text-shortcuts-candidate-bubble-layout-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-keyboard-shortcuts-roundtrip-proof",
             "keyboard-shortcuts-roundtrip-proof.json",
         ),
@@ -5502,6 +5507,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-textshortcuts-candidate-bubble-frame-proof",
             "/proof/text-shortcuts-candidate-bubble-frame",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-textshortcuts-candidate-bubble-layout-proof",
+            "/proof/text-shortcuts-candidate-bubble-layout",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5855,6 +5865,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-textshortcuts-candidate-bubble-layout-proof-json",
+            "text-shortcuts-candidate-bubble-layout-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-writes-keyboard-shortcuts-roundtrip-proof-json",
             "keyboard-shortcuts-roundtrip-proof.json",
         ),
@@ -5910,6 +5925,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-layout-proof",
+            "HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-layout proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-keyboard-shortcuts-roundtrip-proof",
             "HONESTY GUARD: missing or failing Keyboard shortcuts roundtrip proof",
         ),
@@ -5957,6 +5977,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-bubble-frame-style",
             "\"style_class\": \"gos-text-shortcuts-candidate\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-layout-count",
+            "\"layout_count\": \"4\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-layout-clamp",
+            "\"right_edge_clamped\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-layout-flip",
+            "\"bottom_edge_flipped\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-candidate-bubble-layout-collapse",
+            "\"hidden_frame_collapses\": \"true\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6097,6 +6137,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-textshortcuts-candidate-bubble-frame-proof",
             "text_shortcuts_candidate_bubble_frame_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-textshortcuts-candidate-bubble-layout-proof",
+            "text_shortcuts_candidate_bubble_layout_proof",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6490,6 +6535,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-textshortcuts-candidate-bubble-layout-proof",
+            "text_shortcuts_candidate_bubble_layout_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-keyboard-shortcuts-roundtrip-proof",
             "keyboard_shortcuts_roundtrip_proof_passes",
         ),
@@ -6615,6 +6665,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-textshortcuts-candidate-bubble-frame-proof-filename",
             "text-shortcuts-candidate-bubble-frame-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-textshortcuts-candidate-bubble-layout-proof-filename",
+            "text-shortcuts-candidate-bubble-layout-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -6878,6 +6933,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-textshortcuts-candidate-bubble-layout-proof",
+            "text_shortcuts_candidate_bubble_layout_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-requires-keyboard-shortcuts-roundtrip-proof",
             "keyboard_shortcuts_roundtrip_proof_passes",
         ),
@@ -6930,6 +6990,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-textshortcuts-candidate-bubble-frame-proof",
             "Text Shortcuts candidate bubble frame checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-textshortcuts-candidate-bubble-layout-proof",
+            "Text Shortcuts candidate bubble layout checked",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),

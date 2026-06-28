@@ -418,6 +418,18 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -q '"reason": "dismissed"' /tmp/goblins-textshortcuts-overlay-intent.json \
     && grep -q '"reason": "committed"' /tmp/goblins-textshortcuts-overlay-intent.json \
     && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-overlay-intent.json \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --candidate-bubble-frame-self-test > /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"status": "pass"' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"surface": "goblins-textshortcuts-accept-bubble-frame"' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"show_frame_count": 2' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"hide_frame_count": 2' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"dismissed_frame": true' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"committed_frame": true' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"style_class": "gos-text-shortcuts-candidate"' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"sensitive_field_refusal": true' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"adapter_contract_ready": true' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"runtime_ready_claim": false' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \

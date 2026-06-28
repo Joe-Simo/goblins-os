@@ -163,7 +163,10 @@ source_secret_scan() {
     '^[[:space:]]*(export[[:space:]]+)?(OPENAI_API_KEY|AI_GATEWAY_API_KEY|OPENAI_ACCOUNT_CLIENT_SECRET)[[:space:]]*=[[:space:]]*([^<[:space:]#][^#]*)' \
     . \
     --glob '!.git/**' \
+    --glob '!.claude/**' \
     --glob '!target/**' \
+    --glob '!.ci-target/**' \
+    --glob '!.ci-target-amd64/**' \
     --glob '!artifacts/**' \
     --glob '!libpod/**' \
     --glob '!os/signoff-proofs/**' \
@@ -176,7 +179,10 @@ source_secret_scan() {
     '(^|[^A-Za-z0-9_-])(sk-proj-[A-Za-z0-9_-]{24,}|sk-[A-Za-z0-9_-]{29,})' \
     . \
     --glob '!.git/**' \
+    --glob '!.claude/**' \
     --glob '!target/**' \
+    --glob '!.ci-target/**' \
+    --glob '!.ci-target-amd64/**' \
     --glob '!artifacts/**' \
     --glob '!libpod/**' \
     --glob '!os/signoff-proofs/**' \
@@ -849,6 +855,7 @@ check "capture harness proves Text Shortcuts candidate metadata without live ove
 check "capture driver persists Text Shortcuts candidate metadata proof" "rg -q 'text-shortcuts-candidate-metadata-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-metadata' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate metadata proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts overlay intent without live overlay claim" "rg -q '/proof/text-shortcuts-overlay-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--overlay-intent-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-ibus-adapter-overlay-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'show_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hide_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismissed_reason=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'committed_reason=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts overlay intent proof" "rg -q 'text-shortcuts-overlay-intent-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-overlay-intent' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts overlay-intent proof' os/hardware-gate/capture-harness/run-capture.sh"
+check "Text Shortcuts accept-bubble frame contract is source-gated" "rg -q -- '--candidate-bubble-frame-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-accept-bubble-frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-candidate-bubble-frame.json' os/bootc/Containerfile && rg -q 'show_frame_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'hide_frame_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'dismissed_frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'committed_frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'sensitive_field_refusal' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'gos-text-shortcuts-candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'rendered_bubble_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'live_overlay_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'runtime_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile"
 check "capture harness prints qemu diagnostics on startup failure" "rg -q 'QEMU startup diagnostics' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'qemu.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'serial.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'last connection error' os/hardware-gate/capture-harness/drive-capture.py"
 check "hardware gate requires live firewall proof in signoff" "rg -q 'firewall_live_toggle_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Firewall live toggle checked' os/hardware-gate/close-signoff.sh && rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts session proof in signoff" "rg -q 'text_shortcuts_session_enable_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts session enablement checked' os/hardware-gate/close-signoff.sh && rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/runbook.md"

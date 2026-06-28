@@ -4966,6 +4966,21 @@ fn secret_hygiene_checks(root: &Path) -> Vec<Check> {
             "source_secret_scan",
         ),
         contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-source-secret-scan-skips-claude-worktrees",
+            "!.claude/**",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-source-secret-scan-skips-ci-target",
+            "!.ci-target/**",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-source-secret-scan-skips-ci-target-amd64",
+            "!.ci-target-amd64/**",
+        ),
+        contains_check(
             root.join("os/hardware-gate/secret-scan.sh"),
             "artifact-secret-scan-helper",
             "goblins_os_artifact_secret_scan",
@@ -9507,8 +9522,18 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-runs-textshortcuts-candidate-bubble-frame-self-test",
+            "goblins-textshortcuts-ibus --candidate-bubble-frame-self-test",
+        ),
+        container_contains_check(
+            root,
             "bootc-requires-textshortcuts-overlay-intent-proof",
             "goblins-textshortcuts-overlay-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-frame-proof",
+            "goblins-textshortcuts-candidate-bubble-frame.json",
         ),
         container_contains_check(
             root,
@@ -9517,8 +9542,58 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-requires-textshortcuts-candidate-bubble-frame-surface",
+            "grep -q '\"surface\": \"goblins-textshortcuts-accept-bubble-frame\"' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-frame-show-count",
+            "grep -q '\"show_frame_count\": 2' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-frame-hide-count",
+            "grep -q '\"hide_frame_count\": 2' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-frame-dismiss",
+            "grep -q '\"dismissed_frame\": true' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-frame-commit",
+            "grep -q '\"committed_frame\": true' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-frame-style",
+            "grep -q '\"style_class\": \"gos-text-shortcuts-candidate\"' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-frame-sensitive-refusal",
+            "grep -q '\"sensitive_field_refusal\": true' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
             "bootc-keeps-textshortcuts-overlay-live-claim-false",
             "grep -q '\"live_overlay_claim\": false' /tmp/goblins-textshortcuts-overlay-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-candidate-bubble-render-claim-false",
+            "grep -q '\"rendered_bubble_ready_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-candidate-bubble-live-claim-false",
+            "grep -q '\"live_overlay_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-candidate-bubble-runtime-claim-false",
+            "grep -q '\"runtime_ready_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
         ),
         container_contains_check(
             root,
@@ -9669,6 +9744,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-overlay-intent-proof-surface",
             "goblins-textshortcuts-ibus-adapter-overlay-intent",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-frame-surface",
+            "goblins-textshortcuts-accept-bubble-frame",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-frame-builder",
+            "def _candidate_bubble_frame_from_intent",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-frame-self-test",
+            "def _run_candidate_bubble_frame_self_test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-frame-style",
+            "gos-text-shortcuts-candidate",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-frame-cli",
+            "--candidate-bubble-frame-self-test",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),

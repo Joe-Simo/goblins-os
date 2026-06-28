@@ -1397,6 +1397,21 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "gsettings set org.gnome.desktop.input-sources current 1",
     ));
     checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-menubar-focus-chip",
+        "59b-menubar-focus-$suffix.png",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-menubar-focus-seeds-mode",
+        r#"[{"id":"work","name":"Deep Work"}]"#,
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-menubar-focus-seeds-active-mode",
+        "gsettings set org.goblins.os.focus active-mode work",
+    ));
+    checks.push(contains_check(
         root.join("os/bootc/render-desktop.suffix.Dockerfile"),
         "desktop-render-target",
         "desktop-screenshots",
@@ -8110,6 +8125,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/stylesheet.css"),
             "menubar-focus-uses-canonical-accent",
             ".goblins-focus-indicator",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "menubar-focus-desktop-render-proof-hook",
+            "59b-menubar-focus-$suffix.png",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "menubar-focus-render-seeds-mode",
+            r#"[{"id":"work","name":"Deep Work"}]"#,
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "menubar-focus-render-seeds-active-mode",
+            "gsettings set org.goblins.os.focus active-mode work",
         ),
         contains_check(
             root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell-light.css"),

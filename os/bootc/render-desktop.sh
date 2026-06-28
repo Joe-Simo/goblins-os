@@ -238,6 +238,17 @@ render_scheme() {
   gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us')]" 2>/dev/null || true
   sleep 0.2
 
+  # Focus menu-bar proof: seed one configured mode and mark it active so the
+  # Goblins Focus chip is visible. This proves only the shell indicator render;
+  # live arm/disarm and notification writes remain hardware-gated.
+  gsettings set org.goblins.os.focus modes '[{"id":"work","name":"Deep Work"}]' || return 1
+  gsettings set org.goblins.os.focus active-mode work || return 1
+  sleep 0.8
+  shoot "59b-menubar-focus-$suffix.png"
+  gsettings set org.goblins.os.focus active-mode '' 2>/dev/null || true
+  gsettings set org.goblins.os.focus modes '[]' 2>/dev/null || true
+  sleep 0.2
+
   # The native shell composited into the live desktop.
   GOBLINS_OS_THEME="$app_theme" \
   WAYLAND_DISPLAY="$WAYLAND_SOCK" GDK_BACKEND=wayland GSK_RENDERER=cairo \

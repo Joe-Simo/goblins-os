@@ -21,6 +21,7 @@ proof_firewall(){ curl -s "http://$H/proof/firewall-live-toggle?$1" >/dev/null 2
 proof_text_shortcuts(){ curl -s "http://$H/proof/text-shortcuts-session-enable?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_live(){ curl -s "http://$H/proof/text-shortcuts-live-keystroke?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate(){ curl -s "http://$H/proof/text-shortcuts-candidate-metadata?$1" >/dev/null 2>&1 || true; }
+proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-overlay-intent?$1" >/dev/null 2>&1 || true; }
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -296,6 +297,39 @@ text_shortcuts_candidate_metadata_proof(){
   proof_text_shortcuts_candidate "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-candidate-proof&candidate_replacement=on%20my%20way&candidate_accept_on=word-boundary&candidate_dismiss_key=Escape&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
   return 0
 }
+text_shortcuts_overlay_intent_proof(){
+  local overlay_file=/tmp/gate-text-shortcuts-overlay-intent.json
+  local status surface show_count hide_count rendered_claim live_claim runtime_claim
+
+  rm -f "$overlay_file"
+  if ! /usr/libexec/goblins-os/goblins-textshortcuts-ibus --overlay-intent-self-test > "$overlay_file" 2>/tmp/gate-text-shortcuts-overlay-intent.log; then
+    proof_text_shortcuts_overlay_intent "status=fail&stage=adapter-overlay-intent-self-test&surface=goblins-textshortcuts-ibus-adapter-overlay-intent"
+    return 1
+  fi
+
+  status="$(json_field "$overlay_file" status)"
+  surface="$(json_field "$overlay_file" surface)"
+  show_count="$(json_field "$overlay_file" show_count)"
+  hide_count="$(json_field "$overlay_file" hide_count)"
+  rendered_claim="$(json_field "$overlay_file" rendered_bubble_ready_claim)"
+  live_claim="$(json_field "$overlay_file" live_overlay_claim)"
+  runtime_claim="$(json_field "$overlay_file" runtime_ready_claim)"
+  if [ "$status" != "pass" ] \
+    || [ "$surface" != "goblins-textshortcuts-ibus-adapter-overlay-intent" ] \
+    || [ "$show_count" != "2" ] \
+    || [ "$hide_count" != "2" ] \
+    || [ "$rendered_claim" != "false" ] \
+    || [ "$live_claim" != "false" ] \
+    || [ "$runtime_claim" != "false" ] \
+    || ! grep -Fq '"reason": "dismissed"' "$overlay_file" \
+    || ! grep -Fq '"reason": "committed"' "$overlay_file"; then
+    proof_text_shortcuts_overlay_intent "status=fail&stage=overlay-intent-fields&surface=${surface:-missing}&show_count=${show_count:-missing}&hide_count=${hide_count:-missing}&rendered_bubble_ready_claim=${rendered_claim:-missing}&live_overlay_claim=${live_claim:-missing}&runtime_ready_claim=${runtime_claim:-missing}"
+    return 1
+  fi
+
+  proof_text_shortcuts_overlay_intent "status=pass&route=/v1/text-shortcuts&surface=goblins-textshortcuts-ibus-adapter-overlay-intent&adapter_self_test=pass&show_count=2&hide_count=2&dismissed_reason=true&committed_reason=true&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false"
+  return 0
+}
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
 # After capture, fully wait for the binary to exit before returning — GtkApplication
 # is single-instance, so relaunching the same binary (e.g. the installer with a new
@@ -313,6 +347,7 @@ firewall_live_toggle_proof || true
 text_shortcuts_session_enable_proof || true
 text_shortcuts_live_keystroke_proof || true
 text_shortcuts_candidate_metadata_proof || true
+text_shortcuts_overlay_intent_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
 FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device

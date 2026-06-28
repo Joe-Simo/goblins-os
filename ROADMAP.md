@@ -828,6 +828,23 @@ warnings`, `cargo test --workspace`, scoped `git diff --check` over the changed
 files, and `goblins-os-verify --source-root .` -> **blocked=0 (1839)**. This is
 still CI/qemu-pending and does **not** mark Text Shortcuts shipped.
 
+Current Text Shortcuts Escape-dismiss live-proof continuation: the display-backed
+VM keystroke proof now has a third proof-only GTK field,
+`goblins-os-shell --text-shortcuts-proof dismiss`, and the in-session harness
+drives `omw` followed by `wtype -P Escape -p Escape`. The proof JSON must show
+`dismiss_key=Escape`, `dismiss_expected=omw`, `dismiss_actual=omw`, and
+`dismiss_no_commit=true` in addition to the existing normal expansion and
+password refusal checks. `run-capture.sh`, `close-signoff.sh`,
+`verify-shipping-status.sh`, and `goblins-os-verify` reject runs without the
+dismiss proof fields. Local gates: `bash -n` for the capture/signoff scripts,
+`cargo fmt --all --check`, `cargo test -p goblins-os-shell
+parses_text_shortcuts_proof_targets`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, Rust 1.88 GTK container `cargo clippy -p
+goblins-os-shell --features goblins-os-shell/native-desktop -- -D warnings`,
+and `goblins-os-verify --source-root .` -> **blocked=0 (1848)**. This is still
+CI/qemu-pending and does **not** prove the live Wayland/IBus path locally or mark
+Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining

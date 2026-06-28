@@ -163,6 +163,11 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"normal_trigger": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"normal_expected": "onmyway."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"normal_actual": "onmyway."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"dismiss_trigger": "omw"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"dismiss_key": "Escape"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"dismiss_expected": "omw"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"dismiss_actual": "omw"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"dismiss_no_commit": "true"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"password_expected": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"password_actual": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"password_refusal": "true"' "$TEXT_SHORTCUTS_LIVE_PROOF" \

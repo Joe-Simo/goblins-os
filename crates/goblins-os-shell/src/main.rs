@@ -376,6 +376,7 @@ enum StandaloneTarget {
 enum TextShortcutsProofMode {
     Normal,
     Password,
+    Dismiss,
 }
 
 /// Parse the launcher's deep-link from argv (or the env fallback the launcher can
@@ -412,6 +413,7 @@ fn text_shortcuts_proof_mode(mode: &str) -> Option<TextShortcutsProofMode> {
     match mode {
         "normal" => Some(TextShortcutsProofMode::Normal),
         "password" => Some(TextShortcutsProofMode::Password),
+        "dismiss" => Some(TextShortcutsProofMode::Dismiss),
         _ => None,
     }
 }
@@ -2544,6 +2546,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         let title = match mode {
             TextShortcutsProofMode::Normal => "Text Shortcuts proof field",
             TextShortcutsProofMode::Password => "Password-field refusal proof",
+            TextShortcutsProofMode::Dismiss => "Escape-dismiss proof",
         };
         center.append(&label(title, &["gos-card-title"]));
 
@@ -2552,6 +2555,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         entry.set_input_purpose(match mode {
             TextShortcutsProofMode::Normal => gtk::InputPurpose::FreeForm,
             TextShortcutsProofMode::Password => gtk::InputPurpose::Password,
+            TextShortcutsProofMode::Dismiss => gtk::InputPurpose::FreeForm,
         });
         if mode == TextShortcutsProofMode::Password {
             entry.set_visibility(false);
@@ -2559,6 +2563,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         entry.set_placeholder_text(Some(match mode {
             TextShortcutsProofMode::Normal => "Type omw.",
             TextShortcutsProofMode::Password => "Password field",
+            TextShortcutsProofMode::Dismiss => "Type omw, then press Escape",
         }));
 
         if let Some(path) = proof_file.clone() {
@@ -3128,6 +3133,16 @@ mod tests {
             ),
             Some(StandaloneTarget::TextShortcutsProof(
                 TextShortcutsProofMode::Password
+            ))
+        );
+        assert_eq!(
+            standalone_target_from_args(
+                ["--text-shortcuts-proof", "dismiss"]
+                    .map(String::from)
+                    .into_iter()
+            ),
+            Some(StandaloneTarget::TextShortcutsProof(
+                TextShortcutsProofMode::Dismiss
             ))
         );
         assert_eq!(

@@ -5194,6 +5194,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "text-shortcuts-live-keystroke-proof.json",
         ),
         contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-textshortcuts-escape-dismiss-proof",
+            "Escape dismiss without a",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-firewall-live-toggle-proof",
             "/proof/firewall-live-toggle",
@@ -5240,6 +5245,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-opens-textshortcuts-dismiss-proof",
+            "goblins-os-shell\" --text-shortcuts-proof dismiss",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-drives-textshortcuts-escape-dismiss",
+            "wtype -P Escape -p Escape",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-checks-textshortcuts-dismiss-no-commit",
+            "dismiss_no_commit=true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-checks-textshortcuts-password-refusal",
             "password_refusal=true",
         ),
@@ -5277,6 +5297,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-live-keystroke-proof",
             "HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-dismiss-proof",
+            "\"dismiss_no_commit\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-textshortcuts-dismiss-proof",
+            "dismiss_no_commit",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-textshortcuts-dismiss-proof",
+            "dismiss_no_commit",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -9034,6 +9069,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-shell/src/main.rs"),
             "shell-textshortcuts-proof-password-purpose",
             "gtk::InputPurpose::Password",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-dismiss-field",
+            "TextShortcutsProofMode::Dismiss",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-dismiss-placeholder",
+            "press Escape",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),

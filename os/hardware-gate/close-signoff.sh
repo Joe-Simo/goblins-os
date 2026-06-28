@@ -315,6 +315,11 @@ text_shortcuts_live_keystroke_proof_passes() {
     && rg -q '"normal_trigger"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
     && rg -q '"normal_expected"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
     && rg -q '"normal_actual"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
+    && rg -q '"dismiss_trigger"[[:space:]]*:[[:space:]]*"omw"' "$proof" \
+    && rg -q '"dismiss_key"[[:space:]]*:[[:space:]]*"Escape"' "$proof" \
+    && rg -q '"dismiss_expected"[[:space:]]*:[[:space:]]*"omw"' "$proof" \
+    && rg -q '"dismiss_actual"[[:space:]]*:[[:space:]]*"omw"' "$proof" \
+    && rg -q '"dismiss_no_commit"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"password_expected"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
     && rg -q '"password_actual"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
     && rg -q '"password_refusal"[[:space:]]*:[[:space:]]*"true"' "$proof" \
@@ -524,7 +529,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! text_shortcuts_live_keystroke_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"; then
     fail "Text Shortcuts live keystroke proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"
-    fail "Expected wtype-driven normal Entry expansion omw. -> onmyway. plus password Entry refusal omw. -> omw. with the Goblins IBus engine active."
+    fail "Expected wtype-driven normal Entry expansion omw. -> onmyway., Escape dismiss without replacement commit, and password Entry refusal omw. -> omw. with the Goblins IBus engine active."
     exit 1
   fi
   log "All required screenshot proof PNGs and proof manifest passed."
@@ -536,7 +541,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
   FIREWALL_TOGGLE_STATUS="yes ($FIREWALL_LIVE_TOGGLE_PROOF: disable=200/inactive, enable=200/active)"
   TEXT_SHORTCUTS_SESSION_STATUS="yes ($TEXT_SHORTCUTS_SESSION_ENABLE_PROOF: service/source/engine active; runtime expansion still gated false)"
-  TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes ($TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF: normal expansion and password refusal via wtype)"
+  TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes ($TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF: normal expansion, Escape dismiss, and password refusal via wtype)"
 else
   warn "SCREENSHOT_DIR not set; proof screenshot presence check skipped."
 fi

@@ -159,11 +159,12 @@ text_shortcuts_live_keystroke_proof(){
   local table_file="$config_dir/text-shortcuts.json"
   local normal_file=/tmp/gate-text-shortcuts-normal.txt
   local password_file=/tmp/gate-text-shortcuts-password.txt
-  local normal_actual password_actual normal_pid password_pid active_engine
+  local dismiss_file=/tmp/gate-text-shortcuts-dismiss.txt
+  local normal_actual password_actual dismiss_actual normal_pid password_pid dismiss_pid active_engine
 
   mkdir -p "$config_dir"
   printf '[{"replace":"omw","with":"onmyway"}]\n' > "$table_file"
-  rm -f "$normal_file" "$password_file"
+  rm -f "$normal_file" "$password_file" "$dismiss_file"
 
   pkill -f goblins-textshortcuts-ibus 2>/dev/null || true
   pkill -f goblins-textshortcuts-engine 2>/dev/null || true
@@ -198,6 +199,32 @@ text_shortcuts_live_keystroke_proof(){
     return 1
   fi
 
+  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$dismiss_file" "$B/goblins-os-shell" --text-shortcuts-proof dismiss >/tmp/gate-text-shortcuts-dismiss.log 2>&1 &
+  dismiss_pid=$!
+  sleep 4
+  if ! wtype -- "omw" >/dev/null 2>&1; then
+    kill "$dismiss_pid" 2>/dev/null || true
+    proof_text_shortcuts_live "status=fail&stage=dismiss-type&input_driver=wtype&active_engine=goblins-textshortcuts&dismiss_trigger=omw"
+    return 1
+  fi
+  sleep 1
+  if ! wtype -P Escape -p Escape >/dev/null 2>&1; then
+    kill "$dismiss_pid" 2>/dev/null || true
+    proof_text_shortcuts_live "status=fail&stage=dismiss-escape&input_driver=wtype&active_engine=goblins-textshortcuts&dismiss_trigger=omw&dismiss_key=Escape"
+    return 1
+  fi
+  for _ in $(seq 1 20); do
+    dismiss_actual="$(cat "$dismiss_file" 2>/dev/null || true)"
+    [ "$dismiss_actual" = "omw" ] && break
+    sleep 0.5
+  done
+  kill "$dismiss_pid" 2>/dev/null || true
+  wait "$dismiss_pid" 2>/dev/null || true
+  if [ "$dismiss_actual" != "omw" ]; then
+    proof_text_shortcuts_live "status=fail&stage=dismiss-readback&input_driver=wtype&active_engine=goblins-textshortcuts&dismiss_expected=omw&dismiss_actual=${dismiss_actual:-missing}&dismiss_no_commit=false"
+    return 1
+  fi
+
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$password_file" "$B/goblins-os-shell" --text-shortcuts-proof password >/tmp/gate-text-shortcuts-password.log 2>&1 &
   password_pid=$!
   sleep 4
@@ -218,7 +245,7 @@ text_shortcuts_live_keystroke_proof(){
     return 1
   fi
 
-  proof_text_shortcuts_live "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-proof&input_driver=wtype&active_engine=goblins-textshortcuts&normal_trigger=omw.&normal_expected=onmyway.&normal_actual=onmyway.&password_expected=omw.&password_actual=omw.&password_refusal=true&runtime_ready_claim=false"
+  proof_text_shortcuts_live "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-proof&input_driver=wtype&active_engine=goblins-textshortcuts&normal_trigger=omw.&normal_expected=onmyway.&normal_actual=onmyway.&dismiss_trigger=omw&dismiss_key=Escape&dismiss_expected=omw&dismiss_actual=omw&dismiss_no_commit=true&password_expected=omw.&password_actual=omw.&password_refusal=true&runtime_ready_claim=false"
   return 0
 }
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)

@@ -430,6 +430,20 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
     && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
     && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --candidate-bubble-layout-self-test > /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"status": "pass"' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"surface": "goblins-textshortcuts-accept-bubble-layout"' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"frame_surface": "goblins-textshortcuts-accept-bubble-frame"' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"layout_count": 4' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"visible_layout_count": 3' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"right_edge_clamped": true' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"bottom_edge_flipped": true' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"hidden_frame_collapses": true' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"style_class": "gos-text-shortcuts-candidate"' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"font_family": "Inter"' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
+    && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"adapter_contract_ready": true' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"runtime_ready_claim": false' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \

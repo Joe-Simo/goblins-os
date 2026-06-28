@@ -32,7 +32,7 @@
 
 ---
 
-## ⏩ Session status — RESUME HERE (updated 2026-06-27)
+## ⏩ Session status — RESUME HERE (updated 2026-06-28)
 
 Proven code head before the current QMP-startup fix is `d9354b0` on `main`. The
 latest completed source passes shipped the Sound Recognition and Live Captions
@@ -1263,6 +1263,20 @@ and `goblins-os-verify` all require the new artifact. This is still
 CI/qemu-pending and does **not** prove a live rendered accept bubble, focused
 field callback, Wayland text-input-v3 bubble, or mark Text Shortcuts shipped.
 
+Current Text Shortcuts accept-bubble layout contract continuation: the installed
+adapter now derives deterministic `goblins-textshortcuts-accept-bubble-layout`
+records from the existing accept-bubble frame records. The pure contract anchors
+the future bubble to a focused cursor rect, clamps it inside the monitor, flips
+above the cursor when the bottom edge would overflow, collapses hide frames, and
+preserves the `gos-text-shortcuts-candidate`/Inter style contract while keeping
+`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
+`runtime_ready_claim=false`. The image build runs
+`goblins-textshortcuts-ibus --candidate-bubble-layout-self-test` and rejects the
+proof unless it records the below-cursor, right-edge clamp, bottom-edge flip, and
+hide-collapse cases. This is still CI/qemu-pending and does **not** prove a live
+rendered accept bubble, focused field callback, Wayland text-input-v3 bubble, or
+mark Text Shortcuts shipped.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    continue the deferred engine UIs/overlays one feature at a time. The remaining
@@ -1633,6 +1647,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **IBus live-keystroke hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now launches `goblins-os-shell --text-shortcuts-proof normal|passthrough|dismiss|password`, drives focused GTK entries with `wtype`, and requires normal replacement (`onmyway.`), unknown-word pass-through (`hello.` unchanged), Escape dismiss without replacement commit, and password-purpose refusal (`omw.` unchanged, `password_refusal=true`) before signoff. Core still keeps `runtime_ready_claim=false` until the qemu artifact is reviewed and the runtime gate is flipped deliberately.
 - [x] **IBus overlay-intent hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now requires `text-shortcuts-overlay-intent-proof.json`, generated from the installed adapter's `--overlay-intent-self-test`, and rejects signoff unless it records two candidate show intents, two hide intents, dismissed and committed hide reasons, and false rendered/live/runtime readiness claims. This is still not live rendered overlay proof and does not mark Text Shortcuts shipped.
 - [x] **IBus accept-bubble frame contract source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --candidate-bubble-frame-self-test` now converts the adapter's overlay intents into deterministic `goblins-textshortcuts-accept-bubble-frame` show/hide frames for the existing `gos-text-shortcuts-candidate` renderer surface, proves dismissed and committed hide frames plus sensitive-field refusal, and keeps `rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and `runtime_ready_claim=false`. The Containerfile and verifier require the proof. This still does not prove a live rendered accept bubble.
+- [x] **IBus accept-bubble layout contract source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --candidate-bubble-layout-self-test` derives deterministic layout records from the accept-bubble frames, proves below-cursor placement, right-edge clamp, bottom-edge flip, hide-frame collapse, Inter, and the `gos-text-shortcuts-candidate` style contract while keeping `rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and `runtime_ready_claim=false`. The Containerfile, `goblins-os-verify`, and shipping-status gate require the proof. This still does not prove a live rendered accept bubble.
 - [ ] **Live IBus runtime/render ship proof (deferred, XL/highest-risk):** prove the installed `goblins-textshortcuts` IBus engine loop in a real GNOME/Wayland session, focused-field preedit/commit over `text-input-v3`, pass-through by default, password-field refusal in-session, and the rendered accept bubble. The optional model-gated autocorrect tier remains resource-gated.
 - **Packages:** `ibus`, `ibus-gtk4`, `ibus-gtk3`, `ibus-libs`, `python3-ibus` (web-verified for Fedora 44 and asserted with `rpm -q` per the Containerfile convention). NOTE `ibus-typing-booster` exists but is Hunspell prediction, **not** a curated table — wrong fit for the default.
 - **gsettings/dconf:** `org.freedesktop.ibus.general preload-engines` (+`goblins-textshortcuts`); `org.gnome.desktop.input-sources sources=[('ibus','goblins-textshortcuts')]`, `per-window=false`; dconf seed in `10-goblins-os-desktop`. The replacement table itself is **JSON** under `~/.config/goblins-os/text-shortcuts.json`, written only through the core bridge — not a gsetting.

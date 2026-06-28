@@ -28,12 +28,20 @@ CAPABILITY_TIMEOUT_SECONDS = 3.0
 ADAPTER_PATH = "/usr/libexec/goblins-os/goblins-textshortcuts-ibus"
 OVERLAY_INTENT_PROOF_SURFACE = "goblins-textshortcuts-ibus-adapter-overlay-intent"
 ACCEPT_BUBBLE_FRAME_SURFACE = "goblins-textshortcuts-accept-bubble-frame"
+ACCEPT_BUBBLE_LAYOUT_SURFACE = "goblins-textshortcuts-accept-bubble-layout"
 ACCEPT_BUBBLE_STYLE_CLASS = "gos-text-shortcuts-candidate"
 ACCEPT_BUBBLE_TEXT_STYLE_CLASS = "gos-text-shortcuts-candidate-text"
 ACCEPT_BUBBLE_HINT_STYLE_CLASS = "gos-text-shortcuts-candidate-hint"
 TEXT_SHORTCUTS_CONFIG_DIR = "goblins-os"
 TEXT_SHORTCUTS_CONFIG_FILE = "text-shortcuts.json"
 MAX_SHORTCUTS = 500
+BUBBLE_LAYOUT_GAP = 8
+BUBBLE_LAYOUT_MARGIN = 12
+BUBBLE_LAYOUT_HEIGHT = 44
+BUBBLE_LAYOUT_MIN_WIDTH = 196
+BUBBLE_LAYOUT_MAX_WIDTH = 360
+BUBBLE_LAYOUT_HORIZONTAL_PADDING = 112
+BUBBLE_LAYOUT_CHARACTER_WIDTH = 8
 
 
 def _runtime_binary() -> str:
@@ -259,6 +267,153 @@ def _candidate_bubble_frames_from_overlay_intents(
         assert frame is not None
         frames.append(frame)
     return frames
+
+
+def _rect(x: int, y: int, width: int, height: int) -> dict[str, int]:
+    return {
+        "x": int(x),
+        "y": int(y),
+        "width": int(width),
+        "height": int(height),
+    }
+
+
+def _normalize_rect(rect: dict[str, Any]) -> dict[str, int] | None:
+    if not isinstance(rect, dict):
+        return None
+    try:
+        normalized = _rect(
+            int(rect["x"]),
+            int(rect["y"]),
+            int(rect["width"]),
+            int(rect["height"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    if normalized["width"] <= 0 or normalized["height"] <= 0:
+        return None
+    return normalized
+
+
+def _clamp(value: int, lower: int, upper: int) -> int:
+    if upper < lower:
+        return lower
+    return min(max(value, lower), upper)
+
+
+def _candidate_bubble_width(replacement: str) -> int:
+    natural_width = (
+        BUBBLE_LAYOUT_HORIZONTAL_PADDING
+        + len(replacement) * BUBBLE_LAYOUT_CHARACTER_WIDTH
+    )
+    return _clamp(
+        natural_width,
+        BUBBLE_LAYOUT_MIN_WIDTH,
+        BUBBLE_LAYOUT_MAX_WIDTH,
+    )
+
+
+def _valid_frame_contract(frame: dict[str, Any]) -> bool:
+    return (
+        frame.get("surface") == ACCEPT_BUBBLE_FRAME_SURFACE
+        and frame.get("style_class") == ACCEPT_BUBBLE_STYLE_CLASS
+        and frame.get("text_style_class") == ACCEPT_BUBBLE_TEXT_STYLE_CLASS
+        and frame.get("hint_style_class") == ACCEPT_BUBBLE_HINT_STYLE_CLASS
+        and frame.get("font_family") == "Inter"
+        and frame.get("accept_on") == "word-boundary"
+        and frame.get("dismiss_key") == "Escape"
+        and frame.get("rendered_bubble_ready_claim") is False
+        and frame.get("live_overlay_claim") is False
+        and frame.get("runtime_ready_claim") is False
+    )
+
+
+def _candidate_bubble_layout_from_frame(
+    frame: dict[str, Any],
+    anchor_rect: dict[str, Any],
+    monitor_rect: dict[str, Any],
+) -> dict[str, Any] | None:
+    replacement = frame.get("replacement")
+    reason = frame.get("reason")
+    action = frame.get("action")
+    if (
+        not _valid_frame_contract(frame)
+        or action not in {"show-candidate", "hide-candidate"}
+        or not isinstance(replacement, str)
+        or not replacement
+        or not isinstance(reason, str)
+    ):
+        return None
+    base = {
+        "surface": ACCEPT_BUBBLE_LAYOUT_SURFACE,
+        "frame_surface": ACCEPT_BUBBLE_FRAME_SURFACE,
+        "action": action,
+        "replacement": replacement,
+        "accept_on": "word-boundary",
+        "accept_keys": ["Space", "Return"],
+        "dismiss_key": "Escape",
+        "reason": reason,
+        "style_class": ACCEPT_BUBBLE_STYLE_CLASS,
+        "text_style_class": ACCEPT_BUBBLE_TEXT_STYLE_CLASS,
+        "hint_style_class": ACCEPT_BUBBLE_HINT_STYLE_CLASS,
+        "font_family": "Inter",
+        "rendered_bubble_ready_claim": False,
+        "live_overlay_claim": False,
+        "runtime_ready_claim": False,
+    }
+    if action == "hide-candidate":
+        return {
+            **base,
+            "visible": False,
+            "placement": "hidden",
+            "anchor_rect": None,
+            "monitor_rect": None,
+            "bubble_rect": None,
+            "clamped_x": False,
+            "flipped_y": False,
+        }
+
+    anchor = _normalize_rect(anchor_rect)
+    monitor = _normalize_rect(monitor_rect)
+    if anchor is None or monitor is None:
+        return None
+
+    width = _candidate_bubble_width(replacement)
+    height = BUBBLE_LAYOUT_HEIGHT
+    minimum_x = monitor["x"] + BUBBLE_LAYOUT_MARGIN
+    maximum_x = monitor["x"] + monitor["width"] - BUBBLE_LAYOUT_MARGIN - width
+    preferred_x = anchor["x"]
+    x = _clamp(preferred_x, minimum_x, maximum_x)
+
+    minimum_y = monitor["y"] + BUBBLE_LAYOUT_MARGIN
+    maximum_y = monitor["y"] + monitor["height"] - BUBBLE_LAYOUT_MARGIN - height
+    below_y = anchor["y"] + anchor["height"] + BUBBLE_LAYOUT_GAP
+    above_y = anchor["y"] - BUBBLE_LAYOUT_GAP - height
+    if below_y + height <= monitor["y"] + monitor["height"] - BUBBLE_LAYOUT_MARGIN:
+        y = below_y
+        placement = "below-cursor"
+        flipped_y = False
+    elif above_y >= minimum_y:
+        y = above_y
+        placement = "above-cursor"
+        flipped_y = True
+    else:
+        y = _clamp(below_y, minimum_y, maximum_y)
+        placement = "within-monitor"
+        flipped_y = False
+
+    return {
+        **base,
+        "visible": True,
+        "placement": placement,
+        "anchor_rect": anchor,
+        "monitor_rect": monitor,
+        "bubble_rect": _rect(x, y, width, height),
+        "clamped_x": x != preferred_x,
+        "flipped_y": flipped_y,
+        "gap": BUBBLE_LAYOUT_GAP,
+        "margin": BUBBLE_LAYOUT_MARGIN,
+    }
 
 
 class CandidateMetadataState:
@@ -797,6 +952,91 @@ def _run_candidate_bubble_frame_self_test() -> dict[str, Any]:
     return payload
 
 
+def _run_candidate_bubble_layout_self_test() -> dict[str, Any]:
+    frame_payload = _run_candidate_bubble_frame_self_test()
+    frames = frame_payload["frames"]
+    show_frames = [frame for frame in frames if frame.get("action") == "show-candidate"]
+    hide_frames = [frame for frame in frames if frame.get("action") == "hide-candidate"]
+    assert len(show_frames) == 2
+    assert len(hide_frames) == 2
+
+    normal_layout = _candidate_bubble_layout_from_frame(
+        show_frames[0],
+        _rect(120, 140, 1, 22),
+        _rect(0, 0, 800, 600),
+    )
+    assert normal_layout is not None
+    assert normal_layout["placement"] == "below-cursor"
+    assert normal_layout["visible"] is True
+    assert normal_layout["clamped_x"] is False
+    assert normal_layout["flipped_y"] is False
+
+    edge_layout = _candidate_bubble_layout_from_frame(
+        show_frames[1],
+        _rect(760, 140, 1, 22),
+        _rect(0, 0, 800, 600),
+    )
+    assert edge_layout is not None
+    assert edge_layout["placement"] == "below-cursor"
+    assert edge_layout["clamped_x"] is True
+    assert edge_layout["flipped_y"] is False
+
+    bottom_layout = _candidate_bubble_layout_from_frame(
+        show_frames[0],
+        _rect(120, 565, 1, 22),
+        _rect(0, 0, 800, 600),
+    )
+    assert bottom_layout is not None
+    assert bottom_layout["placement"] == "above-cursor"
+    assert bottom_layout["clamped_x"] is False
+    assert bottom_layout["flipped_y"] is True
+
+    hidden_layout = _candidate_bubble_layout_from_frame(
+        hide_frames[0],
+        _rect(120, 140, 1, 22),
+        _rect(0, 0, 800, 600),
+    )
+    assert hidden_layout is not None
+    assert hidden_layout["visible"] is False
+    assert hidden_layout["bubble_rect"] is None
+    assert hidden_layout["placement"] == "hidden"
+
+    layouts = [
+        {"case": "below-cursor", **normal_layout},
+        {"case": "right-edge-clamp", **edge_layout},
+        {"case": "bottom-edge-flip", **bottom_layout},
+        {"case": "hide-candidate", **hidden_layout},
+    ]
+    payload = {
+        "status": "pass",
+        "surface": ACCEPT_BUBBLE_LAYOUT_SURFACE,
+        "frame_surface": ACCEPT_BUBBLE_FRAME_SURFACE,
+        "layouts": layouts,
+        "layout_count": len(layouts),
+        "visible_layout_count": sum(1 for layout in layouts if layout["visible"]),
+        "right_edge_clamped": edge_layout["clamped_x"] is True,
+        "bottom_edge_flipped": bottom_layout["flipped_y"] is True,
+        "hidden_frame_collapses": hidden_layout["visible"] is False
+        and hidden_layout["bubble_rect"] is None,
+        "style_class": ACCEPT_BUBBLE_STYLE_CLASS,
+        "text_style_class": ACCEPT_BUBBLE_TEXT_STYLE_CLASS,
+        "hint_style_class": ACCEPT_BUBBLE_HINT_STYLE_CLASS,
+        "font_family": "Inter",
+        "rendered_bubble_ready_claim": False,
+        "live_overlay_claim": False,
+        "runtime_ready_claim": False,
+    }
+    assert payload["layout_count"] == 4
+    assert payload["visible_layout_count"] == 3
+    assert payload["right_edge_clamped"] is True
+    assert payload["bottom_edge_flipped"] is True
+    assert payload["hidden_frame_collapses"] is True
+    assert payload["rendered_bubble_ready_claim"] is False
+    assert payload["live_overlay_claim"] is False
+    assert payload["runtime_ready_claim"] is False
+    return payload
+
+
 def _run_overlay_intent_self_test() -> dict[str, Any]:
     class FakeTarget:
         def __init__(self) -> None:
@@ -1134,6 +1374,7 @@ def _run_ibus() -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Goblins OS Text Shortcuts IBus adapter")
     parser.add_argument("--capability-check", action="store_true")
+    parser.add_argument("--candidate-bubble-layout-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-frame-self-test", action="store_true")
     parser.add_argument("--overlay-intent-self-test", action="store_true")
     parser.add_argument("--runtime-self-test", action="store_true")
@@ -1141,6 +1382,9 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.capability_check:
         print(json.dumps(capability_payload(), sort_keys=True))
+        return 0
+    if args.candidate_bubble_layout_self_test:
+        print(json.dumps(_run_candidate_bubble_layout_self_test(), sort_keys=True))
         return 0
     if args.candidate_bubble_frame_self_test:
         print(json.dumps(_run_candidate_bubble_frame_self_test(), sort_keys=True))

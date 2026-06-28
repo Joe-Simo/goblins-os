@@ -9617,6 +9617,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-runs-textshortcuts-candidate-bubble-layout-self-test",
+            "goblins-textshortcuts-ibus --candidate-bubble-layout-self-test",
+        ),
+        container_contains_check(
+            root,
             "bootc-requires-textshortcuts-overlay-intent-proof",
             "goblins-textshortcuts-overlay-intent.json",
         ),
@@ -9624,6 +9629,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-requires-textshortcuts-candidate-bubble-frame-proof",
             "goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-layout-proof",
+            "goblins-textshortcuts-candidate-bubble-layout.json",
         ),
         container_contains_check(
             root,
@@ -9662,6 +9672,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-requires-textshortcuts-candidate-bubble-layout-surface",
+            "grep -q '\"surface\": \"goblins-textshortcuts-accept-bubble-layout\"' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-layout-count",
+            "grep -q '\"layout_count\": 4' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-layout-visible-count",
+            "grep -q '\"visible_layout_count\": 3' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-layout-clamp",
+            "grep -q '\"right_edge_clamped\": true' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-layout-flip",
+            "grep -q '\"bottom_edge_flipped\": true' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-candidate-bubble-layout-hide-collapse",
+            "grep -q '\"hidden_frame_collapses\": true' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
             "bootc-requires-textshortcuts-candidate-bubble-frame-sensitive-refusal",
             "grep -q '\"sensitive_field_refusal\": true' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
         ),
@@ -9684,6 +9724,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-keeps-textshortcuts-candidate-bubble-runtime-claim-false",
             "grep -q '\"runtime_ready_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-candidate-bubble-layout-render-claim-false",
+            "grep -q '\"rendered_bubble_ready_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-candidate-bubble-layout-live-claim-false",
+            "grep -q '\"live_overlay_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-candidate-bubble-layout-runtime-claim-false",
+            "grep -q '\"runtime_ready_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-layout.json",
         ),
         container_contains_check(
             root,
@@ -9842,13 +9897,28 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-layout-surface",
+            "goblins-textshortcuts-accept-bubble-layout",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-bubble-frame-builder",
             "def _candidate_bubble_frame_from_intent",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-layout-builder",
+            "def _candidate_bubble_layout_from_frame",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-bubble-frame-self-test",
             "def _run_candidate_bubble_frame_self_test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-layout-self-test",
+            "def _run_candidate_bubble_layout_self_test",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
@@ -9859,6 +9929,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-bubble-frame-cli",
             "--candidate-bubble-frame-self-test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-layout-cli",
+            "--candidate-bubble-layout-self-test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-layout-clamps-right-edge",
+            "\"right_edge_clamped\": edge_layout[\"clamped_x\"] is True",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-layout-flips-bottom-edge",
+            "\"bottom_edge_flipped\": bottom_layout[\"flipped_y\"] is True",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-candidate-bubble-layout-collapses-hide-frame",
+            "\"hidden_frame_collapses\": hidden_layout[\"visible\"] is False",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),

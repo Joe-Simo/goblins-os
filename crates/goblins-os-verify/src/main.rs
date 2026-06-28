@@ -8467,6 +8467,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "Typing assistance",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/accessibility.rs"),
+            "core-accessibility-magnifier-schema",
+            "org.gnome.desktop.a11y.magnifier",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/accessibility.rs"),
+            "core-accessibility-magnifier-zoom-target",
+            "magnifier-zoom",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-accessibility-magnifier-controls",
+            "Turn on Magnifier to adjust zoom and lens mode.",
+        ),
+        contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-keyboard-input-sources-list",
             "Input sources",

@@ -14,6 +14,7 @@ const INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
 const A11Y_APPS_SCHEMA: &str = "org.gnome.desktop.a11y.applications";
 const A11Y_INTERFACE_SCHEMA: &str = "org.gnome.desktop.a11y.interface";
 const A11Y_KEYBOARD_SCHEMA: &str = "org.gnome.desktop.a11y.keyboard";
+const A11Y_MAGNIFIER_SCHEMA: &str = "org.gnome.desktop.a11y.magnifier";
 const A11Y_MOUSE_SCHEMA: &str = "org.gnome.desktop.a11y.mouse";
 const COLOR_SCHEMA: &str = "org.gnome.settings-daemon.plugins.color";
 
@@ -23,6 +24,7 @@ pub struct AccessibilityStatus {
     gsettings_available: bool,
     interface: InterfaceAccessibilityStatus,
     assistive: AssistiveTechnologyStatus,
+    magnifier: MagnifierAccessibilityStatus,
     visual: VisualAccessibilityStatus,
     typing: TypingAccessibilityStatus,
     pointing: PointingAccessibilityStatus,
@@ -44,6 +46,14 @@ pub struct AssistiveTechnologyStatus {
     screen_reader: Option<bool>,
     screen_keyboard: Option<bool>,
     magnifier: Option<bool>,
+    detail: String,
+}
+
+#[derive(Serialize)]
+pub struct MagnifierAccessibilityStatus {
+    schema_available: bool,
+    zoom_factor: Option<f64>,
+    lens_mode: Option<bool>,
     detail: String,
 }
 
@@ -99,6 +109,8 @@ enum AccessibilityPreferenceTarget {
     ScreenReader,
     ScreenKeyboard,
     Magnifier,
+    MagnifierZoom,
+    MagnifierLensMode,
     HighContrast,
     StickyKeys,
     SlowKeys,
@@ -175,6 +187,7 @@ fn build_accessibility_status() -> AccessibilityStatus {
     let a11y_schema = schema_snapshot(gsettings_available, A11Y_APPS_SCHEMA);
     let a11y_interface_schema = schema_snapshot(gsettings_available, A11Y_INTERFACE_SCHEMA);
     let a11y_keyboard_schema = schema_snapshot(gsettings_available, A11Y_KEYBOARD_SCHEMA);
+    let a11y_magnifier_schema = schema_snapshot(gsettings_available, A11Y_MAGNIFIER_SCHEMA);
     let a11y_mouse_schema = schema_snapshot(gsettings_available, A11Y_MOUSE_SCHEMA);
     let color_schema = schema_snapshot(gsettings_available, COLOR_SCHEMA);
 
@@ -208,6 +221,18 @@ fn build_accessibility_status() -> AccessibilityStatus {
                 a11y_schema.available,
                 "Assistive technologies",
                 A11Y_APPS_SCHEMA,
+            ),
+        },
+        magnifier: MagnifierAccessibilityStatus {
+            schema_available: a11y_magnifier_schema.available,
+            zoom_factor: setting_f64(&a11y_magnifier_schema, A11Y_MAGNIFIER_SCHEMA, "mag-factor")
+                .map(normalized_magnifier_zoom),
+            lens_mode: setting_bool(&a11y_magnifier_schema, A11Y_MAGNIFIER_SCHEMA, "lens-mode"),
+            detail: schema_detail(
+                gsettings_available,
+                a11y_magnifier_schema.available,
+                "Magnifier controls",
+                A11Y_MAGNIFIER_SCHEMA,
             ),
         },
         visual: VisualAccessibilityStatus {
@@ -328,6 +353,19 @@ fn set_accessibility_preference_outcome(
         );
     }
 
+    if matches!(spec.target, "magnifier-zoom" | "magnifier-lens-mode")
+        && !screen_magnifier_enabled()
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(AccessibilityPreferenceOutcome {
+                ok: false,
+                target: spec.target,
+                text: "Turn on Magnifier to adjust zoom and lens mode.".to_string(),
+            }),
+        );
+    }
+
     let encoded = encode_preference_value(&value);
     match gsettings(&["set", spec.schema, spec.key, &encoded]) {
         Ok(_) => (
@@ -418,6 +456,11 @@ fn setting_f64(schema: &SchemaSnapshot, schema_name: &str, key: &str) -> Option<
     gsettings(&["get", schema_name, key])
         .ok()
         .and_then(|value| parse_gsettings_f64(&value))
+}
+
+fn screen_magnifier_enabled() -> bool {
+    let schema = schema_snapshot(true, A11Y_APPS_SCHEMA);
+    setting_bool(&schema, A11Y_APPS_SCHEMA, "screen-magnifier-enabled") == Some(true)
 }
 
 fn parse_gsettings_bool(value: &str) -> Option<bool> {
@@ -532,6 +575,20 @@ fn accessibility_target_spec(target: AccessibilityPreferenceTarget) -> Accessibi
             label: "Magnifier",
             kind: AccessibilityValueKind::Bool,
         },
+        AccessibilityPreferenceTarget::MagnifierZoom => AccessibilityTargetSpec {
+            target: "magnifier-zoom",
+            schema: A11Y_MAGNIFIER_SCHEMA,
+            key: "mag-factor",
+            label: "Magnifier zoom",
+            kind: AccessibilityValueKind::F64(normalized_magnifier_zoom),
+        },
+        AccessibilityPreferenceTarget::MagnifierLensMode => AccessibilityTargetSpec {
+            target: "magnifier-lens-mode",
+            schema: A11Y_MAGNIFIER_SCHEMA,
+            key: "lens-mode",
+            label: "Lens mode",
+            kind: AccessibilityValueKind::Bool,
+        },
         AccessibilityPreferenceTarget::HighContrast => AccessibilityTargetSpec {
             target: "high-contrast",
             schema: A11Y_INTERFACE_SCHEMA,
@@ -618,6 +675,12 @@ fn accessibility_preference_success_detail(
         ("magnifier", AccessibilityPreferenceValue::Bool(enabled)) => {
             magnifier_detail(*enabled).to_string()
         }
+        ("magnifier-zoom", AccessibilityPreferenceValue::F64(zoom)) => {
+            format!("Magnifier zoom is now {}.", magnifier_zoom_label(*zoom))
+        }
+        ("magnifier-lens-mode", AccessibilityPreferenceValue::Bool(enabled)) => {
+            magnifier_lens_mode_detail(*enabled).to_string()
+        }
         ("high-contrast", AccessibilityPreferenceValue::Bool(enabled)) => {
             high_contrast_detail(*enabled).to_string()
         }
@@ -658,6 +721,13 @@ fn normalized_text_scale(scale: f64) -> f64 {
 
 fn normalized_night_light_temperature(temperature: u32) -> u32 {
     round_to_step(temperature.clamp(1000, 10000), 100)
+}
+
+fn normalized_magnifier_zoom(zoom: f64) -> f64 {
+    if !zoom.is_finite() {
+        return 2.0;
+    }
+    ((zoom.clamp(1.0, 8.0) * 4.0).round() / 4.0 * 100.0).round() / 100.0
 }
 
 fn round_to_step(value: u32, step: u32) -> u32 {
@@ -720,6 +790,25 @@ fn magnifier_detail(enabled: bool) -> &'static str {
         "Screen magnification is enabled for the desktop session."
     } else {
         "Screen magnification is off. Text size still follows the separate text-size setting."
+    }
+}
+
+fn magnifier_lens_mode_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Lens mode tracks the pointer in a bounded zoom window."
+    } else {
+        "The magnifier uses the standard full-screen zoom view."
+    }
+}
+
+fn magnifier_zoom_label(zoom: f64) -> String {
+    let zoom = normalized_magnifier_zoom(zoom);
+    if (zoom.fract()).abs() < 0.001 {
+        format!("{zoom:.0}x")
+    } else if ((zoom * 2.0).fract()).abs() < 0.001 {
+        format!("{zoom:.1}x")
+    } else {
+        format!("{zoom:.2}x")
     }
 }
 
@@ -812,7 +901,8 @@ fn gsettings_error_detail(stderr: &str, stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        accessibility_target_spec, encode_preference_value, normalized_night_light_temperature,
+        accessibility_target_spec, encode_preference_value, magnifier_lens_mode_detail,
+        magnifier_zoom_label, normalized_magnifier_zoom, normalized_night_light_temperature,
         normalized_text_scale, parse_gsettings_bool, parse_gsettings_f64, parse_gsettings_u32,
         parse_preference_value, AccessibilityPreferenceTarget, AccessibilityPreferenceValue,
     };
@@ -849,6 +939,22 @@ mod tests {
             Ok(AccessibilityPreferenceValue::U32(3400))
         ));
         assert!(parse_preference_value(temperature, &json!(-1)).is_err());
+
+        let zoom = accessibility_target_spec(AccessibilityPreferenceTarget::MagnifierZoom);
+        assert_eq!(zoom.schema, super::A11Y_MAGNIFIER_SCHEMA);
+        assert_eq!(zoom.key, "mag-factor");
+        assert!(matches!(
+            parse_preference_value(zoom, &json!(2.12)),
+            Ok(AccessibilityPreferenceValue::F64(2.0))
+        ));
+
+        let lens = accessibility_target_spec(AccessibilityPreferenceTarget::MagnifierLensMode);
+        assert_eq!(lens.schema, super::A11Y_MAGNIFIER_SCHEMA);
+        assert_eq!(lens.key, "lens-mode");
+        assert!(matches!(
+            parse_preference_value(lens, &json!(true)),
+            Ok(AccessibilityPreferenceValue::Bool(true))
+        ));
     }
 
     #[test]
@@ -895,5 +1001,15 @@ mod tests {
         assert_eq!(normalized_night_light_temperature(1), 1000);
         assert_eq!(normalized_night_light_temperature(3449), 3400);
         assert_eq!(normalized_night_light_temperature(20000), 10000);
+        assert_eq!(normalized_magnifier_zoom(0.1), 1.0);
+        assert_eq!(normalized_magnifier_zoom(2.12), 2.0);
+        assert_eq!(normalized_magnifier_zoom(2.13), 2.25);
+        assert_eq!(normalized_magnifier_zoom(f64::NAN), 2.0);
+        assert_eq!(normalized_magnifier_zoom(20.0), 8.0);
+        assert_eq!(magnifier_zoom_label(2.0), "2x");
+        assert_eq!(magnifier_zoom_label(2.5), "2.5x");
+        assert_eq!(magnifier_zoom_label(2.25), "2.25x");
+        assert!(magnifier_lens_mode_detail(true).contains("Lens mode"));
+        assert!(magnifier_lens_mode_detail(false).contains("full-screen"));
     }
 }

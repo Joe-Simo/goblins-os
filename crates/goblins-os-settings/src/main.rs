@@ -720,6 +720,7 @@ struct AccessibilityStatus {
     gsettings_available: bool,
     interface: InterfaceAccessibilityStatus,
     assistive: AssistiveTechnologyStatus,
+    magnifier: MagnifierAccessibilityStatus,
     visual: VisualAccessibilityStatus,
     typing: TypingAccessibilityStatus,
     pointing: PointingAccessibilityStatus,
@@ -741,6 +742,14 @@ struct AssistiveTechnologyStatus {
     screen_reader: Option<bool>,
     screen_keyboard: Option<bool>,
     magnifier: Option<bool>,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct MagnifierAccessibilityStatus {
+    schema_available: bool,
+    zoom_factor: Option<f64>,
+    lens_mode: Option<bool>,
     detail: String,
 }
 
@@ -12037,6 +12046,7 @@ fn append_assistive_technology_settings(panel: &gtk4::Box, state: &SettingsState
         assistive.magnifier,
         magnifier_detail,
     );
+    append_magnifier_controls(panel, state, accessibility, assistive);
 
     let visual = &accessibility.visual;
     panel.append(&label("Contrast", &["gos-subsection-title"]));
@@ -12106,6 +12116,70 @@ fn append_assistive_technology_settings(panel: &gtk4::Box, state: &SettingsState
     } else {
         panel.append(&system_row("Dwell click", &pointing.detail));
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_magnifier_controls(
+    panel: &gtk4::Box,
+    state: &SettingsState,
+    accessibility: &AccessibilityStatus,
+    assistive: &AssistiveTechnologyStatus,
+) {
+    panel.append(&label("Magnifier controls", &["gos-subsection-title"]));
+    match assistive.magnifier {
+        Some(true) => {}
+        Some(false) => {
+            panel.append(&system_row(
+                "Magnifier controls",
+                "Turn on Magnifier to adjust zoom and lens mode.",
+            ));
+            return;
+        }
+        None => {
+            panel.append(&system_row(
+                "Magnifier controls",
+                "The desktop did not report whether Magnifier is enabled.",
+            ));
+            return;
+        }
+    }
+
+    let magnifier = &accessibility.magnifier;
+    if !magnifier.schema_available {
+        panel.append(&system_row("Magnifier controls", &magnifier.detail));
+        return;
+    }
+
+    if let Some(zoom_factor) = magnifier.zoom_factor {
+        let core_url = config_core_url(state);
+        panel.append(&slider_row(
+            SliderSpec {
+                title: "Magnifier zoom",
+                detail: "Adjust the zoom factor used by the desktop screen magnifier.",
+                value: normalized_magnifier_zoom(zoom_factor),
+                min: 1.0,
+                max: 8.0,
+                step: 0.25,
+            },
+            magnifier_zoom_label,
+            normalized_magnifier_zoom,
+            move |value| set_accessibility_number(&core_url, "magnifier-zoom", value),
+        ));
+    } else {
+        panel.append(&system_row(
+            "Magnifier zoom",
+            "The magnifier zoom preference is not available in this session.",
+        ));
+    }
+
+    append_accessibility_bool_row(
+        panel,
+        state,
+        "magnifier-lens-mode",
+        "Lens mode",
+        magnifier.lens_mode,
+        magnifier_lens_mode_detail,
+    );
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -13575,6 +13649,32 @@ fn magnifier_detail(enabled: bool) -> &'static str {
         "Screen magnification is enabled for the desktop session."
     } else {
         "Screen magnification is off. Text size still follows the setting below."
+    }
+}
+
+fn magnifier_lens_mode_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Lens mode tracks the pointer in a bounded zoom window."
+    } else {
+        "The magnifier uses the standard full-screen zoom view."
+    }
+}
+
+fn normalized_magnifier_zoom(zoom: f64) -> f64 {
+    if !zoom.is_finite() {
+        return 2.0;
+    }
+    ((zoom.clamp(1.0, 8.0) * 4.0).round() / 4.0 * 100.0).round() / 100.0
+}
+
+fn magnifier_zoom_label(zoom: f64) -> String {
+    let zoom = normalized_magnifier_zoom(zoom);
+    if (zoom.fract()).abs() < 0.001 {
+        format!("{zoom:.0}x")
+    } else if ((zoom * 2.0).fract()).abs() < 0.001 {
+        format!("{zoom:.1}x")
+    } else {
+        format!("{zoom:.2}x")
     }
 }
 
@@ -20517,6 +20617,16 @@ fn test_accessibility_status(
                 unavailable_detail.to_string()
             },
         },
+        magnifier: MagnifierAccessibilityStatus {
+            schema_available: assistive_schema_available,
+            zoom_factor: Some(2.0),
+            lens_mode: Some(false),
+            detail: if gsettings_available && assistive_schema_available {
+                "Magnifier controls are ready.".to_string()
+            } else {
+                unavailable_detail.to_string()
+            },
+        },
         visual: VisualAccessibilityStatus {
             schema_available: assistive_schema_available,
             high_contrast: Some(false),
@@ -20811,16 +20921,18 @@ mod tests {
         hotspot_connected_clients_label, hotspot_settings_inputs, hotspot_toggle_outcome,
         input_feedback_sounds_detail, interface_sounds_detail, key_repeat_detail,
         local_account_identity_detail, local_account_type_detail, lock_screen_notifications_detail,
-        magnifier_detail, microphone_access_detail, milliseconds_label, motion_preference_detail,
-        night_light_detail, night_light_schedule_detail, night_light_temperature_label,
-        normalized_appearance_theme, normalized_audio_volume, normalized_background_picture_option,
+        magnifier_detail, magnifier_lens_mode_detail, magnifier_zoom_label,
+        microphone_access_detail, milliseconds_label, motion_preference_detail, night_light_detail,
+        night_light_schedule_detail, night_light_temperature_label, normalized_appearance_theme,
+        normalized_audio_volume, normalized_background_picture_option,
         normalized_background_shading, normalized_keyboard_delay,
-        normalized_keyboard_repeat_interval, normalized_night_light_temperature,
-        normalized_old_files_age, normalized_proxy_mode, normalized_text_scale,
-        normalized_unit_speed, notification_app_children_detail, notification_app_enable_detail,
-        notification_app_expand_detail, notification_app_lock_screen_detail,
-        notification_app_lock_screen_details_detail, notification_app_sound_detail,
-        notification_banners_detail, notification_preference_outcome, openai_account_detail,
+        normalized_keyboard_repeat_interval, normalized_magnifier_zoom,
+        normalized_night_light_temperature, normalized_old_files_age, normalized_proxy_mode,
+        normalized_text_scale, normalized_unit_speed, notification_app_children_detail,
+        notification_app_enable_detail, notification_app_expand_detail,
+        notification_app_lock_screen_detail, notification_app_lock_screen_details_detail,
+        notification_app_sound_detail, notification_banners_detail,
+        notification_preference_outcome, openai_account_detail,
         openai_login_destination_from_response, parse_http_endpoint, parse_http_response,
         pointer_speed_label, privacy_control_waiting_detail, privacy_state_label,
         proxy_auto_config_detail, proxy_endpoint_detail, proxy_ignore_hosts_detail,
@@ -22425,6 +22537,14 @@ mod tests {
         assert!(screen_keyboard_detail(false).contains("hidden"));
         assert!(magnifier_detail(true).contains("enabled"));
         assert!(magnifier_detail(false).contains("off"));
+        assert!(magnifier_lens_mode_detail(true).contains("Lens mode"));
+        assert!(magnifier_lens_mode_detail(false).contains("full-screen"));
+        assert_eq!(normalized_magnifier_zoom(0.1), 1.0);
+        assert_eq!(normalized_magnifier_zoom(2.13), 2.25);
+        assert_eq!(normalized_magnifier_zoom(f64::NAN), 2.0);
+        assert_eq!(magnifier_zoom_label(2.0), "2x");
+        assert_eq!(magnifier_zoom_label(2.5), "2.5x");
+        assert_eq!(magnifier_zoom_label(2.25), "2.25x");
     }
 
     #[test]
@@ -22990,6 +23110,12 @@ mod tests {
                 magnifier: Some(false),
                 detail: "Assistive technology settings are available.".to_string(),
             },
+            magnifier: super::MagnifierAccessibilityStatus {
+                schema_available: true,
+                zoom_factor: Some(2.0),
+                lens_mode: Some(false),
+                detail: "Magnifier controls are available.".to_string(),
+            },
             visual: super::VisualAccessibilityStatus {
                 schema_available: true,
                 high_contrast: Some(false),
@@ -23081,6 +23207,12 @@ mod tests {
                 screen_keyboard: None,
                 magnifier: None,
                 detail: "Assistive technology settings are unavailable.".to_string(),
+            },
+            magnifier: super::MagnifierAccessibilityStatus {
+                schema_available: false,
+                zoom_factor: None,
+                lens_mode: None,
+                detail: "Magnifier controls are unavailable.".to_string(),
             },
             visual: super::VisualAccessibilityStatus {
                 schema_available: false,
@@ -23420,6 +23552,12 @@ mod tests {
                 screen_keyboard: Some(false),
                 magnifier: Some(false),
                 detail: "Assistive technology settings are available.".to_string(),
+            },
+            magnifier: super::MagnifierAccessibilityStatus {
+                schema_available: true,
+                zoom_factor: Some(2.0),
+                lens_mode: Some(false),
+                detail: "Magnifier controls are available.".to_string(),
             },
             visual: super::VisualAccessibilityStatus {
                 schema_available: true,

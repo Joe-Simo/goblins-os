@@ -235,6 +235,24 @@ gates: targeted `cargo test -p goblins-os-core input`, targeted
 worktree GTK container
 `cargo clippy -p goblins-os-launcher --features goblins-os-launcher/native-desktop -- -D warnings`.
 
+Current Accessibility magnifier continuation: the optional magnifier zoom/lens
+controls are now source-gated but still CI/qemu-pending for GTK render and live
+GSettings writes. Core exposes the `org.gnome.desktop.a11y.magnifier`
+`mag-factor` and `lens-mode` keys through the existing
+`/v1/accessibility/preference` allowlist, clamps zoom to 1.0x-8.0x in 0.25x
+steps, and rejects zoom/lens writes unless the desktop reports
+`screen-magnifier-enabled=true`. Settings ▸ Accessibility adds a Magnifier
+controls subsection that shows a clear read-only message until Magnifier is on
+and the magnifier schema/keys are present. This pass does **not** claim the
+rendered GTK row layout or live GNOME magnifier behavior. Local source gates:
+targeted `cargo test -p goblins-os-core accessibility`, targeted
+`cargo test -p goblins-os-settings accessibility`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (2007)**, `git diff --check`,
+`bash -n os/hardware-gate/verify-shipping-status.sh`, and the Rust 1.88 current
+worktree GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
+
 Current Focus continuation: Focus arm/disarm/tick is now source-gated but not
 shipped. Core exposes `/v1/focus/activate`, `/v1/focus/deactivate`, and
 `/v1/focus/tick`; validates configured mode JSON, snapshots/restores global
@@ -1242,7 +1260,7 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 ### `shipped` Branded Accessibility panel rows
 - [x] **Core bridge** (`crates/goblins-os-core/src/accessibility.rs`): high contrast (`a11y.interface`), sticky/slow/bounce/mouse keys (`a11y.keyboard`), dwell click (`a11y.mouse`) read in `/v1/accessibility/status` + settable via `/v1/accessibility/preference` through the allowlisted, type-checked bridge — honest-gated per schema. Unit-tested on the host.
 - [x] **GTK Settings rows** (`crates/goblins-os-settings`): Contrast / Typing assistance / Pointer assistance groups via `append_accessibility_bool_row`, with honest "unavailable" rows when a schema is absent. **Compile- + `clippy -D warnings`-clean in a Linux container** (the local native-build loop), host tests green (92), verify gate added.
-- [ ] Optional later: the magnifier zoom-factor + lens-mode sliders (non-boolean controls).
+- [x] **Magnifier zoom/lens controls source-gated (CI/qemu-pending):** core reads/writes `org.gnome.desktop.a11y.magnifier` `mag-factor`/`lens-mode` through the same allowlisted preference bridge, clamps zoom to 1.0x-8.0x in 0.25x steps, and Settings only exposes active controls when `screen-magnifier-enabled=true`; otherwise it renders honest read-only copy. GTK render and live GNOME magnifier writes remain CI/qemu-pending.
 - **Packages:** none (schemas ship in gsettings-desktop-schemas, pulled by gnome-control-center).
 - **gsettings:** `org.gnome.desktop.a11y.interface high-contrast`; `…a11y.keyboard` stickykeys/slowkeys(+delay)/bouncekeys(+delay)/mousekeys(+max-speed/init-delay/accel-time); `…a11y.mouse` dwell-click-enabled/dwell-time(`d`)/dwell-threshold/secondary-click-enabled/secondary-click-time(`d`); `…a11y.magnifier` mag-factor(`d`)/lens-mode/screen-position; gated by existing `…a11y.applications screen-magnifier-enabled`.
 - **Files:** `crates/goblins-os-core/src/accessibility.rs` (new `AccessibilityPreferenceTarget` arms + normalizers/clamps), `crates/goblins-os-settings/src/main.rs` (new "Contrast"/"Typing assistance"/"Pointer assistance"/"Magnifier" groups via existing `switch_row_dynamic`/`slider_row`/`append_accessibility_bool_row`), `crates/goblins-os-design/src/lib.rs` (only if a new label fn is needed; reuse `gos-subsection-title` + `gos-switch-row` first).

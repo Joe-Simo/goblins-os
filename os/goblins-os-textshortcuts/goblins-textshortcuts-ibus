@@ -27,6 +27,7 @@ RESPONSE_TIMEOUT_SECONDS = 0.35
 CAPABILITY_TIMEOUT_SECONDS = 3.0
 ADAPTER_PATH = "/usr/libexec/goblins-os/goblins-textshortcuts-ibus"
 OVERLAY_INTENT_PROOF_SURFACE = "goblins-textshortcuts-ibus-adapter-overlay-intent"
+GI_ADAPTER_CONTRACT_SURFACE = "goblins-textshortcuts-gi-adapter-contract"
 ACCEPT_BUBBLE_FRAME_SURFACE = "goblins-textshortcuts-accept-bubble-frame"
 ACCEPT_BUBBLE_LAYOUT_SURFACE = "goblins-textshortcuts-accept-bubble-layout"
 ACCEPT_BUBBLE_RENDER_INTENT_SURFACE = "goblins-textshortcuts-accept-bubble-render-intent"
@@ -1363,6 +1364,219 @@ def _run_candidate_bubble_render_intent_self_test() -> dict[str, Any]:
     return payload
 
 
+def _run_gi_adapter_contract_self_test() -> dict[str, Any]:
+    import gi
+
+    gi.require_version("IBus", "1.0")
+    from gi.repository import IBus
+
+    IBus.init()
+
+    class FakeTarget:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        @staticmethod
+        def _text_value(text: Any) -> str:
+            getter = getattr(text, "get_text", None)
+            if callable(getter):
+                try:
+                    return str(getter())
+                except (TypeError, ValueError):
+                    pass
+            value = getattr(text, "text", None)
+            if value is not None:
+                return str(value)
+            return str(text)
+
+        def update_preedit_text(self, text: Any, cursor_pos: int, visible: bool) -> None:
+            self.calls.append(("update", self._text_value(text), cursor_pos, visible))
+
+        def hide_preedit_text(self) -> None:
+            self.calls.append(("hide",))
+
+        def delete_surrounding_text(self, offset: int, n_chars: int) -> None:
+            self.calls.append(("delete", offset, n_chars))
+
+        def commit_text(self, text: Any) -> None:
+            self.calls.append(("commit", self._text_value(text)))
+
+    text_factory = IBus.Text.new_from_string
+    assert text_factory("Goblins") is not None
+    assert _key_request(ord("o"), 0, IBus) == {
+        "type": "key",
+        "keyval": ord("o"),
+        "unicode": "o",
+        "pressed": True,
+        "command_modifier_active": False,
+    }
+    release_mask = int(getattr(IBus.ModifierType, "RELEASE_MASK", 1 << 30))
+    command_mask = next(
+        int(mask)
+        for name in (
+            "CONTROL_MASK",
+            "META_MASK",
+            "MOD1_MASK",
+            "MOD4_MASK",
+            "SUPER_MASK",
+            "HYPER_MASK",
+        )
+        if (mask := getattr(IBus.ModifierType, name, None)) is not None
+    )
+    assert _key_request(ord("o"), release_mask, IBus)["pressed"] is False
+    assert (
+        _key_request(ord("w"), command_mask, IBus)["command_modifier_active"] is True
+    )
+
+    callbacks_exercised = [
+        "focus-in",
+        "process-key-event",
+        "set-content-type",
+        "focus-out",
+        "reset",
+    ]
+    target = FakeTarget()
+    candidate_state = CandidateMetadataState()
+    render_contract = _run_candidate_bubble_render_intent_self_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        table_path = os.path.join(tmpdir, "text-shortcuts.json")
+        with open(table_path, "w", encoding="utf-8") as table_file:
+            json.dump([{"replace": "omw", "with": "on my way"}], table_file)
+
+        table_bridge = ShortcutTableBridge(table_path)
+        runtime = RuntimeBridge(response_timeout=CAPABILITY_TIMEOUT_SECONDS)
+        try:
+            _send_table_changed_if_needed(
+                table_bridge,
+                runtime,
+                target,
+                text_factory,
+                candidate_state,
+            )
+            _apply_response_operations(
+                target,
+                runtime.send(_content_purpose_request("focus-in", 0)),
+                text_factory,
+                candidate_state,
+            )
+
+            for character in "omw":
+                response = runtime.send(_key_request(ord(character), 0, IBus))
+                _apply_response_operations(
+                    target,
+                    response,
+                    text_factory,
+                    candidate_state,
+                )
+            preedit_update = (
+                response.get("candidate", {}).get("replacement") == "on my way"
+                and any(
+                    call[0] == "update" and call[2:] == (9, True)
+                    for call in target.calls
+                )
+            )
+
+            _apply_response_operations(
+                target,
+                runtime.send(_key_request(0xFF1B, 0, IBus)),
+                text_factory,
+                candidate_state,
+            )
+            escape_dismiss = target.calls[-1:] == [("hide",)] and candidate_state.current is None
+
+            target.calls.clear()
+            for character in "omw ":
+                response = runtime.send(_key_request(ord(character), 0, IBus))
+                _apply_response_operations(
+                    target,
+                    response,
+                    text_factory,
+                    candidate_state,
+                )
+            boundary_commit = (
+                response.get("handled") is True
+                and any(
+                    operation.get("type") == "commit-text"
+                    and operation.get("text") == "on my way "
+                    for operation in response.get("operations", [])
+                    if isinstance(operation, dict)
+                )
+                and [call[0] for call in target.calls]
+                == ["update", "delete", "commit", "hide"]
+                and ("delete", -3, 3) in target.calls
+            )
+
+            target.calls.clear()
+            pass_through_default = True
+            for character in "hello ":
+                response = runtime.send(_key_request(ord(character), 0, IBus))
+                pass_through_default = pass_through_default and response.get("handled") is False
+                _apply_response_operations(target, response, text_factory, candidate_state)
+            pass_through_default = pass_through_default and target.calls == []
+
+            runtime.send(_content_purpose_request("content-purpose-changed", 9))
+            target.calls.clear()
+            password_refusal = True
+            for character in "omw ":
+                response = runtime.send(_key_request(ord(character), 0, IBus))
+                password_refusal = password_refusal and response.get("handled") is False
+                _apply_response_operations(target, response, text_factory, candidate_state)
+            password_refusal = password_refusal and target.calls == []
+
+            _apply_response_operations(
+                target,
+                runtime.send({"type": "focus-out"}),
+                text_factory,
+                candidate_state,
+            )
+            _apply_response_operations(
+                target,
+                runtime.send({"type": "reset"}),
+                text_factory,
+                candidate_state,
+            )
+        finally:
+            runtime.close()
+
+    payload = {
+        "status": "pass",
+        "surface": GI_ADAPTER_CONTRACT_SURFACE,
+        "adapter_entrypoint": ADAPTER_PATH,
+        "component_exec": ADAPTER_PATH,
+        "engine_name": ENGINE_NAME,
+        "gi_ibus_import": True,
+        "ibus_text_factory": "IBus.Text.new_from_string",
+        "ibus_key_unicode": True,
+        "callbacks_exercised": callbacks_exercised,
+        "preedit_update": preedit_update,
+        "boundary_commit": boundary_commit,
+        "escape_dismiss": escape_dismiss,
+        "pass_through_default": pass_through_default,
+        "password_refusal": password_refusal,
+        "render_intent_surface": render_contract["surface"],
+        "render_intent_count": render_contract["render_intent_count"],
+        "rendered_bubble_ready_claim": False,
+        "live_overlay_claim": False,
+        "live_ibus_bus_claim": False,
+        "text_input_v3_claim": False,
+        "runtime_ready_claim": False,
+    }
+    assert payload["preedit_update"] is True
+    assert payload["boundary_commit"] is True
+    assert payload["escape_dismiss"] is True
+    assert payload["pass_through_default"] is True
+    assert payload["password_refusal"] is True
+    assert payload["render_intent_surface"] == ACCEPT_BUBBLE_RENDER_INTENT_SURFACE
+    assert payload["render_intent_count"] == 8
+    assert payload["rendered_bubble_ready_claim"] is False
+    assert payload["live_overlay_claim"] is False
+    assert payload["live_ibus_bus_claim"] is False
+    assert payload["text_input_v3_claim"] is False
+    assert payload["runtime_ready_claim"] is False
+    return payload
+
+
 def _run_overlay_intent_self_test() -> dict[str, Any]:
     class FakeTarget:
         def __init__(self) -> None:
@@ -1708,6 +1922,7 @@ def _run_ibus() -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Goblins OS Text Shortcuts IBus adapter")
     parser.add_argument("--capability-check", action="store_true")
+    parser.add_argument("--gi-adapter-contract-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-render-intent-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-layout-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-frame-self-test", action="store_true")
@@ -1717,6 +1932,9 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.capability_check:
         print(json.dumps(capability_payload(), sort_keys=True))
+        return 0
+    if args.gi_adapter_contract_self_test:
+        print(json.dumps(_run_gi_adapter_contract_self_test(), sort_keys=True))
         return 0
     if args.candidate_bubble_render_intent_self_test:
         print(json.dumps(_run_candidate_bubble_render_intent_self_test(), sort_keys=True))

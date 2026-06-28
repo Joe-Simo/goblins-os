@@ -477,6 +477,32 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --gi-adapter-contract-self-test > /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"status": "pass"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"surface": "goblins-textshortcuts-gi-adapter-contract"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"adapter_entrypoint": "/usr/libexec/goblins-os/goblins-textshortcuts-ibus"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"component_exec": "/usr/libexec/goblins-os/goblins-textshortcuts-ibus"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"engine_name": "goblins-textshortcuts"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"gi_ibus_import": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"ibus_text_factory": "IBus.Text.new_from_string"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"ibus_key_unicode": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"focus-in"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"process-key-event"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"set-content-type"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"focus-out"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"reset"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"preedit_update": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"boundary_commit": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"escape_dismiss": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"pass_through_default": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"password_refusal": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"render_intent_surface": "goblins-textshortcuts-accept-bubble-render-intent"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"render_intent_count": 8' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"live_ibus_bus_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"text_input_v3_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"adapter_contract_ready": true' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --capability-check | grep -q '"runtime_ready_claim": false' \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --self-test \

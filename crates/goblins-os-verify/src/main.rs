@@ -10722,6 +10722,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-runs-textshortcuts-gi-adapter-contract-self-test",
+            "goblins-textshortcuts-ibus --gi-adapter-contract-self-test",
+        ),
+        container_contains_check(
+            root,
             "bootc-requires-textshortcuts-overlay-intent-proof",
             "goblins-textshortcuts-overlay-intent.json",
         ),
@@ -10739,6 +10744,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-requires-textshortcuts-candidate-bubble-render-intent-proof",
             "goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-proof",
+            "goblins-textshortcuts-gi-adapter-contract.json",
         ),
         container_contains_check(
             root,
@@ -10877,6 +10887,101 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-pass",
+            "grep -q '\"status\": \"pass\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-surface",
+            "grep -q '\"surface\": \"goblins-textshortcuts-gi-adapter-contract\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-entrypoint",
+            "grep -q '\"adapter_entrypoint\": \"/usr/libexec/goblins-os/goblins-textshortcuts-ibus\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-component-exec",
+            "grep -q '\"component_exec\": \"/usr/libexec/goblins-os/goblins-textshortcuts-ibus\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-gi-import",
+            "grep -q '\"gi_ibus_import\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-text-factory",
+            "grep -q '\"ibus_text_factory\": \"IBus.Text.new_from_string\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-key-unicode",
+            "grep -q '\"ibus_key_unicode\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-focus-in",
+            "grep -q '\"focus-in\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-process-key",
+            "grep -q '\"process-key-event\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-content-type",
+            "grep -q '\"set-content-type\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-focus-out",
+            "grep -q '\"focus-out\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-reset",
+            "grep -q '\"reset\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-preedit",
+            "grep -q '\"preedit_update\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-commit",
+            "grep -q '\"boundary_commit\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-dismiss",
+            "grep -q '\"escape_dismiss\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-pass-through",
+            "grep -q '\"pass_through_default\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-password-refusal",
+            "grep -q '\"password_refusal\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-render-surface",
+            "grep -q '\"render_intent_surface\": \"goblins-textshortcuts-accept-bubble-render-intent\"' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-render-count",
+            "grep -q '\"render_intent_count\": 8' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
             "bootc-requires-textshortcuts-candidate-bubble-frame-sensitive-refusal",
             "grep -q '\"sensitive_field_refusal\": true' /tmp/goblins-textshortcuts-candidate-bubble-frame.json",
         ),
@@ -10929,6 +11034,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-keeps-textshortcuts-candidate-bubble-render-intent-runtime-claim-false",
             "grep -q '\"runtime_ready_claim\": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-gi-adapter-contract-render-claim-false",
+            "grep -q '\"rendered_bubble_ready_claim\": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-gi-adapter-contract-live-claim-false",
+            "grep -q '\"live_overlay_claim\": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-gi-adapter-contract-bus-claim-false",
+            "grep -q '\"live_ibus_bus_claim\": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-gi-adapter-contract-text-input-claim-false",
+            "grep -q '\"text_input_v3_claim\": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-keeps-textshortcuts-gi-adapter-contract-runtime-claim-false",
+            "grep -q '\"runtime_ready_claim\": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
         ),
         container_contains_check(
             root,
@@ -11154,6 +11284,76 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-candidate-bubble-render-intent-cli",
             "--candidate-bubble-render-intent-self-test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-cli",
+            "--gi-adapter-contract-self-test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-surface",
+            "goblins-textshortcuts-gi-adapter-contract",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-self-test",
+            "def _run_gi_adapter_contract_self_test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-imports-ibus",
+            "from gi.repository import IBus",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-text-factory",
+            "IBus.Text.new_from_string",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-key-unicode",
+            "\"ibus_key_unicode\": True",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-preedit",
+            "\"preedit_update\": preedit_update",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-commit",
+            "\"boundary_commit\": boundary_commit",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-dismiss",
+            "\"escape_dismiss\": escape_dismiss",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-pass-through",
+            "\"pass_through_default\": pass_through_default",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-password-refusal",
+            "\"password_refusal\": password_refusal",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-render-count",
+            "\"render_intent_count\": render_contract[\"render_intent_count\"]",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-no-live-bus-claim",
+            "\"live_ibus_bus_claim\": False",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-gi-contract-no-text-input-claim",
+            "\"text_input_v3_claim\": False",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),

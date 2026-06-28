@@ -2479,6 +2479,40 @@ fn contains_check(path: PathBuf, id: &str, needle: &str) -> Check {
     }
 }
 
+fn shell_function_contains_check(
+    path: PathBuf,
+    function_name: &str,
+    id: &str,
+    needle: &str,
+) -> Check {
+    let text = read_to_string(&path);
+    let marker = format!("{function_name}() {{");
+    let Some(start) = text.find(&marker) else {
+        return blocked(
+            id,
+            &format!(
+                "{} is missing shell function {function_name}",
+                path.display()
+            ),
+        );
+    };
+    let body = text[start..]
+        .split_once("\n}\n")
+        .map(|(body, _)| body)
+        .unwrap_or(&text[start..]);
+    if body.contains(needle) {
+        ready(
+            id,
+            &format!("{} {function_name} contains {}", path.display(), needle),
+        )
+    } else {
+        blocked(
+            id,
+            &format!("{} {function_name} is missing {}", path.display(), needle),
+        )
+    }
+}
+
 /// Like `contains_check`, but collapses runs of whitespace in the file to a
 /// single space before searching, so the needle survives any benign re-wrap or
 /// reflow of the source document. Used for prose checks where the asserted
@@ -6177,6 +6211,30 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-input-sources-roundtrip-proof",
             "input_sources_roundtrip_proof_passes",
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "screenshot_run_is_complete",
+            "shipping-status-complete-run-requires-keyboard-shortcuts-roundtrip-proof",
+            r#"keyboard_shortcuts_roundtrip_proof_passes "$run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "screenshot_run_is_complete",
+            "shipping-status-complete-run-requires-input-sources-roundtrip-proof",
+            r#"input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "print_missing_screenshot_paths",
+            "shipping-status-missing-list-includes-keyboard-shortcuts-roundtrip-proof",
+            r#"echo "  $run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "print_missing_screenshot_paths",
+            "shipping-status-missing-list-includes-input-sources-roundtrip-proof",
+            r#"echo "  $run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF""#,
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),

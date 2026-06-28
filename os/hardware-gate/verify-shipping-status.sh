@@ -222,6 +222,8 @@ screenshot_run_is_complete() {
   text_shortcuts_candidate_metadata_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF" || return 1
   text_shortcuts_overlay_intent_proof_passes "$run_dir/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF" || return 1
   text_shortcuts_candidate_bubble_frame_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" || return 1
+  keyboard_shortcuts_roundtrip_proof_passes "$run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" || return 1
+  input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF" || return 1
   return 0
 }
 
@@ -478,6 +480,14 @@ print_missing_screenshot_paths() {
   fi
   if ! text_shortcuts_candidate_bubble_frame_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"; then
     echo "  $run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"
+    missing=1
+  fi
+  if ! keyboard_shortcuts_roundtrip_proof_passes "$run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"; then
+    echo "  $run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"
+    missing=1
+  fi
+  if ! input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF"; then
+    echo "  $run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF"
     missing=1
   fi
   return "$missing"

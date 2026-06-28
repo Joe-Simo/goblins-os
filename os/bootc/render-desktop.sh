@@ -227,6 +227,17 @@ render_scheme() {
   # Bare desktop: wallpaper + menu bar + dock, no window.
   shoot "50-desktop-$suffix.png" || true
 
+  # IME menu-bar proof: seed two stock XKB sources and switch to the second one
+  # so the Goblins menu-bar input-source chip is visible. This proves only the
+  # shell indicator render; live CJK engine switching remains hardware-gated.
+  gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us'), ('xkb', 'gb')]" || return 1
+  gsettings set org.gnome.desktop.input-sources current 1 || return 1
+  sleep 0.8
+  shoot "59-menubar-input-source-$suffix.png"
+  gsettings set org.gnome.desktop.input-sources current 0 2>/dev/null || true
+  gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us')]" 2>/dev/null || true
+  sleep 0.2
+
   # The native shell composited into the live desktop.
   GOBLINS_OS_THEME="$app_theme" \
   WAYLAND_DISPLAY="$WAYLAND_SOCK" GDK_BACKEND=wayland GSK_RENDERER=cairo \

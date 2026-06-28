@@ -1382,6 +1382,21 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "showPointScanDemo",
     ));
     checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-menubar-input-source-chip",
+        "59-menubar-input-source-$suffix.png",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-menubar-input-source-seeds-two-sources",
+        "[('xkb', 'us'), ('xkb', 'gb')]",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-menubar-input-source-seeds-current-index",
+        "gsettings set org.gnome.desktop.input-sources current 1",
+    ));
+    checks.push(contains_check(
         root.join("os/bootc/render-desktop.suffix.Dockerfile"),
         "desktop-render-target",
         "desktop-screenshots",
@@ -7997,6 +8012,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/stylesheet.css"),
             "menubar-input-source-uses-canonical-accent",
             "rgba(0, 145, 255, 0.22)",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "menubar-input-source-desktop-render-proof-hook",
+            "59-menubar-input-source-$suffix.png",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "menubar-input-source-render-seeds-two-sources",
+            "[('xkb', 'us'), ('xkb', 'gb')]",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "menubar-input-source-render-seeds-current-index",
+            "gsettings set org.gnome.desktop.input-sources current 1",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),

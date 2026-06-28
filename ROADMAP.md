@@ -202,14 +202,17 @@ capture driver, `bash -n` for the capture and shipping scripts, scoped
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
 `goblins-os-verify --source-root .` → **blocked=0 (2183)**.
 
-Current IME menu-bar indicator continuation: the active-source indicator is now
-source-gated. The `goblins-menubar` shell extension binds the stable GNOME
-`org.gnome.desktop.input-sources` `sources/current` keys, hides the indicator
-when fewer than two sources are configured, hides rather than guessing if the
-current source cannot be read, and renders a compact abbreviation chip for known
-XKB/IBus sources using the canonical Goblins shell accent. This does not add a
-source picker, change IME environment defaults, restore `Super+Space`, or claim
-live candidate/input switching; render and live switching remain CI/qemu-pending.
+Current IME menu-bar indicator continuation: the active-source indicator render
+hook is now source-gated. The `goblins-menubar` shell extension binds the stable
+GNOME `org.gnome.desktop.input-sources` `sources/current` keys, hides the
+indicator when fewer than two sources are configured, hides rather than guessing
+if the current source cannot be read, and renders a compact abbreviation chip for
+known XKB/IBus sources using the canonical Goblins shell accent. The desktop
+render harness now seeds deterministic `xkb/us` + `xkb/gb`, switches to the
+second source, captures `59-menubar-input-source-$suffix.png`, then restores the
+single-source state. This does not add a source picker, change IME environment
+defaults, restore `Super+Space`, or claim live candidate/input switching; pixel
+proof and live switching remain CI/qemu-pending.
 
 Current IME add-source continuation: the **Add input source…** surface is now
 source-gated. Core exposes `/v1/input/source`, re-reads the current GNOME
@@ -1400,7 +1403,7 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 - [x] **Settings list (GTK) shipped**: Settings ▸ Keyboard now renders a read-only **Input sources** list (friendly names via a unit-tested `input_source_label`, e.g. xkb `us` → "English (US)", ibus `libpinyin` → "Pinyin (Chinese)", honest raw-id fallback), with honest unavailable/empty rows. Compile- + `clippy -D warnings`-clean in the native container; 93 settings host tests; verify gate added.
 - [x] **Set/reorder/remove substrate source-gated (CI/qemu-pending):** core exposes `/v1/input/sources`, validates only `xkb`/`ibus` source entries, encodes the `a(ss)` GVariant, and returns honest failure when gsettings or `org.gnome.desktop.input-sources sources` is absent. Settings ▸ Keyboard adds Move up / Move down / Remove row controls for existing configured sources only; the last source cannot be removed. Host tests cover `a(ss)` encode/decode, allowlist, reorder/remove, and the last-source rule; native GTK clippy passes in the Rust 1.88 container; verify gate added. **Not shipped** until CI/qemu proves render + interaction + live source switching.
 - [x] **CJK engine package substrate source-gated (CI/qemu-pending):** Fedora 44 package metadata and a clean Fedora 44 install probe confirm `ibus-libpinyin`, `ibus-anthy`, `ibus-hangul`, and the existing `ibus-gtk4` module. The bootc image installs and `rpm -q` asserts the CJK engines, asserts `/usr/share/ibus/component/{libpinyin,anthy,hangul}.xml`, asserts `/usr/libexec/ibus-engine-{libpinyin,anthy,hangul}`, and asserts the GTK4 IBus module. Core reports a pure CJK engine package registry plus runtime path readiness; Settings ▸ Keyboard renders read-only CJK engine package rows. **Not shipped** until CI/qemu proves the installed image, Settings render, live IBus engine listing, source switching, and candidate window behavior.
-- [x] **Menu-bar active-source indicator source-gated (CI/qemu-pending):** `goblins-menubar` reads GNOME's `org.gnome.desktop.input-sources` `sources/current` keys, hides itself when only one source is configured, hides rather than guessing if the schema/current key is not readable, and shows a compact Goblins-accent abbreviation chip for known XKB/IBus sources. **Not shipped** until CI/qemu proves the shell render and live source switching.
+- [x] **Menu-bar active-source indicator source-gated (CI/qemu-pending):** `goblins-menubar` reads GNOME's `org.gnome.desktop.input-sources` `sources/current` keys, hides itself when only one source is configured, hides rather than guessing if the schema/current key is not readable, and shows a compact Goblins-accent abbreviation chip for known XKB/IBus sources. The desktop render harness now captures `59-menubar-input-source-$suffix.png` after seeding `xkb/us` plus `xkb/gb` and switching current to index `1`, then restores the single-source state. **Not shipped** until CI/qemu proves the shell render and live source switching.
 - [x] **Add input source sheet source-gated (CI/qemu-pending):** core exposes a narrow append-only `/v1/input/source` route that lists/adds only installed CJK IBus engines reported by `ibus list-engine` and not already configured; Settings ▸ Keyboard renders **Add input source…** choices from that core list. **Not shipped** until CI/qemu proves Settings render, installed-session `ibus list-engine`, real gsettings writes, menu-bar indicator update, source switching, and candidate-window behavior.
 - [x] **Super+Space launcher handoff source-gated (CI/qemu-pending):** the seeded launcher binding calls `goblins-os-launcher --super-space`, which first asks core `/v1/input/switch-next` to rotate `org.gnome.desktop.input-sources current` only when more than one source exists. If switching is unavailable or unnecessary, the launcher opens normally. GNOME's stock switcher bindings stay empty so there is still only one owner of the key. **Not shipped** until CI/qemu proves live source switching and the launcher fallback path.
 - [x] **Live input-source roundtrip hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `input-sources-roundtrip-proof.json`, posts `/v1/input/sources` with `xkb/us` plus `xkb/gb`, verifies gsettings read-back, seeds current index `0`, posts `/v1/input/switch-next`, verifies current index `1`, restores the original source list/current index, links the proof in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. No live qemu run has produced the proof yet.

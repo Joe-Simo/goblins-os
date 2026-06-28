@@ -253,6 +253,24 @@ targeted `cargo test -p goblins-os-core accessibility`, targeted
 worktree GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
 
+Current Hot Corners Settings continuation: the Settings chooser is now
+source-gated but still CI/qemu-pending for GTK render and live GSettings writes.
+Core exposes `/v1/window-management/status` and
+`/v1/window-management/hot-corner`, reads only the existing
+`org.goblins.shell.extensions.wm` hot-corner keys, validates the four corner ids
+plus the existing `none`/`mission-control`/`app-expose` action registry, and
+returns a read-only message when the Goblins WM schema/session is absent.
+Settings ▸ Multitasking now shows a Hot corners subsection with four chooser
+rows driven by core status. This pass does **not** claim rendered GTK layout,
+barrier geometry, or live shell dispatch behavior. Local source gates: targeted
+`cargo test -p goblins-os-core window_management`, targeted
+`cargo test -p goblins-os-settings hot_corner`, `cargo fmt --all --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`goblins-os-verify --source-root .` → **blocked=0 (2015)**, `git diff --check`,
+`bash -n os/hardware-gate/verify-shipping-status.sh`, and the Rust 1.88 current
+worktree GTK container
+`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
+
 Current Focus continuation: Focus arm/disarm/tick is now source-gated but not
 shipped. Core exposes `/v1/focus/activate`, `/v1/focus/deactivate`, and
 `/v1/focus/tick`; validates configured mode JSON, snapshots/restores global
@@ -1298,7 +1316,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 
 ### `shipped` Hot Corners
 - [x] **Opt-in hot corners shipped** (`goblins-wm@goblins.os`): four `hot-corner-{top,bottom}-{left,right}` gschema keys (`s`, choices `none`/`mission-control`/`app-expose`, **default `none`** so nothing changes until opted in — macOS-style). Each enabled corner gets a tiny reactive actor (`addChrome`) that triggers the action on pointer entry, rebuilt on settings change, fully torn down on disable. Verified with `node --check`, `glib-compile-schemas`, verify gates, and CI/qemu desktop artifacts from build run `28287964440`: `52c-wm-hot-corner-{light,dark}.png` on both `x86_64` and `aarch64`.
-- [ ] Optional polish: more corner actions (Show Desktop, Control/Notification Center, Lock), a modifier-key guard, and the Settings ▸ Desktop chooser UI; set `org.gnome.desktop.interface enable-hot-corners=false` in dconf if GNOME's built-in corner ever conflicts.
+- [x] **Settings chooser source-gated (CI/qemu-pending):** core exposes `/v1/window-management/status` and `/v1/window-management/hot-corner`, writes only the four allowlisted Goblins WM hot-corner keys, validates the existing action registry, and Settings ▸ Multitasking renders four chooser rows from core status. Render, live writes, and shell dispatch remain CI/qemu-pending.
+- [ ] Optional polish: more corner actions (Show Desktop, Control/Notification Center, Lock), a modifier-key guard; set `org.gnome.desktop.interface enable-hot-corners=false` in dconf if GNOME's built-in corner ever conflicts.
 - **Packages:** none.
 - **gsettings:** EXTEND `org.goblins.shell.extensions.wm` — add `HotCornerAction` enum + `hot-corner-{top,bottom}-{left,right}` (`s`, default 'none'), `hot-corner-modifier` (none/super/ctrl/alt/shift), `hot-corners-enabled` (b). SET `org.gnome.desktop.interface enable-hot-corners=false` in dconf so GNOME's built-in corner doesn't fight the barriers.
 - **Files:** `…/goblins-wm@goblins.os/schemas/…wm.gschema.xml` (enum + 6 keys), `…/goblins-wm@goblins.os/extension.js` (self-contained `HotCorners` manager: pressure barriers + guarded dispatch), `os/dconf/db/local.d/10-goblins-os-desktop`, `crates/goblins-os-settings/src/main.rs` (replace the read-only Multitasking "Hot corner" row with a live four-corner DropDown surface), `crates/goblins-os-core/src/window_management.rs` (NEW allowlisted gsettings bridge), `crates/goblins-os-core/src/lib.rs` (module + routes).

@@ -45,6 +45,7 @@ mod today;
 mod vision;
 mod voice;
 mod voice_control;
+mod window_management;
 
 use std::net::SocketAddr;
 
@@ -104,6 +105,7 @@ use crate::{
     system::{health, system_services},
     system_image::system_image_status,
     voice::{voice_converse, voice_dictate, voice_status},
+    window_management::{set_hot_corner, window_management_status},
 };
 
 #[tokio::main]
@@ -284,6 +286,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/v1/hotspot/status", get(hotspot::hotspot_status))
         .route("/v1/hotspot/enabled", post(hotspot::set_hotspot_enabled))
+        .route(
+            "/v1/window-management/status",
+            get(window_management_status),
+        )
+        .route("/v1/window-management/hot-corner", post(set_hot_corner))
         .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
         .route("/v1/keyboard/shortcuts/status", get(shortcuts_status))
         .route("/v1/keyboard/shortcuts/binding", post(set_shortcut_binding))

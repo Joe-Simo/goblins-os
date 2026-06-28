@@ -8813,6 +8813,46 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-window-management-status-route",
+            "/v1/window-management/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-hot-corner-route",
+            "/v1/window-management/hot-corner",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/window_management.rs"),
+            "core-hot-corner-allowlist",
+            "hot_corner_by_id",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/window_management.rs"),
+            "core-hot-corner-gsettings-string-encoder",
+            "encode_gsettings_string",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-fetches-window-management-status",
+            "/v1/window-management/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-posts-hot-corner-route",
+            "/v1/window-management/hot-corner",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-multitasking-hot-corner-controls",
+            "append_hot_corner_settings",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-hot-corner-action-options",
+            "HOT_CORNER_ACTION_OPTIONS",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-shortcuts-status-route",
             "/v1/shortcuts/status",
         ),

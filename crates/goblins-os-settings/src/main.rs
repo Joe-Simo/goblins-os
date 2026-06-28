@@ -122,6 +122,7 @@ struct SettingsState {
     accessibility: Option<AccessibilityStatus>,
     firewall: Option<FirewallStatus>,
     hotspot: Option<HotspotStatus>,
+    window_management: Option<WindowManagementStatus>,
     shortcuts: Option<ShortcutsStatus>,
     keychain: Option<KeychainStatus>,
     fingerprint: Option<FingerprintStatus>,
@@ -828,6 +829,16 @@ struct HotspotToggleOutcome {
 }
 
 #[derive(Deserialize)]
+struct HotCornerOutcome {
+    ok: bool,
+    #[allow(dead_code)]
+    corner: String,
+    #[allow(dead_code)]
+    action: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
 struct InputPreferenceOutcome {
     ok: bool,
     #[allow(dead_code)]
@@ -1040,6 +1051,35 @@ struct SoundRecognitionCategory {
     group: String,
     enabled: bool,
     description: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct WindowManagementStatus {
+    #[allow(dead_code)]
+    source: String,
+    #[allow(dead_code)]
+    gsettings_available: bool,
+    available: bool,
+    hot_corners: HotCornersStatus,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct HotCornersStatus {
+    schema_available: bool,
+    corners: Vec<HotCornerSetting>,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct HotCornerSetting {
+    id: String,
+    title: String,
+    action: String,
+    #[allow(dead_code)]
+    action_label: String,
+    #[allow(dead_code)]
+    detail: String,
 }
 
 impl VoiceStatus {
@@ -1331,6 +1371,15 @@ fn sound_recognition_lock_screen_detail(enabled: bool) -> String {
     } else {
         "Sound Recognition alerts stay out of the lock screen.".to_string()
     }
+}
+
+fn hot_corner_action_detail(value: &str) -> String {
+    match value {
+        "mission-control" => "Pointing to this corner opens Mission Control.",
+        "app-expose" => "Pointing to this corner opens App Exposé for the focused app.",
+        _ => "This corner is off.",
+    }
+    .to_string()
 }
 
 /// Offline / private-mode status from Goblins OS. The toggle only mirrors and
@@ -3089,6 +3138,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             accessibility: None,
             firewall: None,
             hotspot: None,
+            window_management: None,
             shortcuts: None,
             keychain: None,
             fingerprint: None,
@@ -3128,6 +3178,7 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         accessibility: get_core_json(&config.core_url, "/v1/accessibility/status").ok(),
         firewall: get_core_json(&config.core_url, "/v1/firewall/status").ok(),
         hotspot: get_core_json(&config.core_url, "/v1/hotspot/status").ok(),
+        window_management: get_core_json(&config.core_url, "/v1/window-management/status").ok(),
         shortcuts: get_core_json(&config.core_url, "/v1/shortcuts/status").ok(),
         keychain: get_core_json(&config.core_url, "/v1/keychain/status").ok(),
         fingerprint: get_core_json(&config.core_url, "/v1/fingerprint/status").ok(),
@@ -4736,7 +4787,7 @@ fn populate_panel(
         SettingsPanel::Notifications => build_notifications(main, state),
         SettingsPanel::LockScreen => build_device_settings_panel(main, panel, state),
         SettingsPanel::SearchIndexing => build_device_settings_panel(main, panel, state),
-        SettingsPanel::Multitasking => build_device_settings_panel(main, panel, state),
+        SettingsPanel::Multitasking => build_multitasking(main, state),
         SettingsPanel::PowerBattery => build_device_settings_panel(main, panel, state),
         SettingsPanel::Games => build_games(main),
         SettingsPanel::PrintersScanners => build_device_settings_panel(main, panel, state),
@@ -5183,6 +5234,81 @@ fn build_device_settings_panel(
     let title = settings_panel.display_name();
     let detail = device_settings_integrated_detail(settings_panel);
     append_device_settings_handoff(panel, settings_panel, title, &detail, state.system.as_ref());
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn build_multitasking(panel: &gtk4::Box, state: &SettingsState) {
+    use gtk4::prelude::*;
+
+    let settings_panel = SettingsPanel::Multitasking;
+    append_panel_header(
+        panel,
+        settings_panel.display_name(),
+        settings_panel.summary(),
+    );
+    let available = gnome_control_center_available();
+    let readiness = device_settings_readiness(state.system.as_ref(), available);
+    append_device_native_coverage(panel, settings_panel);
+    if matches!(readiness, DeviceSettingsReadiness::Unavailable) {
+        panel.append(&label("System Status", &["gos-subsection-title"]));
+        panel.append(&device_settings_context_grid(settings_panel, readiness));
+    }
+    append_hot_corner_settings(panel, state);
+    append_device_native_handoffs(panel, settings_panel);
+    panel.append(&label("Controls", &["gos-subsection-title"]));
+    let detail = device_settings_integrated_detail(settings_panel);
+    append_device_settings_handoff(
+        panel,
+        settings_panel,
+        settings_panel.display_name(),
+        &detail,
+        state.system.as_ref(),
+    );
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_hot_corner_settings(panel: &gtk4::Box, state: &SettingsState) {
+    panel.append(&label("Hot corners", &["gos-subsection-title"]));
+    let Some(window_management) = &state.window_management else {
+        panel.append(&system_row(
+            "Hot corners",
+            "Waiting for Goblins window-management preferences.",
+        ));
+        return;
+    };
+
+    panel.append(&health_row(
+        "Goblins window manager",
+        if window_management.available {
+            "ready"
+        } else {
+            "waiting"
+        },
+        window_management.available,
+        &window_management.detail,
+    ));
+
+    let hot_corners = &window_management.hot_corners;
+    if !window_management.available
+        || !hot_corners.schema_available
+        || hot_corners.corners.is_empty()
+    {
+        panel.append(&system_row("Hot corners", &hot_corners.detail));
+        return;
+    }
+
+    let core_url = config_core_url(state);
+    for corner in &hot_corners.corners {
+        let core_url = core_url.clone();
+        let corner_id = corner.id.clone();
+        panel.append(&choice_row(
+            &corner.title,
+            &corner.action,
+            HOT_CORNER_ACTION_OPTIONS,
+            hot_corner_action_detail,
+            move |action| set_hot_corner_action(&core_url, &corner_id, action),
+        ));
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -16416,6 +16542,22 @@ const SOUND_RECOGNITION_SENSITIVITY_OPTIONS: &[ChoiceOption<'static>] = &[
 ];
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+const HOT_CORNER_ACTION_OPTIONS: &[ChoiceOption<'static>] = &[
+    ChoiceOption {
+        id: "none",
+        label: "Off",
+    },
+    ChoiceOption {
+        id: "mission-control",
+        label: "Mission Control",
+    },
+    ChoiceOption {
+        id: "app-expose",
+        label: "App Exposé",
+    },
+];
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 const BACKGROUND_PICTURE_OPTIONS: &[ChoiceOption<'static>] = &[
     ChoiceOption {
         id: "zoom",
@@ -18408,6 +18550,28 @@ fn set_hotspot(
 }
 
 fn hotspot_toggle_outcome(body: &[u8]) -> Result<HotspotToggleOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_hot_corner_action(base_url: &str, corner: &str, action: &str) -> Result<String, String> {
+    let body = serde_json::json!({
+        "corner": corner,
+        "action": action,
+    })
+    .to_string();
+    let response = http_post_json_response(base_url, "/v1/window-management/hot-corner", &body)
+        .map_err(|error| format!("Goblins OS could not reach Hot Corners: {error}."))?;
+    let outcome = hot_corner_outcome(&response.body).map_err(|error| error.to_string())?;
+
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn hot_corner_outcome(body: &[u8]) -> Result<HotCornerOutcome, CoreFetchError> {
     serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
 }
 
@@ -25233,6 +25397,32 @@ mod tests {
         assert_eq!(
             outcome.text,
             "Personal Hotspot could not be changed.".to_string()
+        );
+    }
+
+    #[test]
+    fn hot_corner_copy_and_outcome_keep_core_state_honest() {
+        assert_eq!(
+            super::hot_corner_action_detail("mission-control"),
+            "Pointing to this corner opens Mission Control."
+        );
+        assert_eq!(
+            super::hot_corner_action_detail("app-expose"),
+            "Pointing to this corner opens App Exposé for the focused app."
+        );
+        assert_eq!(
+            super::hot_corner_action_detail("none"),
+            "This corner is off."
+        );
+
+        let outcome = super::hot_corner_outcome(
+            br#"{"ok":false,"corner":"hot-corner-top-left","action":"app-expose","text":"Hot corners need the Goblins window manager session before they can be changed."}"#,
+        )
+        .unwrap();
+        assert!(!outcome.ok);
+        assert_eq!(
+            outcome.text,
+            "Hot corners need the Goblins window manager session before they can be changed."
         );
     }
 

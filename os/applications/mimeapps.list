@@ -1,0 +1,23 @@
+[Default Applications]
+application/pdf=org.gnome.Papers.desktop
+application/x-bzpdf=org.gnome.Papers.desktop
+application/x-gzpdf=org.gnome.Papers.desktop
+application/postscript=org.gnome.Papers.desktop
+image/bmp=org.gnome.Loupe.desktop
+image/gif=org.gnome.Loupe.desktop
+image/jpeg=org.gnome.Loupe.desktop
+image/png=org.gnome.Loupe.desktop
+image/tiff=org.gnome.Loupe.desktop
+image/webp=org.gnome.Loupe.desktop
+
+[Added Associations]
+application/pdf=org.gnome.Papers.desktop;
+application/x-bzpdf=org.gnome.Papers.desktop;
+application/x-gzpdf=org.gnome.Papers.desktop;
+application/postscript=org.gnome.Papers.desktop;
+image/bmp=org.gnome.Loupe.desktop;
+image/gif=org.gnome.Loupe.desktop;
+image/jpeg=org.gnome.Loupe.desktop;
+image/png=org.gnome.Loupe.desktop;
+image/tiff=org.gnome.Loupe.desktop;
+image/webp=org.gnome.Loupe.desktop;

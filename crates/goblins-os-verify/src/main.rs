@@ -557,6 +557,22 @@ fn source_checks(root: &Path) -> Vec<Check> {
     for app in APPLICATIONS {
         checks.push(file_check(root, &format!("os/applications/{app}")));
     }
+    checks.push(file_check(root, "os/applications/mimeapps.list"));
+    checks.push(contains_check(
+        root.join("os/applications/mimeapps.list"),
+        "preview-pdf-defaults-to-papers",
+        "application/pdf=org.gnome.Papers.desktop",
+    ));
+    checks.push(contains_check(
+        root.join("os/applications/mimeapps.list"),
+        "preview-png-defaults-to-loupe",
+        "image/png=org.gnome.Loupe.desktop",
+    ));
+    checks.push(contains_check(
+        root.join("os/applications/mimeapps.list"),
+        "preview-jpeg-defaults-to-loupe",
+        "image/jpeg=org.gnome.Loupe.desktop",
+    ));
     for app in AUTOSTART {
         checks.push(file_check(root, &format!("os/autostart/{app}")));
     }
@@ -1590,6 +1606,27 @@ fn installed_checks(root: &Path) -> Vec<Check> {
     checks.push(file_check(root, "usr/bin/mangohud"));
     checks.push(file_check(root, "usr/bin/vainfo"));
     checks.push(file_check(root, "usr/bin/vdpauinfo"));
+    checks.push(file_check(root, "usr/bin/papers"));
+    checks.push(file_check(root, "usr/bin/loupe"));
+    checks.push(file_check(
+        root,
+        "usr/share/applications/org.gnome.Papers.desktop",
+    ));
+    checks.push(file_check(
+        root,
+        "usr/share/applications/org.gnome.Loupe.desktop",
+    ));
+    checks.push(file_check(root, "usr/share/applications/mimeapps.list"));
+    checks.push(contains_check(
+        root.join("usr/share/applications/mimeapps.list"),
+        "installed-preview-pdf-defaults-to-papers",
+        "application/pdf=org.gnome.Papers.desktop",
+    ));
+    checks.push(contains_check(
+        root.join("usr/share/applications/mimeapps.list"),
+        "installed-preview-png-defaults-to-loupe",
+        "image/png=org.gnome.Loupe.desktop",
+    ));
     checks.push(file_check(root, "usr/bin/pw-cli"));
     checks.push(file_check(root, "usr/bin/wpctl"));
     checks.push(file_check(root, "usr/bin/evtest"));
@@ -8308,6 +8345,23 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/bootc/Containerfile"),
             "bootc-command-asserts-firewall-cmd",
             "command -v firewall-cmd",
+        ),
+        container_package_lockstep_check(root, "preview-papers-packaged", "papers"),
+        container_package_lockstep_check(root, "preview-loupe-packaged", "loupe"),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "preview-papers-command-assertion",
+            "command -v papers",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "preview-loupe-command-assertion",
+            "command -v loupe",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "preview-package-desktop-entries-asserted",
+            "org.gnome.Papers.desktop",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),

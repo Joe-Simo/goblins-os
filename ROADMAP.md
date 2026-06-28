@@ -69,9 +69,10 @@ not mark Batch 5 shipped.
 - **Web-verify** — `WebSearch`/`WebFetch` confirm Fedora-44 package names + D-Bus
   shapes before any Containerfile/D-Bus change (did seahorse + the PermissionStore).
 
-**Done so far (21 of 26 features advanced):**
+**Done so far (22 of 26 features advanced):**
 - **Batch 1 (Bucket A) — complete:** Live Text/OCR (core+handoff+markup Copy Text),
-  Color picker. *(IME read+list also shipped.)*
+  Color picker. *(IME read+list also shipped; Preview viewer package/default
+  app wiring is source-gated.)*
 - **Batch 2 (shell) — shipped with CI/qemu render proof:** App Exposé, Hot
   Corners, Snap Assist.
 - **Batch 3 (Settings surfaces) — all 9 have a shipped read/status/UI surface:**
@@ -213,6 +214,17 @@ scoped `git diff --check`, and `bash -n os/hardware-gate/verify-shipping-status.
 CI/qemu must still prove the Settings render, policy-denied and live-write
 paths, NetworkManager AP creation, DHCP/shared-mode behavior, and connected
 client readout before Personal Hotspot can ship.
+
+Current Preview viewer continuation: PDF/image default viewer wiring is now
+source-gated but not shipped. Fedora 44 repo metadata was checked in a clean
+Fedora container: `papers` provides `/usr/bin/papers` and
+`org.gnome.Papers.desktop`; `loupe` provides `/usr/bin/loupe` and
+`org.gnome.Loupe.desktop`. The bootc image installs and `rpm -q`/`command -v`
+asserts both packages, and `/usr/share/applications/mimeapps.list` defaults PDFs
+to Papers and common image formats to Loupe. This pass does **not** claim a live
+double-click/open proof, PDF render, or image render; CI/qemu must still prove
+the package desktop entries, MIME association, and themed GTK app render before
+Preview can ship.
 
 Current Per-app Privacy continuation: app-keyed portal permission revokes are now
 source-gated but not shipped. Core exposes `/v1/app-privacy/revoke`, validates
@@ -969,10 +981,11 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 - **Verifiable:** host — sRGB→hex rounding/clamp, `rgb()`/`hsl()` formatting, round-trip + boundaries (0.0→00, 1.0→ff), format-cycle strings. CI/qemu — portal handshake, `wl-copy`, swatch render.
 - **Effort:** M · **Risk:** LOW (boot untouched; hotkey-launched libexec).
 
-### `TODO` PDF / image Preview viewer
+### `in-progress` PDF / image Preview viewer
+- [x] **Package/default-app substrate source-gated (CI/qemu-pending):** Fedora 44 repo metadata confirms `papers` (`/usr/bin/papers`, `org.gnome.Papers.desktop`) and `loupe` (`/usr/bin/loupe`, `org.gnome.Loupe.desktop`). The bootc image installs and `rpm -q`/`command -v` asserts both packages, and `os/applications/mimeapps.list` makes PDFs open in Papers and common image formats open in Loupe. This is not shipped until CI/qemu proves the installed desktop entries, MIME open behavior, and themed render.
 - [ ] Open any PDF/image as the default viewer (macOS Preview altitude — view, page, basic annotate; not a deep editor). The Goblins markup editor already covers screenshot annotation; this fills the "double-click a PDF" gap.
 - **Approach:** themed_gnome_fallback (deep long tail — a stock GNOME viewer branded via `os/gtk-4.0/gtk.css`, not a custom build) for v1; a Goblins-native viewer is a later option.
-- **Packages:** verify the fc44 name first — GNOME's document viewer was renamed `evince`→`papers` around F41; **confirm `papers` vs `evince` against the fc44 repo before adding** (wrong name breaks the image build). Image viewer: `loupe` (GNOME Image Viewer, fc44).
+- **Packages:** `papers` (GNOME Documents, verified in Fedora 44 repo metadata; `evince` is not used here) + `loupe` (GNOME Image Viewer, verified in Fedora 44 repo metadata).
 - **Files:** `os/bootc/Containerfile` (package + `rpm -q`), default-application dconf / mimeapps so PDFs/images open in it, `os/gtk-4.0/gtk.css` (already brands stock GTK apps — confirm coverage).
 - **Goblins-grade:** branded via the gtk.css bridge (window/headerbar/sidebar/accent in Goblins tokens). Honest gating: n/a (a viewer is always present once packaged).
 - **Verifiable:** CI/qemu only (package + render). **Effort:** S · **Risk:** LOW once the package name is confirmed.

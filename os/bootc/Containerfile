@@ -124,6 +124,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       localsearch \
       sushi \
       gnome-font-viewer \
+      papers \
+      loupe \
       seahorse \
       tesseract \
       tesseract-langpack-eng \
@@ -139,6 +141,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       deja-dup \
       sushi \
       gnome-font-viewer \
+      papers \
+      loupe \
       seahorse \
       tesseract \
       tesseract-langpack-eng \
@@ -189,6 +193,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v ibus-daemon \
     && command -v snapper \
     && command -v xdg-open \
+    && command -v papers \
+    && command -v loupe \
     && command -v fc-match \
     && command -v fc-list \
     && fc-match Inter | grep -qi 'Inter' \
@@ -271,6 +277,12 @@ COPY os/glib-schemas/ /usr/share/glib-2.0/schemas/
 RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
+    && test -f /usr/share/applications/org.gnome.Papers.desktop \
+    && test -f /usr/share/applications/org.gnome.Loupe.desktop \
+    && test -f /usr/share/applications/mimeapps.list \
+    && grep -Fq 'application/pdf=org.gnome.Papers.desktop' /usr/share/applications/mimeapps.list \
+    && grep -Fq 'image/png=org.gnome.Loupe.desktop' /usr/share/applications/mimeapps.list \
+    && grep -Fq 'image/jpeg=org.gnome.Loupe.desktop' /usr/share/applications/mimeapps.list \
     && { test -x /usr/bin/liveinst || test -x /usr/bin/anaconda || test -x /usr/libexec/anaconda/run-anaconda; } \
     && test -x /usr/libexec/goblins-os/goblins-os-install-game-launcher \
     && test -x /usr/libexec/goblins-os/goblins-os-sound-listener \

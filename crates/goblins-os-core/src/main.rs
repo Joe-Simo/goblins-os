@@ -274,6 +274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(app_permissions::revoke_app_permission),
         )
         .route("/v1/hotspot/status", get(hotspot::hotspot_status))
+        .route("/v1/hotspot/enabled", post(hotspot::set_hotspot_enabled))
         .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
         .route("/v1/keyboard/shortcuts/status", get(shortcuts_status))
         .route("/v1/keyboard/shortcuts/binding", post(set_shortcut_binding))

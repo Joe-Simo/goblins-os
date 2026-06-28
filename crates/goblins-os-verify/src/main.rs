@@ -8302,7 +8302,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/bootc/Containerfile"),
             "bootc-rpm-asserts-firewalld",
-            "firewalld \\\n      wl-clipboard",
+            "firewalld \\\n      dnsmasq \\\n      wl-clipboard",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),
@@ -8343,6 +8343,42 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-hotspot-status-route",
             "/v1/hotspot/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-hotspot-enabled-route",
+            "/v1/hotspot/enabled",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/hotspot.rs"),
+            "hotspot-write-policy-gated",
+            "policy_state_for_control(\"settings-control\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/hotspot.rs"),
+            "hotspot-start-validates-dnsmasq",
+            "dnsmasq_present",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/hotspot.rs"),
+            "hotspot-start-blocks-single-radio-wifi-uplink",
+            "Connect to the internet over Ethernet to share it over Wi-Fi.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/hotspot.rs"),
+            "hotspot-uses-nonpersistent-networkmanager-profile",
+            "\"save\".to_string()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/hotspot.rs"),
+            "hotspot-sanitizes-psk-errors",
+            "sanitize_hotspot_error",
+        ),
+        container_package_lockstep_check(root, "hotspot-dnsmasq-packaged", "dnsmasq"),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "hotspot-dnsmasq-command-assertion",
+            "command -v dnsmasq",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),

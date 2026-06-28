@@ -196,6 +196,24 @@ container `glib-compile-schemas --dry-run os/glib-schemas`, scoped
 Center/menu-bar surfaces, per-app breakthroughs, a user timer, and live qemu
 write proof remain deferred.
 
+Current Personal Hotspot continuation: the gated core start/stop substrate is
+now source-gated but not shipped. Core exposes `/v1/hotspot/enabled`, gates
+writes through `policy_state_for_control("settings-control")`, validates SSID
+and WPA passphrases before calling NetworkManager, requires `dnsmasq` for
+`ipv4.method shared`, rejects devices without AP-capable Wi-Fi, blocks the
+single-radio Wi-Fi-uplink case with "Connect to the internet over Ethernet to
+share it over Wi-Fi.", creates the NetworkManager AP profile with `save no`, and
+sanitizes `nmcli` failures so the PSK never appears in API output. The image now
+installs and asserts the Fedora `dnsmasq` package. This pass does **not** add the
+GTK switch/editor, connected-device readout, WPA3/SAE selection, or live AP proof.
+Local source gates: `cargo fmt --all --check`, targeted
+`cargo test -p goblins-os-core hotspot`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `goblins-os-verify --source-root .` → **blocked=0**,
+scoped `git diff --check`, and `bash -n os/hardware-gate/verify-shipping-status.sh`.
+CI/qemu must still prove the Settings render, policy-denied and live-write
+paths, NetworkManager AP creation, DHCP/shared-mode behavior, and connected
+client readout before Personal Hotspot can ship.
+
 Current Per-app Privacy continuation: app-keyed portal permission revokes are now
 source-gated but not shipped. Core exposes `/v1/app-privacy/revoke`, validates
 the known PermissionStore tables plus safe desktop app/resource IDs, and calls
@@ -1004,7 +1022,8 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 
 ### `in-progress` Personal Hotspot toggle (Settings ▸ Network)
 - [x] **Status read + row shipped** (`crates/goblins-os-core/src/hotspot.rs` + `/v1/hotspot/status`, Settings ▸ Network "Personal Hotspot" row): detects an active Wi-Fi access-point connection via `nmcli` (UUID-keyed lookup → no name-escaping; pure `active_wifi_devices`/`mode_is_ap` helpers unit-tested, 174 core tests), honest-gated to "unavailable" without NetworkManager. Container-verified (clippy `-D warnings`), verify gates added.
-- [ ] **Gated start/stop (deferred):** turn the radio into a WPA2/WPA3 AP sharing the uplink — on/off switch, editable SSID + password, live connected-devices readout via NetworkManager shared-mode, gated by the Wi-Fi-connect policy profile; needs `dnsmasq` in the image (`ipv4.method shared`).
+- [x] **Gated start/stop core substrate source-gated (CI/qemu-pending):** `/v1/hotspot/enabled` is policy-gated by `settings-control`, validates SSID/password before `nmcli`, requires `dnsmasq` for NetworkManager shared mode, rejects no-AP-adapter and single-radio Wi-Fi-uplink states, uses a non-persistent `save no` AP profile, removes the fixed "Goblins Hotspot" profile on stop/failure, and sanitizes errors so the PSK never leaks. The image installs and `rpm -q`/`command -v` asserts `dnsmasq`. No GTK editor, connected-client readout, WPA3/SAE selector, or live AP proof is claimed yet.
+- [ ] **Settings binding + live AP proof (deferred):** turn the radio into a WPA2/WPA3 AP sharing the uplink — on/off switch, editable SSID + password, live connected-devices readout via NetworkManager shared-mode, and qemu/live-device proof.
 - **Packages:** `dnsmasq` (verified `2.92rel2-9.fc44`; **mandatory** — `ipv4.method shared` needs it for DHCP/NAT, not pulled by NetworkManager-wifi).
 - **Files:** `crates/goblins-os-core/src/hotspot.rs` (NEW — nmcli status/start/stop, SSID + password validation, uplink/single-radio gating, PSK error sanitization, tests), `crates/goblins-os-core/src/main.rs` (`mod hotspot` + `/v1/network/hotspot/status`, `/v1/network/hotspot`), `crates/goblins-os-settings/src/main.rs` (`append_hotspot_management` in `build_network`, modeled on `append_bluetooth_power_control`; `HotspotStatus` + `set_hotspot`), `os/bootc/Containerfile` (`dnsmasq`).
 - **APIs:** `nmcli` AP profile (`802-11-wireless.mode ap`, `band bg`, `ipv4.method shared`, `wifi-sec.key-mgmt wpa-psk`/`sae`, `wifi-sec.psk`), reusing `network.rs` `split_terse` + `policy_state_for_control("settings-control")`; GTK4 `Switch`/`Entry`/`PasswordEntry`.

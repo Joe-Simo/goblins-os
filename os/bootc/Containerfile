@@ -87,6 +87,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       NetworkManager \
       NetworkManager-wifi \
       nm-connection-editor \
+      dnsmasq \
       pipewire \
       pipewire-alsa \
       pipewire-pulseaudio \
@@ -142,6 +143,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       tesseract \
       tesseract-langpack-eng \
       firewalld \
+      dnsmasq \
       wl-clipboard \
       ibus \
       ibus-gtk4 \
@@ -182,6 +184,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v gnome-software \
     && command -v orca \
     && command -v firewall-cmd \
+    && command -v dnsmasq \
     && command -v ibus \
     && command -v ibus-daemon \
     && command -v snapper \

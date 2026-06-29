@@ -4,7 +4,8 @@
 Codifies the validated flow against a running qemu VM (QMP socket):
   1. wait for the verification-only kickstart install marker
   2. require the kickstart %post marker, then wait for first-boot desktop settle
-  3. dismiss the onboarding (Escape, then "Private - keep this computer offline")
+  3. dismiss the onboarding through the visible "Private - keep this computer
+     offline" path
   4. launch the in-session orchestrator via GNOME Alt+F2 (curl -o + bash; no sshd)
   5. screendump each surface to OUTDIR/<shot>.png on its HTTP /ready/<shot> signal
      until ORCH_ALLDONE
@@ -195,6 +196,24 @@ def wait_stage(label, seconds, sample_every=30):
     compact = [f"{sample['size']}:{sample['sha256']}" for sample in samples[-16:]]
     print(f"{label}: diagnostic framebuffer samples after {seconds}s: {compact}", flush=True)
 
+def dismiss_first_boot_setup():
+    """Select the real first-boot window and take the offline/private path."""
+    print("first boot setup: selecting welcome window and clicking private offline path", flush=True)
+    frame_sample("first boot before dismiss", save_debug=True)
+    # The desktop often lands in Overview with the Welcome window as a preview.
+    # First select that preview, then click both the centered and preview-position
+    # private buttons. If the UI is elsewhere, the post-dismiss frame makes the
+    # miss inspectable and proof still fails closed.
+    click(0.73, 0.53)
+    time.sleep(2)
+    click(0.50, 0.575)
+    time.sleep(3)
+    click(0.73, 0.575)
+    time.sleep(4)
+    key("esc")
+    time.sleep(1)
+    frame_sample("post first boot dismiss", save_debug=True)
+
 def http_get_path(line):
     marker = '"GET '
     if marker not in line:
@@ -244,8 +263,8 @@ wait_serial_contains(
 )
 # 2. Wait for first boot before treating install progress as real.
 wait_stage("first boot desktop", 420)
-# 3. dismiss onboarding
-key("esc"); time.sleep(2); click(0.5, 0.627); time.sleep(3)
+# 3. dismiss onboarding through the real offline/private UI path.
+dismiss_first_boot_setup()
 # 4. launch orchestrator via Alt+F2 (pipe-free)
 key("alt+f2"); time.sleep(2); typ(f"curl -o /tmp/o 10.0.2.2:{PORT}/orchestrator.sh"); time.sleep(1); key("ret"); time.sleep(3)
 key("alt+f2"); time.sleep(2); typ("bash /tmp/o"); time.sleep(1); key("ret")

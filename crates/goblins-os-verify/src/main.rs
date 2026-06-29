@@ -6435,6 +6435,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-selects-first-boot-private-path",
+            "first boot setup: selecting welcome window and clicking private offline path",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-saves-post-first-boot-dismiss-debug-frame",
+            "post first boot dismiss",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-prints-diagnostic-frame-samples",
             "diagnostic framebuffer samples",
         ),

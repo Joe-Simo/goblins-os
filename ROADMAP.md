@@ -1666,6 +1666,18 @@ The hardware workflow now builds its proof ISO with
 verification-only scratch-`vda` storage automation into the ISO's `/osbuild.ks`.
 This is source-gated only until rerun.
 
+Follow-up hardware-gate run `28355883788` at `f271527` proved the GHCR image
+push, verification ISO build with `os/iso/verify-config.toml`, display-backed
+Anaconda install, reboot into the installed Goblins OS entry, and the
+`GOBLINS_VERIFY_INSTALL_DONE` serial marker. The next blocker is first-boot
+dismissal/orchestrator launch, not kickstart storage: the debug frame shows the
+installed desktop in GNOME Overview with the Welcome window and login gate
+visible, while `httpd.log` stayed empty and all in-session proof signals were
+missing. The current local fix selects the Welcome window, clicks the
+Private/offline path at the observed positions, and saves post-dismiss debug
+frames before trying Alt-F2 orchestrator launch. This is source-gated only until
+rerun.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    after source-gating the fail-closed capture-stage fix, rerun the

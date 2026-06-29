@@ -32,10 +32,10 @@
 
 ---
 
-## ⏩ Session status — RESUME HERE (updated 2026-06-28)
+## ⏩ Session status — RESUME HERE (updated 2026-06-29)
 
-Proven code head before the current QMP-startup fix is `d9354b0` on `main`. The
-latest completed source passes shipped the Sound Recognition and Live Captions
+Proven code head before the current QMP absolute-pointer fix is `d78ebb7` on
+`main`. The latest completed source passes shipped the Sound Recognition and Live Captions
 substrates, fixed the Fedora 44 `sushi` package name, added the App Exposé / Hot
 Corner desktop-proof hooks, changed the image workflow to avoid exporting the
 full bootc image into the runner daemon, and added nonblocking BuildKit GHA
@@ -1610,11 +1610,20 @@ push, shippable ISO build, model setup, artifact upload-on-failure path, and the
 new diagnostic frame/log artifact path. The uploaded debug frame showed the VM
 was on the branded Anaconda summary with `Installation Destination` marked
 `Kickstart insufficient`, while `serial.log` never reached
-`GOBLINS_VERIFY_INSTALL_DONE` and `httpd.log` stayed empty. The current local
-fix makes the Anaconda driver explicitly save destination-screen transition
-frames, select the scratch disk, save the post-destination summary, and click the
-center of the `Begin Installation` button instead of the page footer before
-waiting for the kickstart `%post` marker. This is source-gated only until rerun.
+`GOBLINS_VERIFY_INSTALL_DONE` and `httpd.log` stayed empty. The next source fix
+made the Anaconda driver explicitly save destination-screen transition frames,
+select the scratch disk, save the post-destination summary, and click the center
+of the `Begin Installation` button instead of the page footer.
+
+Follow-up hardware-gate run `28343942753` at `d78ebb7` proved the GHCR image
+push, shippable ISO build, model setup, and all Anaconda transition debug
+artifact uploads, but the destination-screen and disk-selected frames were still
+the unchanged summary page. That means the QMP click events were not landing in
+the installer UI. The current local fix scales QMP absolute pointer events with
+the full `0x7fffffff` axis range in both the automated driver and manual helper,
+then pins that contract in `verify-shipping-status.sh` and `goblins-os-verify`.
+This is source-gated only until a fresh hardware-gate run reaches Anaconda and
+produces the required live proof artifacts.
 
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**

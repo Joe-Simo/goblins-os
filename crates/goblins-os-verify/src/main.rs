@@ -6325,6 +6325,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-uses-qmp-absolute-axis-range",
+            "ABS_MAX = 0x7fffffff",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-clamps-qmp-absolute-axis",
+            "def abs_axis(value):",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/qmp-capture.py"),
+            "manual-qmp-helper-uses-qmp-absolute-axis-range",
+            "ABS_MAX = 0x7fffffff",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/qmp-capture.py"),
+            "manual-qmp-helper-clamps-qmp-absolute-axis",
+            "def abs_axis(value):",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-saves-begin-submitted-debug-frame",
             "Anaconda begin submitted",
         ),

@@ -5,6 +5,7 @@ import json, socket, sys, time, os, subprocess
 SOCK = "/tmp/gos-hwgate-aarch64/qmp.sock"
 SERIAL = "/tmp/gos-hwgate-aarch64/serial.log"
 OUTDIR = "/tmp/gos-hwgate-aarch64/shots"
+ABS_MAX = 0x7fffffff
 
 # char -> (qcode, shift?)
 CMAP = {}
@@ -49,8 +50,11 @@ def type_string(f, s):
         cmd(f, "send-key", keys=keys)
         time.sleep(0.03)
 
+def abs_axis(value):
+    return int(max(0.0, min(1.0, value)) * ABS_MAX)
+
 def click(f, xf, yf):
-    ax = int(xf * 32767); ay = int(yf * 32767)
+    ax = abs_axis(xf); ay = abs_axis(yf)
     cmd(f, "input-send-event", events=[
         {"type": "abs", "data": {"axis": "x", "value": ax}},
         {"type": "abs", "data": {"axis": "y", "value": ay}}])

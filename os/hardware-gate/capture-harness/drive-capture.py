@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 QMP = os.environ["GOS_QMP"]; HTTPLOG = os.environ["GOS_HTTPLOG"]
 SERIALLOG = os.environ.get("GOS_SERIALLOG", os.path.join(os.path.dirname(QMP), "serial.log"))
 OUTDIR = os.environ["GOS_OUTDIR"]; PORT = os.environ.get("GOS_PORT", "8099")
+ABS_MAX = 0x7fffffff
 REQUIRED_PROOFS = (
     "firewall-live-toggle",
     "text-shortcuts-session-enable",
@@ -88,9 +89,11 @@ def typ(s):
             q, sh = CMAP[ch]
             cmd("send-key", keys=([{"type": "qcode", "data": "shift"}] if sh else []) + [{"type": "qcode", "data": q}])
             time.sleep(0.03)
+def abs_axis(value):
+    return int(max(0.0, min(1.0, value)) * ABS_MAX)
 def click(xf, yf):
-    cmd("input-send-event", events=[{"type": "abs", "data": {"axis": "x", "value": int(xf*32767)}},
-                                     {"type": "abs", "data": {"axis": "y", "value": int(yf*32767)}}])
+    cmd("input-send-event", events=[{"type": "abs", "data": {"axis": "x", "value": abs_axis(xf)}},
+                                     {"type": "abs", "data": {"axis": "y", "value": abs_axis(yf)}}])
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": True}}])
     cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
 def dump(p): cmd("screendump", filename=p)

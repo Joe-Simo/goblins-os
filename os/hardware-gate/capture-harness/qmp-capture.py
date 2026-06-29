@@ -5,7 +5,8 @@ import json, socket, sys, time, os, subprocess
 SOCK = "/tmp/gos-hwgate-aarch64/qmp.sock"
 SERIAL = "/tmp/gos-hwgate-aarch64/serial.log"
 OUTDIR = "/tmp/gos-hwgate-aarch64/shots"
-ABS_MAX = 0x7fffffff
+DISPLAY_DEVICE = os.environ.get("GOS_QMP_DISPLAY_DEVICE", "video0")
+ABS_MAX = 0x7fff
 
 # char -> (qcode, shift?)
 CMAP = {}
@@ -36,6 +37,8 @@ def cmd(f, execute, **args):
         if not line: return None
         obj = json.loads(line)
         if "event" in obj: continue
+        if "error" in obj:
+            raise SystemExit(f"QMP command {execute!r} failed: {obj['error']}")
         return obj
 
 def sendkey(f, keys):
@@ -55,11 +58,13 @@ def abs_axis(value):
 
 def click(f, xf, yf):
     ax = abs_axis(xf); ay = abs_axis(yf)
-    cmd(f, "input-send-event", events=[
+    route = {"device": DISPLAY_DEVICE} if DISPLAY_DEVICE else {}
+    cmd(f, "input-send-event", **route, events=[
         {"type": "abs", "data": {"axis": "x", "value": ax}},
         {"type": "abs", "data": {"axis": "y", "value": ay}}])
-    cmd(f, "input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": True}}])
-    cmd(f, "input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
+    cmd(f, "input-send-event", **route, events=[{"type": "btn", "data": {"button": "left", "down": True}}])
+    time.sleep(0.05)
+    cmd(f, "input-send-event", **route, events=[{"type": "btn", "data": {"button": "left", "down": False}}])
 
 def dump(f, path):
     cmd(f, "screendump", filename=path)

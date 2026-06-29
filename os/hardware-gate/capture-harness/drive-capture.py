@@ -21,7 +21,8 @@ from urllib.parse import parse_qs, urlparse
 QMP = os.environ["GOS_QMP"]; HTTPLOG = os.environ["GOS_HTTPLOG"]
 SERIALLOG = os.environ.get("GOS_SERIALLOG", os.path.join(os.path.dirname(QMP), "serial.log"))
 OUTDIR = os.environ["GOS_OUTDIR"]; PORT = os.environ.get("GOS_PORT", "8099")
-ABS_MAX = 0x7fffffff
+DISPLAY_DEVICE = os.environ.get("GOS_QMP_DISPLAY_DEVICE", "video0")
+ABS_MAX = 0x7fff
 REQUIRED_PROOFS = (
     "firewall-live-toggle",
     "text-shortcuts-session-enable",
@@ -81,7 +82,16 @@ def cmd(ex, **a):
     F.write(json.dumps(m) + "\n"); F.flush()
     while True:
         o = json.loads(F.readline())
-        if "event" not in o: return o
+        if "event" not in o:
+            if "error" in o:
+                raise SystemExit(f"QMP command {ex!r} failed: {o['error']}")
+            return o
+def try_cmd(ex, **a):
+    try:
+        return cmd(ex, **a)
+    except SystemExit as err:
+        print(f"diagnostic QMP command {ex!r} failed: {err}", flush=True)
+        return None
 def key(k): cmd("send-key", keys=[{"type": "qcode", "data": x} for x in k.split("+")])
 def typ(s):
     for ch in s:
@@ -92,10 +102,12 @@ def typ(s):
 def abs_axis(value):
     return int(max(0.0, min(1.0, value)) * ABS_MAX)
 def click(xf, yf):
-    cmd("input-send-event", events=[{"type": "abs", "data": {"axis": "x", "value": abs_axis(xf)}},
-                                     {"type": "abs", "data": {"axis": "y", "value": abs_axis(yf)}}])
-    cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": True}}])
-    cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
+    route = {"device": DISPLAY_DEVICE} if DISPLAY_DEVICE else {}
+    cmd("input-send-event", **route, events=[{"type": "abs", "data": {"axis": "x", "value": abs_axis(xf)}},
+                                             {"type": "abs", "data": {"axis": "y", "value": abs_axis(yf)}}])
+    cmd("input-send-event", **route, events=[{"type": "btn", "data": {"button": "left", "down": True}}])
+    time.sleep(0.05)
+    cmd("input-send-event", **route, events=[{"type": "btn", "data": {"button": "left", "down": False}}])
 def dump(p): cmd("screendump", filename=p)
 def png(ppm, out): subprocess.run(["sips", "-s", "format", "png", ppm, "--out", out] if os.uname().sysname == "Darwin"
                                   else ["convert", ppm, out], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -209,6 +221,8 @@ def require_proofs(proofs):
         raise SystemExit("missing or failing required proof signals: " + ", ".join(bad))
 
 # 0. Boot the highlighted installer entry instead of burning the GRUB timeout.
+print(f"QMP display input route: {DISPLAY_DEVICE or 'default'}", flush=True)
+print(f"QMP query-mice: {try_cmd('query-mice')}", flush=True)
 wait_serial_contains("ISO boot menu", "Install Goblins OS 44", 180)
 if "Booting `Install Goblins OS 44'" not in serial_text():
     key("ret")

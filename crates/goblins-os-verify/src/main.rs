@@ -6325,8 +6325,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-uses-qmp-absolute-axis-range",
-            "ABS_MAX = 0x7fffffff",
+            "capture-driver-uses-documented-qmp-absolute-axis-range",
+            "ABS_MAX = 0x7fff",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
@@ -6335,13 +6335,38 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/qmp-capture.py"),
-            "manual-qmp-helper-uses-qmp-absolute-axis-range",
-            "ABS_MAX = 0x7fffffff",
+            "manual-qmp-helper-uses-documented-qmp-absolute-axis-range",
+            "ABS_MAX = 0x7fff",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/qmp-capture.py"),
             "manual-qmp-helper-clamps-qmp-absolute-axis",
             "def abs_axis(value):",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-assigns-stable-display-device-id",
+            "virtio-gpu-pci,id=video0",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-exports-qmp-display-device-route",
+            "GOS_QMP_DISPLAY_DEVICE=video0",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-routes-pointer-events-to-display-device",
+            "device\": DISPLAY_DEVICE",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/qmp-capture.py"),
+            "manual-qmp-helper-routes-pointer-events-to-display-device",
+            "device\": DISPLAY_DEVICE",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-fail-closes-on-qmp-command-errors",
+            "QMP command",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),

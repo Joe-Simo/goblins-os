@@ -132,11 +132,11 @@ rm -f "$WORK/qmp.sock"
   -cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" \
   -drive "file=$WORK/oemdrv.img,if=virtio,format=raw,file.locking=off" -boot d \
   -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
-  -device virtio-gpu-pci -device qemu-xhci -device usb-tablet -device usb-kbd \
+  -device virtio-gpu-pci,id=video0 -device qemu-xhci -device usb-tablet -device usb-kbd \
   -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &
 QEMU_PID=$!
 
-export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT"
+export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT" GOS_QMP_DISPLAY_DEVICE=video0
 # Phase the run with the QMP driver (waits for Anaconda, drives it, waits for the
 # desktop, dismisses onboarding, launches the orchestrator, captures on signals).
 python3 "$HERE/drive-capture.py"

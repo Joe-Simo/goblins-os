@@ -34,7 +34,7 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-29)
 
-Proven code head before the current QMP absolute-pointer fix is `d78ebb7` on
+Proven code head before the current QMP display-route fix is `b9cc892` on
 `main`. The latest completed source passes shipped the Sound Recognition and Live Captions
 substrates, fixed the Fedora 44 `sushi` package name, added the App Exposé / Hot
 Corner desktop-proof hooks, changed the image workflow to avoid exporting the
@@ -1619,11 +1619,21 @@ Follow-up hardware-gate run `28343942753` at `d78ebb7` proved the GHCR image
 push, shippable ISO build, model setup, and all Anaconda transition debug
 artifact uploads, but the destination-screen and disk-selected frames were still
 the unchanged summary page. That means the QMP click events were not landing in
-the installer UI. The current local fix scales QMP absolute pointer events with
-the full `0x7fffffff` axis range in both the automated driver and manual helper,
-then pins that contract in `verify-shipping-status.sh` and `goblins-os-verify`.
-This is source-gated only until a fresh hardware-gate run reaches Anaconda and
-produces the required live proof artifacts.
+the installer UI. The next source attempt scaled QMP absolute pointer events
+with the full `0x7fffffff` axis range in both the automated driver and manual
+helper, then pinned that contract in `verify-shipping-status.sh` and
+`goblins-os-verify`.
+
+Follow-up hardware-gate run `28346403493` at `b9cc892` proved the GHCR image
+push, shippable ISO build, model setup, and display-backed VM boot into
+Anaconda, but the five Anaconda debug screenshots were byte-identical and
+`serial.log` still contained only the GRUB menu. The attempted QMP pointer range
+change was wrong: QEMU documents absolute coordinates as `0..0x7fff`, not
+`0x7fffffff`, and the capture driver did not fail-close on QMP command errors.
+The current local fix restores the documented absolute range, gives the
+virtio-gpu device a stable `video0` id, routes pointer events to that display
+device, logs `query-mice`, and makes QMP command errors fail loudly. This is
+source-gated only until rerun.
 
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**

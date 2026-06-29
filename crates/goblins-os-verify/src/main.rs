@@ -6310,6 +6310,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-saves-destination-screen-debug-frame",
+            "Anaconda destination screen",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-selects-installation-destination-disk",
+            "Anaconda destination disk selected",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-clicks-begin-installation-button-center",
+            "click(0.937, 0.895)",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-saves-begin-submitted-debug-frame",
+            "Anaconda begin submitted",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-requires-kickstart-install-post-marker",
             "wait_serial_contains(\"kickstart install post\"",
         ),

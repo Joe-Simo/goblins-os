@@ -1605,6 +1605,17 @@ artifacts on failure, and the capture harness copies `qemu.log`, `serial.log`,
 and `httpd.log` into `_capture-logs` so the next blocker is inspectable from the
 artifact, not only the Actions tail. This is source-gated only until rerun.
 
+Follow-up hardware-gate run `28341591378` at `a888bac` proved the GHCR image
+push, shippable ISO build, model setup, artifact upload-on-failure path, and the
+new diagnostic frame/log artifact path. The uploaded debug frame showed the VM
+was on the branded Anaconda summary with `Installation Destination` marked
+`Kickstart insufficient`, while `serial.log` never reached
+`GOBLINS_VERIFY_INSTALL_DONE` and `httpd.log` stayed empty. The current local
+fix makes the Anaconda driver explicitly save destination-screen transition
+frames, select the scratch disk, save the post-destination summary, and click the
+center of the `Begin Installation` button instead of the page footer before
+waiting for the kickstart `%post` marker. This is source-gated only until rerun.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    after source-gating the fail-closed capture-stage fix, rerun the

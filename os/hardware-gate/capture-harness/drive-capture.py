@@ -212,7 +212,14 @@ if "Booting `Install Goblins OS 44'" not in serial_text():
 observe_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 30)
 # 1. Let Anaconda reach the storage confirmation, then drive the validated clicks.
 wait_stage("Anaconda storage confirmation", 360)
-click(0.55, 0.455); time.sleep(3); click(0.039, 0.06); time.sleep(3); click(0.937, 0.935)
+click(0.55, 0.455); time.sleep(5)
+frame_sample("Anaconda destination screen", save_debug=True)
+click(0.34, 0.32); time.sleep(2)
+frame_sample("Anaconda destination disk selected", save_debug=True)
+click(0.039, 0.06); time.sleep(6)
+frame_sample("Anaconda summary after destination", save_debug=True)
+click(0.937, 0.895); time.sleep(5)
+frame_sample("Anaconda begin submitted", save_debug=True)
 # 2. Wait for the kickstart post marker before treating install progress as real.
 wait_serial_contains("kickstart install post", "GOBLINS_VERIFY_INSTALL_DONE", 1800)
 wait_stage("first boot desktop", 420)

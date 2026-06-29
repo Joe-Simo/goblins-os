@@ -29,6 +29,7 @@ paths = [
   "os/gtk-4.0/",
   "os/hardware-gate/",
   "os/icons/",
+  "os/input/",
   "os/iso/",
   "os/nautilus/",
   "os/plymouth/",

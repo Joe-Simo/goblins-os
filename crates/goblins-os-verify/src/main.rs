@@ -11980,11 +11980,63 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "textshortcuts-dconf-disables-per-window-source-switching",
             "per-window=false",
         ),
+        file_check(root, "os/input/goblins-os-input-source-seed"),
+        contains_check(
+            root.join("os/release/source-tree-manifest.toml"),
+            "source-manifest-includes-input-seed-assets",
+            "os/input/",
+        ),
+        container_contains_check(
+            root,
+            "container-installs-input-source-seed-helper",
+            "COPY --chmod=0755 os/input/goblins-os-input-source-seed /usr/libexec/goblins-os/goblins-os-input-source-seed",
+        ),
+        container_contains_check(
+            root,
+            "container-syntax-checks-input-source-seed-helper",
+            "bash -n /usr/libexec/goblins-os/goblins-os-input-source-seed",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-uses-one-shot-marker",
+            "input-source-seeded",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-appends-goblins-source",
+            "gsettings set org.gnome.desktop.input-sources sources",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-appends-goblins-preload",
+            "gsettings set org.freedesktop.ibus.general preload-engines",
+        ),
+        file_check(root, "os/systemd-user/org.goblins.OS.InputSourcesSeed.service"),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.InputSourcesSeed.service"),
+            "input-source-seed-user-service-exec",
+            "ExecStart=/usr/libexec/goblins-os/goblins-os-input-source-seed",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.InputSourcesSeed.service"),
+            "input-source-seed-runs-before-ibus",
+            "Before=org.goblins.OS.IBus.service",
+        ),
         file_check(root, "os/systemd-user/org.goblins.OS.IBus.service"),
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),
             "textshortcuts-ibus-user-service-exec",
             "ExecStart=/usr/bin/ibus-daemon --replace --xim --panel disable",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "textshortcuts-ibus-waits-for-input-source-seed",
+            "After=gnome-session-initialized.target org.gnome.Shell@user.service org.goblins.OS.InputSourcesSeed.service",
+        ),
+        contains_check(
+            root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
+            "textshortcuts-input-source-seed-wanted-by-session",
+            "Wants=org.goblins.OS.InputSourcesSeed.service",
         ),
         contains_check(
             root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),

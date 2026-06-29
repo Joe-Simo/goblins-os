@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENGINE_KIND="ibus"
+ENGINE_ID="goblins-textshortcuts"
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+MARKER="$STATE_HOME/goblins-os/input-source-seeded"
+
+if [ -e "$MARKER" ]; then
+  exit 0
+fi
+
+if ! command -v gsettings >/dev/null 2>&1; then
+  echo "goblins-os-input-source-seed: gsettings is unavailable; leaving input sources unchanged" >&2
+  exit 0
+fi
+
+if ! gsettings writable org.gnome.desktop.input-sources sources >/dev/null 2>&1; then
+  echo "goblins-os-input-source-seed: input source settings are unavailable; leaving input sources unchanged" >&2
+  exit 0
+fi
+
+if ! gsettings writable org.freedesktop.ibus.general preload-engines >/dev/null 2>&1; then
+  echo "goblins-os-input-source-seed: IBus preload settings are unavailable; leaving preload unchanged" >&2
+  exit 0
+fi
+
+append_input_source() {
+  python3 - "$1" "$ENGINE_KIND" "$ENGINE_ID" <<'PY'
+import ast
+import sys
+
+raw, kind, engine_id = sys.argv[1:4]
+try:
+    parsed = ast.literal_eval(raw)
+except Exception:
+    parsed = []
+
+sources = []
+if isinstance(parsed, (list, tuple)):
+    for item in parsed:
+        if (
+            isinstance(item, (list, tuple))
+            and len(item) == 2
+            and isinstance(item[0], str)
+            and isinstance(item[1], str)
+        ):
+            sources.append((item[0], item[1]))
+
+if (kind, engine_id) not in sources:
+    sources.append((kind, engine_id))
+if not sources:
+    sources = [(kind, engine_id)]
+
+print("[" + ", ".join(f"('{kind}', '{value}')" for kind, value in sources) + "]")
+PY
+}
+
+append_preload_engine() {
+  python3 - "$1" "$ENGINE_ID" <<'PY'
+import ast
+import sys
+
+raw, engine_id = sys.argv[1:3]
+try:
+    parsed = ast.literal_eval(raw)
+except Exception:
+    parsed = []
+
+engines = []
+if isinstance(parsed, (list, tuple)):
+    for item in parsed:
+        if isinstance(item, str) and item not in engines:
+            engines.append(item)
+
+if engine_id not in engines:
+    engines.append(engine_id)
+
+print("[" + ", ".join(repr(engine) for engine in engines) + "]")
+PY
+}
+
+current_sources="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
+current_mru="$(gsettings get org.gnome.desktop.input-sources mru-sources 2>/dev/null || true)"
+current_preload="$(gsettings get org.freedesktop.ibus.general preload-engines 2>/dev/null || true)"
+
+next_sources="$(append_input_source "$current_sources")"
+next_mru="$(append_input_source "$current_mru")"
+next_preload="$(append_preload_engine "$current_preload")"
+
+gsettings set org.gnome.desktop.input-sources sources "$next_sources"
+gsettings set org.gnome.desktop.input-sources mru-sources "$next_mru"
+gsettings set org.freedesktop.ibus.general preload-engines "$next_preload"
+
+mkdir -p "$(dirname "$MARKER")"
+printf 'seeded %s/%s\n' "$ENGINE_KIND" "$ENGINE_ID" > "$MARKER"

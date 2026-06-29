@@ -1,0 +1,11 @@
+[Unit]
+Description=Goblins OS first-session input source seed
+CollectMode=inactive-or-failed
+
+PartOf=gnome-session-initialized.target
+After=gnome-session-initialized.target org.gnome.Shell@user.service
+Before=org.goblins.OS.IBus.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/goblins-os/goblins-os-input-source-seed

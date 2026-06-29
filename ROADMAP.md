@@ -35,8 +35,9 @@
 ## ⏩ Session status — RESUME HERE (updated 2026-06-29)
 
 Proven code head before the current verification-installer config fix is `9283b3f` on
-`main`; current source head is `e38b3e6` with a failed hardware-gate follow-up
-under inspection. The latest completed source passes shipped the Sound Recognition and Live Captions
+`main`; current committed source head is `1a7e9e7` with a failed hardware-gate
+follow-up under inspection and a local Text Shortcuts input-source seed fix in
+progress. The latest completed source passes shipped the Sound Recognition and Live Captions
 substrates, fixed the Fedora 44 `sushi` package name, added the App Exposé / Hot
 Corner desktop-proof hooks, changed the image workflow to avoid exporting the
 full bootc image into the runner daemon, and added nonblocking BuildKit GHA
@@ -1677,6 +1678,22 @@ missing. The current local fix selects the Welcome window, clicks the
 Private/offline path at the observed positions, and saves post-dismiss debug
 frames before trying Alt-F2 orchestrator launch. This is source-gated only until
 rerun.
+
+Follow-up hardware-gate run `28359494431` at `1a7e9e7` proved the GHCR image
+push, verification ISO build, display-backed install/reboot, first-boot
+private/offline dismissal, Alt-F2 orchestrator launch, HTTP proof channel, and
+28 screenshots. It still failed required live proof signals:
+`firewall-live-toggle`, `text-shortcuts-session-enable`,
+`text-shortcuts-live-keystroke`, `text-shortcuts-candidate-metadata`,
+`text-shortcuts-candidate-bubble-render`,
+`text-shortcuts-live-ibus-runtime-render`, `keyboard-shortcuts-roundtrip`,
+`input-sources-roundtrip`, `focus-arm-roundtrip`, `app-privacy-revoke`, and
+`preview-open-render`. The run did pass the Text Shortcuts overlay intent,
+candidate frame, candidate layout, and render-intent proof hooks. The current
+local fix adds a one-shot `InputSourcesSeed` user service before the IBus user
+service so the installed session appends the Goblins IBus source and preload
+engine once, without weakening the live IBus proof. This is source-gated only
+until rerun.
 
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**

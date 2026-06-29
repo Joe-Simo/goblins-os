@@ -314,6 +314,7 @@ COPY os/gnome-session/goblins-os.session /usr/share/gnome-session/sessions/gobli
 COPY os/gnome-shell-modes/goblins-os.json /usr/share/gnome-shell/modes/goblins-os.json
 COPY --chmod=0755 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus /usr/libexec/goblins-os/goblins-textshortcuts-ibus
 COPY os/goblins-os-textshortcuts/goblins-textshortcuts.xml /usr/share/ibus/component/goblins-textshortcuts.xml
+COPY --chmod=0755 os/input/goblins-os-input-source-seed /usr/libexec/goblins-os/goblins-os-input-source-seed
 COPY --chmod=0755 os/sound-recognition/goblins-os-sound-listener /usr/libexec/goblins-os/goblins-os-sound-listener
 COPY --chmod=0755 os/focus/goblins-os-focus-tick /usr/libexec/goblins-os/goblins-os-focus-tick
 COPY --chmod=0755 os/voice/goblins-os-dictate /usr/libexec/goblins-os/goblins-os-dictate
@@ -420,6 +421,8 @@ RUN sed -i 's/#51a2da/#0b0b0f/g' /usr/share/anaconda/pixmaps/fedora.css 2>/dev/n
 RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && test -x /usr/libexec/goblins-os/goblins-textshortcuts-engine \
     && test -x /usr/libexec/goblins-os/goblins-textshortcuts-ibus \
+    && test -x /usr/libexec/goblins-os/goblins-os-input-source-seed \
+    && bash -n /usr/libexec/goblins-os/goblins-os-input-source-seed \
     && test -f /usr/share/ibus/component/goblins-textshortcuts.xml \
     && python3 -m py_compile /usr/libexec/goblins-os/goblins-textshortcuts-ibus \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --self-test \

@@ -3,7 +3,7 @@ Description=Goblins OS IBus input method service
 CollectMode=inactive-or-failed
 
 PartOf=gnome-session-initialized.target
-After=gnome-session-initialized.target org.gnome.Shell@user.service
+After=gnome-session-initialized.target org.gnome.Shell@user.service org.goblins.OS.InputSourcesSeed.service
 
 [Service]
 Type=simple

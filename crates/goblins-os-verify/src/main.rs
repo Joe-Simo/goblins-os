@@ -943,6 +943,21 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(container_contains_check(
         root,
+        "image-default-target-pinned-in-usr",
+        "ln -sfn graphical.target /usr/lib/systemd/system/default.target",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "display-manager-alias-pinned-in-usr",
+        "ln -sfn gdm.service /usr/lib/systemd/system/display-manager.service",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "display-manager-alias-pinned-in-etc",
+        "ln -sfn /usr/lib/systemd/system/gdm.service /etc/systemd/system/display-manager.service",
+    ));
+    checks.push(container_contains_check(
+        root,
         "accountsservice-default-session",
         "COPY os/accountsservice/goblin /var/lib/AccountsService/users/goblin",
     ));
@@ -1855,6 +1870,33 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         "etc/systemd/system/default.target",
         "installed-graphical-default-target",
         "graphical.target",
+    ));
+    checks.push(file_check(root, "usr/lib/systemd/system/default.target"));
+    checks.push(symlink_target_check(
+        root,
+        "usr/lib/systemd/system/default.target",
+        "installed-image-graphical-default-target",
+        "graphical.target",
+    ));
+    checks.push(file_check(
+        root,
+        "etc/systemd/system/display-manager.service",
+    ));
+    checks.push(symlink_target_check(
+        root,
+        "etc/systemd/system/display-manager.service",
+        "installed-etc-display-manager-is-gdm",
+        "gdm.service",
+    ));
+    checks.push(file_check(
+        root,
+        "usr/lib/systemd/system/display-manager.service",
+    ));
+    checks.push(symlink_target_check(
+        root,
+        "usr/lib/systemd/system/display-manager.service",
+        "installed-image-display-manager-is-gdm",
+        "gdm.service",
     ));
     checks.push(file_check(root, "var/lib/AccountsService/users/goblin"));
     checks.push(contains_check(

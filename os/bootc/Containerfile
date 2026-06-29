@@ -572,6 +572,14 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && systemctl enable firewalld.service \
     && systemctl enable gdm.service \
     && systemctl set-default graphical.target \
+    && ln -sfn graphical.target /usr/lib/systemd/system/default.target \
+    && ln -sfn /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target \
+    && ln -sfn gdm.service /usr/lib/systemd/system/display-manager.service \
+    && ln -sfn /usr/lib/systemd/system/gdm.service /etc/systemd/system/display-manager.service \
+    && readlink /usr/lib/systemd/system/default.target | grep -Fq graphical.target \
+    && readlink /etc/systemd/system/default.target | grep -Fq graphical.target \
+    && readlink /usr/lib/systemd/system/display-manager.service | grep -Fq gdm.service \
+    && readlink /etc/systemd/system/display-manager.service | grep -Fq gdm.service \
     && systemctl enable goblins-os-model-cache.service \
     && systemctl enable goblins-os-core.service \
     && systemctl enable goblins-os-resident.service \

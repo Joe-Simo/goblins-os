@@ -1695,6 +1695,15 @@ service so the installed session appends the Goblins IBus source and preload
 engine once, without weakening the live IBus proof. This is source-gated only
 until rerun.
 
+Current local firewall bridge follow-up: the firewalld polkit rule is moving
+from `/etc/polkit-1/rules.d` to the image-owned
+`/usr/share/polkit-1/rules.d` path, while core accepts either the image-owned
+rule or a local admin override and uses the stable `/usr/bin/systemctl` path
+when starting the allowlisted helper instance. This targets the previous
+`firewall-live-toggle` `manageable=false` proof failure, but Firewall remains
+`in-progress` until a hardware-gate run proves disable/enable readback through
+the live systemd/polkit path.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    after source-gating the fail-closed capture-stage fix, rerun the

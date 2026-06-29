@@ -10337,6 +10337,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "subject.user !== \"goblins-os\"",
         ),
         contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-installs-firewall-polkit-rule-in-image-owned-path",
+            "60-goblins-os-firewall.rules /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/firewall.rs"),
+            "core-firewall-accepts-image-owned-polkit-rule-path",
+            "/usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/firewall.rs"),
+            "core-firewall-uses-stable-systemctl-path",
+            "/usr/bin/systemctl",
+        ),
+        contains_check(
             root.join("crates/goblins-os-markup/src/main.rs"),
             "markup-copy-text-ocr-handoff",
             "/v1/ocr/recognize",

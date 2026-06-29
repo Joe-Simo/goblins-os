@@ -266,7 +266,7 @@ RUN useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/s
     && install -d -m 0700 -o goblins-os -g goblins-os /var/lib/goblins-os/secrets/openai \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.local/bin \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.config \
-    && install -d /etc/dconf/db/local.d /etc/goblins-os/model-manifests /etc/polkit-1/rules.d /etc/xdg/autostart /usr/lib/bootc/install /usr/lib/systemd/system /usr/lib/systemd/user /usr/libexec/goblins-os /usr/share/applications /usr/share/goblins-os/brand /usr/share/gnome-session/sessions /usr/share/wayland-sessions /usr/share/gnome-shell/modes /usr/share/ibus/component
+    && install -d /etc/dconf/db/local.d /etc/goblins-os/model-manifests /etc/xdg/autostart /usr/lib/bootc/install /usr/lib/systemd/system /usr/lib/systemd/user /usr/libexec/goblins-os /usr/share/applications /usr/share/goblins-os/brand /usr/share/gnome-session/sessions /usr/share/wayland-sessions /usr/share/gnome-shell/modes /usr/share/ibus/component /usr/share/polkit-1/rules.d
 
 # Human desktop login user. Goblins OS authenticates people through the in-session
 # OpenAI identity gate, so the machine auto-enters the OS session as this user;
@@ -306,7 +306,7 @@ COPY os/systemd/goblins-os-resident.service /usr/lib/systemd/system/goblins-os-r
 COPY os/systemd/goblins-os-model-cache.service /usr/lib/systemd/system/goblins-os-model-cache.service
 COPY os/systemd-system/ /usr/lib/systemd/system/
 COPY --chmod=0755 os/bootc/goblins-os-firewall /usr/libexec/goblins-os/goblins-os-firewall
-COPY os/bootc/60-goblins-os-firewall.rules /etc/polkit-1/rules.d/60-goblins-os-firewall.rules
+COPY os/bootc/60-goblins-os-firewall.rules /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules
 COPY --chmod=0755 os/bootc/generate-preview-proof-fixtures.py /usr/libexec/goblins-os/generate-preview-proof-fixtures.py
 COPY os/session/goblins-os-session /usr/libexec/goblins-os/goblins-os-session
 COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.desktop
@@ -540,8 +540,8 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -Fq '/usr/libexec/goblins-os/goblins-textshortcuts-ibus' /usr/share/ibus/component/goblins-textshortcuts.xml \
     && test -x /usr/libexec/goblins-os/goblins-os-firewall \
     && test -f /usr/lib/systemd/system/goblins-os-firewall@.service \
-    && test -f /etc/polkit-1/rules.d/60-goblins-os-firewall.rules \
-    && grep -Fq 'unit.match(/^goblins-os-firewall@(enable|disable)\.service$/)' /etc/polkit-1/rules.d/60-goblins-os-firewall.rules \
+    && test -f /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules \
+    && grep -Fq 'unit.match(/^goblins-os-firewall@(enable|disable)\.service$/)' /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules \
     && install -d -o goblin -g goblin /var/home/goblin/.local/share/nautilus/scripts \
     && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Build an app to open this" "/var/home/goblin/.local/share/nautilus/scripts/Build an app to open this" \
     && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Ask Goblin about this" "/var/home/goblin/.local/share/nautilus/scripts/Ask Goblin about this" \

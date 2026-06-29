@@ -16,7 +16,11 @@ use serde::{Deserialize, Serialize};
 
 const FIREWALL_HELPER: &str = "/usr/libexec/goblins-os/goblins-os-firewall";
 const FIREWALL_UNIT_TEMPLATE: &str = "/usr/lib/systemd/system/goblins-os-firewall@.service";
-const FIREWALL_POLKIT_RULE: &str = "/etc/polkit-1/rules.d/60-goblins-os-firewall.rules";
+const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
+const FIREWALL_POLKIT_RULE_PATHS: &[&str] = &[
+    "/usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules",
+    "/etc/polkit-1/rules.d/60-goblins-os-firewall.rules",
+];
 
 #[derive(Serialize)]
 pub struct FirewallStatus {
@@ -98,10 +102,10 @@ fn executable_exists(name: &str) -> bool {
 }
 
 fn firewall_bridge_ready() -> bool {
-    executable_exists("systemctl")
+    systemctl_available()
         && Path::new(FIREWALL_HELPER).is_file()
         && Path::new(FIREWALL_UNIT_TEMPLATE).is_file()
-        && Path::new(FIREWALL_POLKIT_RULE).is_file()
+        && firewall_polkit_rule_present()
 }
 
 /// firewalld is "running" only when the command succeeded AND said so — pure,
@@ -163,7 +167,7 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
     }
 
     let unit = firewall_template_instance(enabled);
-    match Command::new("systemctl")
+    match Command::new(systemctl_command())
         .args(["start", unit])
         .stdin(Stdio::null())
         .output()
@@ -219,6 +223,28 @@ fn firewall_template_instance(enabled: bool) -> &'static str {
     }
 }
 
+fn systemctl_available() -> bool {
+    Path::new(SYSTEMCTL_PATH).is_file() || executable_exists("systemctl")
+}
+
+fn systemctl_command() -> &'static str {
+    if Path::new(SYSTEMCTL_PATH).is_file() {
+        SYSTEMCTL_PATH
+    } else {
+        "systemctl"
+    }
+}
+
+fn firewall_polkit_rule_present() -> bool {
+    firewall_polkit_rule_paths()
+        .iter()
+        .any(|path| Path::new(path).is_file())
+}
+
+fn firewall_polkit_rule_paths() -> &'static [&'static str] {
+    FIREWALL_POLKIT_RULE_PATHS
+}
+
 fn firewall_toggle_success_detail(enabled: bool, status_detail: &str) -> String {
     if enabled {
         format!("Firewall is on. {status_detail}")
@@ -263,7 +289,8 @@ mod tests {
 
     use super::{
         firewall_command_error_detail, firewall_detail, firewall_is_running,
-        firewall_management_detail, firewall_template_instance, firewall_toggle_response,
+        firewall_management_detail, firewall_polkit_rule_paths, firewall_template_instance,
+        firewall_toggle_response, systemctl_command, SYSTEMCTL_PATH,
     };
 
     #[test]
@@ -299,6 +326,18 @@ mod tests {
             "Turning the firewall on or off is managed by the system."
         );
         assert!(firewall_management_detail(true).contains("Goblins OS firewall bridge"));
+    }
+
+    #[test]
+    fn bridge_paths_cover_image_owned_polkit_rule_and_admin_override() {
+        assert_eq!(SYSTEMCTL_PATH, "/usr/bin/systemctl");
+        assert!(matches!(
+            systemctl_command(),
+            "/usr/bin/systemctl" | "systemctl"
+        ));
+        let paths = firewall_polkit_rule_paths();
+        assert!(paths.contains(&"/usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules"));
+        assert!(paths.contains(&"/etc/polkit-1/rules.d/60-goblins-os-firewall.rules"));
     }
 
     #[test]

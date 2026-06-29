@@ -47,6 +47,14 @@ reboot --eject
   echo "GOBLINS_HWGATE_POST_DIAG_DONE"
 } > /dev/ttyS0 2>&1 || true
 
+# Anaconda's verification-only text install writes an /etc default.target
+# override to multi-user.target even though the bootc image default is
+# graphical.target. The display-backed proof needs the installed deployment to
+# exercise the real GNOME/GDM session, so restore the image contract here.
+systemctl set-default graphical.target
+readlink /etc/systemd/system/default.target | grep -Fq graphical.target
+echo "GOBLINS_HWGATE_GRAPHICAL_TARGET_RESTORED" > /dev/ttyS0 || true
+
 cat > /usr/libexec/goblins-hwgate-firstboot-diagnostics <<'EOF'
 #!/usr/bin/env bash
 set +e

@@ -34,8 +34,8 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-29)
 
-Current committed source head before this first-boot diagnostic follow-up is
-`893be68` on `main`. The latest completed source passes shipped the Sound
+Current committed source head before this verification-install graphical-target
+follow-up is `2853f7e` on `main`. The latest completed source passes shipped the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
 workflow to avoid exporting the full bootc image into the runner daemon, added
@@ -44,15 +44,16 @@ landed the session-owned settings/write bridge, and proved the verification
 installer can complete and boot the installed deployment. The current image
 also pins the graphical default target and GDM display-manager aliases in both
 the immutable image systemd tree and `/etc`, and the capture harness probes the
-likely graphical VTs before it tries onboarding/session automation. Host gates
-for the latest committed source: `python3 -m py_compile` for the capture driver,
-`bash -n` for the hardware-gate shell scripts, scoped `git diff --check`,
-`cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
-`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
-`goblins-os-verify --source-root .` → **blocked=0 (2600)**. A full
-`cargo fmt --all --check` was not claimed for `893be68`; host rustfmt has
-previously stalled while reading the workspace, so only the edited Rust crate
-was checked.
+likely graphical VTs before it tries onboarding/session automation. The current
+verification ISO also emits first-boot display-manager diagnostics to serial.
+Host gates for the latest committed source: `python3 -m py_compile` for the
+capture driver, `bash -n` for the hardware-gate shell scripts, scoped
+`git diff --check`, `cargo fmt -p goblins-os-verify --check`,
+`cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, and `goblins-os-verify --source-root .` →
+**blocked=0 (2608)**. A full `cargo fmt --all --check` was not claimed for
+`2853f7e`; host rustfmt has previously stalled while reading the workspace, so
+only the edited Rust crate was checked.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,
@@ -249,8 +250,16 @@ in-session proof callback was still missing. The local fix under validation now
 adds a verification-only first-boot diagnostics service through
 `os/iso/verify-config.toml`; it prints the installed default target, GDM/display-
 manager symlinks, unit status, and GDM/logind journal to serial before timeout.
-This is source-gated only until a fresh hardware-gate run reaches the real
-desktop and produces the installed-session proof JSONs.
+Run `28404614220` at `2853f7e` proved the diagnostic path: before first boot,
+the verification install had `/etc/systemd/system/default.target ->
+multi-user.target` while the image-owned
+`/usr/lib/systemd/system/default.target -> graphical.target` and both
+display-manager symlinks pointed at GDM. The local fix under validation now
+restores `graphical.target` in the verification-only `%post` after Anaconda's
+text-install override and asserts that `/etc/systemd/system/default.target`
+points back to `graphical.target`. This is source-gated only until a fresh
+hardware-gate run reaches the real desktop and produces the installed-session
+proof JSONs.
 
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.

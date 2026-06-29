@@ -6517,6 +6517,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "verify-config-firstboot-diagnostics-done-marker",
             "GOBLINS_HWGATE_DIAG_DONE",
         ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-restores-graphical-target-after-text-install",
+            "systemctl set-default graphical.target",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-asserts-restored-graphical-target",
+            "readlink /etc/systemd/system/default.target | grep -Fq graphical.target",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-emits-graphical-target-restored-marker",
+            "GOBLINS_HWGATE_GRAPHICAL_TARGET_RESTORED",
+        ),
         absent_check(
             root.join("os/iso/verify-config.toml"),
             "verify-config-lets-bib-inject-ostreecontainer",

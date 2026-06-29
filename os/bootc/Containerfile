@@ -571,6 +571,7 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && systemctl enable NetworkManager.service \
     && systemctl enable firewalld.service \
     && systemctl enable gdm.service \
+    && systemctl set-default graphical.target \
     && systemctl enable goblins-os-model-cache.service \
     && systemctl enable goblins-os-core.service \
     && systemctl enable goblins-os-resident.service \

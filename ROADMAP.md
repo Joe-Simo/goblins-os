@@ -221,6 +221,16 @@ QEMU default to two vCPUs (`GOBLINS_OS_QEMU_CPUS` can override) to match the CI
 KVM warning. This is source-gated only until a fresh hardware-gate run produces
 the installed-session proof JSONs and screenshots.
 
+Current hardware-gate follow-up: run `28370034444` at `4181bfb` proved the
+verification installer now completes (`GOBLINS_VERIFY_INSTALL_DONE`) and boots
+the installed `Goblins OS (ostree:0)` deployment, but the framebuffer reached a
+TTY login prompt instead of the GNOME/GDM session, so the driver typed the
+orchestrator launch into `fedora login:` and all HTTP proof signals were missing.
+The local fix under validation sets the installed image default target to
+`graphical.target` in the bootc image and adds source/installed verifier guards
+for that target. This is source-gated only until a fresh hardware-gate run
+reaches the real desktop and produces the installed-session proof JSONs.
+
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.
 The user service `org.goblins.OS.SessionBridge.service` owns

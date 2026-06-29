@@ -938,6 +938,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(container_contains_check(
         root,
+        "desktop-defaults-to-graphical-target",
+        "systemctl set-default graphical.target",
+    ));
+    checks.push(container_contains_check(
+        root,
         "accountsservice-default-session",
         "COPY os/accountsservice/goblin /var/lib/AccountsService/users/goblin",
     ));
@@ -1844,6 +1849,13 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         "installed-gdm-autologin",
         "AutomaticLogin=goblin",
     ));
+    checks.push(file_check(root, "etc/systemd/system/default.target"));
+    checks.push(symlink_target_check(
+        root,
+        "etc/systemd/system/default.target",
+        "installed-graphical-default-target",
+        "graphical.target",
+    ));
     checks.push(file_check(root, "var/lib/AccountsService/users/goblin"));
     checks.push(contains_check(
         root.join("var/lib/AccountsService/users/goblin"),
@@ -2559,6 +2571,29 @@ fn contains_check(path: PathBuf, id: &str, needle: &str) -> Check {
         ready(id, &format!("{} contains {}", path.display(), needle))
     } else {
         blocked(id, &format!("{} is missing {}", path.display(), needle))
+    }
+}
+
+fn symlink_target_check(root: &Path, relative: &str, id: &str, expected_target: &str) -> Check {
+    let path = root.join(relative);
+    match fs::read_link(&path) {
+        Ok(target) if target.to_string_lossy().contains(expected_target) => ready(
+            id,
+            &format!("{} points to {}", path.display(), target.display()),
+        ),
+        Ok(target) => blocked(
+            id,
+            &format!(
+                "{} points to {}; expected {}",
+                path.display(),
+                target.display(),
+                expected_target
+            ),
+        ),
+        Err(error) => blocked(
+            id,
+            &format!("{} is not a readable symlink: {error}", path.display()),
+        ),
     }
 }
 

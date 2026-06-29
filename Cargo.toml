@@ -13,6 +13,7 @@ members = [
   "crates/goblins-os-open",
   "crates/goblins-os-resident",
   "crates/goblins-os-screenshot-context",
+  "crates/goblins-os-session-bridge",
   "crates/goblins-os-settings",
   "crates/goblins-os-shell",
   "crates/goblins-os-textshortcuts-engine",

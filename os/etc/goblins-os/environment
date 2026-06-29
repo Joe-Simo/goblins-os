@@ -19,6 +19,7 @@ GOBLINS_OS_MODEL_INSTALL_STATE=/var/lib/goblins-os/models/install-state
 GOBLINS_OS_MODEL_MANIFEST_DIR=/etc/goblins-os/model-manifests
 GOBLINS_OS_INSTALLER_STATE=/var/lib/goblins-os/installer
 GOBLINS_OS_SESSION_STATE=/var/lib/goblins-os/session
+GOBLINS_OS_SESSION_BRIDGE_SOCKET=/run/user/1000/goblins-os/session-bridge.sock
 GOBLINS_OS_POLICY_STATE=/var/lib/goblins-os/policy
 GOBLINS_OS_RESIDENT_STATE=/var/lib/goblins-os/resident
 GOBLINS_OS_RESIDENT_SOCKET=/run/goblins-os/resident.sock

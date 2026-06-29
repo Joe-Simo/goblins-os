@@ -767,6 +767,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "goblins-os-session-bridge"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goblins-os-settings"
 version = "0.1.0"
 dependencies = [

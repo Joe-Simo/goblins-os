@@ -131,6 +131,28 @@ fn open_preview_outcome(request: PreviewOpenRequest) -> (StatusCode, PreviewOpen
         );
     }
 
+    match crate::session_bridge::open_preview(&path, kind) {
+        crate::session_bridge::SessionBridgeResult::Success(_) => {
+            return preview_response(
+                StatusCode::OK,
+                true,
+                "Opened with the desktop Preview viewer.",
+                &path,
+                Some(kind),
+            );
+        }
+        crate::session_bridge::SessionBridgeResult::Failed(detail) => {
+            return preview_response(
+                StatusCode::BAD_GATEWAY,
+                false,
+                &format!("Preview could not hand the file to the desktop session: {detail}"),
+                &path,
+                Some(kind),
+            );
+        }
+        crate::session_bridge::SessionBridgeResult::Unavailable => {}
+    }
+
     match Command::new("xdg-open")
         .arg(&path)
         .stdin(Stdio::null())

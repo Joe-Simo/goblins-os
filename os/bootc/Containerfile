@@ -253,7 +253,9 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && ! rpm -q steam-devices >/dev/null 2>&1 \
     && dnf clean all
 
-RUN useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/sbin/nologin goblins-os \
+RUN groupadd --system goblins-session-bridge \
+    && useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/sbin/nologin goblins-os \
+    && usermod -aG goblins-session-bridge goblins-os \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/resident \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/installer \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/session \
@@ -277,6 +279,7 @@ RUN useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/s
 # never read them. Codex sign-in is driven by the core service, not the session.
 RUN install -d /var/home \
     && useradd --uid 1000 --create-home --home-dir /var/home/goblin --shell /bin/bash goblin \
+    && usermod -aG goblins-session-bridge goblin \
     && install -d -o goblin -g goblin /var/home/goblin/.config/environment.d \
     && touch /var/home/goblin/.config/gnome-initial-setup-done \
     && chown -R goblin:goblin /var/home/goblin
@@ -294,6 +297,7 @@ COPY --from=rust-build /src/target/release/goblins-os-markup /usr/libexec/goblin
 COPY --from=rust-build /src/target/release/goblins-os-open /usr/libexec/goblins-os/goblins-os-open
 COPY --from=rust-build /src/target/release/goblins-os-resident /usr/libexec/goblins-os/goblins-os-resident
 COPY --from=rust-build /src/target/release/goblins-os-screenshot-context /usr/libexec/goblins-os/goblins-os-screenshot-context
+COPY --from=rust-build /src/target/release/goblins-os-session-bridge /usr/libexec/goblins-os/goblins-os-session-bridge
 COPY --from=rust-build /src/target/release/goblins-os-settings /usr/libexec/goblins-os/goblins-os-settings
 COPY --from=rust-build /src/target/release/goblins-os-shell /usr/libexec/goblins-os/goblins-os-shell
 COPY --from=rust-build /src/target/release/goblins-os-today /usr/libexec/goblins-os/goblins-os-today
@@ -325,6 +329,12 @@ COPY os/applications/ /usr/share/applications/
 # the rest of the system schema set.
 COPY os/glib-schemas/ /usr/share/glib-2.0/schemas/
 RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
+    && test -x /usr/libexec/goblins-os/goblins-os-session-bridge \
+    && /usr/libexec/goblins-os/goblins-os-session-bridge --self-test \
+    && test -f /usr/lib/systemd/user/org.goblins.OS.SessionBridge.service \
+    && grep -Fq 'ExecStart=/usr/libexec/goblins-os/goblins-os-session-bridge' /usr/lib/systemd/user/org.goblins.OS.SessionBridge.service \
+    && grep -Fq 'Wants=org.goblins.OS.SessionBridge.service' /usr/lib/systemd/user/gnome-session@goblins-os.target.d/goblins-os.session.conf \
+    && grep -Fq 'SupplementaryGroups=goblins-session-bridge' /usr/lib/systemd/system/goblins-os-core.service \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.VisualLookup.desktop \

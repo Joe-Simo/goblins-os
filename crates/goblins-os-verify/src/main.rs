@@ -23,6 +23,7 @@ const BINARIES: &[&str] = &[
     "goblins-os-open",
     "goblins-os-resident",
     "goblins-os-screenshot-context",
+    "goblins-os-session-bridge",
     "goblins-os-settings",
     "goblins-os-shell",
     "goblins-os-today",
@@ -43,6 +44,7 @@ const SYSTEMD_USER_UNITS: &[&str] = &[
     "gnome-session@goblins-os.target.d/goblins-os.session.conf",
     "org.goblins.OS.Shell.target",
     "org.goblins.OS.Shell.service",
+    "org.goblins.OS.SessionBridge.service",
 ];
 
 const APPLICATIONS: &[&str] = &[
@@ -750,9 +752,49 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "ExecStart=/usr/libexec/goblins-os/goblins-os-shell",
     ));
     checks.push(contains_check(
+        root.join("os/systemd-user/org.goblins.OS.SessionBridge.service"),
+        "session-bridge-user-service-exec",
+        "ExecStart=/usr/libexec/goblins-os/goblins-os-session-bridge",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
+        "session-bridge-wanted-by-gnome-session",
+        "Wants=org.goblins.OS.SessionBridge.service",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd/goblins-os-core.service"),
+        "core-service-joins-session-bridge-group-only",
+        "SupplementaryGroups=goblins-session-bridge",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/Containerfile"),
+        "bootc-creates-session-bridge-group",
+        "groupadd --system goblins-session-bridge",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/Containerfile"),
+        "bootc-self-tests-session-bridge",
+        "goblins-os-session-bridge --self-test",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-session-bridge/src/main.rs"),
+        "session-bridge-rejects-arbitrary-gsettings-schemas",
+        "non-allowlisted schema was accepted",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-core/src/session_bridge.rs"),
+        "core-session-bridge-client-uses-unix-socket",
+        "UnixStream::connect",
+    ));
+    checks.push(contains_check(
         root.join("os/etc/goblins-os/environment"),
         "environment-primary-core-url-is-goblins-native",
         "GOBLINS_OS_CORE_URL=http://127.0.0.1:8787",
+    ));
+    checks.push(contains_check(
+        root.join("os/etc/goblins-os/environment"),
+        "environment-session-bridge-socket-is-stable",
+        "GOBLINS_OS_SESSION_BRIDGE_SOCKET=/run/user/1000/goblins-os/session-bridge.sock",
     ));
     checks.push(contains_check(
         root.join("os/etc/goblins-os/environment"),
@@ -1630,6 +1672,16 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         root.join("usr/lib/systemd/user/org.goblins.OS.Shell.service"),
         "installed-goblins-shell-user-service-exec",
         "ExecStart=/usr/libexec/goblins-os/goblins-os-shell",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/user/org.goblins.OS.SessionBridge.service"),
+        "installed-session-bridge-user-service-exec",
+        "ExecStart=/usr/libexec/goblins-os/goblins-os-session-bridge",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
+        "installed-session-bridge-wanted-by-gnome-session",
+        "Wants=org.goblins.OS.SessionBridge.service",
     ));
     checks.push(file_check(root, "usr/lib/bootc/install/00-goblins-os.toml"));
     checks.push(file_check(root, "etc/goblins-os/environment"));

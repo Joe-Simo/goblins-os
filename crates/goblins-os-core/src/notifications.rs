@@ -700,6 +700,13 @@ fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
+    match crate::session_bridge::gsettings(args) {
+        crate::session_bridge::SessionBridgeResult::Success(stdout) => return Ok(stdout),
+        crate::session_bridge::SessionBridgeResult::Failed(detail) => {
+            return Err(GSettingsError::Failed(detail));
+        }
+        crate::session_bridge::SessionBridgeResult::Unavailable => {}
+    }
     let output = Command::new("gsettings")
         .args(args)
         .output()

@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=goblins-os
 Group=goblins-os
+SupplementaryGroups=goblins-session-bridge
 EnvironmentFile=-/etc/goblins-os/environment
 EnvironmentFile=-/etc/goblins-os/openai-secrets.env
 ExecStart=/usr/libexec/goblins-os/goblins-os-core

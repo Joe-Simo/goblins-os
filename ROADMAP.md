@@ -35,8 +35,8 @@
 ## ⏩ Session status — RESUME HERE (updated 2026-06-29)
 
 Proven code head before the current verification-installer config fix is `9283b3f` on
-`main`; current committed source head is `1a7e9e7` with a failed hardware-gate
-follow-up under inspection and a local Text Shortcuts input-source seed fix in
+`main`; current committed source head is `3b05053` with a hardware-gate
+follow-up under inspection and a local session-owned settings/write bridge fix in
 progress. The latest completed source passes shipped the Sound Recognition and Live Captions
 substrates, fixed the Fedora 44 `sushi` package name, added the App Exposé / Hot
 Corner desktop-proof hooks, changed the image workflow to avoid exporting the
@@ -211,6 +211,19 @@ missing-proof diagnostics now print those files explicitly. `goblins-os-verify`
 pins those checks inside the relevant shell functions so a stray validator name
 elsewhere in the script cannot mask drift. This is source-gated only; no live
 qemu run has produced those proof artifacts yet.
+
+Current session bridge continuation: core desktop writes now prefer a
+session-owned Unix-socket bridge before falling back to direct host `gsettings`.
+The user service `org.goblins.OS.SessionBridge.service` owns
+`/run/user/1000/goblins-os/session-bridge.sock`; the system core service can
+connect through the scoped `goblins-session-bridge` group only. The bridge
+allowlists the GNOME/Goblins schemas already surfaced by Settings input,
+Accessibility, Focus, Notifications, keyboard shortcuts, and the Preview open
+handoff, rejects arbitrary schemas/control-character values, and runs
+`xdg-open` inside the desktop user session for `/v1/preview/open`. This targets
+the previous input-source readback, keyboard shortcut 503, Focus activate, and
+Preview open/render failures. It is still source-gated until qemu proves live
+readback, viewer processes, and screenshot artifacts.
 
 Current IME menu-bar indicator continuation: the active-source indicator render
 hook is now source-gated. The `goblins-menubar` shell extension binds the stable

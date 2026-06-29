@@ -33,6 +33,7 @@ mod privacy;
 mod readiness;
 mod resident;
 mod service_catalog;
+mod session_bridge;
 mod session_gate;
 mod settings;
 mod shortcuts;

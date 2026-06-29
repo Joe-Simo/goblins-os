@@ -3,6 +3,7 @@
 # so the installed system boots in Dark, letting the dark wallpaper + chrome be
 # captured at real pixels on REAL GNOME (the headless render harness can't switch
 # mutter's background actor to the dark wallpaper; real GNOME honors picture-uri-dark).
+text --non-interactive
 ostreecontainer --url=/run/install/repo/container --transport=oci
 clearpart --all --initlabel --disklabel=gpt
 reqpart --add-boot

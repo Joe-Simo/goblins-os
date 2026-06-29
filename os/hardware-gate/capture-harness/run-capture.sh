@@ -93,6 +93,7 @@ case "$(uname -s)" in
     exit 1
     ;;
 esac
+QEMU_SMP="${GOBLINS_OS_QEMU_CPUS:-2}"
 pick() { for f in "$@"; do [ -n "$f" ] && [ -f "$f" ] && { echo "$f"; return 0; }; done; return 1; }
 VARS_TEMPLATE=""
 if [ "$ARCH" = aarch64 ]; then
@@ -125,7 +126,7 @@ qemu-img create -f qcow2 "$WORK/scratch.qcow2" 16G >/dev/null
 HTTPD=$!
 
 rm -f "$WORK/qmp.sock"
-"$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp 4 -m 5120 "${PFLASH[@]}" \
+"$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp "$QEMU_SMP" -m 5120 "${PFLASH[@]}" \
   -cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" \
   -boot d \
   -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \

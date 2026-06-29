@@ -34,17 +34,16 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-29)
 
-Proven code head before the current verification-installer config fix is `9283b3f` on
-`main`; current committed source head is `3b05053` with a hardware-gate
-follow-up under inspection and a local session-owned settings/write bridge fix in
-progress. The latest completed source passes shipped the Sound Recognition and Live Captions
-substrates, fixed the Fedora 44 `sushi` package name, added the App Exposé / Hot
-Corner desktop-proof hooks, changed the image workflow to avoid exporting the
-full bootc image into the runner daemon, and added nonblocking BuildKit GHA
-cache scopes for the expensive bootc image builds. Host gates for that source:
-`cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
+Current committed source head before this verification-installer follow-up is
+`22de4b1` on `main`. The latest completed source passes shipped the Sound
+Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
+name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
+workflow to avoid exporting the full bootc image into the runner daemon, added
+nonblocking BuildKit GHA cache scopes for the expensive bootc image builds, and
+landed the session-owned settings/write bridge. Host gates for the session bridge
+source: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, `git diff --check`, and
-`goblins-os-verify --source-root .` → **blocked=0 (1553)**.
+`goblins-os-verify --source-root .` → **blocked=0 (2588)**.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,
@@ -211,6 +210,16 @@ missing-proof diagnostics now print those files explicitly. `goblins-os-verify`
 pins those checks inside the relevant shell functions so a stray validator name
 elsewhere in the script cannot mask drift. This is source-gated only; no live
 qemu run has produced those proof artifacts yet.
+
+Current hardware-gate unblock: run `28365113728` at `22de4b1` built and pushed
+the bootc image, produced the verification installer ISO, launched QEMU, and
+reached the installer initrd framebuffer, but failed before the kickstart `%post`
+marker: serial output stopped after GRUB and the final debug frame sat at
+`initrd-switch-root.service`. The local follow-up under validation makes the
+verification-only kickstart explicitly `text --non-interactive` and drops the
+QEMU default to two vCPUs (`GOBLINS_OS_QEMU_CPUS` can override) to match the CI
+KVM warning. This is source-gated only until a fresh hardware-gate run produces
+the installed-session proof JSONs and screenshots.
 
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.

@@ -4,6 +4,7 @@
 # install -> reboot -> installed desktop chain can be exercised headlessly in qemu.
 # It deploys from the embedded OCI image on the ISO (works offline) and does NOT run
 # the local-registry `bootc switch` (which only existed for the dev build registry).
+text --non-interactive
 ostreecontainer --url=/run/install/repo/container --transport=oci
 ignoredisk --only-use=vda
 zerombr

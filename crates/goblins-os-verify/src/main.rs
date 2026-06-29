@@ -6377,6 +6377,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
+            "verify-config-runs-kickstart-noninteractively",
+            "text --non-interactive",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
             "verify-config-pins-scratch-vda",
             "ignoredisk --only-use=vda",
         ),
@@ -6504,6 +6509,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-saves-debug-frame-artifacts",
             "_debug-",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-defaults-to-ci-kvm-supported-smp",
+            "GOBLINS_OS_QEMU_CPUS:-2",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-passes-configured-qemu-smp",
+            "-smp \"$QEMU_SMP\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),

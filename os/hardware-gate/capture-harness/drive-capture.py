@@ -2,8 +2,8 @@
 """Host-side driver for the hardware-gate display-backed-VM capture.
 
 Codifies the validated flow against a running qemu VM (QMP socket):
-  1. wait for the Anaconda summary, drive Installation Destination -> Begin
-  2. wait for the bootc install + first-boot GDM-autologin desktop
+  1. wait for Anaconda to settle, drive Installation Destination -> Begin
+  2. require the kickstart %post marker, then wait for first-boot desktop settle
   3. dismiss the onboarding (Escape, then "Private - keep this computer offline")
   4. launch the in-session orchestrator via GNOME Alt+F2 (curl -o + bash; no sshd)
   5. screendump each surface to OUTDIR/<shot>.png on its HTTP /ready/<shot> signal
@@ -15,7 +15,7 @@ Note: per-shot window-focus timing lives in in-session-orchestrator.sh; tune the
 settle there if surfaces capture as duplicates (md5-identical). KVM (CI) makes
 the VM fast enough that the same timings that work under hvf hold.
 """
-import json, os, socket, subprocess, time
+import hashlib, json, os, socket, subprocess, time
 from urllib.parse import parse_qs, urlparse
 
 QMP = os.environ["GOS_QMP"]; HTTPLOG = os.environ["GOS_HTTPLOG"]
@@ -96,11 +96,6 @@ def click(xf, yf):
 def dump(p): cmd("screendump", filename=p)
 def png(ppm, out): subprocess.run(["sips", "-s", "format", "png", ppm, "--out", out] if os.uname().sysname == "Darwin"
                                   else ["convert", ppm, out], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-def fb_size():
-    p = "/tmp/_fb.ppm"; dump(p)
-    try: return os.path.getsize(p)
-    except OSError: return 0
-
 def serial_text():
     try:
         with open(SERIALLOG, errors="ignore") as fh:
@@ -137,6 +132,50 @@ def observe_serial_contains(label, needle, timeout):
     )
     return False
 
+def slug(label):
+    value = "".join(ch.lower() if ch.isalnum() else "-" for ch in label).strip("-")
+    return value or "stage"
+
+def frame_sample(label, save_debug=False):
+    p = f"/tmp/_fb-{slug(label)}.ppm"
+    dump(p)
+    try:
+        with open(p, "rb") as fh:
+            data = fh.read()
+        sample = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()[:16]}
+        if save_debug:
+            os.makedirs(OUTDIR, exist_ok=True)
+            out = f"{OUTDIR}/_debug-{slug(label)}.png"
+            png(p, out)
+            print(f"{label}: debug framebuffer saved to {out}", flush=True)
+        return sample
+    except OSError as err:
+        return {"size": 0, "sha256": f"error:{err}"}
+    finally:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+def wait_stage(label, seconds, sample_every=30):
+    """Wait a bounded stage interval while recording diagnostic-only frames.
+
+    QEMU PPM byte size is resolution-driven on CI, not a reliable UI state
+    detector. These samples are intentionally diagnostic-only; real progress is
+    proven by serial markers and in-session HTTP proof signals.
+    """
+    deadline = time.time() + seconds
+    samples = []
+    while True:
+        now = time.time()
+        save_debug = now >= deadline
+        samples.append(frame_sample(label, save_debug=save_debug))
+        if save_debug:
+            break
+        time.sleep(max(1, min(sample_every, int(deadline - now))))
+    compact = [f"{sample['size']}:{sample['sha256']}" for sample in samples[-16:]]
+    print(f"{label}: diagnostic framebuffer samples after {seconds}s: {compact}", flush=True)
+
 def http_get_path(line):
     marker = '"GET '
     if marker not in line:
@@ -166,43 +205,17 @@ def require_proofs(proofs):
     if bad:
         raise SystemExit("missing or failing required proof signals: " + ", ".join(bad))
 
-def wait_frame(label, lo, hi, timeout):
-    t = time.time()
-    samples = []
-    next_sample_at = 0
-    last_size = 0
-    while time.time() - t < timeout:
-        sz = fb_size()
-        last_size = sz
-        now = time.time()
-        if len(samples) < 8 or now >= next_sample_at:
-            samples.append(sz)
-            next_sample_at = now + 30
-        if lo <= sz <= hi:
-            print(f"{label}: matched framebuffer size {sz}", flush=True)
-            return True
-        time.sleep(10)
-    print(
-        f"{label}: framebuffer timeout after {timeout}s; "
-        f"expected {lo}..{hi}; last={last_size}; samples={samples[-16:]}",
-        flush=True,
-    )
-    return False
-
-def require_frame(label, lo, hi, timeout):
-    if not wait_frame(label, lo, hi, timeout):
-        raise SystemExit(f"{label} did not appear; framebuffer did not match expected range")
-
 # 0. Boot the highlighted installer entry instead of burning the GRUB timeout.
 wait_serial_contains("ISO boot menu", "Install Goblins OS 44", 180)
 if "Booting `Install Goblins OS 44'" not in serial_text():
     key("ret")
 observe_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 30)
-# 1. Anaconda summary -> destination -> begin
-require_frame("Anaconda summary", 78000, 95000, 900)
+# 1. Let Anaconda reach the storage confirmation, then drive the validated clicks.
+wait_stage("Anaconda storage confirmation", 360)
 click(0.55, 0.455); time.sleep(3); click(0.039, 0.06); time.sleep(3); click(0.937, 0.935)
-# 2. wait for first-boot desktop (large frame)
-require_frame("first boot desktop", 150000, 10**9, 900)
+# 2. Wait for the kickstart post marker before treating install progress as real.
+wait_serial_contains("kickstart install post", "GOBLINS_VERIFY_INSTALL_DONE", 1800)
+wait_stage("first boot desktop", 420)
 # 3. dismiss onboarding
 key("esc"); time.sleep(2); click(0.5, 0.627); time.sleep(3)
 # 4. launch orchestrator via Alt+F2 (pipe-free)

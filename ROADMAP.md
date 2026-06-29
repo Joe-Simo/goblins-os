@@ -1591,6 +1591,20 @@ diagnostic output, and continues to the required Anaconda framebuffer stage so
 the next failure is tied to the real installer/desktop state rather than a GRUB
 serial-string assumption. This is source-gated only until rerun.
 
+Follow-up hardware-gate run `28339469677` at `5327994` again proved the GHCR
+image push, shippable installer ISO build, and the optional GRUB handoff path,
+then exposed that raw QEMU PPM byte size is not a valid screen-state detector:
+the Anaconda stage timed out with a constant `3072016` byte framebuffer sample,
+which reflects capture resolution rather than whether Anaconda is visible. The
+current local fix removes the size-gated `require_frame` path, keeps the boot
+menu marker required, records framebuffer hashes/screens only as diagnostic
+`_debug-*` artifacts, waits a bounded Anaconda storage-confirmation interval,
+then requires the real `GOBLINS_VERIFY_INSTALL_DONE` kickstart `%post` serial
+marker before waiting for first boot. The hardware workflow also uploads
+artifacts on failure, and the capture harness copies `qemu.log`, `serial.log`,
+and `httpd.log` into `_capture-logs` so the next blocker is inspectable from the
+artifact, not only the Actions tail. This is source-gated only until rerun.
+
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**
    after source-gating the fail-closed capture-stage fix, rerun the

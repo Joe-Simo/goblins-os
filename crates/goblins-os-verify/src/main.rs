@@ -6305,18 +6305,43 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-requires-anaconda-summary-frame",
-            "require_frame(\"Anaconda summary\"",
+            "capture-driver-waits-for-anaconda-storage-confirmation-diagnostics",
+            "wait_stage(\"Anaconda storage confirmation\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-requires-first-boot-desktop-frame",
-            "require_frame(\"first boot desktop\"",
+            "capture-driver-requires-kickstart-install-post-marker",
+            "wait_serial_contains(\"kickstart install post\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-prints-frame-timeout-samples",
-            "framebuffer timeout after",
+            "capture-driver-pins-kickstart-install-post-needle",
+            "GOBLINS_VERIFY_INSTALL_DONE",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-waits-for-first-boot-desktop-diagnostics",
+            "wait_stage(\"first boot desktop\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-prints-diagnostic-frame-samples",
+            "diagnostic framebuffer samples",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-saves-debug-frame-artifacts",
+            "_debug-",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-copies-failure-capture-logs",
+            "_capture-logs",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-uploads-artifact-on-failure",
+            "if: always()",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),

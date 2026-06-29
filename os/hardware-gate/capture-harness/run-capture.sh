@@ -39,7 +39,18 @@ dump_file_tail() {
   fi
 }
 
+copy_capture_logs() {
+  mkdir -p "$RUN_DIR/_capture-logs"
+  local name
+  for name in qemu.log serial.log httpd.log; do
+    if [ -e "$WORK/$name" ]; then
+      cp -f "$WORK/$name" "$RUN_DIR/_capture-logs/$name" || true
+    fi
+  done
+}
+
 dump_capture_logs() {
+  copy_capture_logs
   echo "QEMU startup diagnostics"
   command -v "$QEMU" >/dev/null 2>&1 && "$QEMU" --version | head -n 1 || true
   [ -e /dev/kvm ] && ls -l /dev/kvm || true

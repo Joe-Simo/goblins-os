@@ -6569,6 +6569,31 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-probes-graphical-vts",
+            "def probe_graphical_vts():",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-probes-first-boot-vt2",
+            "\"ctrl+alt+f2\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-probes-legacy-graphical-vt7",
+            "\"ctrl+alt+f7\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-saves-first-boot-vt-debug-frame",
+            "first boot vt f2",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-leaves-vt2-for-session-automation",
+            "first boot vt f2 final",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-selects-first-boot-private-path",
             "first boot setup: selecting welcome window and clicking private offline path",
         ),

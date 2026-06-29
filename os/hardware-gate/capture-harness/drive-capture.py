@@ -196,6 +196,26 @@ def wait_stage(label, seconds, sample_every=30):
     compact = [f"{sample['size']}:{sample['sha256']}" for sample in samples[-16:]]
     print(f"{label}: diagnostic framebuffer samples after {seconds}s: {compact}", flush=True)
 
+def probe_graphical_vts():
+    """Capture likely graphical VTs and leave the VM on the GNOME session VT.
+
+    Failed gates have proven the installed deployment reaches tty1 while the
+    serial install marker is complete. GNOME/GDM commonly owns tty2 under
+    Wayland, so probe the likely VTs with debug frames before any onboarding or
+    Alt+F2 automation. The proof path still fails closed unless the in-session
+    HTTP callbacks arrive.
+    """
+    print("first boot VT probe: checking likely graphical virtual terminals", flush=True)
+    for debug_label, combo in (
+        ("first boot vt f2", "ctrl+alt+f2"),
+        ("first boot vt f7", "ctrl+alt+f7"),
+        ("first boot vt f1", "ctrl+alt+f1"),
+        ("first boot vt f2 final", "ctrl+alt+f2"),
+    ):
+        key(combo)
+        time.sleep(3)
+        frame_sample(debug_label, save_debug=True)
+
 def dismiss_first_boot_setup():
     """Select the real first-boot window and take the offline/private path."""
     print("first boot setup: selecting welcome window and clicking private offline path", flush=True)
@@ -263,6 +283,7 @@ wait_serial_contains(
 )
 # 2. Wait for first boot before treating install progress as real.
 wait_stage("first boot desktop", 420)
+probe_graphical_vts()
 # 3. dismiss onboarding through the real offline/private UI path.
 dismiss_first_boot_setup()
 # 4. launch orchestrator via Alt+F2 (pipe-free)

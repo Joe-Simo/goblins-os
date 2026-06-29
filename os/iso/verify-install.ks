@@ -5,9 +5,12 @@
 # It deploys from the embedded OCI image on the ISO (works offline) and does NOT run
 # the local-registry `bootc switch` (which only existed for the dev build registry).
 ostreecontainer --url=/run/install/repo/container --transport=oci
-clearpart --all --initlabel --disklabel=gpt
+ignoredisk --only-use=vda
+zerombr
+clearpart --all --initlabel --disklabel=gpt --drives=vda
+bootloader --location=mbr --boot-drive=vda
 reqpart --add-boot
-part / --fstype=xfs --label=root --grow
+part / --fstype=xfs --label=root --grow --size=1024 --ondisk=vda
 lang en_US.UTF-8
 keyboard us
 timezone --utc Etc/UTC

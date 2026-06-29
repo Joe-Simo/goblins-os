@@ -2,7 +2,7 @@
 """Host-side driver for the hardware-gate display-backed-VM capture.
 
 Codifies the validated flow against a running qemu VM (QMP socket):
-  1. wait for Anaconda to settle, drive Installation Destination -> Begin
+  1. wait for the verification-only kickstart install marker
   2. require the kickstart %post marker, then wait for first-boot desktop settle
   3. dismiss the onboarding (Escape, then "Private - keep this computer offline")
   4. launch the in-session orchestrator via GNOME Alt+F2 (curl -o + bash; no sshd)
@@ -118,14 +118,18 @@ def serial_text():
     except OSError:
         return ""
 
-def wait_serial_contains(label, needle, timeout):
+def wait_serial_contains(label, needle, timeout, debug_label=None, debug_every=0):
     t = time.time()
     last_tail = ""
+    last_debug = 0.0
     while time.time() - t < timeout:
         data = serial_text()
         if needle in data:
             print(f"{label}: observed serial marker {needle!r}", flush=True)
             return True
+        if debug_label and debug_every and time.time() - last_debug >= debug_every:
+            frame_sample(debug_label, save_debug=True)
+            last_debug = time.time()
         last_tail = data[-500:]
         time.sleep(1)
     raise SystemExit(
@@ -227,18 +231,17 @@ wait_serial_contains("ISO boot menu", "Install Goblins OS 44", 180)
 if "Booting `Install Goblins OS 44'" not in serial_text():
     key("ret")
 observe_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 30)
-# 1. Let Anaconda reach the storage confirmation, then drive the validated clicks.
-wait_stage("Anaconda storage confirmation", 360)
-click(0.55, 0.455); time.sleep(5)
-frame_sample("Anaconda destination screen", save_debug=True)
-click(0.34, 0.32); time.sleep(2)
-frame_sample("Anaconda destination disk selected", save_debug=True)
-click(0.039, 0.06); time.sleep(6)
-frame_sample("Anaconda summary after destination", save_debug=True)
-click(0.937, 0.895); time.sleep(5)
-frame_sample("Anaconda begin submitted", save_debug=True)
-# 2. Wait for the kickstart post marker before treating install progress as real.
-wait_serial_contains("kickstart install post", "GOBLINS_VERIFY_INSTALL_DONE", 1800)
+# 1. The verification-only OEMDRV kickstart pins the scratch VM disk and should
+# auto-start without interactive Anaconda clicks. Progress is proven only by the
+# serial %post marker, with periodic framebuffer diagnostics on timeout paths.
+wait_serial_contains(
+    "kickstart install post",
+    "GOBLINS_VERIFY_INSTALL_DONE",
+    1800,
+    debug_label="Anaconda automated kickstart progress",
+    debug_every=120,
+)
+# 2. Wait for first boot before treating install progress as real.
 wait_stage("first boot desktop", 420)
 # 3. dismiss onboarding
 key("esc"); time.sleep(2); click(0.5, 0.627); time.sleep(3)

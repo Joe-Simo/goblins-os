@@ -34,7 +34,7 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-29)
 
-Proven code head before the current QMP display-route fix is `b9cc892` on
+Proven code head before the current verification-kickstart disk pin fix is `9283b3f` on
 `main`. The latest completed source passes shipped the Sound Recognition and Live Captions
 substrates, fixed the Fedora 44 `sushi` package name, added the App Exposé / Hot
 Corner desktop-proof hooks, changed the image workflow to avoid exporting the
@@ -1633,6 +1633,22 @@ change was wrong: QEMU documents absolute coordinates as `0..0x7fff`, not
 The current local fix restores the documented absolute range, gives the
 virtio-gpu device a stable `video0` id, routes pointer events to that display
 device, logs `query-mice`, and makes QMP command errors fail loudly. This is
+source-gated only until rerun.
+
+Follow-up hardware-gate run `28349173698` at `9283b3f` proved the GHCR image
+push, shippable ISO build, model setup, and display-backed VM boot into
+Anaconda. The QMP diagnostic route initialized (`video0`; `query-mice` saw the
+QEMU HID Tablet), but all five Anaconda debug screenshots were still
+byte-identical on the branded summary with `Installation Destination` marked
+`Kickstart insufficient`, `serial.log` never reached
+`GOBLINS_VERIFY_INSTALL_DONE`, and `httpd.log` was empty. The next source fix
+stops treating Anaconda pointer clicks as the install unblock: the
+verification-only OEMDRV kickstart now pins the scratch VM disk with
+`ignoredisk --only-use=vda`, `clearpart --drives=vda`,
+`bootloader --boot-drive=vda`, and `part / ... --ondisk=vda`; the capture driver
+waits for the real kickstart `%post` serial marker with periodic debug frames
+instead of clicking Installation Destination / Begin Installation; and both
+verifier gates reject drift back to the fragile click contract. This is
 source-gated only until rerun.
 
 **NEXT — pick up exactly here:**

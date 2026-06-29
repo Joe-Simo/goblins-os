@@ -6305,23 +6305,33 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-waits-for-anaconda-storage-confirmation-diagnostics",
-            "wait_stage(\"Anaconda storage confirmation\"",
+            "capture-driver-waits-for-automated-kickstart-progress-diagnostics",
+            "Anaconda automated kickstart progress",
         ),
         contains_check(
-            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-saves-destination-screen-debug-frame",
-            "Anaconda destination screen",
+            root.join("os/iso/verify-install.ks"),
+            "verify-kickstart-pins-scratch-vda",
+            "ignoredisk --only-use=vda",
         ),
         contains_check(
+            root.join("os/iso/verify-install.ks"),
+            "verify-kickstart-clears-only-scratch-vda",
+            "clearpart --all --initlabel --disklabel=gpt --drives=vda",
+        ),
+        contains_check(
+            root.join("os/iso/verify-install.ks"),
+            "verify-kickstart-sets-vda-boot-drive",
+            "bootloader --location=mbr --boot-drive=vda",
+        ),
+        contains_check(
+            root.join("os/iso/verify-install.ks"),
+            "verify-kickstart-puts-root-on-scratch-vda",
+            "part / --fstype=xfs --label=root --grow --size=1024 --ondisk=vda",
+        ),
+        absent_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-selects-installation-destination-disk",
+            "capture-driver-does-not-fake-anaconda-disk-selection-by-click",
             "Anaconda destination disk selected",
-        ),
-        contains_check(
-            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-clicks-begin-installation-button-center",
-            "click(0.937, 0.895)",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
@@ -6370,13 +6380,13 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-saves-begin-submitted-debug-frame",
-            "Anaconda begin submitted",
+            "capture-driver-saves-automated-kickstart-debug-frame",
+            "Anaconda automated kickstart progress",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-requires-kickstart-install-post-marker",
-            "wait_serial_contains(\"kickstart install post\"",
+            "\"kickstart install post\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),

@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Drive the full hardware-gate capture in a display-backed qemu VM and close-signoff.
 #
-# Boots the UNMODIFIED in-tree ISO (so its SHA still matches the proof-manifest)
-# with an auto-detected OEMDRV kickstart disk, drives the interactive Anaconda
-# destination confirmation via QMP, waits for the bootc install + first-boot
-# GDM-autologin desktop, dismisses the onboarding, launches the in-session
-# orchestrator (served over the slirp gateway, started via GNOME Alt+F2),
-# captures the 27 required shots by QMP-screendump on each HTTP signal, writes
-# proof-manifest.json, and runs close-signoff.sh.
+# Boots the hardware-gate ISO built with os/iso/verify-config.toml (so the
+# embedded /osbuild.ks, not a sidecar disk, drives Anaconda), waits for the bootc
+# install + first-boot GDM-autologin desktop, dismisses the onboarding, launches
+# the in-session orchestrator (served over the slirp gateway, started via GNOME
+# Alt+F2), captures the 27 required shots by QMP-screendump on each HTTP signal,
+# writes proof-manifest.json, and runs close-signoff.sh.
 #
 # Honest: every shot is a real framebuffer capture of the real installed OS.
 # Gaming uses the OS's own lavapipe/gamescope/pipewire stack; studio-live uses a
@@ -120,8 +119,6 @@ else
   : > "$WORK/vars.fd"; truncate -s 67108864 "$WORK/vars.fd" 2>/dev/null || dd if=/dev/zero of="$WORK/vars.fd" bs=1m count=64 2>/dev/null
 fi
 qemu-img create -f qcow2 "$WORK/scratch.qcow2" 16G >/dev/null
-# OEMDRV kickstart disk (FAT, label OEMDRV) carrying verify-install.ks
-"$HERE/make-oemdrv.sh" "$WORK/oemdrv.img" "$REPO/os/iso/verify-install.ks"
 
 # Serve orchestrator + receive capture signals.
 ( cd "$WORK" && cp "$HERE/in-session-orchestrator.sh" orchestrator.sh && python3 -m http.server "$PORT" --bind 0.0.0.0 >"$WORK/httpd.log" 2>&1 ) &
@@ -130,7 +127,7 @@ HTTPD=$!
 rm -f "$WORK/qmp.sock"
 "$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp 4 -m 5120 "${PFLASH[@]}" \
   -cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" \
-  -drive "file=$WORK/oemdrv.img,if=virtio,format=raw,file.locking=off" -boot d \
+  -boot d \
   -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
   -device virtio-gpu-pci,id=video0 -device qemu-xhci -device usb-tablet -device usb-kbd \
   -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &

@@ -231,9 +231,10 @@ wait_serial_contains("ISO boot menu", "Install Goblins OS 44", 180)
 if "Booting `Install Goblins OS 44'" not in serial_text():
     key("ret")
 observe_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 30)
-# 1. The verification-only OEMDRV kickstart pins the scratch VM disk and should
-# auto-start without interactive Anaconda clicks. Progress is proven only by the
-# serial %post marker, with periodic framebuffer diagnostics on timeout paths.
+# 1. The verification-only embedded kickstart pins the scratch VM disk and
+# should auto-start without interactive Anaconda clicks. Progress is proven only
+# by the serial %post marker, with periodic framebuffer diagnostics on timeout
+# paths.
 wait_serial_contains(
     "kickstart install post",
     "GOBLINS_VERIFY_INSTALL_DONE",

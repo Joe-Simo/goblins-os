@@ -15,6 +15,10 @@
 #   GOBLINS_OS_IMAGE   container image to install (default localhost/goblins-os:<arch>)
 #   GOBLINS_OS_ROOTFS  installed root filesystem  (default xfs, matching the
 #                      bootc install config in os/bootc-install/00-goblins-os.toml)
+#   GOBLINS_OS_ISO_CONFIG
+#                      bootc-image-builder config path (default os/iso/config.toml).
+#                      Hardware proof jobs use os/iso/verify-config.toml; release
+#                      media must keep the default interactive config.
 #   OUTDIR             output directory           (default os/iso/output/<arch>)
 #   BIB_IMAGE          bootc-image-builder image  (default the quay.io latest)
 #   GOBLINS_OS_CONTAINER_RUNTIME
@@ -48,7 +52,16 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CONFIG="$REPO_ROOT/os/iso/config.toml"
+CONFIG="${GOBLINS_OS_ISO_CONFIG:-$REPO_ROOT/os/iso/config.toml}"
+case "$CONFIG" in
+  /*) ;;
+  *) CONFIG="$REPO_ROOT/$CONFIG" ;;
+esac
+[ -f "$CONFIG" ] || { echo "error: missing ISO config: $CONFIG" >&2; exit 1; }
+CONFIG_LABEL="$CONFIG"
+case "$CONFIG_LABEL" in
+  "$REPO_ROOT"/*) CONFIG_LABEL="${CONFIG_LABEL#"$REPO_ROOT/"}" ;;
+esac
 BIB="${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder:latest}"
 ROOTFS="${GOBLINS_OS_ROOTFS:-xfs}"
 CONTAINER_RUNTIME="${GOBLINS_OS_CONTAINER_RUNTIME:-docker}"
@@ -282,6 +295,7 @@ finalize_outputs() {
   "native_host_arch": "$HOST_ARCH",
   "container_engine_arch": "$RUNTIME_ARCH",
   "docker_platform": "$DOCKER_PLATFORM",
+  "installer_config": "$CONFIG_LABEL",
   "builder_source_image": "$BIB_SOURCE_IMAGE_USED",
   "installer_payload_source_kind": "$BIB_SOURCE_KIND",
   "installer_payload_source_local_only": $BIB_SOURCE_LOCAL_ONLY,

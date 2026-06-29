@@ -77,10 +77,11 @@ jobs:
           tags: ${{ steps.ref.outputs.ref }}
           cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
           cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
-      - name: Build the shippable installer ISO from the published ref
+      - name: Build the verification installer ISO from the published ref
         run: |
           GOBLINS_OS_CONTAINER_RUNTIME=docker \
           GOBLINS_OS_ARCH=${{ matrix.arch }} \
+          GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml \
           GOBLINS_OS_IMAGE='${{ steps.ref.outputs.ref }}' \
           GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 \
           GOBLINS_OS_SHIPPABLE_RELEASE=1 \

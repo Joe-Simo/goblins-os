@@ -34,8 +34,9 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-29)
 
-Proven code head before the current verification-kickstart disk pin fix is `9283b3f` on
-`main`. The latest completed source passes shipped the Sound Recognition and Live Captions
+Proven code head before the current verification-installer config fix is `9283b3f` on
+`main`; current source head is `e38b3e6` with a failed hardware-gate follow-up
+under inspection. The latest completed source passes shipped the Sound Recognition and Live Captions
 substrates, fixed the Fedora 44 `sushi` package name, added the App Exposé / Hot
 Corner desktop-proof hooks, changed the image workflow to avoid exporting the
 full bootc image into the runner daemon, and added nonblocking BuildKit GHA
@@ -1650,6 +1651,20 @@ waits for the real kickstart `%post` serial marker with periodic debug frames
 instead of clicking Installation Destination / Begin Installation; and both
 verifier gates reject drift back to the fragile click contract. This is
 source-gated only until rerun.
+
+Follow-up hardware-gate run `28351877832` at `e38b3e6` proved the GHCR image
+push, shippable source-ref ISO build, model setup, QMP display input route, and
+failure-artifact upload path, but it still stopped on the branded Anaconda
+summary with `Installation Destination` marked `Kickstart insufficient`. The
+debug frame hash matched the prior Anaconda-summary frame, `serial.log` never
+reached `GOBLINS_VERIFY_INSTALL_DONE`, and `httpd.log` stayed empty. The source
+fix in progress stops relying on an OEMDRV sidecar kickstart, because the
+generated ISO boots Anaconda with `inst.ks=hd:LABEL=GOBLINS_OS:/osbuild.ks`.
+The hardware workflow now builds its proof ISO with
+`GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml`, leaving release
+`os/iso/config.toml` interactive/non-destructive while embedding the
+verification-only scratch-`vda` storage automation into the ISO's `/osbuild.ks`.
+This is source-gated only until rerun.
 
 **NEXT — pick up exactly here:**
 1. **Batch 4 implementation pass (current direction — CI/qemu at the end):**

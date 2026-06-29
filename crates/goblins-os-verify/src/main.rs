@@ -5289,6 +5289,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "requires GOBLINS_OS_BIB_SOURCE_IMAGE",
         ),
         contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-selects-explicit-config",
+            "GOBLINS_OS_ISO_CONFIG",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-records-installer-config-in-manifest",
+            "\"installer_config\": \"$CONFIG_LABEL\"",
+        ),
+        contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
             "hardware-gate-direct-registry-build-action",
             "docker/build-push-action@v7",
@@ -5327,6 +5337,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join(".github/workflows/hardware-gate-capture.yml"),
             "hardware-gate-skips-local-iso-image-build",
             "GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-uses-verification-iso-config",
+            "GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml",
         ),
         absent_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
@@ -6309,24 +6324,44 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "Anaconda automated kickstart progress",
         ),
         contains_check(
-            root.join("os/iso/verify-install.ks"),
-            "verify-kickstart-pins-scratch-vda",
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-pins-scratch-vda",
             "ignoredisk --only-use=vda",
         ),
         contains_check(
-            root.join("os/iso/verify-install.ks"),
-            "verify-kickstart-clears-only-scratch-vda",
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-clears-only-scratch-vda",
             "clearpart --all --initlabel --disklabel=gpt --drives=vda",
         ),
         contains_check(
-            root.join("os/iso/verify-install.ks"),
-            "verify-kickstart-sets-vda-boot-drive",
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-sets-vda-boot-drive",
             "bootloader --location=mbr --boot-drive=vda",
         ),
         contains_check(
-            root.join("os/iso/verify-install.ks"),
-            "verify-kickstart-puts-root-on-scratch-vda",
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-puts-root-on-scratch-vda",
             "part / --fstype=xfs --label=root --grow --size=1024 --ondisk=vda",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-emits-install-done-marker",
+            "GOBLINS_VERIFY_INSTALL_DONE",
+        ),
+        absent_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-lets-bib-inject-ostreecontainer",
+            "ostreecontainer --url",
+        ),
+        absent_check(
+            root.join("os/iso/config.toml"),
+            "release-iso-config-keeps-install-done-marker-out",
+            "GOBLINS_VERIFY_INSTALL_DONE",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-does-not-pretend-oemdrv-overrides-embedded-osbuild-ks",
+            "make-oemdrv.sh",
         ),
         absent_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),

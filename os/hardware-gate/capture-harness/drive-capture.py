@@ -282,6 +282,7 @@ wait_serial_contains(
     debug_every=120,
 )
 # 2. Wait for first boot before treating install progress as real.
+observe_serial_contains("first boot hardware diagnostics", "GOBLINS_HWGATE_DIAG_DONE", 180)
 wait_stage("first boot desktop", 420)
 probe_graphical_vts()
 # 3. dismiss onboarding through the real offline/private UI path.

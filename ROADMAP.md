@@ -34,8 +34,8 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-29)
 
-Current committed source head before this VT-probe follow-up is
-`2847fc3` on `main`. The latest completed source passes shipped the Sound
+Current committed source head before this first-boot diagnostic follow-up is
+`893be68` on `main`. The latest completed source passes shipped the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
 workflow to avoid exporting the full bootc image into the runner daemon, added
@@ -43,13 +43,16 @@ nonblocking BuildKit GHA cache scopes for the expensive bootc image builds,
 landed the session-owned settings/write bridge, and proved the verification
 installer can complete and boot the installed deployment. The current image
 also pins the graphical default target and GDM display-manager aliases in both
-the immutable image systemd tree and `/etc`. Host gates for the latest committed
-source: `bash -n` for the hardware-gate shell scripts, scoped
-`git diff --check`, `cargo fmt -p goblins-os-verify --check`,
+the immutable image systemd tree and `/etc`, and the capture harness probes the
+likely graphical VTs before it tries onboarding/session automation. Host gates
+for the latest committed source: `python3 -m py_compile` for the capture driver,
+`bash -n` for the hardware-gate shell scripts, scoped `git diff --check`,
+`cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
-`goblins-os-verify --source-root .` → **blocked=0 (2595)**. A full
-`cargo fmt --all --check` was not claimed for `2847fc3`; host rustfmt stalled
-while reading the workspace, so only the edited Rust crate was checked.
+`goblins-os-verify --source-root .` → **blocked=0 (2600)**. A full
+`cargo fmt --all --check` was not claimed for `893be68`; host rustfmt has
+previously stalled while reading the workspace, so only the edited Rust crate
+was checked.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,
@@ -238,12 +241,16 @@ kickstart install again, but `_debug-first-boot-desktop.png` and
 the graphical-target-only fix, and the proof JSONs were all missing. Run
 `28382483951` at `2847fc3` proved the display-manager symlink pins made it into
 the image build, but the first-boot framebuffer still showed tty1 and the
-in-session proof callbacks were still all missing. The local fix under
-validation now probes likely graphical virtual terminals (`tty2`, legacy `tty7`,
-and `tty1`) with saved debug frames before the onboarding clicks, then leaves
-the VM on `tty2` for GNOME/Wayland session automation. This is source-gated only
-until a fresh hardware-gate run reaches the real desktop and produces the
-installed-session proof JSONs.
+in-session proof callbacks were still all missing. Run `28400106080` at
+`893be68` proved the image push and verification ISO again, then captured the
+new VT probe frames: `tty1`, `tty2`, and legacy `tty7` all showed text login
+prompts, not a hidden GNOME/GDM session; `httpd.log` stayed empty and every
+in-session proof callback was still missing. The local fix under validation now
+adds a verification-only first-boot diagnostics service through
+`os/iso/verify-config.toml`; it prints the installed default target, GDM/display-
+manager symlinks, unit status, and GDM/logind journal to serial before timeout.
+This is source-gated only until a fresh hardware-gate run reaches the real
+desktop and produces the installed-session proof JSONs.
 
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.

@@ -6482,6 +6482,41 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "verify-config-emits-install-done-marker",
             "GOBLINS_VERIFY_INSTALL_DONE",
         ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-emits-post-install-target-diagnostics",
+            "GOBLINS_HWGATE_POST_DIAG_BEGIN",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-installs-firstboot-diagnostics-service",
+            "goblins-hwgate-firstboot-diagnostics.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-firstboot-diagnostics-prints-default-target",
+            "default_target=$(systemctl get-default 2>&1)",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-firstboot-diagnostics-statuses-gdm",
+            "systemctl --no-pager --full status graphical.target display-manager.service gdm.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-firstboot-diagnostics-captures-gdm-journal",
+            "journalctl -b --no-pager",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-firstboot-diagnostics-does-not-change-target",
+            "WantedBy=multi-user.target graphical.target",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-firstboot-diagnostics-done-marker",
+            "GOBLINS_HWGATE_DIAG_DONE",
+        ),
         absent_check(
             root.join("os/iso/verify-config.toml"),
             "verify-config-lets-bib-inject-ostreecontainer",
@@ -6566,6 +6601,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-waits-for-first-boot-desktop-diagnostics",
             "wait_stage(\"first boot desktop\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-observes-first-boot-hardware-diagnostics",
+            "observe_serial_contains(\"first boot hardware diagnostics\", \"GOBLINS_HWGATE_DIAG_DONE\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),

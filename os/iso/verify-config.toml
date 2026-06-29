@@ -29,6 +29,73 @@ part / --fstype=xfs --label=root --grow --size=1024 --ondisk=vda
 
 reboot --eject
 %post
+{
+  echo "GOBLINS_HWGATE_POST_DIAG_BEGIN"
+  echo "post_default_target=$(systemctl get-default 2>&1 || true)"
+  for path in \
+    /etc/systemd/system/default.target \
+    /usr/lib/systemd/system/default.target \
+    /etc/systemd/system/display-manager.service \
+    /usr/lib/systemd/system/display-manager.service; do
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      echo "$path -> $(readlink "$path" 2>&1 || true)"
+    else
+      echo "$path missing"
+    fi
+  done
+  systemctl is-enabled gdm.service display-manager.service 2>&1 || true
+  echo "GOBLINS_HWGATE_POST_DIAG_DONE"
+} > /dev/ttyS0 2>&1 || true
+
+cat > /usr/libexec/goblins-hwgate-firstboot-diagnostics <<'EOF'
+#!/usr/bin/env bash
+set +e
+exec >/dev/ttyS0 2>&1
+echo "GOBLINS_HWGATE_DIAG_BEGIN"
+echo "kernel=$(uname -r 2>&1)"
+echo "default_target=$(systemctl get-default 2>&1)"
+for path in \
+  /etc/systemd/system/default.target \
+  /usr/lib/systemd/system/default.target \
+  /etc/systemd/system/display-manager.service \
+  /usr/lib/systemd/system/display-manager.service; do
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    echo "$path -> $(readlink "$path" 2>&1 || true)"
+  else
+    echo "$path missing"
+  fi
+done
+echo "enabled_units_begin"
+systemctl is-enabled graphical.target multi-user.target gdm.service display-manager.service 2>&1 || true
+echo "enabled_units_end"
+echo "active_units_begin"
+systemctl is-active graphical.target multi-user.target gdm.service display-manager.service 2>&1 || true
+echo "active_units_end"
+systemctl --no-pager --full status graphical.target display-manager.service gdm.service 2>&1 || true
+journalctl -b --no-pager \
+  -u display-manager.service \
+  -u gdm.service \
+  -u systemd-logind.service \
+  -u systemd-user-sessions.service \
+  -n 200 2>&1 || true
+echo "GOBLINS_HWGATE_DIAG_DONE"
+EOF
+chmod 0755 /usr/libexec/goblins-hwgate-firstboot-diagnostics
+
+cat > /etc/systemd/system/goblins-hwgate-firstboot-diagnostics.service <<'EOF'
+[Unit]
+Description=Goblins OS hardware-gate first-boot diagnostics
+After=multi-user.target graphical.target display-manager.service gdm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/goblins-hwgate-firstboot-diagnostics
+
+[Install]
+WantedBy=multi-user.target graphical.target
+EOF
+systemctl enable goblins-hwgate-firstboot-diagnostics.service || true
+
 echo "GOBLINS_VERIFY_INSTALL_DONE" > /dev/ttyS0 || true
 %end
 """

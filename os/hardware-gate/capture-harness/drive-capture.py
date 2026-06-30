@@ -240,20 +240,28 @@ def probe_graphical_vts():
         time.sleep(3)
         frame_sample(debug_label, save_debug=True)
 
-def run_alt_f2(command, wait_after=3):
+def run_alt_f2(command, wait_after=3, debug_label=None):
+    key("esc")
+    time.sleep(1)
     key("alt+f2")
     time.sleep(2)
     typ(command)
     time.sleep(1)
     key("ret")
     time.sleep(wait_after)
+    if debug_label:
+        frame_sample(debug_label, save_debug=True)
 
 def complete_first_boot_setup():
     """Complete the real private/offline first-boot path without fragile clicks."""
     print("first boot setup: completing private offline path through session core APIs", flush=True)
     frame_sample("first boot before private unlock", save_debug=True)
-    run_alt_f2(f"curl -o /tmp/gos-firstboot 10.0.2.2:{PORT}/firstboot-unlock.sh")
-    run_alt_f2("bash /tmp/gos-firstboot", wait_after=8)
+    run_alt_f2(
+        f"curl -o /tmp/gos-firstboot 10.0.2.2:{PORT}/firstboot-unlock.sh",
+        debug_label="first boot helper download submitted",
+    )
+    wait_http_contains("first boot helper download", "/firstboot-unlock.sh", 20)
+    run_alt_f2("bash /tmp/gos-firstboot", wait_after=8, debug_label="first boot helper run submitted")
     wait_http_contains("first boot private unlock callback", "/ready/FIRSTBOOT_UNLOCK", 30)
     key("esc")
     time.sleep(1)

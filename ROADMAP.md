@@ -275,9 +275,14 @@ source-gated but failed before launch because the VT probe ended on the GDM
 login surface (`tty2`) instead of the live Goblins session; `httpd.log` stayed
 empty and the `/ready/FIRSTBOOT_UNLOCK` callback never arrived. The local fix
 under validation now keeps the diagnostic VT frames but returns to `tty1`, where
-the same run captured the live session, before sending Alt+F2 automation. This
-is source-gated only until a fresh hardware-gate run reaches the real desktop
-and produces the installed-session proof JSONs.
+the same run captured the live session, before sending Alt+F2 automation. Run
+`28413878856` at `88daf9f` proved that the run still lands on the live GNOME
+overview after the `tty1` return, but the helper was never downloaded: the host
+`httpd.log` stayed empty and `/ready/FIRSTBOOT_UNLOCK` was still missing. The
+local fix under validation now exits the overview before each Alt+F2 command and
+fails earlier unless the host log proves `/firstboot-unlock.sh` was fetched.
+This is source-gated only until a fresh hardware-gate run reaches the real
+desktop and produces the installed-session proof JSONs.
 
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.

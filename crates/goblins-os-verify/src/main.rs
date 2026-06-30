@@ -6654,6 +6654,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-exits-overview-before-alt-f2-commands",
+            "key(\"esc\")",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-requires-firstboot-helper-download",
+            "first boot helper download",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-saves-post-first-boot-private-unlock-debug-frame",
             "post first boot private unlock",
         ),

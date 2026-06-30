@@ -5,6 +5,12 @@
 # (GOBLINS_OS_SYS_BLOCK_DIR, the render-harness mechanism) on an alt port.
 exec >/tmp/gate-cap.log 2>&1
 set -x
+LOCK_DIR=/tmp/goblins-hwgate-orchestrator.lock
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "GOBLINS_HWGATE_ORCHESTRATOR_ALREADY_RUNNING"
+  exit 0
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 H=10.0.2.2:8099
 B=/usr/libexec/goblins-os
 LIVE_URL=http://127.0.0.1:8787
@@ -84,6 +90,28 @@ wait_process_or_bus(){
     pgrep -x "$process" >/dev/null 2>&1 && return 0
     pgrep -f "$process" >/dev/null 2>&1 && return 0
     if [ -n "$bus_name" ] && command -v gdbus >/dev/null 2>&1 \
+      && gdbus call --session \
+        --dest org.freedesktop.DBus \
+        --object-path /org/freedesktop/DBus \
+        --method org.freedesktop.DBus.NameHasOwner \
+        "$bus_name" 2>/dev/null | grep -Fq "true"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+wait_session_bus_name(){
+  local bus_name="$1"
+  if command -v gdbus >/dev/null 2>&1; then
+    gdbus call --session \
+      --dest org.freedesktop.DBus \
+      --object-path /org/freedesktop/DBus \
+      --method org.freedesktop.DBus.StartServiceByName \
+      "$bus_name" 0 >/dev/null 2>&1 || true
+  fi
+  for _ in $(seq 1 30); do
+    if command -v gdbus >/dev/null 2>&1 \
       && gdbus call --session \
         --dest org.freedesktop.DBus \
         --object-path /org/freedesktop/DBus \
@@ -773,8 +801,14 @@ keyboard_shortcuts_roundtrip_proof(){
     -d '{"action":"window-hud","bindings":["<Super><Shift>H"]}' \
     "$LIVE_URL/v1/keyboard/shortcuts/binding" || true)
   shortcut_ok=$(json_field "$shortcut_set_file" ok)
-  shortcut_after_set="$(gsettings get org.goblins.shell.extensions.wm window-hud 2>/dev/null || true)"
-  if [ "$shortcut_code" != "200" ] || [ "$shortcut_ok" != "true" ] || ! printf '%s\n' "$shortcut_after_set" | grep -Fq "'<Super><Shift>H'"; then
+  for _ in $(seq 1 20); do
+    shortcut_after_set="$(gsettings get org.goblins.shell.extensions.wm window-hud 2>/dev/null || true)"
+    if printf '%s\n' "$shortcut_after_set" | grep -Eq "'(<Super><Shift>H|<Shift><Super>H)'"; then
+      break
+    fi
+    sleep 0.25
+  done
+  if [ "$shortcut_code" != "200" ] || [ "$shortcut_ok" != "true" ] || ! printf '%s\n' "$shortcut_after_set" | grep -Eq "'(<Super><Shift>H|<Shift><Super>H)'"; then
     proof_keyboard_shortcuts_roundtrip "status=fail&stage=shortcut-set&route=/v1/keyboard/shortcuts/binding&shortcut_http=${shortcut_code:-000}&shortcut_ok=${shortcut_ok:-missing}&shortcut_action=window-hud&shortcut_binding=%3CSuper%3E%3CShift%3EH"
     return 1
   fi
@@ -784,7 +818,11 @@ keyboard_shortcuts_roundtrip_proof(){
     -d '{"action":"window-hud","reset":true}' \
     "$LIVE_URL/v1/keyboard/shortcuts/binding" || true)
   reset_ok=$(json_field "$shortcut_reset_file" ok)
-  shortcut_after_reset="$(gsettings get org.goblins.shell.extensions.wm window-hud 2>/dev/null || true)"
+  for _ in $(seq 1 20); do
+    shortcut_after_reset="$(gsettings get org.goblins.shell.extensions.wm window-hud 2>/dev/null || true)"
+    printf '%s\n' "$shortcut_after_reset" | grep -Fq "'<Super>w'" && break
+    sleep 0.25
+  done
   if [ "$reset_code" != "200" ] || [ "$reset_ok" != "true" ] || ! printf '%s\n' "$shortcut_after_reset" | grep -Fq "'<Super>w'" || printf '%s\n' "$shortcut_after_reset" | grep -Fq "'<Super><Shift>H'"; then
     proof_keyboard_shortcuts_roundtrip "status=fail&stage=shortcut-reset&route=/v1/keyboard/shortcuts/binding&reset_http=${reset_code:-000}&reset_ok=${reset_ok:-missing}&shortcut_action=window-hud&default_binding=%3CSuper%3Ew"
     return 1
@@ -795,7 +833,11 @@ keyboard_shortcuts_roundtrip_proof(){
     -d '{"target":"caps-lock","value":"control"}' \
     "$LIVE_URL/v1/keyboard/modifier-remap" || true)
   modifier_ok=$(json_field "$modifier_set_file" ok)
-  xkb_after_set="$(gsettings get org.gnome.desktop.input-sources xkb-options 2>/dev/null || true)"
+  for _ in $(seq 1 20); do
+    xkb_after_set="$(gsettings get org.gnome.desktop.input-sources xkb-options 2>/dev/null || true)"
+    printf '%s\n' "$xkb_after_set" | grep -Fq "'ctrl:nocaps'" && break
+    sleep 0.25
+  done
   if [ "$modifier_code" != "200" ] || [ "$modifier_ok" != "true" ] || ! printf '%s\n' "$xkb_after_set" | grep -Fq "'ctrl:nocaps'"; then
     proof_keyboard_shortcuts_roundtrip "status=fail&stage=modifier-set&route=/v1/keyboard/modifier-remap&modifier_http=${modifier_code:-000}&modifier_ok=${modifier_ok:-missing}&modifier_target=caps-lock&modifier_value=control"
     return 1
@@ -806,7 +848,11 @@ keyboard_shortcuts_roundtrip_proof(){
     -d '{"target":"caps-lock","value":"default"}' \
     "$LIVE_URL/v1/keyboard/modifier-remap" || true)
   modifier_reset_ok=$(json_field "$modifier_reset_file" ok)
-  xkb_after_reset="$(gsettings get org.gnome.desktop.input-sources xkb-options 2>/dev/null || true)"
+  for _ in $(seq 1 20); do
+    xkb_after_reset="$(gsettings get org.gnome.desktop.input-sources xkb-options 2>/dev/null || true)"
+    ! printf '%s\n' "$xkb_after_reset" | grep -Fq "'ctrl:nocaps'" && break
+    sleep 0.25
+  done
   if [ "$modifier_reset_code" != "200" ] || [ "$modifier_reset_ok" != "true" ] || printf '%s\n' "$xkb_after_reset" | grep -Fq "'ctrl:nocaps'"; then
     proof_keyboard_shortcuts_roundtrip "status=fail&stage=modifier-reset&route=/v1/keyboard/modifier-remap&modifier_reset_http=${modifier_reset_code:-000}&modifier_reset_ok=${modifier_reset_ok:-missing}&modifier_target=caps-lock&modifier_restore=default"
     return 1
@@ -847,7 +893,14 @@ input_sources_roundtrip_proof(){
     -d '{"sources":[{"kind":"xkb","id":"us"},{"kind":"xkb","id":"gb"}]}' \
     "$LIVE_URL/v1/input/sources" || true)
   set_ok=$(json_field "$set_file" ok)
-  sources_after_set="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
+  for _ in $(seq 1 20); do
+    sources_after_set="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
+    if printf '%s\n' "$sources_after_set" | grep -Fq "('xkb', 'us')" \
+      && printf '%s\n' "$sources_after_set" | grep -Fq "('xkb', 'gb')"; then
+      break
+    fi
+    sleep 0.25
+  done
   if [ "$set_code" != "200" ] || [ "$set_ok" != "true" ] \
     || ! printf '%s\n' "$sources_after_set" | grep -Fq "('xkb', 'us')" \
     || ! printf '%s\n' "$sources_after_set" | grep -Fq "('xkb', 'gb')"; then
@@ -975,6 +1028,10 @@ app_privacy_revoke_proof(){
     proof_app_privacy_revoke "status=fail&stage=gdbus&route=/v1/app-privacy/revoke&permission_store=missing"
     return 1
   fi
+  if ! wait_session_bus_name org.freedesktop.impl.portal.PermissionStore; then
+    proof_app_privacy_revoke "status=fail&stage=permission-store&route=/v1/app-privacy/revoke&permission_store=inactive"
+    return 1
+  fi
 
   prior_reply="$(permission_store_get_permission "$table" "$id" "$app")"
   prior_permissions="$(permission_store_permissions_variant "$prior_reply")"
@@ -1024,7 +1081,7 @@ focus_arm_roundtrip_proof(){
   local status_file=/tmp/gate-focus-status.json
   local activate_file=/tmp/gate-focus-activate.json
   local deactivate_file=/tmp/gate-focus-deactivate.json
-  local focus_modes_seed
+  local focus_mode_seed_code
   local original_modes original_active_raw original_active original_armed original_restore_raw original_restore original_banners
   local status_code available activate_code activate_ok activate_active active_after_activate
   local armed_after_activate restore_after_activate banners_after_activate
@@ -1050,12 +1107,20 @@ focus_arm_roundtrip_proof(){
     return 1
   fi
 
-  focus_modes_seed="'[{\"id\":\"gate-work\",\"name\":\"Gate Work\"}]'"
-  if ! gsettings set org.goblins.os.focus modes "$focus_modes_seed" >/dev/null 2>&1 \
+  if ! gsettings set org.goblins.os.focus modes "'[]'" >/dev/null 2>&1 \
     || ! gsettings set org.goblins.os.focus active-mode '' >/dev/null 2>&1 \
     || ! gsettings set org.goblins.os.focus armed-by-schedule false >/dev/null 2>&1 \
     || ! gsettings set org.goblins.os.focus restore-banners '' >/dev/null 2>&1 \
     || ! gsettings set org.gnome.desktop.notifications show-banners true >/dev/null 2>&1; then
+    restore_focus_roundtrip_state "$original_modes" "$original_active" "$original_armed" "$original_restore" "$original_banners"
+    proof_focus_arm_roundtrip "status=fail&stage=seed&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&test_mode=gate-work&test_mode_configured=false"
+    return 1
+  fi
+  focus_mode_seed_code=$(curl -s -o /tmp/gate-focus-mode-seed.json -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d '{"id":"gate-work","name":"Gate Work"}' \
+    "$LIVE_URL/v1/focus/mode" || true)
+  if [ "$focus_mode_seed_code" != "200" ] || [ "$(json_field /tmp/gate-focus-mode-seed.json ok)" != "true" ]; then
     restore_focus_roundtrip_state "$original_modes" "$original_active" "$original_armed" "$original_restore" "$original_banners"
     proof_focus_arm_roundtrip "status=fail&stage=seed&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&test_mode=gate-work&test_mode_configured=false"
     return 1

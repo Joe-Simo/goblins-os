@@ -5790,6 +5790,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-waits-permission-store-bus-name",
+            "wait_session_bus_name org.freedesktop.impl.portal.PermissionStore",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-app-privacy-revokes-through-permission-store",
             "PermissionStore.DeletePermission",
         ),
@@ -5807,6 +5812,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-preview-open-render-proof",
             "/proof/preview-open-render",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-single-instances-session-orchestrator",
+            "goblins-hwgate-orchestrator.lock",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-rejects-duplicate-session-orchestrator",
+            "GOBLINS_HWGATE_ORCHESTRATOR_ALREADY_RUNNING",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -5852,6 +5867,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-uses-focus-deactivate-route",
             "/v1/focus/deactivate",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-uses-focus-mode-route-for-proof-seed",
+            "/v1/focus/mode",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),

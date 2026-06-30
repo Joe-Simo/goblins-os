@@ -9,6 +9,8 @@
 use std::{
     path::Path,
     process::{Command, Stdio},
+    thread,
+    time::Duration,
 };
 
 use axum::{http::StatusCode, Json};
@@ -173,7 +175,7 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
         .output()
     {
         Ok(output) if output.status.success() => {
-            let status = build_firewall_status();
+            let status = wait_for_firewall_state(enabled);
             if status.available && status.active == enabled {
                 firewall_toggle_response(
                     StatusCode::OK,
@@ -213,6 +215,18 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
             "Firewall control is not ready in this session.",
         ),
     }
+}
+
+fn wait_for_firewall_state(enabled: bool) -> FirewallStatus {
+    let mut status = build_firewall_status();
+    for _ in 0..10 {
+        if status.available && status.active == enabled {
+            return status;
+        }
+        thread::sleep(Duration::from_millis(500));
+        status = build_firewall_status();
+    }
+    status
 }
 
 fn firewall_template_instance(enabled: bool) -> &'static str {

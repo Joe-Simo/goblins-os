@@ -34,20 +34,34 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current hardware-gate proof run is `28457665098` at `e1127ad` on `main`; it
-failed before signoff, but it proved the previous `/etc` helper-location fix.
-The image push, verification ISO, model prep, installed boot, first-boot
-diagnostics, private unlock helper download, root session-orchestrator starter,
-GNOME autostart fallback path, deferred host publish of `/orchestrator.sh`, and
-HTTP `200` orchestrator download all ran. The artifact includes real display
-captures through `28-bootloader-efi-summary.png` plus
+Current hardware-gate proof run is `28463342553` at `5aec4a1` on `main`; it
+failed inside the display-backed VM capture after the image push, verification
+ISO, model prep, installed boot, first-boot diagnostics, private unlock helper
+download, root session-orchestrator starter, GNOME autostart fallback path, host
+publish of `/orchestrator.sh`, and HTTP `200` orchestrator download all ran.
+The artifact includes real display captures through
+`28-bootloader-efi-summary.png` plus
+`31-text-shortcuts-candidate-bubble-render.png`; the Text Shortcuts session
+enable, overlay intent, candidate bubble frame/layout, and candidate render
+intent proofs passed. The new hard blocker is the session orchestrator launching
+twice: `httpd.log` shows two `/orchestrator.sh` `200` downloads and two
+`/ready/ORCH_START` signals, which likely caused proof-file overwrites and
+competing IBus/focus/app-open state. The blocker is no longer CI billing, image
+export, ISO build, GDM autologin, first-boot helper availability, or session
+orchestrator startup.
+
+Previous hardware-gate run `28457665098` at `e1127ad` failed before signoff, but
+it proved the earlier `/etc` helper-location fix. The image push, verification
+ISO, model prep, installed boot, first-boot diagnostics, private unlock helper
+download, root session-orchestrator starter, GNOME autostart fallback path,
+deferred host publish of `/orchestrator.sh`, and HTTP `200` orchestrator
+download all ran. The artifact includes real display captures through
+`28-bootloader-efi-summary.png` plus
 `31-text-shortcuts-candidate-bubble-render.png`, and the serial/http logs include
 `GOBLINS_HWGATE_ETC_HELPERS_INSTALLED`,
 `GOBLINS_HWGATE_DIAG_DONE`,
 `GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED`, and the
-`/orchestrator.sh` `200` fetch. The blocker is no longer CI billing, image
-export, ISO build, GDM autologin, first-boot helper availability, or session
-orchestrator startup.
+`/orchestrator.sh` `200` fetch.
 
 Hardware-gate run `28447129095` at `304010e` proved GitHub Actions billing is
 unblocked, the bootc image build can publish to GHCR, the verification installer
@@ -76,34 +90,32 @@ current blocker is narrowed to verification-only helper files/units not being
 available to the installed booted deployment, not CI billing, image export, ISO
 build, GDM autologin, or GNOME session launch.
 
-The remaining failing live proofs in `28457665098` are now concrete:
-firewall disable succeeded but re-enable returned HTTP `502`; keyboard shortcut
-rebind returned HTTP `503`; input sources returned HTTP `200` but failed the
-readback gate; Focus activation returned HTTP `400`; PermissionStore seeding for
-the per-app revoke proof failed; Preview returned HTTP `200` for the PDF open
-but the process/render wait failed before screenshots `29`/`30`; Text Shortcuts
-active-engine proof saw `active_engine=goblins-textshortcuts` even though the
-setter command returned nonzero, and later live/candidate proof files were empty
-or missing. Screenshots `29-preview-pdf-open.png`,
+The remaining failing live proofs in `28463342553` are now concrete: firewall
+disable succeeded but re-enable returned HTTP `502` after the target state was
+set but before `firewall-cmd --state` reported active; keyboard shortcut and
+input source writes returned HTTP `200` but failed immediate readback gates;
+Focus activation returned HTTP `400`; PermissionStore seeding for the per-app
+revoke proof failed before the route could be exercised; Preview returned HTTP
+`200` for PDF open but the process/render wait failed; and the later Text
+Shortcuts live/candidate proof files were empty or missing after the duplicate
+orchestrators raced. Screenshots `29-preview-pdf-open.png`,
 `30-preview-image-open.png`, and
 `32-text-shortcuts-live-ibus-runtime-render.png` were not produced.
 
-The current source follow-up is source-gated only so far: install the Goblins WM
-shortcut schema into `os/glib-schemas/` so core `/v1/keyboard/shortcuts/binding`
-can see the schema outside the extension-only schema dir; give each
-Text Shortcuts proof window a unique GTK application id; accept IBus activation
-only when the real active-engine readback is `goblins-textshortcuts`; stop
-killing the text-shortcuts adapter immediately before the keystroke proof; wait
-for proof files before killing proof windows; seed Focus modes as a quoted
-GVariant string; and let Preview accept a real process or `org.gnome.Papers` /
-`org.gnome.Loupe` session-bus owner before capture. Local gates so far:
-hardware-gate shell `bash -n`, XML parse, `glib-compile-schemas --dry-run`
-when available, `git diff --check`, `cargo fmt -p goblins-os-shell -p
-goblins-os-verify --check`, focused `cargo test -p goblins-os-shell
-parses_text_shortcuts_proof_targets`, `cargo test -p goblins-os-verify`,
-`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
+The current source follow-up is source-gated only so far: single-instance the
+in-session orchestrator with `/tmp/goblins-hwgate-orchestrator.lock`; keep the
+duplicate launcher honest with `GOBLINS_HWGATE_ORCHESTRATOR_ALREADY_RUNNING`;
+wait for firewall state to settle after the allowlisted systemd bridge starts
+or stops firewalld; wait for keyboard shortcut, modifier, and input-source
+readbacks before failing; seed Focus through `/v1/focus/mode` before activating;
+and wait for `org.freedesktop.impl.portal.PermissionStore` to own its session
+bus name before seeding per-app permissions. Local gates so far: hardware-gate
+shell `bash -n`, `git diff --check`, `cargo fmt -p goblins-os-core -p
+goblins-os-verify --check`, focused `cargo test -p goblins-os-core firewall`,
+`cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, and
 `cargo run -p goblins-os-verify -- --source-root .` →
-**blocked=0 (2652)**. A fresh hardware-gate run is still required before any
+**blocked=0 (2656)**. A fresh hardware-gate run is still required before any
 failed live proof can move to shipped.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`

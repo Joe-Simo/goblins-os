@@ -146,6 +146,62 @@ WantedBy=multi-user.target graphical.target
 EOF
 systemctl enable goblins-hwgate-firstboot-diagnostics.service || true
 
+cat > /usr/libexec/goblins-hwgate-session-orchestrator <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec >>/tmp/goblins-hwgate-session-orchestrator.log 2>&1
+
+HOST_READY_URL="${GOBLINS_HWGATE_HOST_URL:-http://10.0.2.2:8099}"
+LIVE_URL="${GOBLINS_OS_CORE_URL:-http://127.0.0.1:8787}"
+
+download_with_wait() {
+  local path="$1"
+  local output="$2"
+  local attempts="$3"
+  local i
+  for i in $(seq 1 "$attempts"); do
+    if curl -fsS --max-time 2 -o "$output" "$HOST_READY_URL/$path"; then
+      chmod 0700 "$output"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "failed to download $path from $HOST_READY_URL after ${attempts}s"
+  return 1
+}
+
+download_with_wait firstboot-unlock.sh /tmp/gos-firstboot 240
+GOBLINS_HWGATE_HOST_URL="$HOST_READY_URL" GOBLINS_OS_CORE_URL="$LIVE_URL" \
+  bash /tmp/gos-firstboot
+
+# drive-capture.py publishes orchestrator.sh only after it has recorded the
+# post-unlock HTTP log offset, so screenshot/proof signals cannot race ahead of
+# the host tailer.
+download_with_wait orchestrator.sh /tmp/gos-orchestrator 600
+GOBLINS_HWGATE_HOST_URL="$HOST_READY_URL" GOBLINS_OS_CORE_URL="$LIVE_URL" \
+  bash /tmp/gos-orchestrator
+EOF
+chmod 0755 /usr/libexec/goblins-hwgate-session-orchestrator
+
+install -d /etc/systemd/user/gnome-session@goblins-os.target.d
+cat > /etc/systemd/user/goblins-hwgate-session-orchestrator.service <<'EOF'
+[Unit]
+Description=Goblins OS hardware-gate session orchestrator
+After=gnome-session-initialized.target org.gnome.Shell@user.service org.goblins.OS.Shell.service org.goblins.OS.SessionBridge.service
+Wants=org.goblins.OS.Shell.service org.goblins.OS.SessionBridge.service
+
+[Service]
+Type=oneshot
+Environment=GOBLINS_HWGATE_HOST_URL=http://10.0.2.2:8099
+Environment=GOBLINS_OS_CORE_URL=http://127.0.0.1:8787
+ExecStart=/usr/libexec/goblins-hwgate-session-orchestrator
+EOF
+
+cat > /etc/systemd/user/gnome-session@goblins-os.target.d/99-goblins-hwgate-session-orchestrator.conf <<'EOF'
+[Unit]
+Wants=goblins-hwgate-session-orchestrator.service
+EOF
+
 echo "GOBLINS_VERIFY_INSTALL_DONE" > /dev/ttyS0 || true
 %end
 """

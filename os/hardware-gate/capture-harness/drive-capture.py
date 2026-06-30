@@ -6,7 +6,7 @@ Codifies the validated flow against a running qemu VM (QMP socket):
   2. require the kickstart %post marker, then wait for first-boot desktop settle
   3. complete first boot through the same core APIs as the visible private /
      offline path, then close the stale first-boot windows
-  4. launch the in-session orchestrator via GNOME Alt+F2 (curl -o + bash; no sshd)
+  4. publish the in-session orchestrator for the verification-only user service
   5. screendump each surface to OUTDIR/<shot>.png on its HTTP /ready/<shot> signal
      until ORCH_ALLDONE
 
@@ -16,13 +16,15 @@ Note: per-shot window-focus timing lives in in-session-orchestrator.sh; tune the
 settle there if surfaces capture as duplicates (md5-identical). KVM (CI) makes
 the VM fast enough that the same timings that work under hvf hold.
 """
-import hashlib, json, os, socket, subprocess, time
+import hashlib, json, os, shutil, socket, subprocess, time
 from urllib.parse import parse_qs, urlparse
 
 QMP = os.environ["GOS_QMP"]; HTTPLOG = os.environ["GOS_HTTPLOG"]
 SERIALLOG = os.environ.get("GOS_SERIALLOG", os.path.join(os.path.dirname(QMP), "serial.log"))
 OUTDIR = os.environ["GOS_OUTDIR"]; PORT = os.environ.get("GOS_PORT", "8099")
 DISPLAY_DEVICE = os.environ.get("GOS_QMP_DISPLAY_DEVICE", "video0")
+ORCHESTRATOR_SOURCE = os.environ.get("GOS_ORCHESTRATOR_SOURCE")
+ORCHESTRATOR_DEST = os.environ.get("GOS_ORCHESTRATOR_DEST")
 ABS_MAX = 0x7fff
 REQUIRED_PROOFS = (
     "firewall-live-toggle",
@@ -59,10 +61,6 @@ PROOF_FILENAMES = {
     "preview-open-render": "preview-open-render-proof.json",
 }
 
-CMAP = {c: (c, False) for c in "abcdefghijklmnopqrstuvwxyz0123456789"}
-CMAP.update({" ": ("spc", False), "-": ("minus", False), ".": ("dot", False),
-             "/": ("slash", False), ":": ("semicolon", True)})
-
 def _conn():
     last_error = "socket missing"
     for _ in range(120):
@@ -94,12 +92,6 @@ def try_cmd(ex, **a):
         print(f"diagnostic QMP command {ex!r} failed: {err}", flush=True)
         return None
 def key(k): cmd("send-key", keys=[{"type": "qcode", "data": x} for x in k.split("+")])
-def typ(s):
-    for ch in s:
-        if ch in CMAP:
-            q, sh = CMAP[ch]
-            cmd("send-key", keys=([{"type": "qcode", "data": "shift"}] if sh else []) + [{"type": "qcode", "data": q}])
-            time.sleep(0.03)
 def abs_axis(value):
     return int(max(0.0, min(1.0, value)) * ABS_MAX)
 def click(xf, yf):
@@ -174,6 +166,26 @@ def wait_http_contains(label, needle, timeout):
         f"expected {needle!r}; http_tail={last_tail!r}"
     )
 
+def wait_http_contains_after(label, needle, start_pos, timeout):
+    t = time.time()
+    last_tail = ""
+    while time.time() - t < timeout:
+        try:
+            with open(HTTPLOG, errors="ignore") as fh:
+                fh.seek(start_pos)
+                data = fh.read()
+        except OSError:
+            data = ""
+        if needle in data:
+            print(f"{label}: observed HTTP marker {needle!r}", flush=True)
+            return True
+        last_tail = data[-500:]
+        time.sleep(1)
+    raise SystemExit(
+        f"{label} did not appear in HTTP log within {timeout}s; "
+        f"expected {needle!r}; http_tail={last_tail!r}"
+    )
+
 
 def slug(label):
     value = "".join(ch.lower() if ch.isalnum() else "-" for ch in label).strip("-")
@@ -227,7 +239,7 @@ def probe_graphical_vts():
     verification path. Probe likely VTs with debug frames, then return to tty2,
     which current first-boot evidence shows is the user session while tty1 can
     be the GDM login surface. The proof path still fails closed unless the
-    in-session HTTP callbacks arrive.
+    verification-only user service produces the in-session HTTP callbacks.
     """
     print("first boot VT probe: checking likely graphical virtual terminals", flush=True)
     for debug_label, combo in (
@@ -240,32 +252,20 @@ def probe_graphical_vts():
         time.sleep(3)
         frame_sample(debug_label, save_debug=True)
 
-def run_alt_f2(command, wait_after=3, debug_label=None):
-    key("esc")
-    time.sleep(1)
-    key("alt+f2")
-    time.sleep(2)
-    typ(command)
-    time.sleep(1)
-    key("ret")
-    time.sleep(wait_after)
-    if debug_label:
-        frame_sample(debug_label, save_debug=True)
-
 def complete_first_boot_setup():
-    """Complete the real private/offline first-boot path without fragile clicks."""
+    """Wait for the verification-only user service to complete first boot."""
     print("first boot setup: completing private offline path through session core APIs", flush=True)
     frame_sample("first boot before private unlock", save_debug=True)
-    run_alt_f2(
-        f"curl -o /tmp/gos-firstboot 10.0.2.2:{PORT}/firstboot-unlock.sh",
-        debug_label="first boot helper download submitted",
-    )
-    wait_http_contains("first boot helper download", "/firstboot-unlock.sh", 20)
-    run_alt_f2("bash /tmp/gos-firstboot", wait_after=8, debug_label="first boot helper run submitted")
-    wait_http_contains("first boot private unlock callback", "/ready/FIRSTBOOT_UNLOCK", 30)
-    key("esc")
-    time.sleep(1)
+    wait_http_contains("first boot helper download", "/firstboot-unlock.sh", 180)
+    wait_http_contains("first boot private unlock callback", "/ready/FIRSTBOOT_UNLOCK", 180)
     frame_sample("post first boot private unlock", save_debug=True)
+
+def publish_orchestrator():
+    if not ORCHESTRATOR_SOURCE or not ORCHESTRATOR_DEST:
+        raise SystemExit("missing GOS_ORCHESTRATOR_SOURCE/GOS_ORCHESTRATOR_DEST for verification service orchestration")
+    shutil.copyfile(ORCHESTRATOR_SOURCE, ORCHESTRATOR_DEST)
+    os.chmod(ORCHESTRATOR_DEST, 0o644)
+    print(f"in-session orchestrator published for verification user service: {ORCHESTRATOR_DEST}", flush=True)
 
 def http_get_path(line):
     marker = '"GET '
@@ -320,12 +320,12 @@ wait_stage("first boot desktop", 420)
 probe_graphical_vts()
 # 3. complete first boot through the real offline/private core contracts.
 complete_first_boot_setup()
-# 4. launch orchestrator via Alt+F2 (pipe-free)
-run_alt_f2(f"curl -o /tmp/o 10.0.2.2:{PORT}/orchestrator.sh")
-run_alt_f2("bash /tmp/o", wait_after=1)
-# 5. capture on signals
+# 4. publish orchestrator only after the host is ready to tail its signals.
 os.makedirs(OUTDIR, exist_ok=True)
 pos = os.path.getsize(HTTPLOG) if os.path.exists(HTTPLOG) else 0
+publish_orchestrator()
+wait_http_contains_after("in-session orchestrator download", '"GET /orchestrator.sh HTTP/1.1" 200', pos, 180)
+# 5. capture on signals
 seen = set(); proofs = {}; t = time.time()
 while time.time() - t < 600:
     with open(HTTPLOG, errors="ignore") as fh:
@@ -343,7 +343,7 @@ while time.time() - t < 600:
             if name == "ORCH_ALLDONE":
                 require_proofs(proofs)
                 print("ORCH_ALLDONE", flush=True); raise SystemExit(0)
-            if name and name not in seen and name not in ("ORCH_START",):
+            if name and name not in seen and name not in ("ORCH_START", "FIRSTBOOT_UNLOCK"):
                 seen.add(name); ppm = f"{OUTDIR}/{name}.ppm"
                 # Re-dump until the frame differs from the previous shot: a
                 # launched window can render slower than the orchestrator's fixed

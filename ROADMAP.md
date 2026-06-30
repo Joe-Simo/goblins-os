@@ -34,8 +34,8 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current committed source head before this VT-return follow-up is `8227538`
-on `main`. The latest completed source passes shipped the Sound
+Current committed source head before this verification-service follow-up is
+`651fff6` on `main`. The latest completed source passes shipped the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
 workflow to avoid exporting the full bootc image into the runner daemon, added
@@ -55,24 +55,30 @@ latest committed source: scoped `git diff --check`, TOML parse,
 commits; host rustfmt has previously stalled while reading the workspace, so
 only the edited Rust crate was checked.
 
-Latest hardware-gate run `28419767730` at `8227538` proved the bootc image build,
-the verification installer ISO build, GDM autologin, and the installed Goblins
-desktop session: `_debug-first-boot-desktop.png` shows the Goblins first-boot UI
-inside GNOME. It still failed before any signoff proof could run because the
-diagnostic VT probe ended on the GDM user picker before first-boot automation:
-`_debug-first-boot-before-private-unlock.png` and
-`_debug-first-boot-helper-download-submitted.png` show the Fedora/GDM password
-surface, so the harness typed the helper command outside the session and
-`/firstboot-unlock.sh` never appeared in `httpd.log`. The current local fix is
-source-gated only so far: keep the diagnostic VT frames but return to `tty2`
-(`first boot vt f2 final`) before running the Alt+F2 helper/orchestrator path,
-with the verify-crate exact-string gate updated in lockstep. Local gates for
-this follow-up: `python3 -m py_compile` for the capture driver, `bash -n` for
-the hardware-gate shell scripts, scoped `git diff --check`,
+Latest hardware-gate run `28422011519` at `651fff6` proved the bootc image
+build, the verification installer ISO build, GDM autologin, and the installed
+Goblins desktop session. It also proved the VT-return fix itself:
+`_debug-first-boot-vt-f2-final.png` shows the live GNOME session after the
+diagnostic VT probe. It still failed before signoff proof could run because the
+QMP Alt+F2 command path is not reliable in this session state:
+`_debug-first-boot-helper-download-submitted.png` is a black console/cursor
+frame, and `/firstboot-unlock.sh` never appeared in `httpd.log`. The current
+local fix is source-gated only so far: the verification-only kickstart installs
+a `goblin` user service that runs inside the real GNOME session, downloads and
+runs `firstboot-unlock.sh`, then waits for `drive-capture.py` to publish
+`orchestrator.sh` only after the host is ready to tail screenshot/proof signals.
+No production image service, sshd, guest agent, or QMP command injection is
+added; this is scoped to `os/iso/verify-config.toml`, which release media do
+not use. The verify-crate and shell shipping gates were updated in lockstep to
+require the verification-only service, deferred orchestrator publish, and a
+post-publish HTTP `200` download for `/orchestrator.sh`, while rejecting the old
+`key("alt+f2")` path. Local gates for this follow-up: `python3 -m py_compile`
+for the capture driver, `bash -n` for the hardware-gate shell scripts, TOML
+parse for the ISO configs, scoped `git diff --check`,
 `cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
-`goblins-os-verify --source-root .` → **blocked=0 (2628)**. No hardware-gate
-run has proved this VT-return fix yet.
+`goblins-os-verify --source-root .` → **blocked=0 (2634)**. No hardware-gate
+run has proved this verification-service fix yet.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,

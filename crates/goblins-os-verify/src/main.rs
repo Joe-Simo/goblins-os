@@ -6524,6 +6524,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
+            "verify-config-installs-session-orchestrator-service",
+            "goblins-hwgate-session-orchestrator.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-waits-for-published-script",
+            "download_with_wait orchestrator.sh /tmp/gos-orchestrator 600",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-is-session-target-wanted",
+            "99-goblins-hwgate-session-orchestrator.conf",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
             "verify-config-firstboot-diagnostics-prints-default-target",
             "default_target=$(systemctl get-default 2>&1)",
         ),
@@ -6697,10 +6712,10 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "capture-driver-completes-first-boot-private-path-through-core-api",
             "first boot setup: completing private offline path through session core APIs",
         ),
-        contains_check(
+        absent_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-exits-overview-before-alt-f2-commands",
-            "key(\"esc\")",
+            "capture-driver-does-not-use-alt-f2-command-injection",
+            "key(\"alt+f2\")",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
@@ -6716,6 +6731,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-harness-serves-firstboot-unlock-helper",
             "firstboot-unlock.sh",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-harness-defers-orchestrator-until-driver-publishes",
+            "GOS_ORCHESTRATOR_DEST",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-publishes-orchestrator-after-firstboot-callback",
+            "publish_orchestrator()",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-requires-orchestrator-download",
+            "\"GET /orchestrator.sh HTTP/1.1\" 200",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),

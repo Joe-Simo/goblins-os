@@ -4,8 +4,8 @@
 # Boots the hardware-gate ISO built with os/iso/verify-config.toml (so the
 # embedded /osbuild.ks, not a sidecar disk, drives Anaconda), waits for the bootc
 # install + first-boot GDM-autologin desktop, completes first boot through the
-# same core API contracts as the private/offline UI path, launches the in-session
-# orchestrator (served over the slirp gateway, started via GNOME Alt+F2), captures
+# same core API contracts as the private/offline UI path, publishes the
+# in-session orchestrator for the verification-only user service, captures
 # the 27 required shots by QMP-screendump on each HTTP signal,
 # writes proof-manifest.json, and runs close-signoff.sh.
 #
@@ -122,10 +122,12 @@ else
 fi
 qemu-img create -f qcow2 "$WORK/scratch.qcow2" 16G >/dev/null
 
-# Serve first-boot helper + orchestrator, and receive capture signals.
+# Serve first-boot helper and receive capture signals. The orchestrator is
+# published by drive-capture.py only after the host has recorded the post-unlock
+# log offset, so early /ready signals cannot race ahead of the screenshot tailer.
+rm -f "$WORK/orchestrator.sh"
 ( cd "$WORK" \
     && sed "s/@GOS_PORT@/$PORT/g" "$HERE/firstboot-unlock.sh" > firstboot-unlock.sh \
-    && cp "$HERE/in-session-orchestrator.sh" orchestrator.sh \
     && python3 -m http.server "$PORT" --bind 0.0.0.0 >"$WORK/httpd.log" 2>&1 ) &
 HTTPD=$!
 
@@ -139,6 +141,7 @@ rm -f "$WORK/qmp.sock"
 QEMU_PID=$!
 
 export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT" GOS_QMP_DISPLAY_DEVICE=video0
+export GOS_ORCHESTRATOR_SOURCE="$HERE/in-session-orchestrator.sh" GOS_ORCHESTRATOR_DEST="$WORK/orchestrator.sh"
 # Phase the run with the QMP driver (waits for Anaconda, drives it, waits for the
 # desktop, dismisses onboarding, launches the orchestrator, captures on signals).
 python3 "$HERE/drive-capture.py"

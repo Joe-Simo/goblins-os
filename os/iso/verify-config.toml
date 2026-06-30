@@ -44,6 +44,27 @@ reboot --eject
     fi
   done
   systemctl is-enabled gdm.service display-manager.service 2>&1 || true
+  if [ -r /etc/gdm/custom.conf ]; then
+    echo "gdm_custom_conf_begin"
+    sed -n '1,80p' /etc/gdm/custom.conf
+    echo "gdm_custom_conf_end"
+  else
+    echo "/etc/gdm/custom.conf missing"
+  fi
+  if [ -r /var/lib/AccountsService/users/goblin ]; then
+    echo "accountsservice_goblin_begin"
+    sed -n '1,80p' /var/lib/AccountsService/users/goblin
+    echo "accountsservice_goblin_end"
+  else
+    echo "/var/lib/AccountsService/users/goblin missing"
+  fi
+  shadow_field="$(getent shadow goblin 2>/dev/null | cut -d: -f2 || true)"
+  case "$shadow_field" in
+    "") echo "goblin_shadow_state=empty" ;;
+    '!'*) echo "goblin_shadow_state=locked" ;;
+    '*') echo "goblin_shadow_state=invalid-star" ;;
+    *) echo "goblin_shadow_state=hash-present" ;;
+  esac
   echo "GOBLINS_HWGATE_POST_DIAG_DONE"
 } > /dev/ttyS0 2>&1 || true
 
@@ -80,6 +101,27 @@ echo "active_units_begin"
 systemctl is-active graphical.target multi-user.target gdm.service display-manager.service 2>&1 || true
 echo "active_units_end"
 systemctl --no-pager --full status graphical.target display-manager.service gdm.service 2>&1 || true
+if [ -r /etc/gdm/custom.conf ]; then
+  echo "gdm_custom_conf_begin"
+  sed -n '1,80p' /etc/gdm/custom.conf
+  echo "gdm_custom_conf_end"
+else
+  echo "/etc/gdm/custom.conf missing"
+fi
+if [ -r /var/lib/AccountsService/users/goblin ]; then
+  echo "accountsservice_goblin_begin"
+  sed -n '1,80p' /var/lib/AccountsService/users/goblin
+  echo "accountsservice_goblin_end"
+else
+  echo "/var/lib/AccountsService/users/goblin missing"
+fi
+shadow_field="$(getent shadow goblin 2>/dev/null | cut -d: -f2 || true)"
+case "$shadow_field" in
+  "") echo "goblin_shadow_state=empty" ;;
+  '!'*) echo "goblin_shadow_state=locked" ;;
+  '*') echo "goblin_shadow_state=invalid-star" ;;
+  *) echo "goblin_shadow_state=hash-present" ;;
+esac
 journalctl -b --no-pager \
   -u display-manager.service \
   -u gdm.service \

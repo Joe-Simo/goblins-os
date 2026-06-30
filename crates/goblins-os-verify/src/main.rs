@@ -1008,8 +1008,28 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/gdm/custom.conf"),
-        "gdm-autologin-enabled",
+        "gdm-autologin-switch-enabled",
+        "AutomaticLoginEnable=True",
+    ));
+    checks.push(contains_check(
+        root.join("os/gdm/custom.conf"),
+        "gdm-autologin-user",
         "AutomaticLogin=goblin",
+    ));
+    checks.push(contains_check(
+        root.join("os/gdm/custom.conf"),
+        "gdm-timed-login-switch-enabled",
+        "TimedLoginEnable=True",
+    ));
+    checks.push(contains_check(
+        root.join("os/gdm/custom.conf"),
+        "gdm-timed-login-user",
+        "TimedLogin=goblin",
+    ));
+    checks.push(contains_check(
+        root.join("os/gdm/custom.conf"),
+        "gdm-timed-login-zero-delay",
+        "TimedLoginDelay=0",
     ));
     checks.push(container_contains_check(
         root,
@@ -6511,6 +6531,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/iso/verify-config.toml"),
             "verify-config-firstboot-diagnostics-statuses-gdm",
             "systemctl --no-pager --full status graphical.target display-manager.service gdm.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-diagnostics-captures-gdm-config",
+            "gdm_custom_conf_begin",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-diagnostics-captures-goblin-accountsservice",
+            "accountsservice_goblin_begin",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-diagnostics-reports-shadow-state-without-hash",
+            "goblin_shadow_state=invalid-star",
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),

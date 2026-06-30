@@ -399,6 +399,12 @@ COPY os/dconf/ /etc/dconf/
 COPY os/gdm/custom.conf /etc/gdm/custom.conf
 COPY os/accountsservice/goblin /var/lib/AccountsService/users/goblin
 
+RUN grep -Fxq 'AutomaticLoginEnable=True' /etc/gdm/custom.conf \
+    && grep -Fxq 'AutomaticLogin=goblin' /etc/gdm/custom.conf \
+    && grep -Fxq 'TimedLoginEnable=True' /etc/gdm/custom.conf \
+    && grep -Fxq 'TimedLogin=goblin' /etc/gdm/custom.conf \
+    && grep -Fxq 'TimedLoginDelay=0' /etc/gdm/custom.conf
+
 # Product identity: this is Goblins OS, not Fedora. Rebrand os-release (NAME /
 # PRETTY_NAME / VARIANT) while keeping ID=fedora + the version intact so dnf and
 # bootc still resolve the platform correctly.

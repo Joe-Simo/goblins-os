@@ -34,8 +34,8 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current committed source head before this first-boot helper follow-up is
-`463ca56` on `main`. The latest completed source passes shipped the Sound
+Current committed source head before this GDM autologin follow-up is `d1d346d`
+on `main`. The latest completed source passes shipped the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
 workflow to avoid exporting the full bootc image into the runner daemon, added
@@ -52,9 +52,26 @@ for the capture driver, `bash -n` for the hardware-gate shell scripts, scoped
 `git diff --check`, `cargo fmt -p goblins-os-verify --check`,
 `cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, and `goblins-os-verify --source-root .` →
-**blocked=0 (2611)**. A full `cargo fmt --all --check` was not claimed for
-`463ca56`; host rustfmt has previously stalled while reading the workspace, so
+**blocked=0 (2621)**. A full `cargo fmt --all --check` was not claimed for
+the recent hardware-gate fix commits; host rustfmt has previously stalled while reading the workspace, so
 only the edited Rust crate was checked.
+
+Latest hardware-gate run `28417768014` at `d1d346d` proved the bootc image build,
+the verification installer ISO build, and the installed deployment boot path, but
+failed in the display-backed VM capture before any signoff proof could run:
+`_debug-first-boot-before-private-unlock.png` and
+`_debug-first-boot-helper-download-submitted.png` show the Fedora/GDM password
+prompt for `goblin`, and the harness failed closed because `/firstboot-unlock.sh`
+never appeared in the HTTP log. The current local fix is source-gated only so
+far: `/etc/gdm/custom.conf` now uses GDM's canonical `True` autologin values plus
+a zero-delay timed-login fallback for `goblin`, the image build asserts those
+exact lines, and the verification install diagnostics print the installed GDM
+config, AccountsService profile, and non-secret shadow state. Local gates for
+this follow-up so far: scoped `git diff --check`, TOML parse,
+`cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
+`goblins-os-verify --source-root .` → **blocked=0 (2628)**. No new hardware-gate
+run has proved this GDM autologin fix yet.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,

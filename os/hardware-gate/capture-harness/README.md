@@ -28,8 +28,10 @@ hardware run").
 3. The verification-only kickstart installs and globally enables a `goblin` user
    service for the user manager's `default.target`, so it runs inside the real
    GNOME session without relying on a specific VT or GNOME session target name.
-   The host serves `firstboot-unlock.sh` over the qemu slirp gateway
-   (`http://10.0.2.2:PORT/`), then publishes
+   A verification-only system starter waits for the `goblin` user bus and
+   explicitly requests that user service, writing serial markers if the bus or
+   start request is missing. The host serves `firstboot-unlock.sh` over the qemu
+   slirp gateway (`http://10.0.2.2:PORT/`), then publishes
    `in-session-orchestrator.sh` only after the host screenshot tailer is ready.
    No sshd, guest agent, or keystroke command injection is used.
 4. The orchestrator launches each gate surface (`/usr/libexec/goblins-os/*`

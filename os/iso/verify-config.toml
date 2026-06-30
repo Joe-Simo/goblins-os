@@ -201,6 +201,67 @@ WantedBy=default.target
 EOF
 systemctl --global enable goblins-hwgate-session-orchestrator.service || true
 
+cat > /usr/libexec/goblins-hwgate-start-session-orchestrator <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec >>/tmp/goblins-hwgate-start-session-orchestrator.log 2>&1
+
+serial() {
+  echo "$*"
+  echo "$*" > /dev/ttyS0 || true
+}
+
+uid="$(id -u goblin)"
+runtime_dir="/run/user/${uid}"
+bus="${runtime_dir}/bus"
+
+for _ in $(seq 1 240); do
+  if [ -S "$bus" ]; then
+    serial "GOBLINS_HWGATE_SESSION_BUS_READY"
+    break
+  fi
+  sleep 1
+done
+
+if [ ! -S "$bus" ]; then
+  serial "GOBLINS_HWGATE_SESSION_BUS_MISSING"
+  exit 1
+fi
+
+env_common=(
+  "XDG_RUNTIME_DIR=${runtime_dir}"
+  "DBUS_SESSION_BUS_ADDRESS=unix:path=${bus}"
+  "GOBLINS_HWGATE_HOST_URL=http://10.0.2.2:8099"
+  "GOBLINS_OS_CORE_URL=http://127.0.0.1:8787"
+)
+
+if runuser -u goblin -- env "${env_common[@]}" \
+  systemctl --user start --no-block goblins-hwgate-session-orchestrator.service; then
+  serial "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED"
+else
+  serial "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_SYSTEMD_START_FAILED"
+  runuser -u goblin -- env "${env_common[@]}" WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 \
+    /usr/libexec/goblins-hwgate-session-orchestrator &
+  serial "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_DIRECT_FALLBACK_STARTED"
+fi
+EOF
+chmod 0755 /usr/libexec/goblins-hwgate-start-session-orchestrator
+
+cat > /etc/systemd/system/goblins-hwgate-session-orchestrator-starter.service <<'EOF'
+[Unit]
+Description=Goblins OS hardware-gate session orchestrator starter
+After=graphical.target display-manager.service gdm.service systemd-user-sessions.service
+Wants=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/goblins-hwgate-start-session-orchestrator
+
+[Install]
+WantedBy=graphical.target
+EOF
+systemctl enable goblins-hwgate-session-orchestrator-starter.service || true
+
 cat > /etc/systemd/user/gnome-session@goblins-os.target.d/99-goblins-hwgate-session-orchestrator.conf <<'EOF'
 [Unit]
 Wants=goblins-hwgate-session-orchestrator.service

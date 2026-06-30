@@ -34,8 +34,8 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current committed source head before this default-target service follow-up is
-`a621843` on `main`. The latest completed source passes shipped the Sound
+Current committed source head before this system-starter follow-up is
+`d93b271` on `main`. The latest completed source passes shipped the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
 workflow to avoid exporting the full bootc image into the runner daemon, added
@@ -50,37 +50,37 @@ non-secret shadow state in verification-install diagnostics. Host gates for the
 latest committed source: scoped `git diff --check`, TOML parse,
 `cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
-`goblins-os-verify --source-root .` → **blocked=0 (2634)**. A full
+`goblins-os-verify --source-root .` → **blocked=0 (2636)**. A full
 `cargo fmt --all --check` was not claimed for the recent hardware-gate fix
 commits; host rustfmt has previously stalled while reading the workspace, so
 only the edited Rust crate was checked.
 
-Hardware-gate run `28424380162` at `a621843` proved the bootc image build, the
-verification installer ISO build, and the installed Goblins desktop session on
-VT7. It failed before signoff proof because the verification-only user service
-was not pulled into the user manager: `/firstboot-unlock.sh` never appeared in
-`httpd.log`, and the uploaded `httpd.log` was zero bytes. The same run also
-showed that hard-coded VT return is unsafe: `_debug-first-boot-desktop.png` and
-`_debug-first-boot-vt-f7.png` show the live Goblins session, while
-`_debug-first-boot-vt-f2-final.png` shows the GDM login surface. The current
-local fix is source-gated only so far: the verification-only kickstart gives
-`goblins-hwgate-session-orchestrator.service` a `WantedBy=default.target`
-install section and enables it with `systemctl --global enable`, while keeping
-the GNOME-session drop-in as a secondary pull-in. The capture driver also keeps
-VT probing out of the happy path and collects VT frames only if the first-boot
-helper callback times out. No production image service, sshd, guest agent, or
-QMP command injection is added; this remains scoped to
-`os/iso/verify-config.toml`, which release media do not use. The verify-crate
-and shell shipping gates were updated in lockstep to require the global user
-service enablement, deferred orchestrator publish, and post-publish HTTP `200`
-download for `/orchestrator.sh`, while rejecting the old `key("alt+f2")` path.
-Local gates for this follow-up: `python3 -m py_compile` for the capture
-driver, `bash -n` for the hardware-gate shell scripts, TOML parse for the ISO
-configs, `git diff --check`, `cargo fmt -p goblins-os-verify --check`,
+Hardware-gate run `28427064546` at `d93b271` again proved the bootc image build,
+the verification installer ISO build, and the installed Goblins desktop session
+on VT7, but `/firstboot-unlock.sh` still never appeared in `httpd.log`; the
+uploaded `httpd.log` was zero bytes. The run also proved the driver now keeps VT
+probing out of the happy path and only collects VT frames after the first-boot
+helper timeout. The current local fix is source-gated only so far: the
+verification-only kickstart keeps the globally enabled user service, and adds a
+verification-only root system starter that waits for `/run/user/<goblin-uid>/bus`,
+requests `goblins-hwgate-session-orchestrator.service` with
+`systemctl --user start --no-block`, and writes serial markers
+`GOBLINS_HWGATE_SESSION_BUS_READY` and
+`GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED` so the next artifact can
+distinguish "user bus absent" from "service started but no host request". No
+production image service, sshd, guest agent, or QMP command injection is added;
+this remains scoped to `os/iso/verify-config.toml`, which release media do not
+use. The verify-crate and shell shipping gates were updated in lockstep to
+require the system starter, user-bus marker, start-request marker, deferred
+orchestrator publish, and post-publish HTTP `200` download for
+`/orchestrator.sh`, while rejecting the old `key("alt+f2")` path. Local gates
+for this follow-up: `python3 -m py_compile` for the capture driver, `bash -n`
+for the hardware-gate shell scripts, TOML parse for the ISO configs,
+`git diff --check`, `cargo fmt -p goblins-os-verify --check`,
 `cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, and `goblins-os-verify --source-root .` →
-**blocked=0 (2636)**. No hardware-gate run has proved this default-target
-service fix yet.
+**blocked=0 (2640)**. No hardware-gate run has proved this system-starter fix
+yet.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,

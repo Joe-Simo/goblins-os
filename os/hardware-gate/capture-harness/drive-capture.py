@@ -323,6 +323,11 @@ wait_serial_contains(
 # 2. Wait for first boot before treating install progress as real.
 observe_serial_contains("first boot hardware diagnostics", "GOBLINS_HWGATE_DIAG_DONE", 180)
 wait_stage("first boot desktop", 420)
+observe_serial_contains(
+    "session orchestrator starter",
+    "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED",
+    5,
+)
 # 3. complete first boot through the real offline/private core contracts.
 complete_first_boot_setup()
 # 4. publish orchestrator only after the host is ready to tail its signals.

@@ -6549,6 +6549,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
+            "verify-config-installs-session-orchestrator-system-starter",
+            "goblins-hwgate-session-orchestrator-starter.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-waits-for-user-bus",
+            "GOBLINS_HWGATE_SESSION_BUS_READY",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-requests-user-service",
+            "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
             "verify-config-firstboot-diagnostics-prints-default-target",
             "default_target=$(systemctl get-default 2>&1)",
         ),
@@ -6731,6 +6746,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-requires-firstboot-helper-download",
             "first boot helper download",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-reports-session-orchestrator-starter-marker",
+            "session orchestrator starter",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),

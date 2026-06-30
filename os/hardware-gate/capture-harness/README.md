@@ -25,9 +25,11 @@ hardware run").
 2. Anaconda deploys the embedded OCI, reboots, and **GDM autologin (user
    `goblin`) reaches the live Goblins desktop** — the session gate is a window,
    not a fullscreen lock, so no unlock is needed.
-3. The verification-only kickstart installs a `goblin` user service that runs
-   inside the real GNOME session. The host serves `firstboot-unlock.sh` over the
-   qemu slirp gateway (`http://10.0.2.2:PORT/`), then publishes
+3. The verification-only kickstart installs and globally enables a `goblin` user
+   service for the user manager's `default.target`, so it runs inside the real
+   GNOME session without relying on a specific VT or GNOME session target name.
+   The host serves `firstboot-unlock.sh` over the qemu slirp gateway
+   (`http://10.0.2.2:PORT/`), then publishes
    `in-session-orchestrator.sh` only after the host screenshot tailer is ready.
    No sshd, guest agent, or keystroke command injection is used.
 4. The orchestrator launches each gate surface (`/usr/libexec/goblins-os/*`

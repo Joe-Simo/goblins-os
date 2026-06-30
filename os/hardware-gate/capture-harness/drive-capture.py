@@ -232,13 +232,14 @@ def wait_stage(label, seconds, sample_every=30):
     print(f"{label}: diagnostic framebuffer samples after {seconds}s: {compact}", flush=True)
 
 def probe_graphical_vts():
-    """Capture likely graphical VTs and leave the VM on the GNOME session VT.
+    """Capture likely graphical VTs for failure diagnostics only.
 
     Failed gates have proven the installed deployment reaches a graphical
     Goblins session, but VT ownership is not stable across the text-install
-    verification path. Probe likely VTs with debug frames, then return to tty2,
-    which current first-boot evidence shows is the user session while tty1 can
-    be the GDM login surface. The proof path still fails closed unless the
+    verification path. This probe is intentionally outside the happy path:
+    switching VTs before first-boot/orchestrator work can leave the capture
+    driver on the GDM surface instead of the live session. The proof path stays
+    on the currently active graphical session and fails closed unless the
     verification-only user service produces the in-session HTTP callbacks.
     """
     print("first boot VT probe: checking likely graphical virtual terminals", flush=True)
@@ -246,7 +247,7 @@ def probe_graphical_vts():
         ("first boot vt f2", "ctrl+alt+f2"),
         ("first boot vt f7", "ctrl+alt+f7"),
         ("first boot vt f1", "ctrl+alt+f1"),
-        ("first boot vt f2 final", "ctrl+alt+f2"),
+        ("first boot vt f7 final", "ctrl+alt+f7"),
     ):
         key(combo)
         time.sleep(3)
@@ -256,8 +257,13 @@ def complete_first_boot_setup():
     """Wait for the verification-only user service to complete first boot."""
     print("first boot setup: completing private offline path through session core APIs", flush=True)
     frame_sample("first boot before private unlock", save_debug=True)
-    wait_http_contains("first boot helper download", "/firstboot-unlock.sh", 180)
-    wait_http_contains("first boot private unlock callback", "/ready/FIRSTBOOT_UNLOCK", 180)
+    try:
+        wait_http_contains("first boot helper download", "/firstboot-unlock.sh", 180)
+        wait_http_contains("first boot private unlock callback", "/ready/FIRSTBOOT_UNLOCK", 180)
+    except SystemExit:
+        print("first boot setup failed before helper callback; collecting VT diagnostics", flush=True)
+        probe_graphical_vts()
+        raise
     frame_sample("post first boot private unlock", save_debug=True)
 
 def publish_orchestrator():
@@ -317,7 +323,6 @@ wait_serial_contains(
 # 2. Wait for first boot before treating install progress as real.
 observe_serial_contains("first boot hardware diagnostics", "GOBLINS_HWGATE_DIAG_DONE", 180)
 wait_stage("first boot desktop", 420)
-probe_graphical_vts()
 # 3. complete first boot through the real offline/private core contracts.
 complete_first_boot_setup()
 # 4. publish orchestrator only after the host is ready to tail its signals.

@@ -195,7 +195,11 @@ Type=oneshot
 Environment=GOBLINS_HWGATE_HOST_URL=http://10.0.2.2:8099
 Environment=GOBLINS_OS_CORE_URL=http://127.0.0.1:8787
 ExecStart=/usr/libexec/goblins-hwgate-session-orchestrator
+
+[Install]
+WantedBy=default.target
 EOF
+systemctl --global enable goblins-hwgate-session-orchestrator.service || true
 
 cat > /etc/systemd/user/gnome-session@goblins-os.target.d/99-goblins-hwgate-session-orchestrator.conf <<'EOF'
 [Unit]

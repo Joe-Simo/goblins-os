@@ -6539,6 +6539,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-is-enabled-for-user-default-target",
+            "systemctl --global enable goblins-hwgate-session-orchestrator.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-user-service-has-default-target-install",
+            "WantedBy=default.target",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
             "verify-config-firstboot-diagnostics-prints-default-target",
             "default_target=$(systemctl get-default 2>&1)",
         ),
@@ -6704,8 +6714,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-leaves-vt2-for-session-automation",
-            "first boot vt f2 final",
+            "capture-driver-keeps-vt-probe-off-firstboot-happy-path",
+            "first boot setup failed before helper callback; collecting VT diagnostics",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),

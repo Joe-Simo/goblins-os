@@ -270,8 +270,14 @@ helper through the same host HTTP server as the orchestrator, runs it from the
 guest via Alt+F2, completes the real `/v1/privacy`, `/v1/installer/complete`,
 and `/v1/session/unlock` core contracts for the private local path, waits for a
 `/ready/FIRSTBOOT_UNLOCK` callback, and only then launches the proof
-orchestrator. This is source-gated only until a fresh hardware-gate run reaches
-the real desktop and produces the installed-session proof JSONs.
+orchestrator. Run `28411988211` at `a290bf3` proved that helper path is
+source-gated but failed before launch because the VT probe ended on the GDM
+login surface (`tty2`) instead of the live Goblins session; `httpd.log` stayed
+empty and the `/ready/FIRSTBOOT_UNLOCK` callback never arrived. The local fix
+under validation now keeps the diagnostic VT frames but returns to `tty1`, where
+the same run captured the live session, before sending Alt+F2 automation. This
+is source-gated only until a fresh hardware-gate run reaches the real desktop
+and produces the installed-session proof JSONs.
 
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.

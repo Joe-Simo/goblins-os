@@ -222,18 +222,19 @@ def wait_stage(label, seconds, sample_every=30):
 def probe_graphical_vts():
     """Capture likely graphical VTs and leave the VM on the GNOME session VT.
 
-    Failed gates have proven the installed deployment reaches tty1 while the
-    serial install marker is complete. GNOME/GDM commonly owns tty2 under
-    Wayland, so probe the likely VTs with debug frames before any onboarding or
-    Alt+F2 automation. The proof path still fails closed unless the in-session
-    HTTP callbacks arrive.
+    Failed gates have proven the installed deployment reaches a graphical
+    Goblins session, but VT ownership is not stable across the text-install
+    verification path. Probe likely VTs with debug frames, then return to tty1,
+    which current first-boot evidence shows is the user session while tty2 can
+    be the GDM login surface. The proof path still fails closed unless the
+    in-session HTTP callbacks arrive.
     """
     print("first boot VT probe: checking likely graphical virtual terminals", flush=True)
     for debug_label, combo in (
         ("first boot vt f2", "ctrl+alt+f2"),
         ("first boot vt f7", "ctrl+alt+f7"),
         ("first boot vt f1", "ctrl+alt+f1"),
-        ("first boot vt f2 final", "ctrl+alt+f2"),
+        ("first boot vt f1 final", "ctrl+alt+f1"),
     ):
         key(combo)
         time.sleep(3)

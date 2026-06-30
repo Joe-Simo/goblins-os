@@ -6644,8 +6644,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-leaves-vt2-for-session-automation",
-            "first boot vt f2 final",
+            "capture-driver-leaves-vt1-for-session-automation",
+            "first boot vt f1 final",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),

@@ -34,7 +34,8 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current committed source head is `6202315` on `main`. The latest completed
+Current hardware-gate system-starter source commit is `6202315` on `main`.
+Later docs-only commits may update this resume block. The latest completed
 source passes shipped the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image

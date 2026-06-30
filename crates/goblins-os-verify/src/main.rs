@@ -78,6 +78,7 @@ const GLIB_SCHEMA_FILES: &[&str] = &[
     "org.goblins.os.a11y.switch-control.gschema.xml",
     "org.goblins.os.focus.gschema.xml",
     "org.goblins.os.today.gschema.xml",
+    "org.goblins.shell.extensions.wm.gschema.xml",
     "org.goblins.shell.extensions.captions.gschema.xml",
 ];
 
@@ -1129,6 +1130,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root,
         "goblins-wm-schema-compiled",
         "glib-compile-schemas /usr/share/gnome-shell/extensions/goblins-wm@goblins.os/schemas",
+    ));
+    checks.push(contains_check(
+        root.join("os/glib-schemas/org.goblins.shell.extensions.wm.gschema.xml"),
+        "goblins-wm-system-schema-for-core-shortcut-writes",
+        "window-hud",
     ));
     checks.push(contains_check(
         root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),

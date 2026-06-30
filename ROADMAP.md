@@ -34,27 +34,20 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current hardware-gate service/autostart proof run is `28450854194` at `3fab445`
-on `main`; it failed before signoff. The latest completed source passes shipped
-the Sound
-Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
-name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
-workflow to avoid exporting the full bootc image into the runner daemon, added
-nonblocking BuildKit GHA cache scopes for the expensive bootc image builds,
-landed the session-owned settings/write bridge, and proved the verification
-installer can complete and boot the installed deployment. The current image
-also pins the graphical default target and GDM display-manager aliases in both
-the immutable image systemd tree and `/etc`, uses GDM's canonical
-`AutomaticLoginEnable=True` value plus a zero-delay timed-login fallback for
-`goblin`, and prints the installed GDM config, AccountsService profile, and
-non-secret shadow state in verification-install diagnostics. Host gates for the
-latest committed source: scoped `git diff --check`, TOML parse,
-`cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
-`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
-`goblins-os-verify --source-root .` → **blocked=0 (2640)**. A full
-`cargo fmt --all --check` was not claimed for the recent hardware-gate fix
-commits; host rustfmt has previously stalled while reading the workspace, so
-only the edited Rust crate was checked.
+Current hardware-gate proof run is `28457665098` at `e1127ad` on `main`; it
+failed before signoff, but it proved the previous `/etc` helper-location fix.
+The image push, verification ISO, model prep, installed boot, first-boot
+diagnostics, private unlock helper download, root session-orchestrator starter,
+GNOME autostart fallback path, deferred host publish of `/orchestrator.sh`, and
+HTTP `200` orchestrator download all ran. The artifact includes real display
+captures through `28-bootloader-efi-summary.png` plus
+`31-text-shortcuts-candidate-bubble-render.png`, and the serial/http logs include
+`GOBLINS_HWGATE_ETC_HELPERS_INSTALLED`,
+`GOBLINS_HWGATE_DIAG_DONE`,
+`GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED`, and the
+`/orchestrator.sh` `200` fetch. The blocker is no longer CI billing, image
+export, ISO build, GDM autologin, first-boot helper availability, or session
+orchestrator startup.
 
 Hardware-gate run `28447129095` at `304010e` proved GitHub Actions billing is
 unblocked, the bootc image build can publish to GHCR, the verification installer
@@ -83,31 +76,35 @@ current blocker is narrowed to verification-only helper files/units not being
 available to the installed booted deployment, not CI billing, image export, ISO
 build, GDM autologin, or GNOME session launch.
 
-The current source follow-up is source-gated only so far: the verification-only
-kickstart now writes direct `multi-user.target.wants/` and
-`graphical.target.wants/` symlinks for the first-boot diagnostics service, keeps
-the root system starter, adds a GNOME autostart fallback for
-`/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator`, stores all
-verification helper executables under `/etc/goblins-os/hardware-gate/` instead
-of the image-owned `/usr` tree, emits `GOBLINS_HWGATE_ETC_HELPERS_INSTALLED`
-when those helpers exist, and makes the session orchestrator itself emit serial
-markers including
-`GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED` and
-`GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED`. No production image service, sshd,
-guest agent, or QMP command injection is added; this remains scoped to
-`os/iso/verify-config.toml`, which release media do not use. The verify-crate
-and shell shipping gates were updated in lockstep to require the direct wanted
-symlinks, `/etc` helper path, autostart fallback, helper-install marker, new
-serial markers, deferred orchestrator publish, and post-publish HTTP `200`
-download for `/orchestrator.sh`, while rejecting both the old `key("alt+f2")`
-path and the old `/usr/libexec/goblins-hwgate*` helper location. Local gates
-for this follow-up: TOML parse for the ISO configs, `bash -n` for the
-hardware-gate shell scripts, `git diff --check`,
-`cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
+The remaining failing live proofs in `28457665098` are now concrete:
+firewall disable succeeded but re-enable returned HTTP `502`; keyboard shortcut
+rebind returned HTTP `503`; input sources returned HTTP `200` but failed the
+readback gate; Focus activation returned HTTP `400`; PermissionStore seeding for
+the per-app revoke proof failed; Preview returned HTTP `200` for the PDF open
+but the process/render wait failed before screenshots `29`/`30`; Text Shortcuts
+active-engine proof saw `active_engine=goblins-textshortcuts` even though the
+setter command returned nonzero, and later live/candidate proof files were empty
+or missing. Screenshots `29-preview-pdf-open.png`,
+`30-preview-image-open.png`, and
+`32-text-shortcuts-live-ibus-runtime-render.png` were not produced.
+
+The current source follow-up is source-gated only so far: install the Goblins WM
+shortcut schema into `os/glib-schemas/` so core `/v1/keyboard/shortcuts/binding`
+can see the schema outside the extension-only schema dir; give each
+Text Shortcuts proof window a unique GTK application id; accept IBus activation
+only when the real active-engine readback is `goblins-textshortcuts`; stop
+killing the text-shortcuts adapter immediately before the keystroke proof; wait
+for proof files before killing proof windows; seed Focus modes as a quoted
+GVariant string; and let Preview accept a real process or `org.gnome.Papers` /
+`org.gnome.Loupe` session-bus owner before capture. Local gates so far:
+hardware-gate shell `bash -n`, XML parse, `glib-compile-schemas --dry-run`
+when available, `git diff --check`, `cargo fmt -p goblins-os-shell -p
+goblins-os-verify --check`, focused `cargo test -p goblins-os-shell
+parses_text_shortcuts_proof_targets`, `cargo test -p goblins-os-verify`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
 `cargo run -p goblins-os-verify -- --source-root .` →
-**blocked=0 (2650)**, `cargo clippy --workspace -- -D warnings`, and
-`cargo test --workspace`. No hardware-gate run has proved the `/etc` helper
-fallback yet.
+**blocked=0 (2652)**. A fresh hardware-gate run is still required before any
+failed live proof can move to shipped.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,

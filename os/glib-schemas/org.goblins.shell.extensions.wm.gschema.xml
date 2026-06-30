@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.goblins.shell.extensions.wm" path="/org/goblins/shell/extensions/wm/">
+    <key name="mission-control" type="as">
+      <default>['&lt;Super&gt;Up', 'F9']</default>
+      <summary>Show Mission Control</summary>
+      <description>Shows all open windows grouped by workspace.</description>
+    </key>
+    <key name="app-expose" type="as">
+      <default>['&lt;Super&gt;e', 'F10']</default>
+      <summary>Show App Exposé</summary>
+      <description>Spreads only the focused application's windows, mirroring macOS App Exposé.</description>
+    </key>
+    <key name="window-switcher" type="as">
+      <default>['&lt;Super&gt;Tab']</default>
+      <summary>Show Goblins app switcher</summary>
+      <description>Shows a material app/window switcher with live thumbnails.</description>
+    </key>
+    <key name="window-hud" type="as">
+      <default>['&lt;Super&gt;w']</default>
+      <summary>Show window actions HUD</summary>
+      <description>Shows quick actions for the focused window.</description>
+    </key>
+    <key name="snap-left" type="as">
+      <default>['&lt;Super&gt;Left']</default>
+      <summary>Snap the focused window left</summary>
+      <description>Tiles the focused window to the left half of the work area.</description>
+    </key>
+    <key name="snap-right" type="as">
+      <default>['&lt;Super&gt;Right']</default>
+      <summary>Snap the focused window right</summary>
+      <description>Tiles the focused window to the right half of the work area.</description>
+    </key>
+    <key name="snap-top-left" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;Left']</default>
+      <summary>Snap the focused window top left</summary>
+      <description>Tiles the focused window to the top-left quarter of the work area.</description>
+    </key>
+    <key name="snap-top-right" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;Right']</default>
+      <summary>Snap the focused window top right</summary>
+      <description>Tiles the focused window to the top-right quarter of the work area.</description>
+    </key>
+    <key name="snap-bottom-left" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;Left']</default>
+      <summary>Snap the focused window bottom left</summary>
+      <description>Tiles the focused window to the bottom-left quarter of the work area.</description>
+    </key>
+    <key name="snap-bottom-right" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;Right']</default>
+      <summary>Snap the focused window bottom right</summary>
+      <description>Tiles the focused window to the bottom-right quarter of the work area.</description>
+    </key>
+    <key name="restore-window" type="as">
+      <default>['&lt;Super&gt;Down']</default>
+      <summary>Restore previous window geometry</summary>
+      <description>Restores the focused window to the geometry it had before snapping.</description>
+    </key>
+    <key name="center-window" type="as">
+      <default>['&lt;Super&gt;c']</default>
+      <summary>Center the focused window</summary>
+      <description>Centers the focused window in the current work area.</description>
+    </key>
+    <key name="space-left" type="as">
+      <default>['&lt;Super&gt;&lt;Control&gt;Left']</default>
+      <summary>Move to the previous space</summary>
+      <description>Activates the previous workspace.</description>
+    </key>
+    <key name="space-right" type="as">
+      <default>['&lt;Super&gt;&lt;Control&gt;Right']</default>
+      <summary>Move to the next space</summary>
+      <description>Activates the next workspace.</description>
+    </key>
+    <key name="hot-corner-top-left" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="mission-control"/>
+        <choice value="app-expose"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Top-left hot corner action</summary>
+      <description>Action triggered when the pointer reaches the top-left corner (macOS-style hot corners). 'none' disables the corner.</description>
+    </key>
+    <key name="hot-corner-top-right" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="mission-control"/>
+        <choice value="app-expose"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Top-right hot corner action</summary>
+      <description>Action triggered when the pointer reaches the top-right corner. 'none' disables the corner.</description>
+    </key>
+    <key name="hot-corner-bottom-left" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="mission-control"/>
+        <choice value="app-expose"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Bottom-left hot corner action</summary>
+      <description>Action triggered when the pointer reaches the bottom-left corner. 'none' disables the corner.</description>
+    </key>
+    <key name="hot-corner-bottom-right" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="mission-control"/>
+        <choice value="app-expose"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Bottom-right hot corner action</summary>
+      <description>Action triggered when the pointer reaches the bottom-right corner. 'none' disables the corner.</description>
+    </key>
+    <key name="snap-assist" type="b">
+      <default>true</default>
+      <summary>Offer Snap Assist after a half-snap</summary>
+      <description>After snapping a window to the left or right half, offer the other open windows to fill the other half. Dismissed by Escape, a pick, or a short timeout.</description>
+    </key>
+  </schema>
+</schemalist>

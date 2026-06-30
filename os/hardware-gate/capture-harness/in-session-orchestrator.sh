@@ -77,6 +77,47 @@ wait_process(){
   done
   return 1
 }
+wait_process_or_bus(){
+  local process="$1"
+  local bus_name="$2"
+  for _ in $(seq 1 30); do
+    pgrep -x "$process" >/dev/null 2>&1 && return 0
+    pgrep -f "$process" >/dev/null 2>&1 && return 0
+    if [ -n "$bus_name" ] && command -v gdbus >/dev/null 2>&1 \
+      && gdbus call --session \
+        --dest org.freedesktop.DBus \
+        --object-path /org/freedesktop/DBus \
+        --method org.freedesktop.DBus.NameHasOwner \
+        "$bus_name" 2>/dev/null | grep -Fq "true"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+active_ibus_engine(){
+  ibus engine 2>/dev/null | tr -d '\n' || true
+}
+activate_goblins_textshortcuts_engine(){
+  local active_engine
+  for _ in $(seq 1 20); do
+    ibus read-cache >/dev/null 2>&1 || true
+    ibus engine goblins-textshortcuts >/dev/null 2>&1 || true
+    active_engine="$(active_ibus_engine)"
+    [ "$active_engine" = "goblins-textshortcuts" ] && return 0
+    sleep 0.5
+  done
+  return 1
+}
+wait_proof_file_nonempty(){
+  local proof_file="$1"
+  local attempts="${2:-40}"
+  for _ in $(seq 1 "$attempts"); do
+    [ -s "$proof_file" ] && return 0
+    sleep 0.25
+  done
+  return 1
+}
 firewall_live_toggle_proof(){
   local status_file=/tmp/gate-firewall-status.json
   local disable_file=/tmp/gate-firewall-disable.json
@@ -172,12 +213,12 @@ text_shortcuts_session_enable_proof(){
     return 1
   fi
 
-  if ibus engine goblins-textshortcuts >/dev/null 2>&1; then
+  if activate_goblins_textshortcuts_engine; then
     engine_set=pass
   else
     engine_set=fail
   fi
-  active_engine="$(ibus engine 2>/dev/null | tr -d '\n' || true)"
+  active_engine="$(active_ibus_engine)"
   if [ "$engine_set" != "pass" ] || [ "$active_engine" != "goblins-textshortcuts" ]; then
     proof_text_shortcuts "status=fail&stage=active-engine&service=active&engine_set=$engine_set&active_engine=${active_engine:-missing}"
     return 1
@@ -207,14 +248,12 @@ text_shortcuts_live_keystroke_proof(){
   printf '[{"replace":"omw","with":"onmyway"}]\n' > "$table_file"
   rm -f "$normal_file" "$passthrough_file" "$password_file" "$dismiss_file"
 
-  pkill -f goblins-textshortcuts-ibus 2>/dev/null || true
-  pkill -f goblins-textshortcuts-engine 2>/dev/null || true
-  sleep 1
-  if ! ibus engine goblins-textshortcuts >/dev/null 2>&1; then
-    proof_text_shortcuts_live "status=fail&stage=engine-set&input_driver=wtype&active_engine=missing"
+  if ! activate_goblins_textshortcuts_engine; then
+    active_engine="$(active_ibus_engine)"
+    proof_text_shortcuts_live "status=fail&stage=engine-set&input_driver=wtype&active_engine=${active_engine:-missing}"
     return 1
   fi
-  active_engine="$(ibus engine 2>/dev/null | tr -d '\n' || true)"
+  active_engine="$(active_ibus_engine)"
   if [ "$active_engine" != "goblins-textshortcuts" ]; then
     proof_text_shortcuts_live "status=fail&stage=engine-active&input_driver=wtype&active_engine=${active_engine:-missing}"
     return 1
@@ -317,6 +356,7 @@ text_shortcuts_candidate_metadata_proof(){
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$candidate_file" "$B/goblins-os-shell" --text-shortcuts-proof candidate >/tmp/gate-text-shortcuts-candidate.log 2>&1 &
   candidate_pid=$!
   sleep 4
+  wait_proof_file_nonempty "$candidate_file" 40 || true
   kill "$candidate_pid" 2>/dev/null || true
   wait "$candidate_pid" 2>/dev/null || true
 
@@ -533,6 +573,7 @@ text_shortcuts_candidate_bubble_render_proof(){
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$render_file" "$B/goblins-os-shell" --text-shortcuts-proof candidate-render >/tmp/gate-text-shortcuts-candidate-bubble-render.log 2>&1 &
   render_pid=$!
   sleep 4
+  wait_proof_file_nonempty "$render_file" 40 || true
   sig 31-text-shortcuts-candidate-bubble-render
   kill "$render_pid" 2>/dev/null || true
   wait "$render_pid" 2>/dev/null || true
@@ -597,11 +638,12 @@ text_shortcuts_live_ibus_runtime_render_proof(){
   fi
 
   ibus read-cache >/dev/null 2>&1 || true
-  if ! ibus engine goblins-textshortcuts >/dev/null 2>&1; then
-    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=engine-set&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=missing&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+  if ! activate_goblins_textshortcuts_engine; then
+    active_engine="$(active_ibus_engine)"
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=engine-set&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=${active_engine:-missing}&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
     return 1
   fi
-  active_engine="$(ibus engine 2>/dev/null | tr -d '\n' || true)"
+  active_engine="$(active_ibus_engine)"
   if [ "$active_engine" != "goblins-textshortcuts" ]; then
     proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=engine-active&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=${active_engine:-missing}&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
     return 1
@@ -982,6 +1024,7 @@ focus_arm_roundtrip_proof(){
   local status_file=/tmp/gate-focus-status.json
   local activate_file=/tmp/gate-focus-activate.json
   local deactivate_file=/tmp/gate-focus-deactivate.json
+  local focus_modes_seed
   local original_modes original_active_raw original_active original_armed original_restore_raw original_restore original_banners
   local status_code available activate_code activate_ok activate_active active_after_activate
   local armed_after_activate restore_after_activate banners_after_activate
@@ -1007,7 +1050,8 @@ focus_arm_roundtrip_proof(){
     return 1
   fi
 
-  if ! gsettings set org.goblins.os.focus modes '[{"id":"gate-work","name":"Gate Work"}]' >/dev/null 2>&1 \
+  focus_modes_seed="'[{\"id\":\"gate-work\",\"name\":\"Gate Work\"}]'"
+  if ! gsettings set org.goblins.os.focus modes "$focus_modes_seed" >/dev/null 2>&1 \
     || ! gsettings set org.goblins.os.focus active-mode '' >/dev/null 2>&1 \
     || ! gsettings set org.goblins.os.focus armed-by-schedule false >/dev/null 2>&1 \
     || ! gsettings set org.goblins.os.focus restore-banners '' >/dev/null 2>&1 \
@@ -1130,7 +1174,7 @@ preview_open_render_proof(){
     "$LIVE_URL/v1/preview/open" || true)
   pdf_ok=$(json_field "$pdf_file" ok)
   pdf_kind=$(json_field "$pdf_file" kind)
-  if [ "$pdf_code" != "200" ] || [ "$pdf_ok" != "true" ] || [ "$pdf_kind" != "pdf" ] || ! wait_process papers; then
+  if [ "$pdf_code" != "200" ] || [ "$pdf_ok" != "true" ] || [ "$pdf_kind" != "pdf" ] || ! wait_process_or_bus papers org.gnome.Papers; then
     proof_preview_open_render "status=fail&stage=pdf-open&status_route=/v1/preview/status&route=/v1/preview/open&status_http=200&available=true&xdg_open=true&papers=true&loupe=true&pdf_default=$pdf_default&image_default=$image_default&pdf_http=${pdf_code:-000}&pdf_ok=${pdf_ok:-missing}&pdf_kind=${pdf_kind:-missing}"
     pkill -x papers 2>/dev/null || true
     return 1
@@ -1145,7 +1189,7 @@ preview_open_render_proof(){
     "$LIVE_URL/v1/preview/open" || true)
   image_ok=$(json_field "$image_file" ok)
   image_kind=$(json_field "$image_file" kind)
-  if [ "$image_code" != "200" ] || [ "$image_ok" != "true" ] || [ "$image_kind" != "image" ] || ! wait_process loupe; then
+  if [ "$image_code" != "200" ] || [ "$image_ok" != "true" ] || [ "$image_kind" != "image" ] || ! wait_process_or_bus loupe org.gnome.Loupe; then
     proof_preview_open_render "status=fail&stage=image-open&status_route=/v1/preview/status&route=/v1/preview/open&status_http=200&available=true&xdg_open=true&papers=true&loupe=true&pdf_default=$pdf_default&image_default=$image_default&pdf_http=200&pdf_ok=true&pdf_kind=pdf&image_http=${image_code:-000}&image_ok=${image_ok:-missing}&image_kind=${image_kind:-missing}&pdf_screenshot=29-preview-pdf-open.png&rendered_pdf_frame=true"
     pkill -x loupe 2>/dev/null || true
     return 1

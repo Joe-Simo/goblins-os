@@ -426,6 +426,25 @@ fn text_shortcuts_proof_mode(mode: &str) -> Option<TextShortcutsProofMode> {
     }
 }
 
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn text_shortcuts_proof_application_id(mode: TextShortcutsProofMode) -> &'static str {
+    match mode {
+        TextShortcutsProofMode::Normal => "org.goblins.OS.Shell.TextShortcutsProof.Normal",
+        TextShortcutsProofMode::Passthrough => {
+            "org.goblins.OS.Shell.TextShortcutsProof.Passthrough"
+        }
+        TextShortcutsProofMode::Password => "org.goblins.OS.Shell.TextShortcutsProof.Password",
+        TextShortcutsProofMode::Dismiss => "org.goblins.OS.Shell.TextShortcutsProof.Dismiss",
+        TextShortcutsProofMode::Candidate => "org.goblins.OS.Shell.TextShortcutsProof.Candidate",
+        TextShortcutsProofMode::CandidateRender => {
+            "org.goblins.OS.Shell.TextShortcutsProof.CandidateRender"
+        }
+        TextShortcutsProofMode::LiveRuntimeRender => {
+            "org.goblins.OS.Shell.TextShortcutsProof.LiveRuntimeRender"
+        }
+    }
+}
+
 fn main() -> ShellResult<()> {
     let config = ShellConfig::from_env();
 
@@ -2602,7 +2621,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
     }
 
     let application = gtk::Application::builder()
-        .application_id("org.goblins.OS.Shell.TextShortcutsProof")
+        .application_id(text_shortcuts_proof_application_id(mode))
         .build();
 
     application.connect_activate(move |app| {

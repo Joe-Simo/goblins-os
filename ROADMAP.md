@@ -34,9 +34,9 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current hardware-gate system-starter source commit is `6202315` on `main`.
-Later docs-only commits may update this resume block. The latest completed
-source passes shipped the Sound
+Current hardware-gate service/autostart proof run is `28450854194` at `3fab445`
+on `main`; it failed before signoff. The latest completed source passes shipped
+the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
 workflow to avoid exporting the full bootc image into the runner daemon, added
@@ -69,26 +69,45 @@ confirms the session remained on VT7 after failure diagnostics. This narrows the
 blocker to verification-only first-boot/session automation not starting, rather
 than billing, image export, ISO build, GDM autologin, or GNOME session launch.
 
+Hardware-gate run `28450854194` at `3fab445` proved the image push and
+verification ISO again, booted the installed deployment into the Goblins
+desktop, and reproduced the first-boot/session automation failure after the
+direct wanted-symlink plus GNOME autostart fallback. No new session markers
+appeared: `GOBLINS_HWGATE_DIAG_DONE`,
+`GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED`,
+`GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED`, and
+`GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED` were all absent; `httpd.log`
+remained empty and `/firstboot-unlock.sh` was never fetched. The post-install
+markers still appeared in the serial log and the desktop still rendered, so the
+current blocker is narrowed to verification-only helper files/units not being
+available to the installed booted deployment, not CI billing, image export, ISO
+build, GDM autologin, or GNOME session launch.
+
 The current source follow-up is source-gated only so far: the verification-only
 kickstart now writes direct `multi-user.target.wants/` and
 `graphical.target.wants/` symlinks for the first-boot diagnostics service, keeps
 the root system starter, adds a GNOME autostart fallback for
-`/usr/libexec/goblins-hwgate-session-orchestrator`, and makes the session
-orchestrator itself emit serial markers including
+`/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator`, stores all
+verification helper executables under `/etc/goblins-os/hardware-gate/` instead
+of the image-owned `/usr` tree, emits `GOBLINS_HWGATE_ETC_HELPERS_INSTALLED`
+when those helpers exist, and makes the session orchestrator itself emit serial
+markers including
 `GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED` and
 `GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED`. No production image service, sshd,
 guest agent, or QMP command injection is added; this remains scoped to
 `os/iso/verify-config.toml`, which release media do not use. The verify-crate
 and shell shipping gates were updated in lockstep to require the direct wanted
-symlinks, autostart fallback, new serial markers, deferred orchestrator publish,
-and post-publish HTTP `200` download for `/orchestrator.sh`, while rejecting the
-old `key("alt+f2")` path. Local gates for this follow-up: TOML parse for the ISO
-configs, `bash -n` for the hardware-gate shell scripts, `git diff --check`,
+symlinks, `/etc` helper path, autostart fallback, helper-install marker, new
+serial markers, deferred orchestrator publish, and post-publish HTTP `200`
+download for `/orchestrator.sh`, while rejecting both the old `key("alt+f2")`
+path and the old `/usr/libexec/goblins-hwgate*` helper location. Local gates
+for this follow-up: TOML parse for the ISO configs, `bash -n` for the
+hardware-gate shell scripts, `git diff --check`,
 `cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
 `cargo run -p goblins-os-verify -- --source-root .` →
-**blocked=0 (2647)**, `cargo clippy --workspace -- -D warnings`, and
-`cargo test --workspace`. No hardware-gate run has proved this autostart/direct
-wanted-symlink fallback yet.
+**blocked=0 (2650)**, `cargo clippy --workspace -- -D warnings`, and
+`cargo test --workspace`. No hardware-gate run has proved the `/etc` helper
+fallback yet.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,

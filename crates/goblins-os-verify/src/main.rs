@@ -6524,6 +6524,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
+            "verify-config-installs-hwgate-helpers-under-etc",
+            "/etc/goblins-os/hardware-gate",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-confirms-etc-hwgate-helpers-installed",
+            "GOBLINS_HWGATE_ETC_HELPERS_INSTALLED",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
             "verify-config-firstboot-diagnostics-directly-wanted-by-multi-user",
             "multi-user.target.wants/goblins-hwgate-firstboot-diagnostics.service",
         ),
@@ -6545,7 +6555,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/iso/verify-config.toml"),
             "verify-config-session-orchestrator-autostart-execs-helper",
-            "Exec=/usr/libexec/goblins-hwgate-session-orchestrator",
+            "Exec=/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator",
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
@@ -6661,6 +6671,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/iso/config.toml"),
             "release-iso-config-keeps-install-done-marker-out",
             "GOBLINS_VERIFY_INSTALL_DONE",
+        ),
+        absent_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-does-not-write-hwgate-helpers-to-image-owned-usr",
+            "/usr/libexec/goblins-hwgate",
         ),
         absent_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),

@@ -76,7 +76,9 @@ systemctl set-default graphical.target
 readlink /etc/systemd/system/default.target | grep -Fq graphical.target
 echo "GOBLINS_HWGATE_GRAPHICAL_TARGET_RESTORED" > /dev/ttyS0 || true
 
-cat > /usr/libexec/goblins-hwgate-firstboot-diagnostics <<'EOF'
+install -d -m 0755 /etc/goblins-os/hardware-gate
+
+cat > /etc/goblins-os/hardware-gate/goblins-hwgate-firstboot-diagnostics <<'EOF'
 #!/usr/bin/env bash
 set +e
 exec >/dev/ttyS0 2>&1
@@ -130,7 +132,7 @@ journalctl -b --no-pager \
   -n 200 2>&1 || true
 echo "GOBLINS_HWGATE_DIAG_DONE"
 EOF
-chmod 0755 /usr/libexec/goblins-hwgate-firstboot-diagnostics
+chmod 0755 /etc/goblins-os/hardware-gate/goblins-hwgate-firstboot-diagnostics
 
 cat > /etc/systemd/system/goblins-hwgate-firstboot-diagnostics.service <<'EOF'
 [Unit]
@@ -139,7 +141,7 @@ After=multi-user.target graphical.target display-manager.service gdm.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/libexec/goblins-hwgate-firstboot-diagnostics
+ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-firstboot-diagnostics
 
 [Install]
 WantedBy=multi-user.target graphical.target
@@ -151,7 +153,7 @@ ln -sfn ../goblins-hwgate-firstboot-diagnostics.service \
 ln -sfn ../goblins-hwgate-firstboot-diagnostics.service \
   /etc/systemd/system/graphical.target.wants/goblins-hwgate-firstboot-diagnostics.service
 
-cat > /usr/libexec/goblins-hwgate-session-orchestrator <<'EOF'
+cat > /etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 exec >>/tmp/goblins-hwgate-session-orchestrator.log 2>&1
@@ -196,7 +198,7 @@ serial "GOBLINS_HWGATE_ORCHESTRATOR_DOWNLOADED"
 GOBLINS_HWGATE_HOST_URL="$HOST_READY_URL" GOBLINS_OS_CORE_URL="$LIVE_URL" \
   bash /tmp/gos-orchestrator
 EOF
-chmod 0755 /usr/libexec/goblins-hwgate-session-orchestrator
+chmod 0755 /etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator
 
 install -d /etc/xdg/autostart
 cat > /etc/xdg/autostart/goblins-hwgate-session-orchestrator.desktop <<'EOF'
@@ -206,7 +208,7 @@ Name=Goblins OS hardware-gate session orchestrator
 NoDisplay=true
 OnlyShowIn=GNOME;
 X-GNOME-Autostart-enabled=true
-Exec=/usr/libexec/goblins-hwgate-session-orchestrator
+Exec=/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator
 EOF
 
 install -d /etc/systemd/user/gnome-session@goblins-os.target.d
@@ -220,14 +222,14 @@ Wants=org.goblins.OS.Shell.service org.goblins.OS.SessionBridge.service
 Type=oneshot
 Environment=GOBLINS_HWGATE_HOST_URL=http://10.0.2.2:8099
 Environment=GOBLINS_OS_CORE_URL=http://127.0.0.1:8787
-ExecStart=/usr/libexec/goblins-hwgate-session-orchestrator
+ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator
 
 [Install]
 WantedBy=default.target
 EOF
 systemctl --global enable goblins-hwgate-session-orchestrator.service || true
 
-cat > /usr/libexec/goblins-hwgate-start-session-orchestrator <<'EOF'
+cat > /etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 exec >>/tmp/goblins-hwgate-start-session-orchestrator.log 2>&1
@@ -267,11 +269,11 @@ if runuser -u goblin -- env "${env_common[@]}" \
 else
   serial "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_SYSTEMD_START_FAILED"
   runuser -u goblin -- env "${env_common[@]}" WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 \
-    /usr/libexec/goblins-hwgate-session-orchestrator &
+    /etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator &
   serial "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_DIRECT_FALLBACK_STARTED"
 fi
 EOF
-chmod 0755 /usr/libexec/goblins-hwgate-start-session-orchestrator
+chmod 0755 /etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator
 
 cat > /etc/systemd/system/goblins-hwgate-session-orchestrator-starter.service <<'EOF'
 [Unit]
@@ -281,7 +283,7 @@ Wants=graphical.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/libexec/goblins-hwgate-start-session-orchestrator
+ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator
 
 [Install]
 WantedBy=graphical.target
@@ -294,6 +296,14 @@ cat > /etc/systemd/user/gnome-session@goblins-os.target.d/99-goblins-hwgate-sess
 [Unit]
 Wants=goblins-hwgate-session-orchestrator.service
 EOF
+
+if test -x /etc/goblins-os/hardware-gate/goblins-hwgate-firstboot-diagnostics \
+  && test -x /etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator \
+  && test -x /etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator; then
+  echo "GOBLINS_HWGATE_ETC_HELPERS_INSTALLED" > /dev/ttyS0 || true
+else
+  echo "GOBLINS_HWGATE_ETC_HELPERS_MISSING" > /dev/ttyS0 || true
+fi
 
 echo "GOBLINS_VERIFY_INSTALL_DONE" > /dev/ttyS0 || true
 %end

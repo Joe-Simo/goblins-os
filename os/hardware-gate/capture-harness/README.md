@@ -30,11 +30,14 @@ hardware run").
    GNOME session without relying on a specific VT or GNOME session target name.
    A verification-only system starter waits for the `goblin` user bus and
    explicitly requests that user service, writing serial markers if the bus or
-   start request is missing. The same verification-only script is also installed
-   as a GNOME autostart fallback, and the kickstart writes direct systemd
-   `*.wants/` symlinks so chrooted `systemctl enable` behavior cannot silently
-   drop the proof services. The host serves `firstboot-unlock.sh` over the qemu
-   slirp gateway (`http://10.0.2.2:PORT/`), then publishes
+   start request is missing. The helper scripts live under
+   `/etc/goblins-os/hardware-gate/` so the verification-only install does not
+   try to mutate the image-owned `/usr` tree. The same verification-only script
+   is also installed as a GNOME autostart fallback, and the kickstart writes
+   direct systemd `*.wants/` symlinks so chrooted `systemctl enable` behavior
+   cannot silently drop the proof services. The host serves
+   `firstboot-unlock.sh` over the qemu slirp gateway (`http://10.0.2.2:PORT/`),
+   then publishes
    `in-session-orchestrator.sh` only after the host screenshot tailer is ready.
    No sshd, guest agent, or keystroke command injection is used.
 4. The orchestrator launches each gate surface (`/usr/libexec/goblins-os/*`

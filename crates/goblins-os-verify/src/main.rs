@@ -6649,13 +6649,43 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-selects-first-boot-private-path",
-            "first boot setup: selecting welcome window and clicking private offline path",
+            "capture-driver-completes-first-boot-private-path-through-core-api",
+            "first boot setup: completing private offline path through session core APIs",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-saves-post-first-boot-dismiss-debug-frame",
-            "post first boot dismiss",
+            "capture-driver-saves-post-first-boot-private-unlock-debug-frame",
+            "post first boot private unlock",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-harness-serves-firstboot-unlock-helper",
+            "firstboot-unlock.sh",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-sets-private-mode",
+            "/v1/privacy",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-completes-installer",
+            "/v1/installer/complete",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-unlocks-session",
+            "/v1/session/unlock",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-callbacks-to-host",
+            "/ready/FIRSTBOOT_UNLOCK",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-requires-firstboot-unlock-callback",
+            "first boot private unlock callback",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),

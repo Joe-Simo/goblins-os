@@ -3,9 +3,10 @@
 #
 # Boots the hardware-gate ISO built with os/iso/verify-config.toml (so the
 # embedded /osbuild.ks, not a sidecar disk, drives Anaconda), waits for the bootc
-# install + first-boot GDM-autologin desktop, dismisses the onboarding, launches
-# the in-session orchestrator (served over the slirp gateway, started via GNOME
-# Alt+F2), captures the 27 required shots by QMP-screendump on each HTTP signal,
+# install + first-boot GDM-autologin desktop, completes first boot through the
+# same core API contracts as the private/offline UI path, launches the in-session
+# orchestrator (served over the slirp gateway, started via GNOME Alt+F2), captures
+# the 27 required shots by QMP-screendump on each HTTP signal,
 # writes proof-manifest.json, and runs close-signoff.sh.
 #
 # Honest: every shot is a real framebuffer capture of the real installed OS.
@@ -121,8 +122,11 @@ else
 fi
 qemu-img create -f qcow2 "$WORK/scratch.qcow2" 16G >/dev/null
 
-# Serve orchestrator + receive capture signals.
-( cd "$WORK" && cp "$HERE/in-session-orchestrator.sh" orchestrator.sh && python3 -m http.server "$PORT" --bind 0.0.0.0 >"$WORK/httpd.log" 2>&1 ) &
+# Serve first-boot helper + orchestrator, and receive capture signals.
+( cd "$WORK" \
+    && sed "s/@GOS_PORT@/$PORT/g" "$HERE/firstboot-unlock.sh" > firstboot-unlock.sh \
+    && cp "$HERE/in-session-orchestrator.sh" orchestrator.sh \
+    && python3 -m http.server "$PORT" --bind 0.0.0.0 >"$WORK/httpd.log" 2>&1 ) &
 HTTPD=$!
 
 rm -f "$WORK/qmp.sock"

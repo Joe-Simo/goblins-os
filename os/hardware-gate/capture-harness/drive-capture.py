@@ -4,8 +4,8 @@
 Codifies the validated flow against a running qemu VM (QMP socket):
   1. wait for the verification-only kickstart install marker
   2. require the kickstart %post marker, then wait for first-boot desktop settle
-  3. dismiss the onboarding through the visible "Private - keep this computer
-     offline" path
+  3. complete first boot through the same core APIs as the visible private /
+     offline path, then close the stale first-boot windows
   4. launch the in-session orchestrator via GNOME Alt+F2 (curl -o + bash; no sshd)
   5. screendump each surface to OUTDIR/<shot>.png on its HTTP /ready/<shot> signal
      until ORCH_ALLDONE
@@ -119,6 +119,13 @@ def serial_text():
     except OSError:
         return ""
 
+def http_log_text():
+    try:
+        with open(HTTPLOG, errors="ignore") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
 def wait_serial_contains(label, needle, timeout, debug_label=None, debug_every=0):
     t = time.time()
     last_tail = ""
@@ -151,6 +158,22 @@ def observe_serial_contains(label, needle, timeout):
         flush=True,
     )
     return False
+
+def wait_http_contains(label, needle, timeout):
+    t = time.time()
+    last_tail = ""
+    while time.time() - t < timeout:
+        data = http_log_text()
+        if needle in data:
+            print(f"{label}: observed HTTP marker {needle!r}", flush=True)
+            return True
+        last_tail = data[-500:]
+        time.sleep(1)
+    raise SystemExit(
+        f"{label} did not appear in HTTP log within {timeout}s; "
+        f"expected {needle!r}; http_tail={last_tail!r}"
+    )
+
 
 def slug(label):
     value = "".join(ch.lower() if ch.isalnum() else "-" for ch in label).strip("-")
@@ -216,23 +239,24 @@ def probe_graphical_vts():
         time.sleep(3)
         frame_sample(debug_label, save_debug=True)
 
-def dismiss_first_boot_setup():
-    """Select the real first-boot window and take the offline/private path."""
-    print("first boot setup: selecting welcome window and clicking private offline path", flush=True)
-    frame_sample("first boot before dismiss", save_debug=True)
-    # The desktop often lands in Overview with the Welcome window as a preview.
-    # First select that preview, then click both the centered and preview-position
-    # private buttons. If the UI is elsewhere, the post-dismiss frame makes the
-    # miss inspectable and proof still fails closed.
-    click(0.73, 0.53)
+def run_alt_f2(command, wait_after=3):
+    key("alt+f2")
     time.sleep(2)
-    click(0.50, 0.575)
-    time.sleep(3)
-    click(0.73, 0.575)
-    time.sleep(4)
+    typ(command)
+    time.sleep(1)
+    key("ret")
+    time.sleep(wait_after)
+
+def complete_first_boot_setup():
+    """Complete the real private/offline first-boot path without fragile clicks."""
+    print("first boot setup: completing private offline path through session core APIs", flush=True)
+    frame_sample("first boot before private unlock", save_debug=True)
+    run_alt_f2(f"curl -o /tmp/gos-firstboot 10.0.2.2:{PORT}/firstboot-unlock.sh")
+    run_alt_f2("bash /tmp/gos-firstboot", wait_after=8)
+    wait_http_contains("first boot private unlock callback", "/ready/FIRSTBOOT_UNLOCK", 30)
     key("esc")
     time.sleep(1)
-    frame_sample("post first boot dismiss", save_debug=True)
+    frame_sample("post first boot private unlock", save_debug=True)
 
 def http_get_path(line):
     marker = '"GET '
@@ -285,11 +309,11 @@ wait_serial_contains(
 observe_serial_contains("first boot hardware diagnostics", "GOBLINS_HWGATE_DIAG_DONE", 180)
 wait_stage("first boot desktop", 420)
 probe_graphical_vts()
-# 3. dismiss onboarding through the real offline/private UI path.
-dismiss_first_boot_setup()
+# 3. complete first boot through the real offline/private core contracts.
+complete_first_boot_setup()
 # 4. launch orchestrator via Alt+F2 (pipe-free)
-key("alt+f2"); time.sleep(2); typ(f"curl -o /tmp/o 10.0.2.2:{PORT}/orchestrator.sh"); time.sleep(1); key("ret"); time.sleep(3)
-key("alt+f2"); time.sleep(2); typ("bash /tmp/o"); time.sleep(1); key("ret")
+run_alt_f2(f"curl -o /tmp/o 10.0.2.2:{PORT}/orchestrator.sh")
+run_alt_f2("bash /tmp/o", wait_after=1)
 # 5. capture on signals
 os.makedirs(OUTDIR, exist_ok=True)
 pos = os.path.getsize(HTTPLOG) if os.path.exists(HTTPLOG) else 0

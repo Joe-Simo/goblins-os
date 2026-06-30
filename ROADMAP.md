@@ -32,10 +32,10 @@
 
 ---
 
-## ⏩ Session status — RESUME HERE (updated 2026-06-29)
+## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current committed source head before this verification-install graphical-target
-follow-up is `2853f7e` on `main`. The latest completed source passes shipped the Sound
+Current committed source head before this first-boot helper follow-up is
+`463ca56` on `main`. The latest completed source passes shipped the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
 workflow to avoid exporting the full bootc image into the runner daemon, added
@@ -45,14 +45,15 @@ installer can complete and boot the installed deployment. The current image
 also pins the graphical default target and GDM display-manager aliases in both
 the immutable image systemd tree and `/etc`, and the capture harness probes the
 likely graphical VTs before it tries onboarding/session automation. The current
-verification ISO also emits first-boot display-manager diagnostics to serial.
-Host gates for the latest committed source: `python3 -m py_compile` for the
-capture driver, `bash -n` for the hardware-gate shell scripts, scoped
+verification ISO also emits first-boot display-manager diagnostics to serial
+and restores `graphical.target` after Anaconda's verification-only text install
+override. Host gates for the latest committed source: `python3 -m py_compile`
+for the capture driver, `bash -n` for the hardware-gate shell scripts, scoped
 `git diff --check`, `cargo fmt -p goblins-os-verify --check`,
 `cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, and `goblins-os-verify --source-root .` →
-**blocked=0 (2608)**. A full `cargo fmt --all --check` was not claimed for
-`2853f7e`; host rustfmt has previously stalled while reading the workspace, so
+**blocked=0 (2611)**. A full `cargo fmt --all --check` was not claimed for
+`463ca56`; host rustfmt has previously stalled while reading the workspace, so
 only the edited Rust crate was checked.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
@@ -257,9 +258,20 @@ multi-user.target` while the image-owned
 display-manager symlinks pointed at GDM. The local fix under validation now
 restores `graphical.target` in the verification-only `%post` after Anaconda's
 text-install override and asserts that `/etc/systemd/system/default.target`
-points back to `graphical.target`. This is source-gated only until a fresh
-hardware-gate run reaches the real desktop and produces the installed-session
-proof JSONs.
+points back to `graphical.target`. Run `28409192428` at `463ca56` then proved
+the restore marker (`GOBLINS_HWGATE_GRAPHICAL_TARGET_RESTORED`), built the
+image and ISO, booted the installed deployment into the real GNOME/Goblins OS
+desktop, and captured first-boot UI frames instead of tty prompts. It still
+failed because the coordinate-based first-boot dismissal clicked through the
+visible Welcome UI, blanked the display, and never launched the in-session
+orchestrator; `httpd.log` stayed empty and every proof JSON was missing. The
+local fix under validation now serves a verification-only `firstboot-unlock.sh`
+helper through the same host HTTP server as the orchestrator, runs it from the
+guest via Alt+F2, completes the real `/v1/privacy`, `/v1/installer/complete`,
+and `/v1/session/unlock` core contracts for the private local path, waits for a
+`/ready/FIRSTBOOT_UNLOCK` callback, and only then launches the proof
+orchestrator. This is source-gated only until a fresh hardware-gate run reaches
+the real desktop and produces the installed-session proof JSONs.
 
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.

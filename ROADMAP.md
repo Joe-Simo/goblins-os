@@ -80,12 +80,12 @@ for the hardware-gate shell scripts, TOML parse for the ISO configs,
 `git diff --check`, `cargo fmt -p goblins-os-verify --check`,
 `cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, and `goblins-os-verify --source-root .` →
-**blocked=0 (2640)**. Hardware-gate run `28430082422` at `6202315` did not
-reach a runner or QEMU: GitHub Actions failed the job before steps started with
-"recent account payments have failed or your spending limit needs to be
-increased." No hardware-gate run has proved this system-starter fix yet; the
-next required unblock is GitHub Actions billing/spend, then rerun
-`hardware-gate-capture.yml`.
+**blocked=0 (2640)**. Hardware-gate runs `28430082422` at `6202315` and
+`28430226074` at `09ae88e` did not reach a runner or QEMU: GitHub Actions failed
+each job before steps started with "recent account payments have failed or your
+spending limit needs to be increased." No hardware-gate run has proved this
+system-starter fix yet; the next required unblock is GitHub Actions
+billing/spend, then rerun `hardware-gate-capture.yml`.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,

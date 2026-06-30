@@ -276,10 +276,15 @@ RUN groupadd --system goblins-session-bridge \
 # deliberately NOT a member of the `goblins-os` service group: the OS account
 # credential (CODEX_HOME/auth.json) and the operator secrets are owned by the
 # service user only, so the desktop session — and anything it launches — can
-# never read them. Codex sign-in is driven by the core service, not the session.
+# never read them. The password hash is intentionally invalid but not
+# shadow-locked: GDM autologin can enter the local session, while password auth
+# still has no valid local secret to verify. Codex sign-in is driven by the core
+# service, not the session.
 RUN install -d /var/home \
     && useradd --uid 1000 --create-home --home-dir /var/home/goblin --shell /bin/bash goblin \
     && usermod -aG goblins-session-bridge goblin \
+    && usermod --password '*' goblin \
+    && test "$(getent shadow goblin | cut -d: -f2)" = "*" \
     && install -d -o goblin -g goblin /var/home/goblin/.config/environment.d \
     && touch /var/home/goblin/.config/gnome-initial-setup-done \
     && chown -R goblin:goblin /var/home/goblin

@@ -280,9 +280,14 @@ the same run captured the live session, before sending Alt+F2 automation. Run
 overview after the `tty1` return, but the helper was never downloaded: the host
 `httpd.log` stayed empty and `/ready/FIRSTBOOT_UNLOCK` was still missing. The
 local fix under validation now exits the overview before each Alt+F2 command and
-fails earlier unless the host log proves `/firstboot-unlock.sh` was fetched.
-This is source-gated only until a fresh hardware-gate run reaches the real
-desktop and produces the installed-session proof JSONs.
+fails earlier unless the host log proves `/firstboot-unlock.sh` was fetched. Run
+`28415844049` at `dc01b1c` proved that the VM is on the GDM password surface
+after leaving the overview; the helper download frame showed the password prompt
+and `httpd.log` stayed empty. The local fix under validation makes the image
+give the `goblin` autologin account an invalid but non-locked shadow hash so GDM
+can enter the local session without creating a usable local password. This is
+source-gated only until a fresh hardware-gate run reaches the real desktop and
+produces the installed-session proof JSONs.
 
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.

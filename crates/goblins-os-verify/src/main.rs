@@ -933,6 +933,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(container_contains_check(
         root,
+        "human-login-user-invalid-nonlocked-password-hash",
+        "usermod --password '*' goblin",
+    ));
+    checks.push(container_contains_check(
+        root,
         "gdm-autologin-config",
         "COPY os/gdm/custom.conf /etc/gdm/custom.conf",
     ));
@@ -1005,6 +1010,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root.join("os/gdm/custom.conf"),
         "gdm-autologin-enabled",
         "AutomaticLogin=goblin",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "gdm-autologin-user-shadow-hash-is-invalid-not-locked",
+        r#"test "$(getent shadow goblin | cut -d: -f2)" = "*""#,
     ));
     checks.push(contains_check(
         root.join("os/accountsservice/goblin"),

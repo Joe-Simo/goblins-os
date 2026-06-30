@@ -224,8 +224,8 @@ def probe_graphical_vts():
 
     Failed gates have proven the installed deployment reaches a graphical
     Goblins session, but VT ownership is not stable across the text-install
-    verification path. Probe likely VTs with debug frames, then return to tty1,
-    which current first-boot evidence shows is the user session while tty2 can
+    verification path. Probe likely VTs with debug frames, then return to tty2,
+    which current first-boot evidence shows is the user session while tty1 can
     be the GDM login surface. The proof path still fails closed unless the
     in-session HTTP callbacks arrive.
     """
@@ -234,7 +234,7 @@ def probe_graphical_vts():
         ("first boot vt f2", "ctrl+alt+f2"),
         ("first boot vt f7", "ctrl+alt+f7"),
         ("first boot vt f1", "ctrl+alt+f1"),
-        ("first boot vt f1 final", "ctrl+alt+f1"),
+        ("first boot vt f2 final", "ctrl+alt+f2"),
     ):
         key(combo)
         time.sleep(3)

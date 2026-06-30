@@ -34,7 +34,7 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current committed source head before this GDM autologin follow-up is `d1d346d`
+Current committed source head before this VT-return follow-up is `8227538`
 on `main`. The latest completed source passes shipped the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
@@ -43,35 +43,36 @@ nonblocking BuildKit GHA cache scopes for the expensive bootc image builds,
 landed the session-owned settings/write bridge, and proved the verification
 installer can complete and boot the installed deployment. The current image
 also pins the graphical default target and GDM display-manager aliases in both
-the immutable image systemd tree and `/etc`, and the capture harness probes the
-likely graphical VTs before it tries onboarding/session automation. The current
-verification ISO also emits first-boot display-manager diagnostics to serial
-and restores `graphical.target` after Anaconda's verification-only text install
-override. Host gates for the latest committed source: `python3 -m py_compile`
-for the capture driver, `bash -n` for the hardware-gate shell scripts, scoped
-`git diff --check`, `cargo fmt -p goblins-os-verify --check`,
-`cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
-`cargo test --workspace`, and `goblins-os-verify --source-root .` →
-**blocked=0 (2621)**. A full `cargo fmt --all --check` was not claimed for
-the recent hardware-gate fix commits; host rustfmt has previously stalled while reading the workspace, so
-only the edited Rust crate was checked.
-
-Latest hardware-gate run `28417768014` at `d1d346d` proved the bootc image build,
-the verification installer ISO build, and the installed deployment boot path, but
-failed in the display-backed VM capture before any signoff proof could run:
-`_debug-first-boot-before-private-unlock.png` and
-`_debug-first-boot-helper-download-submitted.png` show the Fedora/GDM password
-prompt for `goblin`, and the harness failed closed because `/firstboot-unlock.sh`
-never appeared in the HTTP log. The current local fix is source-gated only so
-far: `/etc/gdm/custom.conf` now uses GDM's canonical `True` autologin values plus
-a zero-delay timed-login fallback for `goblin`, the image build asserts those
-exact lines, and the verification install diagnostics print the installed GDM
-config, AccountsService profile, and non-secret shadow state. Local gates for
-this follow-up so far: scoped `git diff --check`, TOML parse,
+the immutable image systemd tree and `/etc`, uses GDM's canonical
+`AutomaticLoginEnable=True` value plus a zero-delay timed-login fallback for
+`goblin`, and prints the installed GDM config, AccountsService profile, and
+non-secret shadow state in verification-install diagnostics. Host gates for the
+latest committed source: scoped `git diff --check`, TOML parse,
 `cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
-`goblins-os-verify --source-root .` → **blocked=0 (2628)**. No new hardware-gate
-run has proved this GDM autologin fix yet.
+`goblins-os-verify --source-root .` → **blocked=0 (2628)**. A full
+`cargo fmt --all --check` was not claimed for the recent hardware-gate fix
+commits; host rustfmt has previously stalled while reading the workspace, so
+only the edited Rust crate was checked.
+
+Latest hardware-gate run `28419767730` at `8227538` proved the bootc image build,
+the verification installer ISO build, GDM autologin, and the installed Goblins
+desktop session: `_debug-first-boot-desktop.png` shows the Goblins first-boot UI
+inside GNOME. It still failed before any signoff proof could run because the
+diagnostic VT probe ended on the GDM user picker before first-boot automation:
+`_debug-first-boot-before-private-unlock.png` and
+`_debug-first-boot-helper-download-submitted.png` show the Fedora/GDM password
+surface, so the harness typed the helper command outside the session and
+`/firstboot-unlock.sh` never appeared in `httpd.log`. The current local fix is
+source-gated only so far: keep the diagnostic VT frames but return to `tty2`
+(`first boot vt f2 final`) before running the Alt+F2 helper/orchestrator path,
+with the verify-crate exact-string gate updated in lockstep. Local gates for
+this follow-up: `python3 -m py_compile` for the capture driver, `bash -n` for
+the hardware-gate shell scripts, scoped `git diff --check`,
+`cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
+`goblins-os-verify --source-root .` → **blocked=0 (2628)**. No hardware-gate
+run has proved this VT-return fix yet.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,
@@ -300,11 +301,15 @@ local fix under validation now exits the overview before each Alt+F2 command and
 fails earlier unless the host log proves `/firstboot-unlock.sh` was fetched. Run
 `28415844049` at `dc01b1c` proved that the VM is on the GDM password surface
 after leaving the overview; the helper download frame showed the password prompt
-and `httpd.log` stayed empty. The local fix under validation makes the image
-give the `goblin` autologin account an invalid but non-locked shadow hash so GDM
-can enter the local session without creating a usable local password. This is
-source-gated only until a fresh hardware-gate run reaches the real desktop and
-produces the installed-session proof JSONs.
+and `httpd.log` stayed empty. Run `28417768014` at `d1d346d` then failed the same
+way after the first account-state follow-up. Run `28419767730` at `8227538`
+proved the canonical GDM autologin config and timed-login fallback were present
+and that autologin did reach the live Goblins desktop; the failure came later,
+because the diagnostic VT probe ended on the GDM user picker before the Alt+F2
+helper launch. The local fix under validation now keeps the VT diagnostics but
+returns to `tty2` (`first boot vt f2 final`) before first-boot helper and
+orchestrator automation. This is source-gated only until a fresh hardware-gate
+run reaches the real desktop and produces the installed-session proof JSONs.
 
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.

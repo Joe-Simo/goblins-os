@@ -34,8 +34,8 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-06-30)
 
-Current committed source head before this system-starter follow-up is
-`d93b271` on `main`. The latest completed source passes shipped the Sound
+Current committed source head is `6202315` on `main`. The latest completed
+source passes shipped the Sound
 Recognition and Live Captions substrates, fixed the Fedora 44 `sushi` package
 name, added the App Exposé / Hot Corner desktop-proof hooks, changed the image
 workflow to avoid exporting the full bootc image into the runner daemon, added
@@ -50,7 +50,7 @@ non-secret shadow state in verification-install diagnostics. Host gates for the
 latest committed source: scoped `git diff --check`, TOML parse,
 `cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
-`goblins-os-verify --source-root .` → **blocked=0 (2636)**. A full
+`goblins-os-verify --source-root .` → **blocked=0 (2640)**. A full
 `cargo fmt --all --check` was not claimed for the recent hardware-gate fix
 commits; host rustfmt has previously stalled while reading the workspace, so
 only the edited Rust crate was checked.
@@ -79,8 +79,12 @@ for the hardware-gate shell scripts, TOML parse for the ISO configs,
 `git diff --check`, `cargo fmt -p goblins-os-verify --check`,
 `cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, and `goblins-os-verify --source-root .` →
-**blocked=0 (2640)**. No hardware-gate run has proved this system-starter fix
-yet.
+**blocked=0 (2640)**. Hardware-gate run `28430082422` at `6202315` did not
+reach a runner or QEMU: GitHub Actions failed the job before steps started with
+"recent account payments have failed or your spending limit needs to be
+increased." No hardware-gate run has proved this system-starter fix yet; the
+next required unblock is GitHub Actions billing/spend, then rerun
+`hardware-gate-capture.yml`.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,

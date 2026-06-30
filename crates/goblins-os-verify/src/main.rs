@@ -6524,8 +6524,38 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
+            "verify-config-firstboot-diagnostics-directly-wanted-by-multi-user",
+            "multi-user.target.wants/goblins-hwgate-firstboot-diagnostics.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-firstboot-diagnostics-directly-wanted-by-graphical",
+            "graphical.target.wants/goblins-hwgate-firstboot-diagnostics.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
             "verify-config-installs-session-orchestrator-service",
             "goblins-hwgate-session-orchestrator.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-has-autostart-fallback",
+            "/etc/xdg/autostart/goblins-hwgate-session-orchestrator.desktop",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-autostart-execs-helper",
+            "Exec=/usr/libexec/goblins-hwgate-session-orchestrator",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-emits-started-marker",
+            "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-emits-firstboot-download-marker",
+            "GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED",
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
@@ -6551,6 +6581,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/iso/verify-config.toml"),
             "verify-config-installs-session-orchestrator-system-starter",
             "goblins-hwgate-session-orchestrator-starter.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-directly-wanted-by-graphical",
+            "graphical.target.wants/goblins-hwgate-session-orchestrator-starter.service",
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),

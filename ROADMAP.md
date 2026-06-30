@@ -56,36 +56,39 @@ latest committed source: scoped `git diff --check`, TOML parse,
 commits; host rustfmt has previously stalled while reading the workspace, so
 only the edited Rust crate was checked.
 
-Hardware-gate run `28427064546` at `d93b271` again proved the bootc image build,
-the verification installer ISO build, and the installed Goblins desktop session
-on VT7, but `/firstboot-unlock.sh` still never appeared in `httpd.log`; the
-uploaded `httpd.log` was zero bytes. The run also proved the driver now keeps VT
-probing out of the happy path and only collects VT frames after the first-boot
-helper timeout. The current local fix is source-gated only so far: the
-verification-only kickstart keeps the globally enabled user service, and adds a
-verification-only root system starter that waits for `/run/user/<goblin-uid>/bus`,
-requests `goblins-hwgate-session-orchestrator.service` with
-`systemctl --user start --no-block`, and writes serial markers
-`GOBLINS_HWGATE_SESSION_BUS_READY` and
-`GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED` so the next artifact can
-distinguish "user bus absent" from "service started but no host request". No
-production image service, sshd, guest agent, or QMP command injection is added;
-this remains scoped to `os/iso/verify-config.toml`, which release media do not
-use. The verify-crate and shell shipping gates were updated in lockstep to
-require the system starter, user-bus marker, start-request marker, deferred
-orchestrator publish, and post-publish HTTP `200` download for
-`/orchestrator.sh`, while rejecting the old `key("alt+f2")` path. Local gates
-for this follow-up: `python3 -m py_compile` for the capture driver, `bash -n`
-for the hardware-gate shell scripts, TOML parse for the ISO configs,
-`git diff --check`, `cargo fmt -p goblins-os-verify --check`,
-`cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
-`cargo test --workspace`, and `goblins-os-verify --source-root .` →
-**blocked=0 (2640)**. Hardware-gate runs `28430082422` at `6202315` and
-`28430226074` at `09ae88e` did not reach a runner or QEMU: GitHub Actions failed
-each job before steps started with "recent account payments have failed or your
-spending limit needs to be increased." No hardware-gate run has proved this
-system-starter fix yet; the next required unblock is GitHub Actions
-billing/spend, then rerun `hardware-gate-capture.yml`.
+Hardware-gate run `28447129095` at `304010e` proved GitHub Actions billing is
+unblocked, the bootc image build can publish to GHCR, the verification installer
+ISO can build from that published ref, and the installed deployment reaches the
+Goblins desktop with the first-boot UI visible. It still failed before signoff:
+`/firstboot-unlock.sh` never appeared in `httpd.log`, `httpd.log` was empty, the
+first-boot diagnostics marker `GOBLINS_HWGATE_DIAG_DONE` did not appear, and the
+system-starter marker `GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED` did
+not appear. The artifact includes only debug frames; `_debug-first-boot-desktop.png`
+shows the live desktop/first-boot windows, and `_debug-first-boot-vt-f7-final.png`
+confirms the session remained on VT7 after failure diagnostics. This narrows the
+blocker to verification-only first-boot/session automation not starting, rather
+than billing, image export, ISO build, GDM autologin, or GNOME session launch.
+
+The current source follow-up is source-gated only so far: the verification-only
+kickstart now writes direct `multi-user.target.wants/` and
+`graphical.target.wants/` symlinks for the first-boot diagnostics service, keeps
+the root system starter, adds a GNOME autostart fallback for
+`/usr/libexec/goblins-hwgate-session-orchestrator`, and makes the session
+orchestrator itself emit serial markers including
+`GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED` and
+`GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED`. No production image service, sshd,
+guest agent, or QMP command injection is added; this remains scoped to
+`os/iso/verify-config.toml`, which release media do not use. The verify-crate
+and shell shipping gates were updated in lockstep to require the direct wanted
+symlinks, autostart fallback, new serial markers, deferred orchestrator publish,
+and post-publish HTTP `200` download for `/orchestrator.sh`, while rejecting the
+old `key("alt+f2")` path. Local gates for this follow-up: TOML parse for the ISO
+configs, `bash -n` for the hardware-gate shell scripts, `git diff --check`,
+`cargo fmt -p goblins-os-verify --check`, `cargo test -p goblins-os-verify`,
+`cargo run -p goblins-os-verify -- --source-root .` →
+**blocked=0 (2647)**, `cargo clippy --workspace -- -D warnings`, and
+`cargo test --workspace`. No hardware-gate run has proved this autostart/direct
+wanted-symlink fallback yet.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,

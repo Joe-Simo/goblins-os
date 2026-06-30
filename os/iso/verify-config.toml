@@ -145,11 +145,23 @@ ExecStart=/usr/libexec/goblins-hwgate-firstboot-diagnostics
 WantedBy=multi-user.target graphical.target
 EOF
 systemctl enable goblins-hwgate-firstboot-diagnostics.service || true
+install -d /etc/systemd/system/multi-user.target.wants /etc/systemd/system/graphical.target.wants
+ln -sfn ../goblins-hwgate-firstboot-diagnostics.service \
+  /etc/systemd/system/multi-user.target.wants/goblins-hwgate-firstboot-diagnostics.service
+ln -sfn ../goblins-hwgate-firstboot-diagnostics.service \
+  /etc/systemd/system/graphical.target.wants/goblins-hwgate-firstboot-diagnostics.service
 
 cat > /usr/libexec/goblins-hwgate-session-orchestrator <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 exec >>/tmp/goblins-hwgate-session-orchestrator.log 2>&1
+
+serial() {
+  echo "$*"
+  echo "$*" > /dev/ttyS0 || true
+}
+
+serial "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED"
 
 HOST_READY_URL="${GOBLINS_HWGATE_HOST_URL:-http://10.0.2.2:8099}"
 LIVE_URL="${GOBLINS_OS_CORE_URL:-http://127.0.0.1:8787}"
@@ -171,17 +183,31 @@ download_with_wait() {
 }
 
 download_with_wait firstboot-unlock.sh /tmp/gos-firstboot 240
+serial "GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED"
 GOBLINS_HWGATE_HOST_URL="$HOST_READY_URL" GOBLINS_OS_CORE_URL="$LIVE_URL" \
   bash /tmp/gos-firstboot
+serial "GOBLINS_HWGATE_FIRSTBOOT_HELPER_RAN"
 
 # drive-capture.py publishes orchestrator.sh only after it has recorded the
 # post-unlock HTTP log offset, so screenshot/proof signals cannot race ahead of
 # the host tailer.
 download_with_wait orchestrator.sh /tmp/gos-orchestrator 600
+serial "GOBLINS_HWGATE_ORCHESTRATOR_DOWNLOADED"
 GOBLINS_HWGATE_HOST_URL="$HOST_READY_URL" GOBLINS_OS_CORE_URL="$LIVE_URL" \
   bash /tmp/gos-orchestrator
 EOF
 chmod 0755 /usr/libexec/goblins-hwgate-session-orchestrator
+
+install -d /etc/xdg/autostart
+cat > /etc/xdg/autostart/goblins-hwgate-session-orchestrator.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Goblins OS hardware-gate session orchestrator
+NoDisplay=true
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true
+Exec=/usr/libexec/goblins-hwgate-session-orchestrator
+EOF
 
 install -d /etc/systemd/user/gnome-session@goblins-os.target.d
 cat > /etc/systemd/user/goblins-hwgate-session-orchestrator.service <<'EOF'
@@ -261,6 +287,8 @@ ExecStart=/usr/libexec/goblins-hwgate-start-session-orchestrator
 WantedBy=graphical.target
 EOF
 systemctl enable goblins-hwgate-session-orchestrator-starter.service || true
+ln -sfn ../goblins-hwgate-session-orchestrator-starter.service \
+  /etc/systemd/system/graphical.target.wants/goblins-hwgate-session-orchestrator-starter.service
 
 cat > /etc/systemd/user/gnome-session@goblins-os.target.d/99-goblins-hwgate-session-orchestrator.conf <<'EOF'
 [Unit]

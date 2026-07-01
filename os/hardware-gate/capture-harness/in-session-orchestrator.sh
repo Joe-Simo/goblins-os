@@ -15,6 +15,7 @@ H=10.0.2.2:8099
 B=/usr/libexec/goblins-os
 LIVE_URL=http://127.0.0.1:8787
 TEXT_SHORTCUTS_INPUT_DRIVER=qmp-keyboard
+TEXT_SHORTCUTS_IBUS_SERVICE=org.freedesktop.IBus.session.GNOME.service
 export GDK_BACKEND=wayland XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
 # Maximize every captured GTK surface so the host QMP screendump catches it filling
 # the work area (keeping window chrome + the menu bar/dock) instead of an ambiguous
@@ -82,7 +83,7 @@ wait_ibus_bus_owned(){
   return 1
 }
 ibus_service_diag_query_value(){
-  proof_query_value "$(systemctl --user show org.goblins.OS.IBus.service -p Type -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus 2>/dev/null | tr '\n' ' ')"
+  proof_query_value "$(systemctl --user show "$TEXT_SHORTCUTS_IBUS_SERVICE" -p Type -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus 2>/dev/null | tr '\n' ' ')"
 }
 ibus_daemon_process_query_value(){
   proof_query_value "$(pgrep -af 'ibus-daemon' 2>/dev/null | head -n 3 | tr '\n' ';')"
@@ -313,10 +314,10 @@ text_shortcuts_session_enable_proof(){
   systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS 2>/dev/null || true
   dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS 2>/dev/null || true
   ibus write-cache >/tmp/gate-text-shortcuts-session-write-cache.log 2>&1 || true
-  systemctl --user reset-failed org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-session-ibus-reset-failed.log 2>&1 || true
-  systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-session-ibus-restart.log 2>&1 || true
+  systemctl --user reset-failed "$TEXT_SHORTCUTS_IBUS_SERVICE" >/tmp/gate-text-shortcuts-session-ibus-reset-failed.log 2>&1 || true
+  systemctl --user restart "$TEXT_SHORTCUTS_IBUS_SERVICE" >/tmp/gate-text-shortcuts-session-ibus-restart.log 2>&1 || true
   for _ in $(seq 1 80); do
-    service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
+    service_state="$(systemctl --user is-active "$TEXT_SHORTCUTS_IBUS_SERVICE" 2>/dev/null || true)"
     if [ "$service_state" = "active" ] && wait_ibus_bus_owned 1; then
       break
     fi
@@ -324,7 +325,7 @@ text_shortcuts_session_enable_proof(){
   done
 
   if [ "$service_state" != "active" ]; then
-    proof_text_shortcuts "status=fail&stage=user-service&service=${service_state:-missing}&service_unit=org.goblins.OS.IBus.service&cache_refreshed=true&daemon_restarted=true&user_component_seeded=true&bus_owner=$(ibus_bus_owner_value)&service_diag=$(ibus_service_diag_query_value)&daemon_process=$(ibus_daemon_process_query_value)&session_env=$(ibus_session_env_query_value)"
+    proof_text_shortcuts "status=fail&stage=user-service&service=${service_state:-missing}&service_unit=$TEXT_SHORTCUTS_IBUS_SERVICE&cache_refreshed=true&daemon_restarted=true&user_component_seeded=true&bus_owner=$(ibus_bus_owner_value)&service_diag=$(ibus_service_diag_query_value)&daemon_process=$(ibus_daemon_process_query_value)&session_env=$(ibus_session_env_query_value)"
     return 1
   fi
 
@@ -382,7 +383,7 @@ text_shortcuts_session_enable_proof(){
     return 1
   fi
 
-  proof_text_shortcuts "status=pass&route=/v1/text-shortcuts&service=active&service_unit=org.goblins.OS.IBus.service&input_source_configured=true&preload_configured=true&engine_listed=true&adapter_self_test=pass&engine_set=pass&active_engine=goblins-textshortcuts&core_http=200&core_engine_available=false&core_runtime_loop_available=false&runtime_ready_claim=false"
+  proof_text_shortcuts "status=pass&route=/v1/text-shortcuts&service=active&service_unit=$TEXT_SHORTCUTS_IBUS_SERVICE&input_source_configured=true&preload_configured=true&engine_listed=true&adapter_self_test=pass&engine_set=pass&active_engine=goblins-textshortcuts&core_http=200&core_engine_available=false&core_runtime_loop_available=false&runtime_ready_claim=false"
   return 0
 }
 text_shortcuts_live_keystroke_proof(){
@@ -782,10 +783,10 @@ text_shortcuts_live_ibus_runtime_render_proof(){
   fi
   systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS 2>/dev/null || true
   dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS 2>/dev/null || true
-  systemctl --user reset-failed org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-live-ibus-reset-failed.log 2>&1 || true
-  systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-live-ibus-service.log 2>&1 || true
+  systemctl --user reset-failed "$TEXT_SHORTCUTS_IBUS_SERVICE" >/tmp/gate-text-shortcuts-live-ibus-reset-failed.log 2>&1 || true
+  systemctl --user restart "$TEXT_SHORTCUTS_IBUS_SERVICE" >/tmp/gate-text-shortcuts-live-ibus-service.log 2>&1 || true
   for _ in $(seq 1 80); do
-    service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
+    service_state="$(systemctl --user is-active "$TEXT_SHORTCUTS_IBUS_SERVICE" 2>/dev/null || true)"
     if [ "$service_state" = "active" ] && wait_ibus_bus_owned 1; then
       break
     fi

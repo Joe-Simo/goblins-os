@@ -6037,8 +6037,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-verifies-textshortcuts-user-service",
-            "org.goblins.OS.IBus.service",
+            "capture-harness-verifies-fedora-gnome-ibus-service",
+            "TEXT_SHORTCUTS_IBUS_SERVICE=org.freedesktop.IBus.session.GNOME.service",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6096,34 +6096,24 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "gate-text-shortcuts-session-ibus-restart.log",
         ),
         contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "ibus-service-uses-user-and-system-component-path",
-            "IBUS_COMPONENT_PATH=%h/.local/share/ibus/component:/usr/share/ibus/component",
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-records-fedora-gnome-ibus-service-unit",
+            "service_unit=$TEXT_SHORTCUTS_IBUS_SERVICE",
         ),
         contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "ibus-service-refreshes-user-cache-before-start",
-            "ExecStartPre=-/usr/bin/ibus write-cache",
+            root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
+            "session-wants-fedora-gnome-ibus-service",
+            "Wants=org.freedesktop.IBus.session.GNOME.service",
         ),
         contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "ibus-service-uses-fedora-gnome-dbus-service-model",
-            "Type=dbus",
+            root.join("os/systemd-user/org.goblins.OS.InputSourcesSeed.service"),
+            "input-source-seed-runs-before-fedora-gnome-ibus",
+            "Before=org.freedesktop.IBus.session.GNOME.service",
         ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "ibus-service-owns-freedesktop-ibus-bus-name",
-            "BusName=org.freedesktop.IBus",
-        ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "ibus-service-uses-wayland-safe-xim-guard",
-            "XDG_SESSION_TYPE",
-        ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "ibus-service-replaces-preexisting-session-daemon",
-            "--replace",
+        path_absent_check(
+            root,
+            "os/systemd-user/org.goblins.OS.IBus.service",
+            "custom-ibus-service-removed-to-use-fedora-gnome-service",
         ),
         absent_check(
             root.join("crates/goblins-os-shell/src/main.rs"),
@@ -12912,43 +12902,12 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.InputSourcesSeed.service"),
             "input-source-seed-runs-before-ibus",
-            "Before=org.goblins.OS.IBus.service",
+            "Before=org.freedesktop.IBus.session.GNOME.service",
         ),
-        file_check(root, "os/systemd-user/org.goblins.OS.IBus.service"),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-dbus-supervised",
-            "Type=dbus",
-        ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-owns-ibus-bus",
-            "BusName=org.freedesktop.IBus",
-        ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-wayland-safe-exec",
-            "--panel disable",
-        ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-replaces-session-daemon",
-            "--replace",
-        ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-guards-xim-to-x11",
-            "XDG_SESSION_TYPE",
-        ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-restarts-on-abnormal",
-            "Restart=on-abnormal",
-        ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-waits-for-input-source-seed",
-            "After=gnome-session-initialized.target org.gnome.Shell@user.service org.goblins.OS.InputSourcesSeed.service",
+        path_absent_check(
+            root,
+            "os/systemd-user/org.goblins.OS.IBus.service",
+            "textshortcuts-custom-ibus-user-service-absent",
         ),
         contains_check(
             root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
@@ -12957,8 +12916,8 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
-            "textshortcuts-ibus-user-service-wanted-by-session",
-            "Wants=org.goblins.OS.IBus.service",
+            "textshortcuts-fedora-gnome-ibus-service-wanted-by-session",
+            "Wants=org.freedesktop.IBus.session.GNOME.service",
         ),
         contains_check(
             root.join("os/session/goblins-os-session"),

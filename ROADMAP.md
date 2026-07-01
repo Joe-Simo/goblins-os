@@ -34,9 +34,9 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest pushed source commit `5f74fe4` on `main` passed the fast Rust build
-(`28513849128`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
-tests, and release build all succeeded. Hardware-gate run `28513853150` at the
+Latest pushed source commit `fffea01` on `main` passed the fast Rust build
+(`28517070368`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
+tests, and release build all succeeded. Hardware-gate run `28517091135` at the
 same head passed bootc image publish, verification installer ISO build, model
 serve, install/boot/session automation, and most display-backed VM proof
 routes, but still failed before the final Text Shortcuts live runtime render.
@@ -45,28 +45,32 @@ The artifact has real display captures through
 `30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-Run `28513853150` proves the firewall live toggle, app-keyed Per-app Privacy
+Run `28517091135` proves the firewall live toggle, app-keyed Per-app Privacy
 revoke, keyboard shortcut rebind, input source switching, Focus arm/disarm,
 Preview PDF/image open/render, Text Shortcuts candidate metadata, overlay
 intent, deterministic candidate bubble frame/layout, deterministic candidate
 bubble render proof routes, and active `goblins-textshortcuts` selection for the
-basic live-keystroke path still pass. The remaining blockers are concrete:
-`text-shortcuts-session-enable-proof.json` failed at `stage=user-service` with
-`bus_owner=true`, `daemon_process=/usr/bin/ibus-daemon --panel disable`, but
-`service=inactive` because the Goblins unit did not replace the pre-existing
-session IBus daemon. `text-shortcuts-live-keystroke-proof.json` then failed at
-`stage=normal-readback` with `normal_log_tail="Unknown option --text-shortcuts-proof"`,
-which came from handing the already-parsed qemu proof flag back into GTK
-`Application::run_with_args`.
+basic live-keystroke path still pass. The remaining blocker is concrete:
+`text-shortcuts-session-enable-proof.json` and
+`text-shortcuts-live-ibus-runtime-render-proof.json` failed at
+`stage=user-service` with `bus_owner=true`,
+`daemon_process=/usr/bin/ibus-daemon --panel disable`, but `service=inactive`
+for the custom Goblins IBus unit. The live-keystroke proof no longer hits the
+GTK `Unknown option --text-shortcuts-proof` parser failure; it now reaches
+`stage=normal-readback`, proving the flag-strip fix worked and narrowing the
+next failure back to session IBus ownership/readiness.
 
-Current follow-up source work keeps the real pass criteria intact: the qemu
-proof windows now strip `--text-shortcuts-proof` before GTK argument parsing,
-and `org.goblins.OS.IBus.service` keeps Fedora 44 GNOME D-Bus supervision while
-adding `--replace` so the user unit owns the session daemon instead of exiting
-behind an already-running IBus process. The verifier and hardware-gate source
-checks pin both fixes. This remains qemu-pending until the next display-backed
-VM run proves `text-shortcuts-session-enable`, `text-shortcuts-live-keystroke`,
-and `text-shortcuts-live-ibus-runtime-render` end-to-end.
+Current follow-up source work keeps the real pass criteria intact and stops
+competing with Fedora's GNOME IBus D-Bus service. The Goblins session now wants
+`org.freedesktop.IBus.session.GNOME.service`, the Text Shortcuts input-source
+seed runs before that Fedora service, the custom `org.goblins.OS.IBus.service`
+is removed, and the hardware proof restarts/records
+`org.freedesktop.IBus.session.GNOME.service` before requiring the seeded source,
+preload, active `goblins-textshortcuts` engine, adapter self-test, live
+keystroke commits, password refusal, rendered accept bubble, and deferred core
+readiness flip. This remains qemu-pending until the next display-backed VM run
+proves `text-shortcuts-session-enable`, `text-shortcuts-live-keystroke`, and
+`text-shortcuts-live-ibus-runtime-render` end-to-end.
 
 Previous hardware-gate run `28510121319` at `118402b` passed bootc image
 publish, verification installer ISO build, model serve, install/boot/session
@@ -1340,9 +1344,9 @@ keystroke selftest before Text Shortcuts can ship.
 Current Text Shortcuts session-enable continuation: the Goblins session now
 seeds `org.gnome.desktop.input-sources sources=[('ibus',
 'goblins-textshortcuts')]`, preloads the Goblins IBus engine through
-`org.freedesktop.ibus.general preload-engines`, starts
-`org.goblins.OS.IBus.service` from the user GNOME session target, and removes
-the old `GTK_IM_MODULE=gtk-im-context-simple` / `QT_IM_MODULE=simple` /
+`org.freedesktop.ibus.general preload-engines`, orders the seed before Fedora's
+`org.freedesktop.IBus.session.GNOME.service`, and removes the old
+`GTK_IM_MODULE=gtk-im-context-simple` / `QT_IM_MODULE=simple` /
 `XMODIFIERS=@im=none` overrides from both the session wrapper and installed
 environment.d file. It does not set `GTK_IM_MODULE=ibus` globally; GNOME Wayland
 is expected to broker IBus through Mutter/text-input-v3. Core still keeps
@@ -1360,7 +1364,7 @@ Text Shortcuts can ship.
 Current Text Shortcuts hardware-proof continuation: the display-backed VM
 capture harness now fail-closes on `text-shortcuts-session-enable-proof.json`.
 Inside the installed GNOME session it requires active
-`org.goblins.OS.IBus.service`, seeded `goblins-textshortcuts` input source,
+`org.freedesktop.IBus.session.GNOME.service`, seeded `goblins-textshortcuts` input source,
 preloaded Goblins engine, `ibus engine goblins-textshortcuts` as the active
 engine, adapter `--self-test`, and `/v1/text-shortcuts` honesty that
 `engine_available=false` / `runtime_loop_available=false` until a later

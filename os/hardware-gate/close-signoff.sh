@@ -337,7 +337,7 @@ text_shortcuts_session_enable_proof_passes() {
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
     && rg -q '"service"[[:space:]]*:[[:space:]]*"active"' "$proof" \
-    && rg -q '"service_unit"[[:space:]]*:[[:space:]]*"org.goblins.OS.IBus.service"' "$proof" \
+    && rg -q '"service_unit"[[:space:]]*:[[:space:]]*"org.freedesktop.IBus.session.GNOME.service"' "$proof" \
     && rg -q '"input_source_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"preload_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"engine_listed"[[:space:]]*:[[:space:]]*"true"' "$proof" \
@@ -856,7 +856,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! text_shortcuts_session_enable_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"; then
     fail "Text Shortcuts session-enable proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"
-    fail "Expected active org.goblins.OS.IBus.service, configured Goblins IBus source/preload, active goblins-textshortcuts engine, adapter self-test pass, and core runtime honesty still false."
+    fail "Expected active Fedora GNOME IBus service, configured Goblins IBus source/preload, active goblins-textshortcuts engine, adapter self-test pass, and core runtime honesty still false."
     exit 1
   fi
   if ! text_shortcuts_live_keystroke_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"; then

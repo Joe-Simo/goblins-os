@@ -4,7 +4,7 @@ CollectMode=inactive-or-failed
 
 PartOf=gnome-session-initialized.target
 After=gnome-session-initialized.target org.gnome.Shell@user.service
-Before=org.goblins.OS.IBus.service
+Before=org.freedesktop.IBus.session.GNOME.service
 
 [Service]
 Type=oneshot

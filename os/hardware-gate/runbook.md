@@ -166,11 +166,12 @@ enabling it with HTTP 200 and observed active status through the scoped systemd
 oneshot/polkit bridge.
 
 The same run must include `text-shortcuts-session-enable-proof.json`. That proof
-only covers the live session plumbing: active `org.goblins.OS.IBus.service`, the
-seeded `goblins-textshortcuts` input source and preload engine, active IBus
-engine selection, adapter self-test, and core honesty that runtime expansion is
-still gated off. It does not ship Text Shortcuts expansion; the keystroke commit
-proof remains a separate qemu gate.
+only covers the live session plumbing: active Fedora GNOME IBus service
+(`org.freedesktop.IBus.session.GNOME.service`), the seeded
+`goblins-textshortcuts` input source and preload engine, active IBus engine
+selection, adapter self-test, and core honesty that runtime expansion is still
+gated off. It does not ship Text Shortcuts expansion; the keystroke commit proof
+remains a separate qemu gate.
 
 The keystroke gate is `text-shortcuts-live-keystroke-proof.json`. It launches the
 Goblins shell's proof-only GTK field, drives it through host QMP keyboard input,

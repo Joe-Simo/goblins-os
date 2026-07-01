@@ -171,7 +171,7 @@ if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
 fi
 if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"service": "active"' "$TEXT_SHORTCUTS_PROOF" \
-  || ! grep -Fq '"service_unit": "org.goblins.OS.IBus.service"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"service_unit": "org.freedesktop.IBus.session.GNOME.service"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"input_source_configured": "true"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"preload_configured": "true"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"engine_listed": "true"' "$TEXT_SHORTCUTS_PROOF" \

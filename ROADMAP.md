@@ -34,45 +34,50 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest hardware-gate run `28493666844` at `52f0403` on `main` passed the fast
-Rust build on both `ubuntu-24.04` and `ubuntu-24.04-arm`, then failed inside the
+Latest hardware-gate run `28496717503` at `729ea69` on `main` passed the fast
+Rust build on both `ubuntu-24.04` and `ubuntu-24.04-arm`, passed the bootc image
+publish and verification installer ISO build, then failed inside the
 display-backed VM capture after the installed session reached `/ready/ORCH_START`
 and `/ready/ORCH_ALLDONE`. The artifact has real display captures through
 `31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png` and
 `30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-That run proves the previous IBus component/cache follow-up worked:
-`text-shortcuts-session-enable-proof.json` is now `pass` with
+That run proves the App Privacy follow-up worked:
+`app-privacy-revoke-proof.json` is `pass` with
+`PermissionStore.SetPermission` seed/readback, `/v1/app-privacy/revoke` HTTP
+`200`, `PermissionStore.DeletePermission`, `post_revoke_absent=true`, and prior
+state restored. It also keeps the earlier qemu-gated writes/renders green:
+keyboard shortcut rebind, input source switching, Focus arm/disarm, Preview
+PDF/image open/render, Text Shortcuts candidate metadata, overlay intent,
+deterministic candidate bubble frame/layout, and deterministic candidate bubble
+render all pass their live proof JSON. The remaining live failures are narrower:
+firewall disable succeeds but re-enable still returns HTTP `502` with
+`Firewall control returned before firewalld reported the requested state`, and
+Text Shortcuts session/live runtime now fails at IBus bus readiness:
+`text-shortcuts-session-enable-proof.json` reports service `active`, component
+seeded, cache refreshed, but `ibus list-engine` returns
+`Can't connect to IBus`. Firewall and Text Shortcuts live runtime stay
+`in-progress`; app-keyed Per-app Privacy revoke is qemu-proven.
+
+Current follow-up source work makes the IBus user unit `Type=dbus` with
+`BusName=org.freedesktop.IBus` so `systemctl --user is-active` means the IBus bus
+name is actually owned, adds explicit `ibus list-engine` readiness waits before
+listing or setting `goblins-textshortcuts`, and lets firewall status treat an
+active `firewalld.service` as an honest live-on fallback when unprivileged
+`firewall-cmd --state` does not report running after the root helper succeeds.
+This remains qemu-pending until the next display-backed VM run proves firewall
+re-enable with `enable_active=true` and live GTK Text Shortcuts expansion/render
+end-to-end.
+
+Previous hardware-gate run `28493666844` at `52f0403` on `main` passed the fast
+Rust build on both `ubuntu-24.04` and `ubuntu-24.04-arm`, then failed inside the
+display-backed VM capture after the installed session reached `/ready/ORCH_START`
+and `/ready/ORCH_ALLDONE`. That run proved the IBus component/cache follow-up
+once (`text-shortcuts-session-enable-proof.json` was `pass` with
 `engine_listed=true`, `engine_set=pass`, and
-`active_engine=goblins-textshortcuts`. It also keeps the earlier qemu-gated
-writes/renders green: keyboard shortcut rebind, input source switching, Focus
-arm/disarm, Preview PDF/image open/render, Text Shortcuts candidate metadata,
-overlay intent, deterministic candidate bubble frame/layout, and deterministic
-candidate bubble render all pass their live proof JSON. The remaining live
-failures are narrower: firewall disable succeeds but re-enable returns HTTP
-`502` after active state remains false; App Privacy PermissionStore seed/readback
-now succeeds but the core revoke route returns HTTP `502`; Text Shortcuts live
-keystroke/runtime still fails because QMP keyboard input is not landing in the
-proof GTK fields even though `goblins-textshortcuts` is active. Firewall,
-per-app revoke, and Text Shortcuts live runtime stay `in-progress`.
-
-Current follow-up source work routes App Privacy revoke through the allowlisted
-user-session bridge instead of direct system-service `gdbus --session`, keeps the
-upstream `PermissionStore.DeletePermission(table, id, app)` contract
-web-verified, adds QMP pointer click/focus before each Text Shortcuts live proof
-typing step, and records firewall toggle response text in failing proof JSON.
-This does not mark per-app revoke, firewall, or Text Shortcuts runtime shipped;
-the next display-backed VM run must still prove live revoke/readback, re-enable
-with `enable_active=true`, and live GTK field expansion/render end-to-end.
-
-Current firewall follow-up source work hardens the privileged helper after the
-live proof showed disable succeeded but re-enable returned HTTP `502`: reset
-stale failed state, unmask if needed, reload systemd, enable before start,
-retry start through restart, wait up to 90 seconds for `firewall-cmd --state`,
-and let the core route re-check live state before returning a helper failure.
-This remains qemu-pending until the live toggle proof passes with
-`enable_active=true`.
+`active_engine=goblins-textshortcuts`) but App Privacy revoke and firewall
+re-enable still failed.
 
 Previous hardware-gate run `28486096503` at `00b0950` on `main` passed the bootc
 image build and verification ISO build, then failed inside the display-backed VM
@@ -230,9 +235,10 @@ not mark Batch 5 shipped.
 - **Batch 3 (Settings surfaces) — all 9 have a shipped read/status/UI surface:**
   Accessibility rows, Firewall, Keyboard shortcuts, Focus (substrate+gschema),
   Migration (substrate), Multi-display (read side via `displays.rs`), Personal
-  Hotspot, Per-app privacy, Keychain. **Gated WRITES remain qemu-pending** for
-  firewall toggle, IME set, focus arm, per-app revoke, multi-display apply, and
-  keyboard rebind.
+  Hotspot, Per-app privacy, Keychain. **Gated WRITES still qemu-pending** for
+  firewall toggle and multi-display apply. IME/input-source switching, Focus
+  arm/disarm, keyboard rebind, and app-keyed Per-app Privacy revoke now have
+  live display-backed VM proof.
 - **Batch 4 (engines) — 7 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**
   Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today,
   Sound Recognition, Live Captions.
@@ -708,7 +714,7 @@ sudo/session unlock; CI/qemu plus real hardware must still prove fprintd D-Bus
 enrollment/verification and password fallback before Fingerprint can ship.
 
 Current Per-app Privacy continuation: app-keyed portal permission revokes are now
-source-gated but not shipped. Core exposes `/v1/app-privacy/revoke`, validates
+source-gated and live-qemu proven. Core exposes `/v1/app-privacy/revoke`, validates
 the known PermissionStore tables plus safe desktop app/resource IDs, and calls
 `org.freedesktop.impl.portal.PermissionStore.DeletePermission(table, id, app)`
 only for app-keyed grants; resource-keyed device grants remain read-only until
@@ -718,17 +724,20 @@ outcome. Local source gates: `cargo fmt --all`, `cargo clippy --workspace -- -D 
 `cargo test --workspace`, the Rust 1.88 GTK container
 `cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`,
 scoped `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`,
-and `goblins-os-verify --source-root .` → **blocked=0 (1575)**. CI/qemu render
-and a live portal revoke/reload proof remain pending.
+and `goblins-os-verify --source-root .` → **blocked=0 (1575)**. Run
+`28496717503` proves the live app-keyed portal revoke/reload path with
+`app-privacy-revoke-proof.json` `status=pass`; resource-keyed device revokes
+remain read-only and deferred.
 Current Per-app Privacy hardware-proof continuation: the display-backed
 hardware-gate harness now requires `app-privacy-revoke-proof.json`: inside the
 installed session it snapshots the deterministic
 `org.goblins.GatePrivacyProof` portal PermissionStore location grant, seeds that
 grant with `PermissionStore.SetPermission`, posts `/v1/app-privacy/revoke`,
 verifies `PermissionStore.GetPermission` no longer reports the grant, restores
-the prior state, writes the proof beside the screenshot run, and links it from
-`proof-manifest.json`. This is source-gated proof plumbing only; no live qemu run
-has produced the proof artifact yet, and resource-keyed device revokes remain
+the prior state, and writes the proof beside the screenshot run. A fully passing
+close-signoff run will link it from `proof-manifest.json`. Run `28496717503`
+produced the proof artifact and passed
+the app-keyed revoke/readback path; resource-keyed device revokes remain
 deferred.
 
 Current Multi-display continuation: the guarded apply substrate is now

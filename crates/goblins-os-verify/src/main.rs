@@ -6037,6 +6037,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-waits-for-textshortcuts-ibus-cli",
+            "wait_ibus_cli_ready",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-reports-textshortcuts-user-component-seed",
             "user_component_seeded=true",
         ),
@@ -10979,6 +10984,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "firewall-cmd --state",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/firewall.rs"),
+            "core-firewall-status-falls-back-to-systemd-active",
+            "is-active\", \"--quiet\", \"firewalld.service",
+        ),
+        contains_check(
             root.join("os/bootc/goblins-os-firewall"),
             "bootc-firewall-helper-waits-up-to-ninety-seconds",
             "while [ \"$i\" -lt 90 ]",
@@ -12840,6 +12850,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "Before=org.goblins.OS.IBus.service",
         ),
         file_check(root, "os/systemd-user/org.goblins.OS.IBus.service"),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "textshortcuts-ibus-user-service-waits-for-bus-name",
+            "Type=dbus",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "textshortcuts-ibus-user-service-bus-name",
+            "BusName=org.freedesktop.IBus",
+        ),
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),
             "textshortcuts-ibus-user-service-exec",

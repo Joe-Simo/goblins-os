@@ -160,6 +160,20 @@ wait_session_bus_name(){
 active_ibus_engine(){
   ibus engine 2>/dev/null | tr -d '\n' || true
 }
+wait_ibus_cli_ready(){
+  local out_file="$1"
+  local err_file="$2"
+  local attempts="${3:-80}"
+  : > "$out_file"
+  : > "$err_file"
+  for _ in $(seq 1 "$attempts"); do
+    if ibus list-engine >"$out_file" 2>"$err_file"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
 ensure_textshortcuts_ibus_component(){
   local user_component_dir="${XDG_DATA_HOME:-$HOME/.local/share}/ibus/component"
   mkdir -p "$user_component_dir"
@@ -168,10 +182,15 @@ ensure_textshortcuts_ibus_component(){
   fi
 }
 activate_goblins_textshortcuts_engine(){
-  local active_engine
-  for _ in $(seq 1 20); do
+  local active_engine list_out=/tmp/gate-text-shortcuts-activate-list-engine.out list_err=/tmp/gate-text-shortcuts-activate-list-engine.err
+  for _ in $(seq 1 40); do
     ensure_textshortcuts_ibus_component
     ibus write-cache >/dev/null 2>&1 || true
+    wait_ibus_cli_ready "$list_out" "$list_err" 4 || true
+    if ! grep -Fq 'goblins-textshortcuts' "$list_out" 2>/dev/null; then
+      sleep 0.5
+      continue
+    fi
     ibus engine goblins-textshortcuts >/dev/null 2>&1 || true
     active_engine="$(active_ibus_engine)"
     [ "$active_engine" = "goblins-textshortcuts" ] && return 0
@@ -274,10 +293,11 @@ text_shortcuts_session_enable_proof(){
     sleep 0.5
   done
   engine_listed=false
-  for _ in $(seq 1 20); do
+  for _ in $(seq 1 40); do
     ensure_textshortcuts_ibus_component
     ibus write-cache >/tmp/gate-text-shortcuts-session-write-cache.log 2>&1 || true
-    if ibus list-engine 2>/tmp/gate-text-shortcuts-session-list-engine.err | grep -Fq 'goblins-textshortcuts'; then
+    if wait_ibus_cli_ready /tmp/gate-text-shortcuts-session-list-engine.out /tmp/gate-text-shortcuts-session-list-engine.err 4 \
+      && grep -Fq 'goblins-textshortcuts' /tmp/gate-text-shortcuts-session-list-engine.out; then
       engine_listed=true
       break
     fi
@@ -726,7 +746,8 @@ text_shortcuts_live_ibus_runtime_render_proof(){
     return 1
   fi
 
-  ibus write-cache >/dev/null 2>&1 || true
+  ibus write-cache >/tmp/gate-text-shortcuts-live-ibus-write-cache.log 2>&1 || true
+  wait_ibus_cli_ready /tmp/gate-text-shortcuts-live-ibus-list-engine.out /tmp/gate-text-shortcuts-live-ibus-list-engine.err 80 || true
   if ! activate_goblins_textshortcuts_engine; then
     active_engine="$(active_ibus_engine)"
     proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=engine-set&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=${active_engine:-missing}&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"

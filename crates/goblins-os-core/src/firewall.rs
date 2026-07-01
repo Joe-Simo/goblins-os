@@ -76,13 +76,14 @@ fn build_firewall_status() -> FirewallStatus {
         .arg("--state")
         .stdin(Stdio::null())
         .output();
-    let active = match output {
+    let firewall_cmd_active = match output {
         Ok(output) => firewall_is_running(
             output.status.success(),
             &String::from_utf8_lossy(&output.stdout),
         ),
         Err(_) => false,
     };
+    let active = firewall_cmd_active || firewalld_unit_active();
     let manageable = firewall_bridge_ready();
     FirewallStatus {
         source: "goblins-os-core",
@@ -114,6 +115,16 @@ fn firewall_bridge_ready() -> bool {
 /// unit-tested so the status can never silently report the wrong posture.
 fn firewall_is_running(command_succeeded: bool, stdout: &str) -> bool {
     command_succeeded && stdout.trim() == "running"
+}
+
+fn firewalld_unit_active() -> bool {
+    Command::new(systemctl_command())
+        .args(["is-active", "--quiet", "firewalld.service"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn firewall_detail(active: bool, zone: Option<&str>) -> String {

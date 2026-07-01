@@ -50,9 +50,9 @@ proof JSON. The remaining live failures are now narrow and concrete: firewall
 disable succeeds but re-enable returns HTTP `502` after active state remains
 false; PermissionStore `SetPermission` seeding fails before the per-app revoke
 route can be exercised; Text Shortcuts live keystroke and live runtime render
-fail after the engine is active because `wtype` input does not reach the
-focused field callback/text-input-v3 commit path. Firewall, per-app revoke, and
-Text Shortcuts live runtime stay `in-progress`.
+fail after the engine is active because the old `wtype` input path does not
+reach the focused field callback/text-input-v3 commit path. Firewall, per-app
+revoke, and Text Shortcuts live runtime stay `in-progress`.
 
 Current follow-up source work adds a PermissionStore seed fallback in the
 hardware harness: retry `SetPermission` with the plain `as` argument after the
@@ -1340,8 +1340,8 @@ capture harness now has a proof-only GTK text field surface in
 `goblins-os-shell --text-shortcuts-proof normal|password` and fail-closes on
 `text-shortcuts-live-keystroke-proof.json`. In qemu it seeds a single
 `omw` -> `onmyway` shortcut, selects the `goblins-textshortcuts` IBus engine,
-drives the focused field with `wtype -- "omw."`, requires normal text to read
-back as `onmyway.`, and requires the password-purpose field to read back as the
+drives the focused field with host QMP keyboard input `omw.`, requires normal
+text to read back as `onmyway.`, and requires the password-purpose field to read back as the
 unchanged `omw.` with `password_refusal=true`. `run-capture.sh`,
 `drive-capture.py`, `close-signoff.sh`, `verify-shipping-status.sh`, and
 `goblins-os-verify` now reject screenshot/signoff runs without that live
@@ -1451,7 +1451,7 @@ still CI/qemu-pending and does **not** mark Text Shortcuts shipped.
 Current Text Shortcuts Escape-dismiss live-proof continuation: the display-backed
 VM keystroke proof now has a third proof-only GTK field,
 `goblins-os-shell --text-shortcuts-proof dismiss`, and the in-session harness
-drives `omw` followed by `wtype -P Escape -p Escape`. The proof JSON must show
+drives `omw` followed by host QMP keyboard `Escape`. The proof JSON must show
 `dismiss_key=Escape`, `dismiss_expected=omw`, `dismiss_actual=omw`, and
 `dismiss_no_commit=true` in addition to the existing normal expansion and
 password refusal checks. `run-capture.sh`, `close-signoff.sh`,
@@ -1468,7 +1468,7 @@ Text Shortcuts shipped.
 Current Text Shortcuts pass-through live-proof continuation: the display-backed
 VM keystroke proof now has a fourth proof-only GTK field,
 `goblins-os-shell --text-shortcuts-proof passthrough`, and the in-session harness
-drives an unknown word with `wtype -- "hello."`. The proof JSON must show
+drives an unknown word with host QMP keyboard input `hello.`. The proof JSON must show
 `passthrough_input=hello.`, `passthrough_expected=hello.`,
 `passthrough_actual=hello.`, and `passthrough_unchanged=true` in addition to the
 normal replacement, Escape dismiss, and password refusal fields. `run-capture.sh`,
@@ -1763,8 +1763,8 @@ the display-backed VM harness now attempts the real in-session proof instead of
 the old not-implemented fail proof. It seeds a deterministic `omw` -> `onmyway`
 table, propagates `GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS` into the user IBus
 service, selects the active `goblins-textshortcuts` engine, launches
-`goblins-os-shell --text-shortcuts-proof live-runtime-render`, drives `wtype`,
-captures `32-text-shortcuts-live-ibus-runtime-render.png`, and requires the
+`goblins-os-shell --text-shortcuts-proof live-runtime-render`, drives host QMP
+keyboard input, captures `32-text-shortcuts-live-ibus-runtime-render.png`, and requires the
 redacted live adapter ledger to show focus/key callbacks, a `commit-text`
 operation, render-intent show evidence, Inter, and
 `gos-text-shortcuts-candidate`. The same proof then checks normal expansion to
@@ -2320,7 +2320,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - [x] **Autocorrect capability gate source-gated (CI/qemu-pending):** `/v1/text-shortcuts` now reports a disabled autocorrect capability that becomes resource-available only when a local model path or Hunspell dictionary is present, and Settings shows a read-only Autocorrect row. This still does not add packages, enable a toggle, ship a model, or perform live autocorrect.
 - [x] **IBus session seed source-gated (CI/qemu-pending):** the Goblins session starts a user `ibus-daemon`, seeds the `goblins-textshortcuts` IBus source and preload engine in dconf, and removes the old forced simple GTK/QT/XIM overrides without setting `GTK_IM_MODULE=ibus` globally. Core still keeps runtime readiness false until qemu proves the session service, active input source, adapter callbacks, and safe replacement commits.
 - [x] **IBus session-enable hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now requires `text-shortcuts-session-enable-proof.json` before signoff, proving the installed session service/source/preload/active-engine path and adapter self-test while explicitly keeping core `engine_available=false` and `runtime_loop_available=false`. This does not prove live keystroke replacement, adapter callbacks from a focused text field, password-field refusal in-session, or the accept bubble.
-- [x] **IBus live-keystroke hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now launches `goblins-os-shell --text-shortcuts-proof normal|passthrough|dismiss|password`, drives focused GTK entries with `wtype`, and requires normal replacement (`onmyway.`), unknown-word pass-through (`hello.` unchanged), Escape dismiss without replacement commit, and password-purpose refusal (`omw.` unchanged, `password_refusal=true`) before signoff. Core still keeps `runtime_ready_claim=false` until the qemu artifact is reviewed and the runtime gate is flipped deliberately.
+- [x] **IBus live-keystroke hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now launches `goblins-os-shell --text-shortcuts-proof normal|passthrough|dismiss|password`, drives focused GTK entries with host QMP keyboard input, and requires normal replacement (`onmyway.`), unknown-word pass-through (`hello.` unchanged), Escape dismiss without replacement commit, and password-purpose refusal (`omw.` unchanged, `password_refusal=true`) before signoff. Core still keeps `runtime_ready_claim=false` until the qemu artifact is reviewed and the runtime gate is flipped deliberately.
 - [x] **IBus overlay-intent hardware proof hook source-gated (CI/qemu-pending):** the display-backed VM harness now requires `text-shortcuts-overlay-intent-proof.json`, generated from the installed adapter's `--overlay-intent-self-test`, and rejects signoff unless it records two candidate show intents, two hide intents, dismissed and committed hide reasons, and false rendered/live/runtime readiness claims. This is still not live rendered overlay proof and does not mark Text Shortcuts shipped.
 - [x] **IBus accept-bubble frame contract source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --candidate-bubble-frame-self-test` now converts the adapter's overlay intents into deterministic `goblins-textshortcuts-accept-bubble-frame` show/hide frames for the existing `gos-text-shortcuts-candidate` renderer surface, proves dismissed and committed hide frames plus sensitive-field refusal, and keeps `rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and `runtime_ready_claim=false`. The Containerfile and verifier require the proof. This still does not prove a live rendered accept bubble.
 - [x] **IBus accept-bubble layout contract source-gated (CI/qemu-pending):** `goblins-textshortcuts-ibus --candidate-bubble-layout-self-test` derives deterministic layout records from the accept-bubble frames, proves below-cursor placement, right-edge clamp, bottom-edge flip, hide-frame collapse, Inter, and the `gos-text-shortcuts-candidate` style contract while keeping `rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and `runtime_ready_claim=false`. The Containerfile, `goblins-os-verify`, and shipping-status gate require the proof. This still does not prove a live rendered accept bubble.

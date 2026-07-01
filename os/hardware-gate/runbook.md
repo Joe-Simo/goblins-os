@@ -173,7 +173,7 @@ still gated off. It does not ship Text Shortcuts expansion; the keystroke commit
 proof remains a separate qemu gate.
 
 The keystroke gate is `text-shortcuts-live-keystroke-proof.json`. It launches the
-Goblins shell's proof-only GTK field, drives it through the Wayland `wtype` path,
+Goblins shell's proof-only GTK field, drives it through host QMP keyboard input,
 and rejects the run unless a normal entry expands `omw.` to `onmyway.`, an
 unknown word stays pass-through as `hello.`, an Escape dismiss without a
 replacement commit leaves a normal entry at `omw`, and a password-purpose entry
@@ -256,10 +256,10 @@ The final live IBus runtime/render gate is
 `text-shortcuts-live-ibus-runtime-render-proof.json` plus
 `32-text-shortcuts-live-ibus-runtime-render.png`. It must run in the installed
 GNOME/Wayland session with the active `goblins-textshortcuts` IBus engine and
-`wtype`, then reject the run unless the proof records a focused-field callback,
-a Wayland `text-input-v3` commit, normal expansion to `onmyway.`, pass-through
-of `hello.`, password-purpose refusal, the rendered Goblins accept bubble,
-`gos-text-shortcuts-candidate`, Inter, and
+host QMP keyboard input, then reject the run unless the proof records a
+focused-field callback, a Wayland `text-input-v3` commit, normal expansion to
+`onmyway.`, pass-through of `hello.`, password-purpose refusal, the rendered
+Goblins accept bubble, `gos-text-shortcuts-candidate`, Inter, and
 `core_readiness_flip=deferred`. This is the only gate allowed to set
 `rendered_bubble_ready_claim=true`, `live_overlay_claim=true`, and
 `runtime_ready_claim=true`; the core readiness flip still stays deferred until

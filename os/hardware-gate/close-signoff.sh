@@ -356,7 +356,7 @@ text_shortcuts_live_keystroke_proof_passes() {
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
     && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-os-shell-text-shortcuts-proof"' "$proof" \
-    && rg -q '"input_driver"[[:space:]]*:[[:space:]]*"wtype"' "$proof" \
+    && rg -q '"input_driver"[[:space:]]*:[[:space:]]*"qmp-keyboard"' "$proof" \
     && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
     && rg -q '"normal_trigger"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
     && rg -q '"normal_expected"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
@@ -512,7 +512,7 @@ text_shortcuts_live_ibus_runtime_render_proof_passes() {
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
     && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-live-ibus-runtime-render"' "$proof" \
-    && rg -q '"input_driver"[[:space:]]*:[[:space:]]*"wtype"' "$proof" \
+    && rg -q '"input_driver"[[:space:]]*:[[:space:]]*"qmp-keyboard"' "$proof" \
     && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
     && rg -q '"normal_actual"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
     && rg -q '"passthrough_actual"[[:space:]]*:[[:space:]]*"hello\."' "$proof" \
@@ -861,7 +861,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! text_shortcuts_live_keystroke_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"; then
     fail "Text Shortcuts live keystroke proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"
-    fail "Expected wtype-driven normal Entry expansion omw. -> onmyway., unknown-word pass-through hello. -> hello., Escape dismiss without replacement commit, and password Entry refusal omw. -> omw. with the Goblins IBus engine active."
+    fail "Expected QMP-keyboard-driven normal Entry expansion omw. -> onmyway., unknown-word pass-through hello. -> hello., Escape dismiss without replacement commit, and password Entry refusal omw. -> omw. with the Goblins IBus engine active."
     exit 1
   fi
   if ! text_shortcuts_candidate_metadata_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"; then
@@ -896,7 +896,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! text_shortcuts_live_ibus_runtime_render_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"; then
     fail "Text Shortcuts live IBus runtime/render proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"
-    fail "Expected 32-text-shortcuts-live-ibus-runtime-render.png plus wtype-driven active goblins-textshortcuts IBus engine proof with focused-field callback, text-input-v3 commit, password refusal, rendered accept bubble, and core_readiness_flip=deferred."
+    fail "Expected 32-text-shortcuts-live-ibus-runtime-render.png plus QMP-keyboard-driven active goblins-textshortcuts IBus engine proof with focused-field callback, text-input-v3 commit, password refusal, rendered accept bubble, and core_readiness_flip=deferred."
     exit 1
   fi
   if ! keyboard_shortcuts_roundtrip_proof_passes "$SCREENSHOT_DIR/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"; then
@@ -945,7 +945,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
   FIREWALL_TOGGLE_STATUS="yes ($FIREWALL_LIVE_TOGGLE_PROOF: disable=200/inactive, enable=200/active)"
   TEXT_SHORTCUTS_SESSION_STATUS="yes ($TEXT_SHORTCUTS_SESSION_ENABLE_PROOF: service/source/engine active; runtime expansion still gated false)"
-  TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes ($TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF: normal expansion, pass-through, Escape dismiss, and password refusal via wtype)"
+  TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes ($TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF: normal expansion, pass-through, Escape dismiss, and password refusal via QMP keyboard)"
   TEXT_SHORTCUTS_CANDIDATE_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF: candidate metadata present; rendered bubble still gated false)"
   TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="yes ($TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF: adapter show/hide overlay intents present; live overlay still gated false)"
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF: adapter accept-bubble frames present; rendered bubble still gated false)"

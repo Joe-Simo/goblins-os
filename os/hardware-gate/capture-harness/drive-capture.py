@@ -92,6 +92,38 @@ def try_cmd(ex, **a):
         print(f"diagnostic QMP command {ex!r} failed: {err}", flush=True)
         return None
 def key(k): cmd("send-key", keys=[{"type": "qcode", "data": x} for x in k.split("+")])
+def qcode_for_char(ch):
+    if "a" <= ch <= "z" or "0" <= ch <= "9":
+        return ch
+    qcodes = {
+        " ": "spc",
+        ".": "dot",
+        ",": "comma",
+        "-": "minus",
+        "_": "shift+minus",
+        "/": "slash",
+        ":": "shift+semicolon",
+        ";": "semicolon",
+        "'": "apostrophe",
+    }
+    if ch in qcodes:
+        return qcodes[ch]
+    raise SystemExit(f"unsupported QMP text input character: {ch!r}")
+def qmp_type_text(text):
+    for ch in text:
+        key(qcode_for_char(ch))
+        time.sleep(0.04)
+def qmp_press_key(name):
+    qcodes = {
+        "Escape": "esc",
+        "Return": "ret",
+        "Space": "spc",
+        "Tab": "tab",
+        "Backspace": "backspace",
+    }
+    if name not in qcodes:
+        raise SystemExit(f"unsupported QMP key input: {name!r}")
+    key(qcodes[name])
 def abs_axis(value):
     return int(max(0.0, min(1.0, value)) * ABS_MAX)
 def click(xf, yf):
@@ -293,6 +325,22 @@ def write_proof(path, proofs):
         json.dump(values, fh, indent=2, sort_keys=True)
         fh.write("\n")
 
+def handle_input(path):
+    parsed = urlparse(path)
+    values = {k: v[-1] for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
+    name = parsed.path.rsplit("/", 1)[-1]
+    if parsed.path.startswith("/input/text/"):
+        text = values.get("text", "")
+        print(f"input text {name}: {text!r}", flush=True)
+        qmp_type_text(text)
+        return
+    if parsed.path.startswith("/input/key/"):
+        key_name = values.get("key", "")
+        print(f"input key {name}: {key_name!r}", flush=True)
+        qmp_press_key(key_name)
+        return
+    raise SystemExit(f"unsupported input path: {path}")
+
 def require_proofs(proofs):
     bad = [
         f"{name}={proofs.get(name, {}).get('status', 'missing')}"
@@ -343,6 +391,9 @@ while time.time() - t < 600:
     for line in chunk.splitlines():
         path = http_get_path(line)
         if not path:
+            continue
+        if path.startswith("/input/"):
+            handle_input(path)
             continue
         if path.startswith("/proof/"):
             write_proof(path, proofs)

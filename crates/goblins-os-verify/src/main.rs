@@ -6007,8 +6007,23 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-drives-textshortcuts-with-wtype",
-            "wtype -- \"omw.\"",
+            "capture-harness-drives-textshortcuts-with-qmp-keyboard",
+            "host_type_text normal-omw \"omw.\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-declares-qmp-keyboard-driver",
+            "TEXT_SHORTCUTS_INPUT_DRIVER=qmp-keyboard",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-types-qmp-keyboard-text",
+            "/input/text/",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-presses-qmp-keyboard-key",
+            "/input/key/",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6023,7 +6038,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-drives-textshortcuts-passthrough",
-            "wtype -- \"hello.\"",
+            "host_type_text passthrough-hello \"hello.\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6033,7 +6048,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-drives-textshortcuts-escape-dismiss",
-            "wtype -P Escape -p Escape",
+            "host_press_key dismiss-escape Escape",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),

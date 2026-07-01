@@ -186,7 +186,7 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
 fi
 if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"surface": "goblins-os-shell-text-shortcuts-proof"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"input_driver": "wtype"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
+  || ! grep -Fq '"input_driver": "qmp-keyboard"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"active_engine": "goblins-textshortcuts"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"normal_trigger": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
   || ! grep -Fq '"normal_expected": "onmyway."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
@@ -311,7 +311,7 @@ fi
 if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"route": "/v1/text-shortcuts"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"surface": "goblins-textshortcuts-live-ibus-runtime-render"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
-  || ! grep -Fq '"input_driver": "wtype"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"input_driver": "qmp-keyboard"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"active_engine": "goblins-textshortcuts"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"normal_actual": "onmyway."' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"passthrough_actual": "hello."' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \

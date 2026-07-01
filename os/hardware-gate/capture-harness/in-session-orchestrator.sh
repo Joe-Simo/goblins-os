@@ -148,9 +148,17 @@ wait_session_bus_name(){
 active_ibus_engine(){
   ibus engine 2>/dev/null | tr -d '\n' || true
 }
+ensure_textshortcuts_ibus_component(){
+  local user_component_dir="${XDG_DATA_HOME:-$HOME/.local/share}/ibus/component"
+  mkdir -p "$user_component_dir"
+  if [ -f /usr/share/ibus/component/goblins-textshortcuts.xml ]; then
+    cp -f /usr/share/ibus/component/goblins-textshortcuts.xml "$user_component_dir/goblins-textshortcuts.xml"
+  fi
+}
 activate_goblins_textshortcuts_engine(){
   local active_engine
   for _ in $(seq 1 20); do
+    ensure_textshortcuts_ibus_component
     ibus write-cache >/dev/null 2>&1 || true
     ibus engine goblins-textshortcuts >/dev/null 2>&1 || true
     active_engine="$(active_ibus_engine)"
@@ -242,6 +250,7 @@ text_shortcuts_session_enable_proof(){
     return 1
   fi
 
+  ensure_textshortcuts_ibus_component
   ibus write-cache >/tmp/gate-text-shortcuts-session-write-cache.log 2>&1 || true
   systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-session-ibus-restart.log 2>&1 || true
   for _ in $(seq 1 30); do
@@ -251,6 +260,7 @@ text_shortcuts_session_enable_proof(){
   done
   engine_listed=false
   for _ in $(seq 1 20); do
+    ensure_textshortcuts_ibus_component
     ibus write-cache >/tmp/gate-text-shortcuts-session-write-cache.log 2>&1 || true
     if ibus list-engine 2>/tmp/gate-text-shortcuts-session-list-engine.err | grep -Fq 'goblins-textshortcuts'; then
       engine_listed=true
@@ -259,7 +269,7 @@ text_shortcuts_session_enable_proof(){
     sleep 0.5
   done
   if [ "$engine_listed" != "true" ]; then
-    proof_text_shortcuts "status=fail&stage=engine-list&service=${service_state:-missing}&input_source_configured=true&preload_configured=true&engine_listed=false&cache_refreshed=true&daemon_restarted=true"
+    proof_text_shortcuts "status=fail&stage=engine-list&service=${service_state:-missing}&input_source_configured=true&preload_configured=true&engine_listed=false&cache_refreshed=true&daemon_restarted=true&user_component_seeded=true&list_error=$(proof_query_value "$(cat /tmp/gate-text-shortcuts-session-list-engine.err 2>/dev/null || true)")"
     return 1
   fi
 
@@ -1100,6 +1110,10 @@ app_privacy_revoke_proof(){
   fi
   if ! wait_session_bus_name org.freedesktop.impl.portal.PermissionStore; then
     proof_app_privacy_revoke "status=fail&stage=permission-store&route=/v1/app-privacy/revoke&permission_store=inactive"
+    return 1
+  fi
+  if ! mkdir -p "$HOME/.local/share/flatpak/db"; then
+    proof_app_privacy_revoke "status=fail&stage=permission-db-dir&route=/v1/app-privacy/revoke&permission_store=active&db_dir=$HOME/.local/share/flatpak/db"
     return 1
   fi
 

@@ -11,7 +11,7 @@ diagnose_firewalld() {
 
 wait_firewalld_running() {
   i=0
-  while [ "$i" -lt 30 ]; do
+  while [ "$i" -lt 90 ]; do
     if firewalld_running; then
       return 0
     fi
@@ -25,7 +25,7 @@ wait_firewalld_running() {
 
 wait_firewalld_stopped() {
   i=0
-  while [ "$i" -lt 30 ]; do
+  while [ "$i" -lt 90 ]; do
     if ! firewalld_running; then
       return 0
     fi
@@ -41,8 +41,9 @@ case "${1:-}" in
   enable)
     /usr/bin/systemctl reset-failed firewalld.service || true
     /usr/bin/systemctl unmask firewalld.service || true
+    /usr/bin/systemctl daemon-reload || true
     /usr/bin/systemctl enable firewalld.service
-    /usr/bin/systemctl start firewalld.service
+    /usr/bin/systemctl start firewalld.service || /usr/bin/systemctl restart firewalld.service
     wait_firewalld_running
     ;;
   disable)

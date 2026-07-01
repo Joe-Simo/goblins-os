@@ -193,6 +193,15 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
             }
         }
         Ok(output) => {
+            let status = wait_for_firewall_state(enabled);
+            if status.available && status.active == enabled {
+                return firewall_toggle_response(
+                    StatusCode::OK,
+                    true,
+                    enabled,
+                    &firewall_toggle_success_detail(enabled, status.detail.as_str()),
+                );
+            }
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
             firewall_toggle_response(
@@ -219,7 +228,7 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
 
 fn wait_for_firewall_state(enabled: bool) -> FirewallStatus {
     let mut status = build_firewall_status();
-    for _ in 0..60 {
+    for _ in 0..180 {
         if status.available && status.active == enabled {
             return status;
         }

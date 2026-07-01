@@ -298,6 +298,8 @@ RUN install -d /var/home \
     && usermod --password '*' goblin \
     && test "$(getent shadow goblin | cut -d: -f2)" = "*" \
     && install -d -o goblin -g goblin /var/home/goblin/.config/environment.d \
+    && install -d -o goblin -g goblin /var/home/goblin/.local/share/flatpak/db \
+    && install -d -o goblin -g goblin /var/home/goblin/.local/share/ibus/component \
     && touch /var/home/goblin/.config/gnome-initial-setup-done \
     && chown -R goblin:goblin /var/home/goblin
 
@@ -460,6 +462,8 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && test -x /usr/libexec/goblins-os/goblins-os-input-source-seed \
     && bash -n /usr/libexec/goblins-os/goblins-os-input-source-seed \
     && test -f /usr/share/ibus/component/goblins-textshortcuts.xml \
+    && install -m 0644 /usr/share/ibus/component/goblins-textshortcuts.xml /var/home/goblin/.local/share/ibus/component/goblins-textshortcuts.xml \
+    && chown goblin:goblin /var/home/goblin/.local/share/ibus/component/goblins-textshortcuts.xml \
     && python3 -m py_compile /usr/libexec/goblins-os/goblins-textshortcuts-ibus \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --self-test \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --runtime-self-test \
@@ -576,6 +580,8 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -Fq '/usr/libexec/goblins-os/goblins-textshortcuts-ibus' /usr/share/ibus/component/goblins-textshortcuts.xml \
     && ibus write-cache --system \
     && ibus read-cache --system | grep -Fq 'goblins-textshortcuts' \
+    && test -f /var/home/goblin/.local/share/ibus/component/goblins-textshortcuts.xml \
+    && test -d /var/home/goblin/.local/share/flatpak/db \
     && test -x /usr/libexec/goblins-os/goblins-os-firewall \
     && test -f /usr/lib/systemd/system/goblins-os-firewall@.service \
     && test -f /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules \

@@ -5861,6 +5861,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "plain_permissions",
         ),
         contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-seeds-permissionstore-flatpak-db-directory",
+            "/var/home/goblin/.local/share/flatpak/db",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-creates-permissionstore-flatpak-db-directory",
+            ".local/share/flatpak/db",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-reports-permissionstore-db-directory-failure",
+            "permission-db-dir",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-app-privacy-reports-seed-attempt",
             "seed_attempt=",
@@ -5992,8 +6007,33 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-seeds-textshortcuts-user-ibus-component",
+            "ensure_textshortcuts_ibus_component",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-reports-textshortcuts-user-component-seed",
+            "user_component_seeded=true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-reports-textshortcuts-engine-list-error",
+            "list_error=",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-restarts-textshortcuts-ibus-after-cache-refresh",
             "gate-text-shortcuts-session-ibus-restart.log",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "ibus-service-uses-user-and-system-component-path",
+            "IBUS_COMPONENT_PATH=%h/.local/share/ibus/component:/usr/share/ibus/component",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "ibus-service-refreshes-user-cache-before-start",
+            "ExecStartPre=-/usr/bin/ibus write-cache",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -10890,8 +10930,23 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-reloads-systemd-before-enable",
+            "systemctl daemon-reload",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-retries-start-with-restart",
+            "systemctl start firewalld.service || /usr/bin/systemctl restart firewalld.service",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
             "bootc-firewall-helper-waits-for-firewalld-state",
             "firewall-cmd --state",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-waits-up-to-ninety-seconds",
+            "while [ \"$i\" -lt 90 ]",
         ),
         contains_check(
             root.join("os/bootc/goblins-os-firewall"),
@@ -11643,6 +11698,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "permission_id_is_safe",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/firewall.rs"),
+            "core-firewall-rechecks-live-state-after-helper-error",
+            "wait_for_firewall_state(enabled)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/firewall.rs"),
+            "core-firewall-waits-up-to-ninety-seconds",
+            "for _ in 0..180",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-text-shortcuts-route",
             "/v1/text-shortcuts",
@@ -11676,6 +11741,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-installs-textshortcuts-component",
             "COPY os/goblins-os-textshortcuts/goblins-textshortcuts.xml /usr/share/ibus/component/goblins-textshortcuts.xml",
+        ),
+        container_contains_check(
+            root,
+            "bootc-seeds-textshortcuts-user-ibus-component",
+            "/var/home/goblin/.local/share/ibus/component/goblins-textshortcuts.xml",
         ),
         container_contains_check(
             root,

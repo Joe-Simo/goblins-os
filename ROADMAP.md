@@ -34,7 +34,7 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest hardware-gate run `28488700949` at `31f8094` on `main` passed the bootc
+Latest hardware-gate run `28491393956` at `393e3cd` on `main` passed the bootc
 image build and verification ISO build, then failed inside the display-backed VM
 capture after the installed session reached `/ready/ORCH_START` and
 `/ready/ORCH_ALLDONE`. The artifact has real display captures through
@@ -44,28 +44,31 @@ capture after the installed session reached `/ready/ORCH_START` and
 
 That run proves several qemu-gated writes and renders now work: keyboard
 shortcut rebind, input source switching, Focus arm/disarm, Preview PDF/image
-open/render, Text Shortcuts engine registration/listing/activation, and the
-deterministic Text Shortcuts candidate bubble render proof all pass their live
-proof JSON. The remaining live failures are now narrow and concrete: firewall
-disable succeeds but re-enable returns HTTP `502` after active state remains
-false; PermissionStore `SetPermission` seeding fails before the per-app revoke
-route can be exercised; Text Shortcuts live keystroke and live runtime render
-fail after the engine is active because the old `wtype` input path does not
-reach the focused field callback/text-input-v3 commit path. Firewall, per-app
-revoke, and Text Shortcuts live runtime stay `in-progress`.
+open/render, Text Shortcuts candidate metadata, overlay intent, deterministic
+candidate bubble frame/layout, and deterministic candidate bubble render all
+pass their live proof JSON. The remaining live failures are narrow and
+concrete: firewall disable succeeds but re-enable returns HTTP `502` after
+active state remains false; PermissionStore `SetPermission` seeding fails
+because `/var/home/goblin/.local/share/flatpak/db` is absent; Text Shortcuts
+session enable, live keystroke, and live runtime render fail because the
+`goblins-textshortcuts` IBus engine is not listed/active in the user session.
+Firewall, per-app revoke, and Text Shortcuts live runtime stay `in-progress`.
 
-Current follow-up source work adds a PermissionStore seed fallback in the
-hardware harness: retry `SetPermission` with the plain `as` argument after the
-typed `@as` form fails, and emit sanitized `seed_attempt`/`seed_error` proof
-fields. This does not mark per-app revoke shipped; the next display-backed VM
-run must still prove seed/readback/revoke/restore end-to-end.
+Current follow-up source work seeds the PermissionStore flatpak db directory in
+the image and harness, installs the Text Shortcuts IBus component into the
+`goblin` user's component directory, starts IBus with an explicit user+system
+component path and user cache refresh, and keeps sanitized engine-list
+diagnostics in the proof. This does not mark per-app revoke or Text Shortcuts
+runtime shipped; the next display-backed VM run must still prove
+seed/readback/revoke/restore and live GTK field expansion end-to-end.
 
 Current firewall follow-up source work hardens the privileged helper after the
 live proof showed disable succeeded but re-enable returned HTTP `502`: reset
-stale failed state, unmask if needed, enable before start, wait for
-`firewall-cmd --state`, and emit `systemctl status firewalld.service`
-diagnostics on failure. This remains qemu-pending until the live toggle proof
-passes with `enable_active=true`.
+stale failed state, unmask if needed, reload systemd, enable before start,
+retry start through restart, wait up to 90 seconds for `firewall-cmd --state`,
+and let the core route re-check live state before returning a helper failure.
+This remains qemu-pending until the live toggle proof passes with
+`enable_active=true`.
 
 Previous hardware-gate run `28486096503` at `00b0950` on `main` passed the bootc
 image build and verification ISO build, then failed inside the display-backed VM

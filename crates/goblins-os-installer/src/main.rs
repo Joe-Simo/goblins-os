@@ -502,16 +502,24 @@ fn main() -> InstallerResult<()> {
     println!("installer_mode=native-desktop");
     println!("{}", installer_state_summary(&state));
 
-    if state
+    let first_boot_completed = state
         .readiness
         .as_ref()
-        .is_some_and(|readiness| readiness.first_boot.completed)
-    {
+        .is_some_and(|readiness| readiness.first_boot.completed);
+    if should_exit_after_first_boot(first_boot_completed, installer_page_override_requested()) {
         println!("first_boot_installer=complete");
         return Ok(());
     }
 
     run_native_installer(config, state)
+}
+
+fn installer_page_override_requested() -> bool {
+    env::var_os("GOBLINS_OS_INSTALLER_PAGE").is_some()
+}
+
+fn should_exit_after_first_boot(first_boot_completed: bool, page_override_requested: bool) -> bool {
+    first_boot_completed && !page_override_requested
 }
 
 impl InstallerConfig {
@@ -5781,7 +5789,8 @@ mod tests {
     use super::{
         first_app_build_failure_copy, first_app_onboarding_subtitle, install_prepare_summary,
         openai_login_destination_from_response, parse_http_endpoint, parse_http_response,
-        review_detail_lines, CoreFetchError, HttpEndpoint, HttpResponse,
+        review_detail_lines, should_exit_after_first_boot, CoreFetchError, HttpEndpoint,
+        HttpResponse,
     };
 
     #[test]
@@ -5941,5 +5950,12 @@ mod tests {
                 "installer UI copy must not expose backend wording: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn completed_first_boot_still_allows_explicit_proof_page_override() {
+        assert!(should_exit_after_first_boot(true, false));
+        assert!(!should_exit_after_first_boot(true, true));
+        assert!(!should_exit_after_first_boot(false, false));
     }
 }

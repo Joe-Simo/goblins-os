@@ -34,55 +34,41 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Current source head is the runbook/verifier follow-up on top of `6cc0288`.
-Commit `6cc0288` includes the multi-display apply proof hook plus the scoped
-same-date hardware-capture reset guard; this follow-up documents that proof in
-the hardware-gate runbook and makes the verifier require the documentation. A
-fresh fast Rust build must pass at the final pushed head before treating this
-pass as CI-green. The older hardware-gate run `28530031330` at `d540563` has
-passed bootc image publish, verification installer ISO build, and model prep;
-it is currently in `Run the display-backed-VM capture + close-signoff`, so no
-artifact from that run should be treated as reviewed yet. That older run does
-not include `multi-display-apply-proof.json`; use it only for Text Shortcuts
-diagnostics if it completes. The latest reviewed display-backed proof artifact
-is still run `28526077212`.
+Base head `e7a928f` is CI-green for the fast Rust build: GitHub Actions build
+run `28533362530` passed on x86_64 and aarch64. The current source follow-up
+targets display-backed capture honesty on top of that head: explicit
+`GOBLINS_OS_INSTALLER_PAGE` proof requests now bypass the completed-first-boot
+early exit, the capture harness turns Switch Control off before ordinary
+screenshots, and both `goblins-os-verify` plus `verify-shipping-status.sh`
+require those guards. Hardware-gate run `28534087254` started at `e7a928f` but
+was canceled as superseded before the fix landed; dispatch a fresh current-head
+hardware gate after this commit is pushed.
 
-The current blocker is Text Shortcuts IBus session env, not image build or the
-core route. In run `28526077212`, `text-shortcuts-session-enable-proof.json`
-failed at `stage=engine-list` with `service=active`, `bus_owner=true`,
-`input_source_configured=true`, `preload_configured=true`, and
-`list_error="Can't connect to IBus."`. The live keystroke and live runtime
-render proofs failed earlier at `stage=engine-set` for the same reason, with
-`active_engine=missing`. The proof payload reports
-`session_env=session_type=missing wayland_display= display= dbus_session_bus=present`,
-and the serial log shows the user-systemd orchestrator path ran rather than the
-direct fallback. The artifact has screenshots through
-`31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png` and
-`30-preview-image-open.png` exist, but
-`32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
+The latest reviewed display-backed proof artifact is run `28530031330` at
+`d540563`. It passed bootc image publish, verification installer ISO build,
+model prep, and the in-session proof routes that existed at that head. The proof
+JSONs for firewall live toggle, keyboard shortcut rebind, input source
+roundtrip, Focus arm/disarm, app-keyed Per-app Privacy revoke, Preview
+PDF/image open/render, and Text Shortcuts through live IBus runtime/render all
+reported `status=pass`; `32-text-shortcuts-live-ibus-runtime-render.png` exists.
+That run is **not** a shipping signoff: `run-capture.sh` failed the duplicate
+surface honesty guard with only 28/35 distinct captures, several installer
+captures were stale desktop frames because the installer exited after completed
+first boot, Switch Control was visible over unrelated screenshots, and the run
+predates `multi-display-apply-proof.json`.
 
-Current follow-up source work keeps the real pass criteria intact and gives the
-verification-only hardware-gate user service deterministic display/session env.
-The ISO starter now imports `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`,
-and desktop session variables into DBus activation and user systemd before
-starting `goblins-hwgate-session-orchestrator.service`; the capture harness also
-defaults the same env before restarting Fedora's GNOME IBus service. This
-remains qemu-pending until the next display-backed VM run proves
-`text-shortcuts-session-enable`, `text-shortcuts-live-keystroke`, and
-`text-shortcuts-live-ibus-runtime-render` end-to-end, including
-`process-key-event`, `commit-text`, password refusal, rendered accept bubble,
-and `32-text-shortcuts-live-ibus-runtime-render.png`.
-
-This follow-up also adds the missing multi-display apply hardware proof hook.
-The display-backed VM harness now has a required `multi-display-apply-proof.json`
-path that discovers the live Mutter DisplayConfig serial/connector/mode from
-`GetCurrentState`, posts the same-layout payload through `/v1/displays/apply`
-with `method=verify` and `method=temporary`, verifies persistent apply is refused
-without explicit confirmation, verifies stale serials are rejected, links the
-proof from `proof-manifest.json`, and makes `close-signoff.sh`,
+The current blocker is therefore not Text Shortcuts IBus readiness anymore; it
+is current-head hardware-gate close-signoff with truthful distinct screenshots
+and the new multi-display apply proof. The display-backed VM harness now has a
+required `multi-display-apply-proof.json` path that discovers the live Mutter
+DisplayConfig serial/connector/mode from `GetCurrentState`, posts the same-layout
+payload through `/v1/displays/apply` with `method=verify` and
+`method=temporary`, verifies persistent apply is refused without explicit
+confirmation, verifies stale serials are rejected, links the proof from
+`proof-manifest.json`, and makes `close-signoff.sh`,
 `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing
 proof. This remains qemu-pending and does **not** ship the writable Displays
-panel or persistent Keep flow. The capture harness also now resets the scoped
+panel or persistent Keep flow. The capture harness also resets the scoped
 `os/screenshots/hardware-gate/$ARCH/$RUN_DATE` directory before each run, so a
 same-date rerun cannot accidentally reuse stale proof files.
 

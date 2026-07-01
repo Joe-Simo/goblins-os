@@ -943,6 +943,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
         ));
     }
     checks.push(contains_check(
+        root.join("crates/goblins-os-installer/src/main.rs"),
+        "installer-proof-page-override-bypasses-completed-firstboot-exit",
+        "should_exit_after_first_boot(first_boot_completed, installer_page_override_requested())",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-installer/src/main.rs"),
+        "installer-proof-page-override-uses-goblins-page-env",
+        "GOBLINS_OS_INSTALLER_PAGE",
+    ));
+    checks.push(contains_check(
         root.join("os/applications/org.goblins.OS.Shell.desktop"),
         "goblins-shell-hidden-under-systemd",
         "X-GNOME-HiddenUnderSystemd=true",
@@ -5809,6 +5819,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-firewall-proof-carries-toggle-response-text",
             "enable_text=$(proof_query_value",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-defuses-switch-control-before-ordinary-shots",
+            "switch_control_off",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-switch-control-off-uses-gsettings",
+            "gsettings set org.goblins.os.a11y.switch-control enabled false",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),

@@ -134,6 +134,10 @@ dismiss_shell_overview(){
   host_press_key "${token}-escape-b" Escape
   sleep 0.5
 }
+switch_control_off(){
+  gsettings set org.goblins.os.a11y.switch-control enabled false 2>/dev/null || true
+  sleep 0.2
+}
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -1653,7 +1657,24 @@ preview_open_render_proof(){
 # GOBLINS_OS_INSTALLER_PAGE, or the shell in dark) before the prior instance dies
 # just re-focuses the old window, producing duplicate captures. Waiting for exit
 # guarantees the next launch creates a fresh window with the new args/env/theme.
-shot(){ local n="$1"; shift; dbus-run-session -- "$@" >/dev/null 2>&1 & local p=$!; sleep 7; sig "$n"; kill "$p" 2>/dev/null; pkill -f "$1" 2>/dev/null; for _ in $(seq 1 24); do pgrep -f "$1" >/dev/null 2>&1 || break; sleep 0.3; done; sleep 1; }
+shot(){
+  local n="$1"
+  shift
+  switch_control_off
+  dbus-run-session -- "$@" >/dev/null 2>&1 &
+  local p=$!
+  sleep 7
+  switch_control_off
+  sig "$n"
+  kill "$p" 2>/dev/null || true
+  pkill -f "$1" 2>/dev/null || true
+  for _ in $(seq 1 24); do
+    pgrep -f "$1" >/dev/null 2>&1 || break
+    sleep 0.3
+  done
+  switch_control_off
+  sleep 1
+}
 darkon(){ gsettings set org.gnome.desktop.interface color-scheme prefer-dark 2>/dev/null; sleep 1; }
 darkoff(){ gsettings set org.gnome.desktop.interface color-scheme default 2>/dev/null; sleep 1; }
 
@@ -1661,6 +1682,7 @@ sleep 3
 curl -s "http://$H/ready/ORCH_START" >/dev/null 2>&1
 pkill -f goblins-os-login 2>/dev/null; pkill -f goblins-os-installer 2>/dev/null; sleep 2
 dismiss_shell_overview text-shortcuts-proof-start
+switch_control_off
 firewall_live_toggle_proof || true
 text_shortcuts_session_enable_proof || true
 text_shortcuts_live_keystroke_proof || true

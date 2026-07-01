@@ -38,6 +38,15 @@ proof_input_sources_roundtrip(){ curl -s "http://$H/proof/input-sources-roundtri
 proof_focus_arm_roundtrip(){ curl -s "http://$H/proof/focus-arm-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_app_privacy_revoke(){ curl -s "http://$H/proof/app-privacy-revoke?$1" >/dev/null 2>&1 || true; }
 proof_preview_open_render(){ curl -s "http://$H/proof/preview-open-render?$1" >/dev/null 2>&1 || true; }
+proof_query_value(){
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import quote
+
+value = sys.argv[1].replace("\r", " ").replace("\n", " ").replace("\t", " ")
+print(quote(value[:220], safe="._:-"))
+PY
+}
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -996,15 +1005,48 @@ permission_store_get_permission(){
 }
 permission_store_set_permission(){
   local permissions="$4"
-  case "$permissions" in
+  local typed_permissions="$permissions"
+  local plain_permissions="$permissions"
+  local set_log=/tmp/gate-app-privacy-permission-store-set.log
+  local typed_log=/tmp/gate-app-privacy-permission-store-set-typed.log
+  local mode_file=/tmp/gate-app-privacy-permission-store-set-mode
+
+  case "$typed_permissions" in
     @as*) ;;
-    *) permissions="@as $permissions" ;;
+    *) typed_permissions="@as $typed_permissions" ;;
   esac
-  gdbus call --session \
+  case "$plain_permissions" in
+    "@as "*) plain_permissions="${plain_permissions#@as }" ;;
+    @as*) plain_permissions="${plain_permissions#@as}" ;;
+  esac
+
+  if gdbus call --session \
     --dest org.freedesktop.impl.portal.PermissionStore \
     --object-path /org/freedesktop/impl/portal/PermissionStore \
     --method org.freedesktop.impl.portal.PermissionStore.SetPermission \
-    "$1" true "$2" "$3" "$permissions" >/tmp/gate-app-privacy-permission-store-set.log 2>&1
+    "$1" true "$2" "$3" "$typed_permissions" >"$set_log" 2>&1; then
+    printf 'typed\n' >"$mode_file"
+    return 0
+  fi
+
+  cp "$set_log" "$typed_log" 2>/dev/null || true
+  if [ "$plain_permissions" != "$typed_permissions" ] && gdbus call --session \
+    --dest org.freedesktop.impl.portal.PermissionStore \
+    --object-path /org/freedesktop/impl/portal/PermissionStore \
+    --method org.freedesktop.impl.portal.PermissionStore.SetPermission \
+    "$1" true "$2" "$3" "$plain_permissions" >"$set_log" 2>&1; then
+    printf 'plain\n' >"$mode_file"
+    return 0
+  fi
+
+  printf 'failed\n' >"$mode_file"
+  return 1
+}
+permission_store_set_attempt(){
+  cat /tmp/gate-app-privacy-permission-store-set-mode 2>/dev/null || printf 'missing'
+}
+permission_store_set_error(){
+  proof_query_value "$(cat /tmp/gate-app-privacy-permission-store-set.log 2>/dev/null || true)"
 }
 permission_store_delete_permission(){
   gdbus call --session \
@@ -1030,7 +1072,7 @@ app_privacy_revoke_proof(){
   local app=org.goblins.GatePrivacyProof
   local id=org.goblins.GatePrivacyProof
   local revoke_file=/tmp/gate-app-privacy-revoke.json
-  local prior_reply prior_permissions seeded_reply seeded_permissions
+  local prior_reply prior_permissions seeded_reply seeded_permissions seed_attempt seed_error
   local revoke_code revoke_ok after_reply after_permissions restored_reply restored_permissions
   local seed_readback post_revoke_absent restore_prior_state
 
@@ -1051,16 +1093,19 @@ app_privacy_revoke_proof(){
   prior_reply="$(permission_store_get_permission "$table" "$id" "$app")"
   prior_permissions="$(permission_store_permissions_variant "$prior_reply")"
   if ! permission_store_set_permission "$table" "$id" "$app" "['yes']"; then
-    proof_app_privacy_revoke "status=fail&stage=seed&route=/v1/app-privacy/revoke&table=$table&app=$app&seed_method=PermissionStore.SetPermission&seed_grant=yes"
+    seed_attempt="$(permission_store_set_attempt)"
+    seed_error="$(permission_store_set_error)"
+    proof_app_privacy_revoke "status=fail&stage=seed&route=/v1/app-privacy/revoke&table=$table&app=$app&seed_method=PermissionStore.SetPermission&seed_grant=yes&seed_attempt=$seed_attempt&seed_error=$seed_error"
     return 1
   fi
+  seed_attempt="$(permission_store_set_attempt)"
   seeded_reply="$(permission_store_get_permission "$table" "$id" "$app")"
   seeded_permissions="$(permission_store_permissions_variant "$seeded_reply")"
   seed_readback=false
   [ "$seeded_permissions" = "['yes']" ] && seed_readback=true
   if [ "$seed_readback" != "true" ]; then
     restore_app_privacy_gate_permission "$table" "$id" "$app" "$prior_permissions"
-    proof_app_privacy_revoke "status=fail&stage=seed-readback&route=/v1/app-privacy/revoke&table=$table&app=$app&seed_method=PermissionStore.SetPermission&seed_grant=yes&seed_readback=false"
+    proof_app_privacy_revoke "status=fail&stage=seed-readback&route=/v1/app-privacy/revoke&table=$table&app=$app&seed_method=PermissionStore.SetPermission&seed_grant=yes&seed_attempt=$seed_attempt&seed_readback=false"
     return 1
   fi
 
@@ -1075,7 +1120,7 @@ app_privacy_revoke_proof(){
   [ "$after_permissions" = "[]" ] && post_revoke_absent=true
   if [ "$revoke_code" != "200" ] || [ "$revoke_ok" != "true" ] || [ "$post_revoke_absent" != "true" ]; then
     restore_app_privacy_gate_permission "$table" "$id" "$app" "$prior_permissions"
-    proof_app_privacy_revoke "status=fail&stage=revoke&route=/v1/app-privacy/revoke&table=$table&app=$app&seed_method=PermissionStore.SetPermission&revoke_method=PermissionStore.DeletePermission&readback_method=PermissionStore.GetPermission&seed_readback=true&revoke_http=${revoke_code:-000}&revoke_ok=${revoke_ok:-missing}&post_revoke_absent=$post_revoke_absent"
+    proof_app_privacy_revoke "status=fail&stage=revoke&route=/v1/app-privacy/revoke&table=$table&app=$app&seed_method=PermissionStore.SetPermission&revoke_method=PermissionStore.DeletePermission&readback_method=PermissionStore.GetPermission&seed_attempt=$seed_attempt&seed_readback=true&revoke_http=${revoke_code:-000}&revoke_ok=${revoke_ok:-missing}&post_revoke_absent=$post_revoke_absent"
     return 1
   fi
 
@@ -1089,7 +1134,7 @@ app_privacy_revoke_proof(){
     return 1
   fi
 
-  proof_app_privacy_revoke "status=pass&route=/v1/app-privacy/revoke&table=$table&app=$app&id=$id&seed_method=PermissionStore.SetPermission&revoke_method=PermissionStore.DeletePermission&readback_method=PermissionStore.GetPermission&seed_grant=yes&seed_readback=true&revoke_http=200&revoke_ok=true&post_revoke_absent=true&restore_prior_state=true&roundtrip_restored=true&resource_keyed_claim=false&device_revoke_claim=false"
+  proof_app_privacy_revoke "status=pass&route=/v1/app-privacy/revoke&table=$table&app=$app&id=$id&seed_method=PermissionStore.SetPermission&revoke_method=PermissionStore.DeletePermission&readback_method=PermissionStore.GetPermission&seed_grant=yes&seed_attempt=$seed_attempt&seed_readback=true&revoke_http=200&revoke_ok=true&post_revoke_absent=true&restore_prior_state=true&roundtrip_restored=true&resource_keyed_claim=false&device_revoke_claim=false"
   return 0
 }
 focus_arm_roundtrip_proof(){

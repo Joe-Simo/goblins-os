@@ -54,6 +54,12 @@ fail after the engine is active because `wtype` input does not reach the
 focused field callback/text-input-v3 commit path. Firewall, per-app revoke, and
 Text Shortcuts live runtime stay `in-progress`.
 
+Current follow-up source work adds a PermissionStore seed fallback in the
+hardware harness: retry `SetPermission` with the plain `as` argument after the
+typed `@as` form fails, and emit sanitized `seed_attempt`/`seed_error` proof
+fields. This does not mark per-app revoke shipped; the next display-backed VM
+run must still prove seed/readback/revoke/restore end-to-end.
+
 Previous hardware-gate run `28486096503` at `00b0950` on `main` passed the bootc
 image build and verification ISO build, then failed inside the display-backed VM
 capture after the installed session reached `/ready/ORCH_START` and

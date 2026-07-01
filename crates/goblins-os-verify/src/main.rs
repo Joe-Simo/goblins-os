@@ -5857,6 +5857,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-app-privacy-set-permission-plain-fallback",
+            "plain_permissions",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-app-privacy-reports-seed-attempt",
+            "seed_attempt=",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-app-privacy-reports-seed-error",
+            "seed_error=",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-waits-permission-store-bus-name",
             "wait_session_bus_name org.freedesktop.impl.portal.PermissionStore",
         ),

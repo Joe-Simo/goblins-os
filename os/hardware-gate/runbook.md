@@ -152,6 +152,7 @@ the release media that was booted:
   "text_shortcuts_live_ibus_runtime_render_proof": "text-shortcuts-live-ibus-runtime-render-proof.json",
   "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json",
   "input_sources_roundtrip_proof": "input-sources-roundtrip-proof.json",
+  "multi_display_apply_proof": "multi-display-apply-proof.json",
   "focus_arm_roundtrip_proof": "focus-arm-roundtrip-proof.json",
   "app_privacy_revoke_proof": "app-privacy-revoke-proof.json",
   "preview_open_render_proof": "preview-open-render-proof.json"
@@ -284,6 +285,15 @@ existing IME/input-source write and switch bridges in qemu without depending on
 a CJK engine being active and without marking the Settings input-source UI
 render shipped.
 
+The multi-display apply gate is `multi-display-apply-proof.json`, linked from
+`proof-manifest.json` as `multi_display_apply_proof`. It queries the live Mutter
+DisplayConfig state, builds a same-layout `/v1/displays/apply` payload from the
+current serial/connector/mode, proves `method=verify` and `method=temporary`
+return HTTP 200, proves persistent apply is rejected without explicit Keep
+confirmation, and proves a stale serial is rejected. This proves the protected
+DisplayConfig write bridge in qemu; it does not claim the writable Displays
+canvas, multi-output editing, or persistent Keep/Revert UI shipped.
+
 The Focus arm gate is `focus-arm-roundtrip-proof.json`, linked from
 `proof-manifest.json` as `focus_arm_roundtrip_proof`. It saves the current
 Goblins Focus mode state and GNOME notification banner preference, seeds a
@@ -404,6 +414,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - Text Shortcuts live IBus runtime/render result, including `text-shortcuts-live-ibus-runtime-render-proof.json` and `32-text-shortcuts-live-ibus-runtime-render.png`
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
+- Multi-display apply result, including `multi-display-apply-proof.json`
 - Focus arm roundtrip result, including `focus-arm-roundtrip-proof.json`
 - App privacy revoke result, including `app-privacy-revoke-proof.json`
 - Preview open/render result, including `preview-open-render-proof.json`, `29-preview-pdf-open.png`, and `30-preview-image-open.png`

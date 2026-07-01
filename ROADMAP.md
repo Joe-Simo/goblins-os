@@ -34,14 +34,18 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest pushed source commit before this follow-up is `d540563` on `main`. It
-passed the fast Rust build (`28530018636`) on both `ubuntu-24.04` and
-`ubuntu-24.04-arm`: format, clippy, tests, and release build all succeeded.
-Hardware-gate run `28530031330` at that head has passed bootc image publish,
-verification installer ISO build, and model prep; it is currently in
-`Run the display-backed-VM capture + close-signoff`, so no artifact from that
-run should be treated as reviewed yet. The latest reviewed display-backed proof
-artifact is still run `28526077212`.
+Current source head is the runbook/verifier follow-up on top of `6cc0288`.
+Commit `6cc0288` includes the multi-display apply proof hook plus the scoped
+same-date hardware-capture reset guard; this follow-up documents that proof in
+the hardware-gate runbook and makes the verifier require the documentation. A
+fresh fast Rust build must pass at the final pushed head before treating this
+pass as CI-green. The older hardware-gate run `28530031330` at `d540563` has
+passed bootc image publish, verification installer ISO build, and model prep;
+it is currently in `Run the display-backed-VM capture + close-signoff`, so no
+artifact from that run should be treated as reviewed yet. That older run does
+not include `multi-display-apply-proof.json`; use it only for Text Shortcuts
+diagnostics if it completes. The latest reviewed display-backed proof artifact
+is still run `28526077212`.
 
 The current blocker is Text Shortcuts IBus session env, not image build or the
 core route. In run `28526077212`, `text-shortcuts-session-enable-proof.json`

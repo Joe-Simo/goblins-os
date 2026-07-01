@@ -5742,6 +5742,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-multi-display-apply-proof",
+            "multi-display-apply-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-multi-display-apply-manifest-key",
+            "multi_display_apply_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-focus-arm-roundtrip-proof",
             "focus-arm-roundtrip-proof.json",
         ),

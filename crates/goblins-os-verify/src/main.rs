@@ -10865,6 +10865,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-resets-failed-state",
+            "systemctl reset-failed firewalld.service",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-unmasks-before-enable",
+            "systemctl unmask firewalld.service",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-waits-for-firewalld-state",
+            "firewall-cmd --state",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-diagnoses-enable-failure",
+            "firewalld did not report running after enable",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-prints-systemd-status",
+            "systemctl --no-pager --full status firewalld.service",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
             "bootc-firewall-helper-stops-before-disabling",
             "systemctl stop firewalld.service",
         ),

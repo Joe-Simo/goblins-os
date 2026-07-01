@@ -1,14 +1,54 @@
 #!/usr/bin/env sh
 set -eu
 
+firewalld_running() {
+  /usr/bin/firewall-cmd --state >/dev/null 2>&1
+}
+
+diagnose_firewalld() {
+  /usr/bin/systemctl --no-pager --full status firewalld.service >&2 || true
+}
+
+wait_firewalld_running() {
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if firewalld_running; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  printf '%s\n' "firewalld did not report running after enable" >&2
+  diagnose_firewalld
+  return 1
+}
+
+wait_firewalld_stopped() {
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if ! firewalld_running; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  printf '%s\n' "firewalld still reported running after disable" >&2
+  diagnose_firewalld
+  return 1
+}
+
 case "${1:-}" in
   enable)
+    /usr/bin/systemctl reset-failed firewalld.service || true
+    /usr/bin/systemctl unmask firewalld.service || true
+    /usr/bin/systemctl enable firewalld.service
     /usr/bin/systemctl start firewalld.service
-    exec /usr/bin/systemctl enable firewalld.service
+    wait_firewalld_running
     ;;
   disable)
     /usr/bin/systemctl stop firewalld.service
-    exec /usr/bin/systemctl disable firewalld.service
+    /usr/bin/systemctl disable firewalld.service
+    wait_firewalld_stopped
     ;;
   *)
     printf '%s\n' "usage: goblins-os-firewall enable|disable" >&2

@@ -60,6 +60,13 @@ typed `@as` form fails, and emit sanitized `seed_attempt`/`seed_error` proof
 fields. This does not mark per-app revoke shipped; the next display-backed VM
 run must still prove seed/readback/revoke/restore end-to-end.
 
+Current firewall follow-up source work hardens the privileged helper after the
+live proof showed disable succeeded but re-enable returned HTTP `502`: reset
+stale failed state, unmask if needed, enable before start, wait for
+`firewall-cmd --state`, and emit `systemctl status firewalld.service`
+diagnostics on failure. This remains qemu-pending until the live toggle proof
+passes with `enable_active=true`.
+
 Previous hardware-gate run `28486096503` at `00b0950` on `main` passed the bootc
 image build and verification ISO build, then failed inside the display-backed VM
 capture after the installed session reached `/ready/ORCH_START` and

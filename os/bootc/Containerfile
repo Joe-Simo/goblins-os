@@ -127,6 +127,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       wtype \
       gnome-shell-extension-gsconnect \
       snapper \
+      btrfs-progs \
+      libbtrfsutil \
       deja-dup \
       localsearch \
       sushi \
@@ -149,6 +151,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       wtype \
       gnome-shell-extension-gsconnect \
       snapper \
+      btrfs-progs \
+      libbtrfsutil \
       deja-dup \
       sushi \
       gnome-font-viewer \
@@ -230,6 +234,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && test -x /usr/libexec/ibus-engine-hangul \
     && test -f /usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so \
     && command -v snapper \
+    && command -v btrfs \
     && command -v xdg-open \
     && command -v papers \
     && command -v loupe \

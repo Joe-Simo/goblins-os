@@ -11266,6 +11266,39 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-snapshots-status-route",
+            "/v1/snapshots/status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-snapshots-restore-route",
+            "/v1/snapshots/restore",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/snapshots.rs"),
+            "core-snapshots-mountinfo-reader",
+            "/proc/self/mountinfo",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/snapshots.rs"),
+            "core-snapshots-snapper-machine-parser",
+            "parse_snapper_machine_readable",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/snapshots.rs"),
+            "core-snapshots-btrfs-home-honesty",
+            "Local snapshots need a btrfs /home",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/snapshots.rs"),
+            "core-snapshots-restore-fail-closed",
+            "executes_restore: false",
+        ),
+        container_package_lockstep_check(root, "snapshots-btrfs-progs-packaged", "btrfs-progs"),
+        container_package_lockstep_check(root, "snapshots-libbtrfsutil-packaged", "libbtrfsutil"),
+        container_contains_check(root, "snapshots-command-asserts-btrfs", "command -v btrfs"),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-focus-status-route",
             "/v1/focus/status",
         ),

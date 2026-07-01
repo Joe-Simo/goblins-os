@@ -37,6 +37,7 @@ mod session_bridge;
 mod session_gate;
 mod settings;
 mod shortcuts;
+mod snapshots;
 mod sound_recognition;
 mod studio;
 mod switch_control;
@@ -107,6 +108,7 @@ use crate::{
     session_gate::{session_gate_status, unlock_session},
     settings::{recovery_status, settings_system},
     shortcuts::{set_modifier_remap, set_shortcut_binding, shortcuts_status},
+    snapshots::{restore_snapshot, snapshots_status},
     studio::{studio_file, studio_session, studio_sessions, studio_turn},
     system::{health, system_services},
     system_image::system_image_status,
@@ -170,6 +172,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(install_progress_status),
         )
         .route("/v1/recovery/status", get(recovery_status))
+        .route("/v1/snapshots/status", get(snapshots_status))
+        .route("/v1/snapshots/restore", post(restore_snapshot))
         .route("/v1/session/gate", get(session_gate_status))
         .route("/v1/session/unlock", post(unlock_session))
         .route("/v1/installer/readiness", get(installer_readiness))

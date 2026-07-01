@@ -34,7 +34,15 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest hardware-gate run `28486096503` at `00b0950` on `main` passed the bootc
+Current hardware-gate run `28488700949` at `31f8094` on `main` has passed the
+bootc image build and verification ISO build and is still inside the
+display-backed VM capture step. It is testing the follow-ups for IBus cache
+registration, firewall re-enable, PermissionStore seeding, and deterministic
+Text Shortcuts candidate proof prewrite. No screenshot/proof artifact from this
+run has been reviewed yet, so firewall, per-app revoke, and Text Shortcuts stay
+`in-progress`.
+
+Latest completed hardware-gate run `28486096503` at `00b0950` on `main` passed the bootc
 image build and verification ISO build, then failed inside the display-backed VM
 capture after the installed session reached `/ready/ORCH_START` and
 `/ready/ORCH_ALLDONE`. The artifact has real display captures through
@@ -134,6 +142,24 @@ tests, Rust 1.88 GTK container clippy for `goblins-os-shell` with
 **blocked=0 (2671)**. A fresh hardware-gate run is still required before
 firewall, per-app revoke, or Text Shortcuts can move to shipped.
 
+Batch 5 btrfs `/home` + snapshots has its first source-only substrate in this
+tree: `GET /v1/snapshots/status`, fail-closed
+`POST /v1/snapshots/restore`, snapper machine-output parsing, mountinfo-based
+btrfs `/var/home` detection, Fedora 44 `btrfs-progs`/`libbtrfsutil` package
+lockstep, and verifier/shipping-status exact-string gates. It does **not** flip
+the installer root filesystem, install snapper configs/timers, render Settings
+UI, create snapshots, or restore files. Local gates for this pass:
+`cargo fmt -p goblins-os-core -p goblins-os-verify -- --check`,
+`cargo fmt --all -- --check`, `cargo test -p goblins-os-core snapshots` (4
+passed), `cargo test -p goblins-os-core` (287 passed),
+`cargo test -p goblins-os-verify` (19 passed),
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
+`cargo run -p goblins-os-verify -- --source-root .` →
+**blocked=0 (2680)**. Full `verify-shipping-status.sh` still fails on missing
+complete architecture ISO/screenshot/signoff artifacts; the new snapshots source
+check passes there, but release proof is still incomplete.
+
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,
 design screenshot render, desktop screenshot render, and artifact uploads on
@@ -159,7 +185,7 @@ not mark Batch 5 shipped.
 - **Web-verify** — `WebSearch`/`WebFetch` confirm Fedora-44 package names + D-Bus
   shapes before any Containerfile/D-Bus change (did seahorse + the PermissionStore).
 
-**Done so far (23 of 26 features advanced):**
+**Done so far (24 of 26 features advanced):**
 - **Batch 1 (Bucket A) — complete:** Live Text/OCR (core+handoff+markup Copy Text),
   Color picker. *(IME read+list also shipped; Preview viewer package/default
   app wiring and Fingerprint package/status substrate are source-gated.)*
@@ -174,6 +200,10 @@ not mark Batch 5 shipped.
 - **Batch 4 (engines) — 7 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**
   Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today,
   Sound Recognition, Live Captions.
+- **Batch 5 (storage) — 1 of 2 source substrates started:** btrfs `/home` +
+  snapshots now has a read-only core status/restore-fail-closed substrate and
+  package gates. It is **not shipped**; install-layout changes, timers, Settings
+  UI, real snapshot creation, and restore proof remain CI/qemu-pending.
 
 **Current local feature pass:** Firewall toggle substrate + Settings binding are
 implemented and locally gated, but the feature remains `in-progress` until the
@@ -2309,8 +2339,9 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - **Verifiable:** host — extend `simple_install_block_setup`/`simple_install_filesystem` to assert tpm2-luks accepted, the command vector contains `--block-setup tpm2-luks`, the tpm-absent degradation, the recovery-key gate; the new endpoint's luksDump/cryptenroll parse. CI/qemu — installer card + Security row render, real bootc tpm2-luks install, real cryptenroll, **PCR7 auto-unlock across a reboot**, the Plymouth recovery-key fallback (the qemu kickstarts + the hardware gate).
 - **Effort:** L · **Risk:** BOOT-CRITICAL. The recovery-key escrow **is** the de-risk (bare `tpm2-luks` is a known unbootable break). Avoid PCR over-binding (PCR7 only — binding 0/4/11 breaks on every ostree update). Keep `direct` as the still-offered "Don't encrypt" path; never auto-enable without the captured-key gate; keep the destructive-ack + `GOBLINS_OS_ENABLE_DESTRUCTIVE_INSTALL` env gate exactly as-is.
 
-### `TODO` btrfs `/home` + local snapshots + restore UI (Time Machine analogue)
+### `in-progress` btrfs `/home` + local snapshots + restore UI (Time Machine analogue)
 - [ ] Automatic local snapshots + an honest "last snapshot" status surface + a timestamped restore browser that recovers files from a chosen snapshot — never silently mutating the live system, always explicit and reversible (default side-by-side, no in-place rollback from the GUI).
+- [x] **Read-only snapshots status substrate source-gated (CI/qemu-pending):** core exposes `GET /v1/snapshots/status` and fail-closed `POST /v1/snapshots/restore`, parses `/proc/self/mountinfo`, parses `snapper -c home list --machine-readable`, reports `available=false` with "Local snapshots need a btrfs /home" on xfs/missing-tool/config cases, and always returns `executes_restore=false` until a real non-destructive restore path is qemu-proved. The bootc image now installs and `rpm -q` asserts Fedora 44 `btrfs-progs` and `libbtrfsutil`, plus `command -v btrfs`. This does **not** flip the installer root filesystem, create snapper configs/timers, render Settings UI, create snapshots, or restore files.
 - **Packages:** `btrfs-progs`, `libbtrfsutil`, `snapper`, `snapper-tools`, `python3-dnf-plugin-snapper`, `deja-dup` (snapper + deja-dup already installed + `rpm -q`-verified; **`btrfs-progs`/`libbtrfsutil` are the gap** — verify present in fc44 before adding).
 - **gsettings/dconf:** no GNOME schema governs btrfs snapshots — snapper is file-based (`/etc/snapper/configs/home`, `/etc/sysconfig/snapper`) + D-Bus `org.opensuse.Snapper`. `deja-dup` (external-target fallback only) exposes `org.gnome.DejaDup` keys. So local snapshots are config-only at the OS layer, surfaced through a NEW allowlisted core bridge — deliberately no gsettings panel.
 - **Files:** `os/bootc-install/00-goblins-os.toml` (**`[install.filesystem.root] type = "btrfs"`** replacing `xfs`), `os/bootc/Containerfile`, `crates/goblins-os-core/src/snapshots.rs` (NEW — read + restore engine; parse `snapper --machine-readable`; off-state when btrfs/snapper absent; **no fabrication**, mirroring `system_image.rs`), `crates/goblins-os-core/src/main.rs` (`GET /v1/snapshots/status`, `POST /v1/snapshots/restore`), `crates/goblins-os-settings/src/main.rs` (a "Snapshots" group in Recovery/Storage + the restore browser), `crates/goblins-os-verify/src/main.rs`, `os/snapper/home`, `os/systemd-system/goblins-os-snapshot-timeline.timer` + `…-cleanup.timer`.

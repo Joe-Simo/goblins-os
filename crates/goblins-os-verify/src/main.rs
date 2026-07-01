@@ -12852,13 +12852,8 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         file_check(root, "os/systemd-user/org.goblins.OS.IBus.service"),
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-waits-for-bus-name",
-            "Type=dbus",
-        ),
-        contains_check(
-            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-bus-name",
-            "BusName=org.freedesktop.IBus",
+            "textshortcuts-ibus-user-service-process-supervised",
+            "Type=simple",
         ),
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),

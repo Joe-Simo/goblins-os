@@ -264,6 +264,9 @@ text_shortcuts_session_enable_proof(){
   local service_state input_sources preload_engines core_code core_engine_available core_runtime_loop
   local input_source_configured preload_configured engine_listed adapter_self_test active_engine engine_set
 
+  ensure_textshortcuts_ibus_component
+  ibus write-cache >/tmp/gate-text-shortcuts-session-write-cache.log 2>&1 || true
+  systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-session-ibus-restart.log 2>&1 || true
   for _ in $(seq 1 60); do
     service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
     [ "$service_state" = "active" ] && break
@@ -271,7 +274,7 @@ text_shortcuts_session_enable_proof(){
   done
 
   if [ "$service_state" != "active" ]; then
-    proof_text_shortcuts "status=fail&stage=user-service&service=${service_state:-missing}&service_unit=org.goblins.OS.IBus.service"
+    proof_text_shortcuts "status=fail&stage=user-service&service=${service_state:-missing}&service_unit=org.goblins.OS.IBus.service&cache_refreshed=true&daemon_restarted=true&user_component_seeded=true"
     return 1
   fi
 
@@ -284,14 +287,6 @@ text_shortcuts_session_enable_proof(){
     return 1
   fi
 
-  ensure_textshortcuts_ibus_component
-  ibus write-cache >/tmp/gate-text-shortcuts-session-write-cache.log 2>&1 || true
-  systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-session-ibus-restart.log 2>&1 || true
-  for _ in $(seq 1 30); do
-    service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
-    [ "$service_state" = "active" ] && break
-    sleep 0.5
-  done
   engine_listed=false
   for _ in $(seq 1 40); do
     ensure_textshortcuts_ibus_component

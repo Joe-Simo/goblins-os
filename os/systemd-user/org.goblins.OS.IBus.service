@@ -6,8 +6,7 @@ PartOf=gnome-session-initialized.target
 After=gnome-session-initialized.target org.gnome.Shell@user.service org.goblins.OS.InputSourcesSeed.service
 
 [Service]
-Type=dbus
-BusName=org.freedesktop.IBus
+Type=simple
 Environment=IBUS_COMPONENT_PATH=%h/.local/share/ibus/component:/usr/share/ibus/component
 ExecStartPre=-/usr/bin/ibus write-cache
 ExecStart=/usr/bin/ibus-daemon --replace --xim --panel disable

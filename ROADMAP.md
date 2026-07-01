@@ -34,41 +34,42 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest hardware-gate run `28496717503` at `729ea69` on `main` passed the fast
-Rust build on both `ubuntu-24.04` and `ubuntu-24.04-arm`, passed the bootc image
-publish and verification installer ISO build, then failed inside the
-display-backed VM capture after the installed session reached `/ready/ORCH_START`
-and `/ready/ORCH_ALLDONE`. The artifact has real display captures through
-`31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png` and
-`30-preview-image-open.png` exist, but
+Latest source commit `e73590d` on `main` passed the fast Rust build
+(`28499432989`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
+tests, and release build all succeeded. Hardware-gate run `28499442352` at the
+same head passed bootc image publish and verification installer ISO build, then
+failed inside the display-backed VM capture. The artifact has real display
+captures through `31-text-shortcuts-candidate-bubble-render.png`;
+`29-preview-pdf-open.png` and `30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-That run proves the App Privacy follow-up worked:
-`app-privacy-revoke-proof.json` is `pass` with
-`PermissionStore.SetPermission` seed/readback, `/v1/app-privacy/revoke` HTTP
-`200`, `PermissionStore.DeletePermission`, `post_revoke_absent=true`, and prior
-state restored. It also keeps the earlier qemu-gated writes/renders green:
+That run proves the firewall follow-up worked:
+`firewall-live-toggle-proof.json` is `pass` with disable HTTP `200`,
+`disable_active=false`, enable HTTP `200`, and `enable_active=true`. It also
+keeps the previous live qemu proofs green: app-keyed Per-app Privacy revoke,
 keyboard shortcut rebind, input source switching, Focus arm/disarm, Preview
 PDF/image open/render, Text Shortcuts candidate metadata, overlay intent,
 deterministic candidate bubble frame/layout, and deterministic candidate bubble
-render all pass their live proof JSON. The remaining live failures are narrower:
-firewall disable succeeds but re-enable still returns HTTP `502` with
-`Firewall control returned before firewalld reported the requested state`, and
-Text Shortcuts session/live runtime now fails at IBus bus readiness:
-`text-shortcuts-session-enable-proof.json` reports service `active`, component
-seeded, cache refreshed, but `ibus list-engine` returns
-`Can't connect to IBus`. Firewall and Text Shortcuts live runtime stay
-`in-progress`; app-keyed Per-app Privacy revoke is qemu-proven.
+render all pass their proof JSON. The remaining live failure is Text Shortcuts
+runtime: `text-shortcuts-session-enable-proof.json` fails at `stage=user-service`
+with `service=inactive`, and the live keystroke/runtime proofs fail because
+`active_engine=missing`. The `Type=dbus` IBus user-unit follow-up is therefore
+wrong for this installed session shape.
 
-Current follow-up source work makes the IBus user unit `Type=dbus` with
-`BusName=org.freedesktop.IBus` so `systemctl --user is-active` means the IBus bus
-name is actually owned, adds explicit `ibus list-engine` readiness waits before
-listing or setting `goblins-textshortcuts`, and lets firewall status treat an
-active `firewalld.service` as an honest live-on fallback when unprivileged
-`firewall-cmd --state` does not report running after the root helper succeeds.
-This remains qemu-pending until the next display-backed VM run proves firewall
-re-enable with `enable_active=true` and live GTK Text Shortcuts expansion/render
-end-to-end.
+Current follow-up source work reverts the IBus user unit to `Type=simple`,
+restarts and cache-refreshes `org.goblins.OS.IBus.service` before the session
+proof declares the service unavailable, and keeps explicit `ibus list-engine`
+readiness waits before listing or setting `goblins-textshortcuts`. This remains
+qemu-pending until the next display-backed VM run proves
+`text-shortcuts-session-enable-proof.json`, `text-shortcuts-live-keystroke`, and
+`text-shortcuts-live-ibus-runtime-render` end-to-end.
+
+Previous hardware-gate run `28496717503` at `729ea69` on `main` proved the App
+Privacy follow-up worked: `app-privacy-revoke-proof.json` was `pass` with
+`PermissionStore.SetPermission` seed/readback, `/v1/app-privacy/revoke` HTTP
+`200`, `PermissionStore.DeletePermission`, `post_revoke_absent=true`, and prior
+state restored. It also narrowed the firewall failure to re-enable state
+readback and the Text Shortcuts failure to IBus bus readiness.
 
 Previous hardware-gate run `28493666844` at `52f0403` on `main` passed the fast
 Rust build on both `ubuntu-24.04` and `ubuntu-24.04-arm`, then failed inside the
@@ -236,7 +237,7 @@ not mark Batch 5 shipped.
   Accessibility rows, Firewall, Keyboard shortcuts, Focus (substrate+gschema),
   Migration (substrate), Multi-display (read side via `displays.rs`), Personal
   Hotspot, Per-app privacy, Keychain. **Gated WRITES still qemu-pending** for
-  firewall toggle and multi-display apply. IME/input-source switching, Focus
+  multi-display apply only. Firewall toggle, IME/input-source switching, Focus
   arm/disarm, keyboard rebind, and app-keyed Per-app Privacy revoke now have
   live display-backed VM proof.
 - **Batch 4 (engines) — 7 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**

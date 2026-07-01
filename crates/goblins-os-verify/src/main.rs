@@ -5897,6 +5897,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-bounds-ready-signals",
+            "GOS_READY_SIGNAL_TIMEOUT_SECONDS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-bounds-shot-helpers",
+            "GOS_SHOT_HELPER_TIMEOUT_SECONDS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-logs-bounded-helper-timeouts",
+            "GOBLINS_HWGATE_BOUNDED_COMMAND_TIMED_OUT",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-kills-stale-proof-window-processes",
             "pkill -x \"$base\"",
         ),

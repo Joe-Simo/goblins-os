@@ -31,7 +31,10 @@ export DESKTOP_SESSION="${DESKTOP_SESSION:-goblins-os}"
 # maximized surface, no compositor/session change. Login + installer already
 # fullscreen by design.
 export GOBLINS_OS_RENDER_FULLSCREEN=1
-sig(){ curl -s "http://$H/ready/$1" >/dev/null 2>&1; sleep 5; }
+sig(){
+  curl --max-time "${GOS_READY_SIGNAL_TIMEOUT_SECONDS:-5}" -s "http://$H/ready/$1" >/dev/null 2>&1 || true
+  sleep 5
+}
 proof_firewall(){ curl -s "http://$H/proof/firewall-live-toggle?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts(){ curl -s "http://$H/proof/text-shortcuts-session-enable?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate(){ curl -s "http://$H/proof/text-shortcuts-candidate-metadata?$1" >/dev/null 2>&1 || true; }
@@ -133,16 +136,49 @@ dismiss_shell_overview(){
   host_press_key "${token}-escape-b" Escape
   sleep 0.5
 }
+run_bounded_quiet(){
+  local seconds="$1"
+  shift
+  if [ -z "$seconds" ] || [ "$#" -eq 0 ]; then
+    return 0
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 2s "${seconds}s" "$@" >/dev/null 2>&1
+    local rc=$?
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      echo "GOBLINS_HWGATE_BOUNDED_COMMAND_TIMED_OUT seconds=$seconds command=$*"
+    fi
+    return "$rc"
+  fi
+
+  "$@" >/dev/null 2>&1 &
+  local bounded_pid=$!
+  local waited=0
+  while kill -0 "$bounded_pid" 2>/dev/null; do
+    if [ "$waited" -ge "$seconds" ]; then
+      echo "GOBLINS_HWGATE_BOUNDED_COMMAND_TIMED_OUT seconds=$seconds command=$*"
+      kill "$bounded_pid" 2>/dev/null || true
+      sleep 0.2
+      kill -9 "$bounded_pid" 2>/dev/null || true
+      wait "$bounded_pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$bounded_pid" 2>/dev/null
+}
 switch_control_off(){
-  gsettings set org.goblins.os.a11y.switch-control enabled false 2>/dev/null || true
-  gdbus call --session \
+  local helper_timeout="${GOS_SHOT_HELPER_TIMEOUT_SECONDS:-3}"
+  run_bounded_quiet "$helper_timeout" gsettings set org.goblins.os.a11y.switch-control enabled false || true
+  run_bounded_quiet "$helper_timeout" gdbus call --session \
+    --timeout "$helper_timeout" \
     --dest org.gnome.Shell \
     --object-path /org/gnome/Shell \
     --method org.gnome.Shell.Eval \
-    "if (globalThis.goblinsSwitchControl) globalThis.goblinsSwitchControl.hide(); 'switch-control-hidden';" \
-    >/dev/null 2>&1 || true
+    "if (globalThis.goblinsSwitchControl) globalThis.goblinsSwitchControl.hide(); 'switch-control-hidden';" || true
   if command -v gnome-extensions >/dev/null 2>&1; then
-    gnome-extensions disable goblins-switch@goblins.os >/dev/null 2>&1 || true
+    run_bounded_quiet "$helper_timeout" gnome-extensions disable goblins-switch@goblins.os || true
   fi
   sleep 0.8
 }
@@ -1559,6 +1595,7 @@ shot(){
       env_args+=("$key=${!key}")
     fi
   done
+  echo "GOBLINS_HWGATE_SHOT_START name=$n command=$*"
   switch_control_off
   pkill -x "$base" 2>/dev/null || true
   pkill -f -- "$bin" 2>/dev/null || true
@@ -1571,7 +1608,9 @@ shot(){
     tail -n 80 "$log" 2>/dev/null || true
   fi
   switch_control_off
+  echo "GOBLINS_HWGATE_SHOT_SIGNALING name=$n"
   sig "$n"
+  echo "GOBLINS_HWGATE_SHOT_SIGNALED name=$n"
   kill "$p" 2>/dev/null || true
   pkill -x "$base" 2>/dev/null || true
   pkill -f -- "$bin" 2>/dev/null || true

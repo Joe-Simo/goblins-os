@@ -34,36 +34,38 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Head `b5ddaca` is CI-green for the fast Rust build: GitHub Actions build run
-`28549840219` passed on x86_64 and aarch64. Hardware-gate run `28549856369` at
+Head `0d4b956` is source-verified (`goblins_os_verify_result total=2799
+blocked=0`) and CI-green for the fast Rust build: GitHub Actions build run
+`28553107526` passed on x86_64 and aarch64. Hardware-gate run `28553109862` at
 that head passed bootc image publish, verification installer ISO build, model
-prep, install/first boot, and the display-backed VM orchestrator. The artifact
-contains the new screenshot set, `31-text-shortcuts-candidate-bubble-render.png`,
-`32-text-shortcuts-live-ibus-runtime-render.png`, and all runtime proof JSONs
-except `proof-manifest.json` because close-signoff failed before manifest write.
+prep, install/first boot, and the display-backed VM proof routes for Firewall
+toggle, IME/input-source switching, Focus arm/disarm, keyboard rebind,
+app-keyed Per-app Privacy revoke, Preview PDF/image open, Multi-display apply,
+and Text Shortcuts live IBus runtime/render. The artifact contains
+`31-text-shortcuts-candidate-bubble-render.png`,
+`32-text-shortcuts-live-ibus-runtime-render.png`, and all required runtime proof
+JSONs with `status=pass`, but still no `proof-manifest.json` because the capture
+run timed out before close-signoff.
 
-That failure is now narrowed to a stale proof contract, not to the runtime engine
-itself. `text-shortcuts-live-ibus-runtime-render-proof.json` passed with
-`normal_actual=onmyway.`, `passthrough_actual=hello.`, `password_refusal=true`,
-`focused_field_callback=true`, `text_input_v3_commit=true`,
-`rendered_accept_bubble=true`, `runtime_ready_claim=true`, and
-`core_readiness_flip=deferred`. The older shallow
-`text-shortcuts-live-keystroke-proof.json` still remained mandatory and failed at
-`stage=normal-readback` with `normal_actual=missing` and
-`normal_file_bytes=0`. That legacy proof is superseded by the stronger
-runtime/render proof because the stronger proof covers normal expansion,
-pass-through, password refusal, focused-field callback, Wayland text-input-v3
-commit, and the rendered accept bubble in one installed GNOME/Wayland session.
+That latest failure is now narrowed to display capture harness liveness, not to
+the runtime engine or gated write routes. The run logged `timeout; captured 26`
+after `20-gamemode-active`: `22-mangohud-overlay.png`,
+`21-gamescope-session.png`, and the three studio-live shots were never signaled.
+`text-shortcuts-live-ibus-runtime-render-proof.json` passed with
+`normal_actual=onmyway.`, `passthrough_actual=hello.`,
+`password_refusal=true`, `focused_field_callback=true`,
+`text_input_v3_commit=true`, `rendered_accept_bubble=true`,
+`runtime_ready_claim=true`, and `core_readiness_flip=deferred`; the older shallow
+`text-shortcuts-live-keystroke-proof.json` is no longer in the mandatory
+hardware signoff path.
 
 The current source follow-up is qemu-pending and does **not** mark more features
-shipped. It retires the superseded `text-shortcuts-live-keystroke-proof.json`
-from the mandatory hardware signoff path while keeping
-`text-shortcuts-live-ibus-runtime-render-proof.json` and
-`32-text-shortcuts-live-ibus-runtime-render.png` required. The gate must still
-fail closed unless the runtime/render proof records active `goblins-textshortcuts`
-IBus engine selection, QMP keyboard input, normal expansion, pass-through,
-password refusal, focused-field callback, text-input-v3 commit, rendered accept
-bubble, Inter styling, and `core_readiness_flip=deferred`.
+shipped. It bounds ready-signal curls and the `switch_control_off` shot helper
+with `GOS_READY_SIGNAL_TIMEOUT_SECONDS` / `GOS_SHOT_HELPER_TIMEOUT_SECONDS`, and
+adds shot start/signaling log markers so a stuck gaming or studio surface cannot
+consume the whole hardware-gate timeout without producing useful evidence. The
+gate must still fail closed unless the required PNGs, pass-status proof JSONs,
+and `proof-manifest.json` are produced by the display-backed VM.
 
 Previous hardware-gate run `28538674596` at `9f5ca8b` passed bootc image
 publish, verification installer ISO build, model prep, install, first boot
@@ -315,14 +317,16 @@ not mark Batch 5 shipped.
   changes, encryption at install, recovery-key escrow, timers, Settings UI,
   real snapshot creation/restore, and boot/reboot proof remain CI/qemu-pending.
 
-**Current local feature pass:** Firewall toggle substrate + Settings binding are
-implemented and locally gated, but the feature remains `in-progress` until the
-CI/qemu image pass proves the GTK render, polkit oneshot path, and live toggle.
-Local proof: `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`,
-`cargo test --workspace`, `goblins-os-verify --source-root .` →
-**blocked=0 (1553)**, `git diff --check`, helper `bash -n`, polkit rule
-`node --check` via a temporary `.js` copy, and the Rust 1.88 GTK container
-`cargo clippy -p goblins-os-settings --features goblins-os-settings/native-desktop -- -D warnings`.
+**Current local gate pass:** Capture-harness liveness follow-up is implemented
+and locally gated, but it remains qemu-pending and does **not** move more
+features to `shipped` until the hardware gate produces the missing gaming/studio
+captures, `proof-manifest.json`, and close-signoff row. Local proof:
+`bash -n` for the hardware-gate scripts, `cargo fmt -p goblins-os-verify -- --check`,
+`cargo fmt --all -- --check`, `cargo test -p goblins-os-verify`,
+`cargo run -p goblins-os-verify -- --source-root .` → **blocked=0 (2802)**,
+`git diff --check`, `cargo clippy --workspace -- -D warnings`, and
+`cargo test --workspace`. Full `verify-shipping-status.sh` still fails on
+missing complete hardware artifacts/signoff rows, as expected.
 The installed-image self-test now exercises `/v1/firewall/status` and the
 `/v1/firewall/enabled` POST with an honest-success/honest-failure assertion;
 the local aarch64 Docker bootc `selftest` target passes with the expected

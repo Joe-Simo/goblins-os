@@ -158,6 +158,7 @@ TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF="$RUN_DIR/text-shortcuts-candidate-
 TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF="$RUN_DIR/text-shortcuts-live-ibus-runtime-render-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="$RUN_DIR/keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="$RUN_DIR/input-sources-roundtrip-proof.json"
+MULTI_DISPLAY_APPLY_PROOF="$RUN_DIR/multi-display-apply-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="$RUN_DIR/focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="$RUN_DIR/app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="$RUN_DIR/preview-open-render-proof.json"
@@ -367,6 +368,24 @@ if ! grep -Fq '"status": "pass"' "$INPUT_SOURCES_ROUNDTRIP_PROOF" \
   echo "HONESTY GUARD: missing or failing Input sources roundtrip proof at $INPUT_SOURCES_ROUNDTRIP_PROOF"
   exit 4
 fi
+if ! grep -Fq '"status": "pass"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"status_route": "/v1/displays/status"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"apply_route": "/v1/displays/apply"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"display_config": "org.gnome.Mutter.DisplayConfig"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"verify_http": "200"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"verify_ok": "true"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"temporary_http": "200"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"temporary_ok": "true"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"persistent_guard_http": "400"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"persistent_confirmation_required": "true"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"stale_serial_http": "409"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"stale_serial_rejected": "true"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"roundtrip_restored": "true"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"persistent_keep_claim": "false"' "$MULTI_DISPLAY_APPLY_PROOF" \
+  || ! grep -Fq '"same_layout_noop": "true"' "$MULTI_DISPLAY_APPLY_PROOF"; then
+  echo "HONESTY GUARD: missing or failing multi-display apply proof at $MULTI_DISPLAY_APPLY_PROOF"
+  exit 4
+fi
 if ! grep -Fq '"status": "pass"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
   || ! grep -Fq '"status_route": "/v1/focus/status"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
   || ! grep -Fq '"activate_route": "/v1/focus/activate"' "$FOCUS_ARM_ROUNDTRIP_PROOF" \
@@ -483,6 +502,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "text_shortcuts_live_ibus_runtime_render_proof":"text-shortcuts-live-ibus-runtime-render-proof.json",
           "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
           "input_sources_roundtrip_proof":"input-sources-roundtrip-proof.json",
+          "multi_display_apply_proof":"multi-display-apply-proof.json",
           "focus_arm_roundtrip_proof":"focus-arm-roundtrip-proof.json",
           "app_privacy_revoke_proof":"app-privacy-revoke-proof.json",
           "preview_open_render_proof":"preview-open-render-proof.json",

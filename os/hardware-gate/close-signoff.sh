@@ -90,6 +90,7 @@ TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF="text-shortcuts-candidate-bubble-re
 TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF="text-shortcuts-live-ibus-runtime-render-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="input-sources-roundtrip-proof.json"
+MULTI_DISPLAY_APPLY_PROOF="multi-display-apply-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
@@ -109,6 +110,7 @@ TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_STATUS="not checked"
 TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_STATUS="not checked"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS="not checked"
 INPUT_SOURCES_ROUNDTRIP_STATUS="not checked"
+MULTI_DISPLAY_APPLY_STATUS="not checked"
 FOCUS_ARM_ROUNDTRIP_STATUS="not checked"
 APP_PRIVACY_REVOKE_STATUS="not checked"
 PREVIEW_OPEN_RENDER_STATUS="not checked"
@@ -306,6 +308,7 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_live_ibus_runtime_render_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"'"' "$manifest" \
     && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest" \
+    && rg -q '"multi_display_apply_proof"[[:space:]]*:[[:space:]]*"'"$MULTI_DISPLAY_APPLY_PROOF"'"' "$manifest" \
     && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"app_privacy_revoke_proof"[[:space:]]*:[[:space:]]*"'"$APP_PRIVACY_REVOKE_PROOF"'"' "$manifest" \
     && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest"
@@ -570,6 +573,31 @@ input_sources_roundtrip_proof_passes() {
     && rg -q '"restore_sources"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"restore_current"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof"
+}
+
+multi_display_apply_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/displays/status"' "$proof" \
+    && rg -q '"apply_route"[[:space:]]*:[[:space:]]*"/v1/displays/apply"' "$proof" \
+    && rg -q '"display_config"[[:space:]]*:[[:space:]]*"org.gnome.Mutter.DisplayConfig"' "$proof" \
+    && rg -q '"connector"[[:space:]]*:[[:space:]]*"[^"]+"' "$proof" \
+    && rg -q '"mode_id"[[:space:]]*:[[:space:]]*"[^"]+"' "$proof" \
+    && rg -q '"serial"[[:space:]]*:[[:space:]]*"[0-9]+"' "$proof" \
+    && rg -q '"verify_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"verify_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"temporary_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"temporary_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"persistent_guard_http"[[:space:]]*:[[:space:]]*"400"' "$proof" \
+    && rg -q '"persistent_confirmation_required"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"stale_serial"[[:space:]]*:[[:space:]]*"[0-9]+"' "$proof" \
+    && rg -q '"stale_serial_http"[[:space:]]*:[[:space:]]*"409"' "$proof" \
+    && rg -q '"stale_serial_rejected"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"persistent_keep_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"same_layout_noop"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
 focus_arm_roundtrip_proof_passes() {
@@ -846,7 +874,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! screenshot_manifest_matches_iso "$SCREENSHOT_DIR/proof-manifest.json"; then
     fail "Screenshot proof manifest missing or not tied to this architecture ISO: $SCREENSHOT_DIR/proof-manifest.json"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
+    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
     exit 1
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
@@ -909,6 +937,11 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Expected live /v1/input/sources and /v1/input/switch-next writes, gsettings read-back, and source/current restore before signoff."
     exit 1
   fi
+  if ! multi_display_apply_proof_passes "$SCREENSHOT_DIR/$MULTI_DISPLAY_APPLY_PROOF"; then
+    fail "Multi-display apply proof missing or failed: $SCREENSHOT_DIR/$MULTI_DISPLAY_APPLY_PROOF"
+    fail "Expected live /v1/displays/apply verify + temporary same-layout apply, persistent-confirmation guard, stale-serial rejection, and no persistent keep claim before signoff."
+    exit 1
+  fi
   if ! focus_arm_roundtrip_proof_passes "$SCREENSHOT_DIR/$FOCUS_ARM_ROUNDTRIP_PROOF"; then
     fail "Focus arm roundtrip proof missing or failed: $SCREENSHOT_DIR/$FOCUS_ARM_ROUNDTRIP_PROOF"
     fail "Expected live /v1/focus/activate and /v1/focus/deactivate writes, active-mode/banner read-back, notification restore, and no mode/schedule/per-app breakthrough claims before signoff."
@@ -937,6 +970,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   log "Text Shortcuts live IBus runtime/render proof passed."
   log "Keyboard shortcuts roundtrip proof passed."
   log "Input sources roundtrip proof passed."
+  log "Multi-display apply proof passed."
   log "Focus arm roundtrip proof passed."
   log "App privacy revoke proof passed."
   log "Preview open/render proof passed."
@@ -955,6 +989,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_STATUS="yes ($TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF + 32-text-shortcuts-live-ibus-runtime-render.png: live IBus callback, text-input-v3 commit, password refusal, and rendered accept bubble proved; core readiness flip deferred)"
   KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS="yes ($KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF: shortcut + Caps Lock writes round-tripped and restored)"
   INPUT_SOURCES_ROUNDTRIP_STATUS="yes ($INPUT_SOURCES_ROUNDTRIP_PROOF: input source set + switch writes round-tripped and restored)"
+  MULTI_DISPLAY_APPLY_STATUS="yes ($MULTI_DISPLAY_APPLY_PROOF: DisplayConfig verify + temporary same-layout apply, persistent guard, and stale serial rejection proved)"
   FOCUS_ARM_ROUNDTRIP_STATUS="yes ($FOCUS_ARM_ROUNDTRIP_PROOF: Focus activate/deactivate writes round-tripped and notification banners restored)"
   APP_PRIVACY_REVOKE_STATUS="yes ($APP_PRIVACY_REVOKE_PROOF: seeded app permission revoked through PermissionStore and prior state restored)"
   PREVIEW_OPEN_RENDER_STATUS="yes ($PREVIEW_OPEN_RENDER_PROOF: Papers PDF and Loupe image windows opened/rendered in display-backed VM)"
@@ -1030,6 +1065,7 @@ if [ "$VERIFY_STATUS" = "pass" ] \
 	  && [[ "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_STATUS" == yes* ]] \
 	  && [[ "$KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$INPUT_SOURCES_ROUNDTRIP_STATUS" == yes* ]] \
+  && [[ "$MULTI_DISPLAY_APPLY_STATUS" == yes* ]] \
   && [[ "$FOCUS_ARM_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$APP_PRIVACY_REVOKE_STATUS" == yes* ]] \
   && [[ "$PREVIEW_OPEN_RENDER_STATUS" == yes* ]] \
@@ -1087,6 +1123,7 @@ cat >> "$OUT" <<EOF2
 - Text Shortcuts live IBus runtime/render checked: ${TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_STATUS}
 - Keyboard shortcuts roundtrip checked: ${KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS}
 - Input sources roundtrip checked: ${INPUT_SOURCES_ROUNDTRIP_STATUS}
+- Multi-display apply checked: ${MULTI_DISPLAY_APPLY_STATUS}
 - Focus arm roundtrip checked: ${FOCUS_ARM_ROUNDTRIP_STATUS}
 - App privacy revoke checked: ${APP_PRIVACY_REVOKE_STATUS}
 - Preview open/render checked: ${PREVIEW_OPEN_RENDER_STATUS}

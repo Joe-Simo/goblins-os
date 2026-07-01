@@ -7657,6 +7657,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-multi-display-apply-proof",
+            "multi_display_apply_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-focus-arm-roundtrip-proof",
             "focus_arm_roundtrip_proof_passes",
         ),
@@ -7681,6 +7686,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "screenshot_run_is_complete",
             "shipping-status-complete-run-requires-input-sources-roundtrip-proof",
             r#"input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "screenshot_run_is_complete",
+            "shipping-status-complete-run-requires-multi-display-apply-proof",
+            r#"multi_display_apply_proof_passes "$run_dir/$MULTI_DISPLAY_APPLY_PROOF""#,
         ),
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -7715,6 +7726,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "print_missing_screenshot_paths",
+            "shipping-status-missing-list-includes-multi-display-apply-proof",
+            r#"echo "  $run_dir/$MULTI_DISPLAY_APPLY_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "print_missing_screenshot_paths",
             "shipping-status-missing-list-includes-focus-arm-roundtrip-proof",
             r#"echo "  $run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF""#,
         ),
@@ -7741,6 +7758,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "signoff_block_required_proof_is_complete",
             "shipping-status-signoff-requires-focus-arm-roundtrip-proof",
             r#"signoff_block_contains "$block" "^- Focus arm roundtrip checked: yes" || return 1"#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "signoff_block_required_proof_is_complete",
+            "shipping-status-signoff-requires-multi-display-apply-proof",
+            r#"signoff_block_contains "$block" "^- Multi-display apply checked: yes" || return 1"#,
         ),
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -7812,6 +7835,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-input-sources-roundtrip-proof-filename",
             "input-sources-roundtrip-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-multi-display-apply-proof-filename",
+            "multi-display-apply-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -7985,6 +8013,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-signoff-requires-multi-display-apply-proof-row",
+            "Multi-display apply checked: yes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-signoff-requires-app-privacy-revoke-proof-row",
             "App privacy revoke checked: yes",
         ),
@@ -8095,6 +8128,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-multi-display-apply-proof",
+            "multi_display_apply_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-requires-focus-arm-roundtrip-proof",
             "focus_arm_roundtrip_proof_passes",
         ),
@@ -8170,6 +8208,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-multi-display-apply-proof",
+            "Multi-display apply checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-focus-arm-roundtrip-proof",
             "Focus arm roundtrip checked",
         ),
@@ -8192,6 +8235,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-focus-arm-roundtrip-status-completes-project",
             r#"[[ "$FOCUS_ARM_ROUNDTRIP_STATUS" == yes* ]]"#,
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-multi-display-apply-status-completes-project",
+            r#"[[ "$MULTI_DISPLAY_APPLY_STATUS" == yes* ]]"#,
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),

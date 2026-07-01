@@ -60,6 +60,7 @@ TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF="text-shortcuts-candidate-bubble-re
 TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF="text-shortcuts-live-ibus-runtime-render-proof.json"
 KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF="keyboard-shortcuts-roundtrip-proof.json"
 INPUT_SOURCES_ROUNDTRIP_PROOF="input-sources-roundtrip-proof.json"
+MULTI_DISPLAY_APPLY_PROOF="multi-display-apply-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
@@ -239,6 +240,7 @@ screenshot_run_is_complete() {
   text_shortcuts_live_ibus_runtime_render_proof_passes "$run_dir/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" || return 1
   keyboard_shortcuts_roundtrip_proof_passes "$run_dir/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" || return 1
   input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF" || return 1
+  multi_display_apply_proof_passes "$run_dir/$MULTI_DISPLAY_APPLY_PROOF" || return 1
   focus_arm_roundtrip_proof_passes "$run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF" || return 1
   app_privacy_revoke_proof_passes "$run_dir/$APP_PRIVACY_REVOKE_PROOF" || return 1
   preview_open_render_proof_passes "$run_dir/$PREVIEW_OPEN_RENDER_PROOF" || return 1
@@ -298,6 +300,7 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_live_ibus_runtime_render_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"'"' "$manifest" \
     && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest" \
+    && rg -q '"multi_display_apply_proof"[[:space:]]*:[[:space:]]*"'"$MULTI_DISPLAY_APPLY_PROOF"'"' "$manifest" \
     && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"app_privacy_revoke_proof"[[:space:]]*:[[:space:]]*"'"$APP_PRIVACY_REVOKE_PROOF"'"' "$manifest" \
     && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest"
@@ -564,6 +567,31 @@ input_sources_roundtrip_proof_passes() {
     && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
+multi_display_apply_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/displays/status"' "$proof" \
+    && rg -q '"apply_route"[[:space:]]*:[[:space:]]*"/v1/displays/apply"' "$proof" \
+    && rg -q '"display_config"[[:space:]]*:[[:space:]]*"org.gnome.Mutter.DisplayConfig"' "$proof" \
+    && rg -q '"connector"[[:space:]]*:[[:space:]]*"[^"]+"' "$proof" \
+    && rg -q '"mode_id"[[:space:]]*:[[:space:]]*"[^"]+"' "$proof" \
+    && rg -q '"serial"[[:space:]]*:[[:space:]]*"[0-9]+"' "$proof" \
+    && rg -q '"verify_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"verify_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"temporary_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"temporary_ok"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"persistent_guard_http"[[:space:]]*:[[:space:]]*"400"' "$proof" \
+    && rg -q '"persistent_confirmation_required"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"stale_serial"[[:space:]]*:[[:space:]]*"[0-9]+"' "$proof" \
+    && rg -q '"stale_serial_http"[[:space:]]*:[[:space:]]*"409"' "$proof" \
+    && rg -q '"stale_serial_rejected"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"roundtrip_restored"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"persistent_keep_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && rg -q '"same_layout_noop"[[:space:]]*:[[:space:]]*"true"' "$proof"
+}
+
 focus_arm_roundtrip_proof_passes() {
   local proof="$1"
 
@@ -710,6 +738,10 @@ print_missing_screenshot_paths() {
   fi
   if ! input_sources_roundtrip_proof_passes "$run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF"; then
     echo "  $run_dir/$INPUT_SOURCES_ROUNDTRIP_PROOF"
+    missing=1
+  fi
+  if ! multi_display_apply_proof_passes "$run_dir/$MULTI_DISPLAY_APPLY_PROOF"; then
+    echo "  $run_dir/$MULTI_DISPLAY_APPLY_PROOF"
     missing=1
   fi
   if ! focus_arm_roundtrip_proof_passes "$run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF"; then
@@ -876,6 +908,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $INPUT_SOURCES_ROUNDTRIP_PROOF (missing or Input sources roundtrip proof failed)"
     missing=1
   fi
+  if multi_display_apply_proof_passes "$run_dir/$MULTI_DISPLAY_APPLY_PROOF"; then
+    echo "[PASS] $MULTI_DISPLAY_APPLY_PROOF"
+  else
+    echo "[FAIL] $MULTI_DISPLAY_APPLY_PROOF (missing or Multi-display apply proof failed)"
+    missing=1
+  fi
   if focus_arm_roundtrip_proof_passes "$run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF"; then
     echo "[PASS] $FOCUS_ARM_ROUNDTRIP_PROOF"
   else
@@ -948,6 +986,7 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$INPUT_SOURCES_ROUNDTRIP_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$MULTI_DISPLAY_APPLY_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$FOCUS_ARM_ROUNDTRIP_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$APP_PRIVACY_REVOKE_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$PREVIEW_OPEN_RENDER_PROOF
@@ -1011,6 +1050,7 @@ signoff_block_required_proof_is_complete() {
   signoff_block_contains "$block" "^- Text Shortcuts candidate bubble render screenshot checked: yes" || return 1
   signoff_block_contains "$block" "^- Keyboard shortcuts roundtrip checked: yes" || return 1
   signoff_block_contains "$block" "^- Input sources roundtrip checked: yes" || return 1
+  signoff_block_contains "$block" "^- Multi-display apply checked: yes" || return 1
   signoff_block_contains "$block" "^- Focus arm roundtrip checked: yes" || return 1
   signoff_block_contains "$block" "^- App privacy revoke checked: yes" || return 1
   signoff_block_contains "$block" "^- Preview open/render checked: yes" || return 1
@@ -1267,6 +1307,8 @@ check "core app privacy exposes allowlisted revoke route" "rg -q '/v1/app-privac
 check "settings app privacy exposes revoke controls" "rg -q 'app_permission_revoke_row' crates/goblins-os-settings/src/main.rs && rg -q '/v1/app-privacy/revoke' crates/goblins-os-settings/src/main.rs"
 check "core display apply exposes serial-gated Mutter route" "rg -q '/v1/displays/apply' crates/goblins-os-core/src/main.rs && rg -q 'ApplyMonitorsConfig' crates/goblins-os-core/src/displays.rs && rg -q 'validate_logical_monitors' crates/goblins-os-core/src/displays.rs && rg -q 'Display layout changed before apply' crates/goblins-os-core/src/displays.rs"
 check "settings displays reports protected apply gate" "rg -q 'display_apply_detail' crates/goblins-os-settings/src/main.rs && rg -q 'Protected display apply is available' crates/goblins-os-settings/src/main.rs"
+check "capture harness proves multi-display apply guarded route" "rg -q '/proof/multi-display-apply' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/displays/status' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/displays/apply' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'org.gnome.Mutter.DisplayConfig.GetCurrentState' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'persistent_confirmation_required=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'stale_serial_rejected=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'persistent_keep_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "capture driver persists multi-display apply proof" "rg -q 'multi-display-apply-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'multi-display-apply' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing multi-display apply proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "installed self-test checks firewall status and honest toggle route" "rg -q '/v1/firewall/status' os/bootc/run-selftest.sh && rg -q '/v1/firewall/enabled' os/bootc/run-selftest.sh && rg -Fq '502|503) [ \"\$firewall_toggle_ok\" != \"true\" ]' os/bootc/run-selftest.sh && rg -q 'firewall_toggle_body' os/bootc/run-selftest.sh"
 check "settings interaction render captures firewall toggle failure" "rg -q 'capture_settings_firewall_toggle_interaction' os/bootc/render-screens.sh && rg -q '118-settings-firewall-before.png' os/bootc/render-screens.sh && rg -q '119-settings-firewall-toggle-failed.png' os/bootc/render-screens.sh"
 check "firewall bridge rule is installed in image-owned polkit path" "rg -q '60-goblins-os-firewall.rules /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules' os/bootc/Containerfile && rg -q '/usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules' crates/goblins-os-core/src/firewall.rs && rg -q '/usr/bin/systemctl' crates/goblins-os-core/src/firewall.rs"

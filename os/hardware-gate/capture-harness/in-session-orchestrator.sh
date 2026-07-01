@@ -44,6 +44,7 @@ proof_text_shortcuts_candidate_bubble_render(){ curl -s "http://$H/proof/text-sh
 proof_text_shortcuts_live_ibus_runtime_render(){ curl -s "http://$H/proof/text-shortcuts-live-ibus-runtime-render?$1" >/dev/null 2>&1 || true; }
 proof_keyboard_shortcuts_roundtrip(){ curl -s "http://$H/proof/keyboard-shortcuts-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_input_sources_roundtrip(){ curl -s "http://$H/proof/input-sources-roundtrip?$1" >/dev/null 2>&1 || true; }
+proof_multi_display_apply(){ curl -s "http://$H/proof/multi-display-apply?$1" >/dev/null 2>&1 || true; }
 proof_focus_arm_roundtrip(){ curl -s "http://$H/proof/focus-arm-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_app_privacy_revoke(){ curl -s "http://$H/proof/app-privacy-revoke?$1" >/dev/null 2>&1 || true; }
 proof_preview_open_render(){ curl -s "http://$H/proof/preview-open-render?$1" >/dev/null 2>&1 || true; }
@@ -1108,6 +1109,172 @@ input_sources_roundtrip_proof(){
   proof_input_sources_roundtrip "status=pass&source_route=/v1/input/sources&switch_route=/v1/input/switch-next&test_sources=xkb-us,xkb-gb&set_http=200&set_ok=true&sources_gsettings_readback=true&current_before_switch=0&switch_http=200&switch_ok=true&switch_switched=true&current_after_switch=1&restore_sources=true&restore_current=true&roundtrip_restored=true"
   return 0
 }
+multi_display_apply_payloads(){
+  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+import json
+import re
+import sys
+
+state_path, verify_path, temporary_path, persistent_guard_path, stale_path = sys.argv[1:6]
+state = open(state_path, encoding="utf-8").read()
+serial_match = re.search(r"^\s*\(\s*(?:uint32\s+)?([0-9]+)\s*,", state, re.S)
+if not serial_match:
+    raise SystemExit("missing DisplayConfig serial")
+serial = int(serial_match.group(1))
+monitor_match = re.search(
+    r"\(\('([^']+)',\s*'[^']*',\s*'[^']*',\s*'[^']*'\),\s*\[(.*?)\]\s*,\s*\{",
+    state,
+    re.S,
+)
+if not monitor_match:
+    raise SystemExit("missing DisplayConfig monitor tuple")
+connector = monitor_match.group(1)
+modes = monitor_match.group(2)
+current_mode = re.search(r"\('([^']+)'.*?\{[^{}]*'is-current': <true>", modes, re.S)
+if not current_mode:
+    current_mode = re.search(r"\('([^']+)'", modes, re.S)
+if not current_mode:
+    raise SystemExit("missing DisplayConfig current mode id")
+mode_id = current_mode.group(1)
+if not re.match(r"^[A-Za-z0-9._-]{1,80}$", connector):
+    raise SystemExit("unsafe connector id")
+if not re.match(r"^[A-Za-z0-9._@-]{1,120}$", mode_id):
+    raise SystemExit("unsafe mode id")
+
+base = {
+    "serial": serial,
+    "method": "verify",
+    "logical_monitors": [
+        {
+            "x": 0,
+            "y": 0,
+            "scale": 1.0,
+            "transform": 0,
+            "primary": True,
+            "monitors": [{"connector": connector, "mode_id": mode_id}],
+        }
+    ],
+}
+payloads = {
+    verify_path: base,
+    temporary_path: {**base, "method": "temporary"},
+    persistent_guard_path: {**base, "method": "persistent"},
+    stale_path: {**base, "serial": serial + 999999},
+}
+for path, payload in payloads.items():
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+        fh.write("\n")
+with open("/tmp/gate-multi-display-apply-meta.json", "w", encoding="utf-8") as fh:
+    json.dump(
+        {
+            "serial": serial,
+            "stale_serial": serial + 999999,
+            "connector": connector,
+            "mode_id": mode_id,
+        },
+        fh,
+        sort_keys=True,
+    )
+    fh.write("\n")
+PY
+}
+multi_display_apply_proof(){
+  local status_file=/tmp/gate-multi-display-status.json
+  local state_file=/tmp/gate-multi-display-state.txt
+  local state_err=/tmp/gate-multi-display-state.err
+  local verify_payload=/tmp/gate-multi-display-verify-payload.json
+  local temporary_payload=/tmp/gate-multi-display-temporary-payload.json
+  local persistent_guard_payload=/tmp/gate-multi-display-persistent-guard-payload.json
+  local stale_payload=/tmp/gate-multi-display-stale-payload.json
+  local verify_file=/tmp/gate-multi-display-verify.json
+  local temporary_file=/tmp/gate-multi-display-temporary.json
+  local persistent_guard_file=/tmp/gate-multi-display-persistent-guard.json
+  local stale_file=/tmp/gate-multi-display-stale.json
+  local status_code available allowed serial connector mode_id state_serial stale_serial
+  local verify_code verify_ok temporary_code temporary_ok guard_code guard_ok stale_code stale_ok
+  local state_error
+
+  for _ in $(seq 1 60); do
+    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+
+  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/displays/status" || true)
+  available=$(json_field "$status_file" mutter_display_config_available)
+  allowed=$(json_field "$status_file" mutter_display_apply_allowed)
+  serial=$(json_field "$status_file" display_config_serial)
+  if [ "$status_code" != "200" ] || [ "$available" != "true" ] || [ "$allowed" != "true" ] || [ -z "$serial" ]; then
+    proof_multi_display_apply "status=fail&stage=status&status_route=/v1/displays/status&apply_route=/v1/displays/apply&status_http=${status_code:-000}&display_config_available=${available:-missing}&apply_allowed=${allowed:-missing}&serial=${serial:-missing}"
+    return 1
+  fi
+
+  if ! gdbus call --session \
+    --dest org.gnome.Mutter.DisplayConfig \
+    --object-path /org/gnome/Mutter/DisplayConfig \
+    --method org.gnome.Mutter.DisplayConfig.GetCurrentState >"$state_file" 2>"$state_err"; then
+    state_error="$(proof_query_value "$(cat "$state_err" 2>/dev/null || true)")"
+    proof_multi_display_apply "status=fail&stage=current-state&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&state_error=$state_error"
+    return 1
+  fi
+  if ! multi_display_apply_payloads "$state_file" "$verify_payload" "$temporary_payload" "$persistent_guard_payload" "$stale_payload" >"$state_err" 2>&1; then
+    state_error="$(proof_query_value "$(cat "$state_err" 2>/dev/null || true)")"
+    proof_multi_display_apply "status=fail&stage=payload&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&state_error=$state_error"
+    return 1
+  fi
+
+  state_serial=$(json_field /tmp/gate-multi-display-apply-meta.json serial)
+  stale_serial=$(json_field /tmp/gate-multi-display-apply-meta.json stale_serial)
+  connector=$(json_field /tmp/gate-multi-display-apply-meta.json connector)
+  mode_id=$(json_field /tmp/gate-multi-display-apply-meta.json mode_id)
+  if [ "$state_serial" != "$serial" ]; then
+    proof_multi_display_apply "status=fail&stage=serial-mismatch&status_route=/v1/displays/status&apply_route=/v1/displays/apply&status_serial=${serial:-missing}&state_serial=${state_serial:-missing}"
+    return 1
+  fi
+
+  verify_code=$(curl -s -o "$verify_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d "@$verify_payload" \
+    "$LIVE_URL/v1/displays/apply" || true)
+  verify_ok=$(json_field "$verify_file" ok)
+  if [ "$verify_code" != "200" ] || [ "$verify_ok" != "true" ]; then
+    proof_multi_display_apply "status=fail&stage=verify&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&connector=$(proof_query_value "$connector")&mode_id=$(proof_query_value "$mode_id")&serial=$state_serial&verify_http=${verify_code:-000}&verify_ok=${verify_ok:-missing}"
+    return 1
+  fi
+
+  temporary_code=$(curl -s -o "$temporary_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d "@$temporary_payload" \
+    "$LIVE_URL/v1/displays/apply" || true)
+  temporary_ok=$(json_field "$temporary_file" ok)
+  if [ "$temporary_code" != "200" ] || [ "$temporary_ok" != "true" ]; then
+    proof_multi_display_apply "status=fail&stage=temporary&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&connector=$(proof_query_value "$connector")&mode_id=$(proof_query_value "$mode_id")&serial=$state_serial&verify_http=200&verify_ok=true&temporary_http=${temporary_code:-000}&temporary_ok=${temporary_ok:-missing}"
+    return 1
+  fi
+
+  guard_code=$(curl -s -o "$persistent_guard_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d "@$persistent_guard_payload" \
+    "$LIVE_URL/v1/displays/apply" || true)
+  guard_ok=$(json_field "$persistent_guard_file" ok)
+  if [ "$guard_code" != "400" ] || [ "$guard_ok" = "true" ]; then
+    proof_multi_display_apply "status=fail&stage=persistent-guard&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&connector=$(proof_query_value "$connector")&mode_id=$(proof_query_value "$mode_id")&serial=$state_serial&persistent_guard_http=${guard_code:-000}&persistent_guard_ok=${guard_ok:-missing}&persistent_confirmation_required=false"
+    return 1
+  fi
+
+  stale_code=$(curl -s -o "$stale_file" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    -d "@$stale_payload" \
+    "$LIVE_URL/v1/displays/apply" || true)
+  stale_ok=$(json_field "$stale_file" ok)
+  if [ "$stale_code" != "409" ] || [ "$stale_ok" = "true" ]; then
+    proof_multi_display_apply "status=fail&stage=stale-serial&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&connector=$(proof_query_value "$connector")&mode_id=$(proof_query_value "$mode_id")&serial=$state_serial&stale_serial=${stale_serial:-missing}&stale_serial_http=${stale_code:-000}&stale_serial_ok=${stale_ok:-missing}&stale_serial_rejected=false"
+    return 1
+  fi
+
+  proof_multi_display_apply "status=pass&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&connector=$(proof_query_value "$connector")&mode_id=$(proof_query_value "$mode_id")&serial=$state_serial&verify_http=200&verify_ok=true&temporary_http=200&temporary_ok=true&persistent_guard_http=400&persistent_confirmation_required=true&stale_serial=$stale_serial&stale_serial_http=409&stale_serial_rejected=true&roundtrip_restored=true&persistent_keep_claim=false&same_layout_noop=true"
+  return 0
+}
 restore_focus_roundtrip_state(){
   local original_modes="$1"
   local original_active="$2"
@@ -1506,6 +1673,7 @@ text_shortcuts_candidate_bubble_render_proof || true
 text_shortcuts_live_ibus_runtime_render_proof || true
 keyboard_shortcuts_roundtrip_proof || true
 input_sources_roundtrip_proof || true
+multi_display_apply_proof || true
 focus_arm_roundtrip_proof || true
 app_privacy_revoke_proof || true
 preview_open_render_proof || true

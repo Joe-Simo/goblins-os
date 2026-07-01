@@ -34,16 +34,14 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest pushed source commit `ae00204` on `main` passed the fast Rust build
-(`28525361234`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
-tests, and release build all succeeded. Hardware-gate run `28526077212` at the
-same head passed bootc image publish, verification installer ISO build, model
-serve, install/boot/session automation, and reached the display-backed VM
-capture. It still proves the firewall live toggle, app-keyed Per-app Privacy
-revoke, keyboard shortcut rebind, input source switching, Focus arm/disarm,
-Preview PDF/image open/render, Text Shortcuts candidate metadata, overlay
-intent, deterministic candidate bubble frame/layout, and candidate bubble
-render proof routes.
+Latest pushed source commit before this follow-up is `d540563` on `main`. It
+passed the fast Rust build (`28530018636`) on both `ubuntu-24.04` and
+`ubuntu-24.04-arm`: format, clippy, tests, and release build all succeeded.
+Hardware-gate run `28530031330` at that head has passed bootc image publish,
+verification installer ISO build, and model prep; it is currently in
+`Run the display-backed-VM capture + close-signoff`, so no artifact from that
+run should be treated as reviewed yet. The latest reviewed display-backed proof
+artifact is still run `28526077212`.
 
 The current blocker is Text Shortcuts IBus session env, not image build or the
 core route. In run `28526077212`, `text-shortcuts-session-enable-proof.json`
@@ -70,6 +68,17 @@ remains qemu-pending until the next display-backed VM run proves
 `text-shortcuts-live-ibus-runtime-render` end-to-end, including
 `process-key-event`, `commit-text`, password refusal, rendered accept bubble,
 and `32-text-shortcuts-live-ibus-runtime-render.png`.
+
+This follow-up also adds the missing multi-display apply hardware proof hook.
+The display-backed VM harness now has a required `multi-display-apply-proof.json`
+path that discovers the live Mutter DisplayConfig serial/connector/mode from
+`GetCurrentState`, posts the same-layout payload through `/v1/displays/apply`
+with `method=verify` and `method=temporary`, verifies persistent apply is refused
+without explicit confirmation, verifies stale serials are rejected, links the
+proof from `proof-manifest.json`, and makes `close-signoff.sh`,
+`verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing
+proof. This remains qemu-pending and does **not** ship the writable Displays
+panel or persistent Keep flow.
 
 Previous hardware-gate run `28517091135` at `fffea01` passed bootc image
 publish, verification installer ISO build, model serve, install/boot/session
@@ -804,6 +813,18 @@ apply is available, but the layout editor remains disabled. Local source gates:
 `git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
 `goblins-os-verify --source-root .` → **blocked=0 (1579)**. CI/qemu still must
 prove the apply/keep/revert flow before the feature can ship.
+
+Current Multi-display hardware-proof continuation: the display-backed VM harness
+now requires `multi-display-apply-proof.json` before signoff. The in-session
+orchestrator reads the live Mutter `GetCurrentState` connector/mode/serial,
+builds a same-layout `/v1/displays/apply` payload, proves `method=verify` and
+`method=temporary` return HTTP `200`, proves persistent apply is rejected without
+explicit keep confirmation, proves a stale serial is rejected with HTTP `409`,
+and records `persistent_keep_claim=false` plus `same_layout_noop=true`. The
+proof is linked in `proof-manifest.json`; `run-capture.sh`, `close-signoff.sh`,
+`verify-shipping-status.sh`, and `goblins-os-verify` now reject a missing or
+failing proof. This is still CI/qemu-pending and does **not** mark Multi-display
+shipped.
 
 Current Keyboard continuation: shortcut rebinding and Caps Lock remap are now
 source-gated but not shipped. Core aliases `/v1/keyboard/shortcuts/status`,
@@ -2196,6 +2217,7 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 
 ### `in-progress` Multi-display arrangement / resolution / scale / refresh / mirror
 - [x] **Apply substrate source-gated (CI/qemu-pending):** `/v1/displays/apply` exposes a serial-gated Mutter `ApplyMonitorsConfig` bridge. It checks `ApplyMonitorsConfigAllowed`, re-reads `GetCurrentState` before apply, rejects stale serials, validates connector/mode IDs and logical-monitor payloads, requires explicit confirmation for persistent `method=2`, and encodes the `a(iiduba(ssa{sv}))` request tuple. Settings reports the protected apply gate but keeps the editor disabled until live proof exists.
+- [x] **Apply hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `multi-display-apply-proof.json`, generated from the installed session's live Mutter DisplayConfig state, and rejects signoff unless `/v1/displays/apply` verifies the current same-layout payload, temporarily applies it, refuses persistent apply without explicit confirmation, and rejects a stale serial. This still does not ship the writable Displays panel, drag canvas, persistent Keep/Revert UI, or multi-output layout editing.
 - [ ] A **writable** Goblins Displays panel driving `org.gnome.Mutter.DisplayConfig` through the allowlisted bridge, replacing today's read-only placeholders. Drag-to-arrange canvas, named scaled modes, scale, refresh, rotation, mirror — with a live-preview + Keep/Revert timer so a bad mode can't lock the user out.
 - **Packages:** `mutter` (already present via gnome-shell — only confirm via `rpm -q`).
 - **gsettings/dconf:** seed `org.gnome.mutter experimental-features = ['scale-monitor-framebuffer']` (additive) so fractional 125/150/175% steps exist at first boot. Mode/scale/rotation/position/primary/mirror are **not** gsettings — applied via `ApplyMonitorsConfig`; Mutter persists `method=2` to `~/.config/monitors.xml`.

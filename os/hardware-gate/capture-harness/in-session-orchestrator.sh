@@ -16,7 +16,14 @@ B=/usr/libexec/goblins-os
 LIVE_URL=http://127.0.0.1:8787
 TEXT_SHORTCUTS_INPUT_DRIVER=qmp-keyboard
 TEXT_SHORTCUTS_IBUS_SERVICE=org.freedesktop.IBus.session.GNOME.service
-export GDK_BACKEND=wayland XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
+export GDK_BACKEND=wayland
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+export DISPLAY="${DISPLAY:-:0}"
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-GNOME}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-goblins-os}"
+export DESKTOP_SESSION="${DESKTOP_SESSION:-goblins-os}"
 # Maximize every captured GTK surface so the host QMP screendump catches it filling
 # the work area (keeping window chrome + the menu bar/dock) instead of an ambiguous
 # windowed surface that may not be foregrounded at screendump time — the root cause

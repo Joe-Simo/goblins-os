@@ -222,6 +222,12 @@ Wants=org.goblins.OS.Shell.service org.goblins.OS.SessionBridge.service
 Type=oneshot
 Environment=GOBLINS_HWGATE_HOST_URL=http://10.0.2.2:8099
 Environment=GOBLINS_OS_CORE_URL=http://127.0.0.1:8787
+Environment=XDG_SESSION_TYPE=wayland
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=DISPLAY=:0
+Environment=XDG_CURRENT_DESKTOP=GNOME
+Environment=XDG_SESSION_DESKTOP=goblins-os
+Environment=DESKTOP_SESSION=goblins-os
 ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator
 
 [Install]
@@ -261,7 +267,18 @@ env_common=(
   "DBUS_SESSION_BUS_ADDRESS=unix:path=${bus}"
   "GOBLINS_HWGATE_HOST_URL=http://10.0.2.2:8099"
   "GOBLINS_OS_CORE_URL=http://127.0.0.1:8787"
+  "XDG_SESSION_TYPE=wayland"
+  "WAYLAND_DISPLAY=wayland-0"
+  "DISPLAY=:0"
+  "XDG_CURRENT_DESKTOP=GNOME"
+  "XDG_SESSION_DESKTOP=goblins-os"
+  "DESKTOP_SESSION=goblins-os"
 )
+
+runuser -u goblin -- env "${env_common[@]}" \
+  dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS || true
+runuser -u goblin -- env "${env_common[@]}" \
+  systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS || true
 
 if runuser -u goblin -- env "${env_common[@]}" \
   systemctl --user start --no-block goblins-hwgate-session-orchestrator.service; then

@@ -6152,6 +6152,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-defaults-wayland-session-env",
+            "export XDG_SESSION_TYPE=\"${XDG_SESSION_TYPE:-wayland}\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-defaults-wayland-display-env",
+            "export WAYLAND_DISPLAY=\"${WAYLAND_DISPLAY:-wayland-0}\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-defaults-x11-display-env",
+            "export DISPLAY=\"${DISPLAY:-:0}\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-declares-qmp-keyboard-driver",
             "TEXT_SHORTCUTS_INPUT_DRIVER=qmp-keyboard",
         ),
@@ -6864,6 +6879,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/iso/verify-config.toml"),
             "verify-config-session-orchestrator-user-service-has-default-target-install",
             "WantedBy=default.target",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-user-service-has-wayland-env",
+            "Environment=WAYLAND_DISPLAY=wayland-0",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-user-service-has-display-env",
+            "Environment=DISPLAY=:0",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-imports-dbus-activation-env",
+            "dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-imports-systemd-user-env",
+            "systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE",
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),

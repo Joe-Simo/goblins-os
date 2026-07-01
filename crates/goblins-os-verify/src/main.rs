@@ -727,9 +727,9 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "gnome-session-settings-daemon-components",
         "org.gnome.SettingsDaemon.Power",
     ));
-    checks.push(contains_check(
+    checks.push(absent_check(
         root.join("os/gnome-session/goblins-os.session"),
-        "gnome-session-shell-component",
+        "gnome-session-shell-not-required-component",
         "org.goblins.OS.Shell",
     ));
     checks.push(contains_check(
@@ -739,8 +739,18 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
-        "gnome-session-systemd-shell-target",
+        "gnome-session-systemd-shell-service-wanted",
+        "Wants=org.goblins.OS.Shell.service",
+    ));
+    checks.push(absent_check(
+        root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
+        "gnome-session-systemd-shell-target-not-required",
         "Requires=org.goblins.OS.Shell.target",
+    ));
+    checks.push(absent_check(
+        root.join("os/systemd-user/org.goblins.OS.Shell.target"),
+        "goblins-shell-target-no-initialized-requisite",
+        "Requisite=gnome-session-initialized.target",
     ));
     checks.push(contains_check(
         root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
@@ -751,6 +761,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root.join("os/systemd-user/org.goblins.OS.Shell.service"),
         "goblins-shell-user-service-exec",
         "ExecStart=/usr/libexec/goblins-os/goblins-os-shell",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-user/org.goblins.OS.Shell.service"),
+        "goblins-shell-user-service-session-partof",
+        "PartOf=gnome-session-initialized.target",
     ));
     checks.push(contains_check(
         root.join("os/systemd-user/org.goblins.OS.SessionBridge.service"),
@@ -793,6 +808,21 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "PermissionStore deletes are limited to app-keyed tables",
     ));
     checks.push(contains_check(
+        root.join("crates/goblins-os-core/src/displays.rs"),
+        "display-config-uses-session-bridge-before-direct-gdbus",
+        "display_config_get_current_state",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-session-bridge/src/main.rs"),
+        "session-bridge-accepts-display-config-apply-op",
+        "DisplayConfigApplyMonitors",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-session-bridge/src/main.rs"),
+        "session-bridge-limits-display-config-layouts",
+        "validate_display_config_logical_monitors",
+    ));
+    checks.push(contains_check(
         root.join("crates/goblins-os-core/src/session_bridge.rs"),
         "core-session-bridge-client-uses-unix-socket",
         "UnixStream::connect",
@@ -801,6 +831,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root.join("crates/goblins-os-core/src/session_bridge.rs"),
         "core-session-bridge-client-supports-permission-store-delete",
         "permission_store_delete_permission",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-core/src/session_bridge.rs"),
+        "core-session-bridge-client-supports-display-config-apply",
+        "display_config_apply_monitors",
     ));
     checks.push(contains_check(
         root.join("crates/goblins-os-core/src/session_bridge.rs"),
@@ -1790,6 +1825,11 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         "installed-ostree-composefs-remount-skip",
         "ConditionKernelCommandLine=!ostree",
     ));
+    checks.push(absent_check(
+        root.join("usr/share/gnome-session/sessions/goblins-os.session"),
+        "installed-gnome-session-shell-not-required-component",
+        "org.goblins.OS.Shell",
+    ));
     checks.push(contains_check(
         root.join("usr/lib/systemd/user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
         "installed-gnome-session-systemd-gnome-shell-service",
@@ -1797,13 +1837,23 @@ fn installed_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("usr/lib/systemd/user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
-        "installed-gnome-session-systemd-shell-target",
+        "installed-gnome-session-systemd-shell-service-wanted",
+        "Wants=org.goblins.OS.Shell.service",
+    ));
+    checks.push(absent_check(
+        root.join("usr/lib/systemd/user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
+        "installed-gnome-session-systemd-shell-target-not-required",
         "Requires=org.goblins.OS.Shell.target",
     ));
     checks.push(contains_check(
         root.join("usr/lib/systemd/user/org.goblins.OS.Shell.service"),
         "installed-goblins-shell-user-service-exec",
         "ExecStart=/usr/libexec/goblins-os/goblins-os-shell",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/user/org.goblins.OS.Shell.service"),
+        "installed-goblins-shell-user-service-session-partof",
+        "PartOf=gnome-session-initialized.target",
     ));
     checks.push(contains_check(
         root.join("usr/lib/systemd/user/org.goblins.OS.SessionBridge.service"),
@@ -5809,6 +5859,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-core-readiness-deferred",
             "core_readiness_flip=deferred",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-harness-rejects-stale-gdm-screenshot-set",
+            "stable_frame_hash",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-harness-crops-top-bar-for-stale-screenshot-guard",
+            "cropping the top bar",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),

@@ -13,6 +13,10 @@ use std::{
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::session_bridge::{
+    DisplayConfigLogicalMonitor, DisplayConfigMonitor, SessionBridgeResult,
+};
+
 const MUTTER_DISPLAY_CONFIG_DEST: &str = "org.gnome.Mutter.DisplayConfig";
 const MUTTER_DISPLAY_CONFIG_PATH: &str = "/org/gnome/Mutter/DisplayConfig";
 const MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE: &str =
@@ -154,15 +158,24 @@ fn build_displays_status() -> DisplaysStatus {
 }
 
 fn mutter_current_state() -> Result<String, DisplayConfigError> {
+    match crate::session_bridge::display_config_get_current_state() {
+        SessionBridgeResult::Success(stdout) => return Ok(stdout),
+        SessionBridgeResult::Failed(detail) => return Err(DisplayConfigError::Failed(detail)),
+        SessionBridgeResult::Unavailable => {}
+    }
     gdbus_call(&[MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE])
 }
 
 fn mutter_display_config_apply_allowed() -> Result<bool, DisplayConfigError> {
-    let reply = gdbus_call(&[
-        "org.freedesktop.DBus.Properties.Get",
-        MUTTER_DISPLAY_CONFIG_DEST,
-        "ApplyMonitorsConfigAllowed",
-    ])?;
+    let reply = match crate::session_bridge::display_config_get_apply_allowed() {
+        SessionBridgeResult::Success(stdout) => stdout,
+        SessionBridgeResult::Failed(detail) => return Err(DisplayConfigError::Failed(detail)),
+        SessionBridgeResult::Unavailable => gdbus_call(&[
+            "org.freedesktop.DBus.Properties.Get",
+            MUTTER_DISPLAY_CONFIG_DEST,
+            "ApplyMonitorsConfigAllowed",
+        ])?,
+    };
     Ok(parse_gdbus_bool(&reply).unwrap_or(false))
 }
 
@@ -283,13 +296,14 @@ fn apply_displays_outcome(request: ApplyDisplaysRequest) -> (StatusCode, ApplyDi
     let logical_monitors = encode_logical_monitors(&request.logical_monitors);
     let method_value = apply_method_value(method).to_string();
     let serial = request.serial.to_string();
-    match gdbus_call(&[
-        MUTTER_DISPLAY_CONFIG_APPLY_MONITORS,
+    match mutter_apply_monitors_config(
+        request.serial,
+        apply_method_value(method),
+        &request.logical_monitors,
         &serial,
         &method_value,
         &logical_monitors,
-        "{}",
-    ]) {
+    ) {
         Ok(_) => apply_displays_response(
             StatusCode::OK,
             true,
@@ -312,6 +326,55 @@ fn apply_displays_outcome(request: ApplyDisplaysRequest) -> (StatusCode, ApplyDi
             request.serial,
         ),
     }
+}
+
+fn mutter_apply_monitors_config(
+    serial: u32,
+    method: u32,
+    request_monitors: &[LogicalMonitorRequest],
+    serial_text: &str,
+    method_text: &str,
+    logical_monitors_text: &str,
+) -> Result<String, DisplayConfigError> {
+    match crate::session_bridge::display_config_apply_monitors(
+        serial,
+        method,
+        bridge_logical_monitors(request_monitors),
+    ) {
+        SessionBridgeResult::Success(stdout) => return Ok(stdout),
+        SessionBridgeResult::Failed(detail) => return Err(DisplayConfigError::Failed(detail)),
+        SessionBridgeResult::Unavailable => {}
+    }
+    gdbus_call(&[
+        MUTTER_DISPLAY_CONFIG_APPLY_MONITORS,
+        serial_text,
+        method_text,
+        logical_monitors_text,
+        "{}",
+    ])
+}
+
+fn bridge_logical_monitors(
+    monitors: &[LogicalMonitorRequest],
+) -> Vec<DisplayConfigLogicalMonitor<'_>> {
+    monitors
+        .iter()
+        .map(|monitor| DisplayConfigLogicalMonitor {
+            x: monitor.x,
+            y: monitor.y,
+            scale: monitor.scale,
+            transform: monitor.transform,
+            primary: monitor.primary,
+            monitors: monitor
+                .monitors
+                .iter()
+                .map(|physical| DisplayConfigMonitor {
+                    connector: physical.connector.as_str(),
+                    mode_id: physical.mode_id.as_str(),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 fn xrandr_outputs() -> Option<Vec<DisplayOutputStatus>> {

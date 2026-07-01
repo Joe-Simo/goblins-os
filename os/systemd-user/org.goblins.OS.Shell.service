@@ -3,6 +3,7 @@ Description=Goblins OS shell
 CollectMode=inactive-or-failed
 
 PartOf=org.goblins.OS.Shell.target
+PartOf=gnome-session-initialized.target
 After=gnome-session-initialized.target org.gnome.Shell@user.service
 
 [Service]

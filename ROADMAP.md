@@ -34,45 +34,50 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Head `a6521f1` is CI-green for the fast Rust build: GitHub Actions build run
-`28534596298` passed on x86_64 and aarch64. Hardware-gate run `28534607015` at
-that head passed bootc image publish, verification installer ISO build, and
-model prep, then failed before any in-session proof: the ISO booted past GRUB
-far enough for the debug framebuffer to show early initrd/switch-root output,
-but the verification `%post` marker `GOBLINS_VERIFY_INSTALL_DONE` never appeared
-within the old 1800s wait. The current source follow-up bounds that pre-proof
-install marker wait to `GOS_INSTALL_POST_TIMEOUT` (default 900s), returns a
-distinct driver code for that exact failure, and lets `run-capture.sh` retry
-once with fresh QEMU firmware/disk/log state while preserving attempt logs.
-Later proof failures still fail closed and are not retried.
+Head `9f5ca8b` is CI-green for the fast Rust build: GitHub Actions build run
+`28538659073` passed. Hardware-gate run `28538674596` at that head passed bootc
+image publish, verification installer ISO build, model prep, install, first
+boot diagnostics, the `%post` marker, and in-session orchestrator startup. It
+failed final signoff on three proof rows:
+`text-shortcuts-live-keystroke=fail`,
+`text-shortcuts-live-ibus-runtime-render=fail`, and
+`multi-display-apply=fail`.
 
-The latest reviewed display-backed proof artifact is run `28530031330` at
-`d540563`. It passed bootc image publish, verification installer ISO build,
-model prep, and the in-session proof routes that existed at that head. The proof
-JSONs for firewall live toggle, keyboard shortcut rebind, input source
-roundtrip, Focus arm/disarm, app-keyed Per-app Privacy revoke, Preview
-PDF/image open/render, and Text Shortcuts through live IBus runtime/render all
-reported `status=pass`; `32-text-shortcuts-live-ibus-runtime-render.png` exists.
-That run is **not** a shipping signoff: `run-capture.sh` failed the duplicate
-surface honesty guard with only 28/35 distinct captures, several installer
-captures were stale desktop frames because the installer exited after completed
-first boot, Switch Control was visible over unrelated screenshots, and the run
-predates `multi-display-apply-proof.json`.
+The artifact narrowed the apparent two-day stall: the Text Shortcuts engine was
+selected and the session-enable proof passed, but the visible proof screenshots
+were GDM login screens with "Login Attempt Timed Out" instead of foregrounded
+app surfaces. That makes the current blocker a session/signoff problem, not a
+fresh Text Shortcuts substrate problem. The multi-display failure was separate:
+the core route could not reach Mutter DisplayConfig from the system service
+context, so `display_config_available=false` and the same-layout apply proof
+could not run.
 
-The current blocker is therefore not Text Shortcuts IBus readiness anymore; it
-is current-head hardware-gate close-signoff with truthful distinct screenshots
-and the new multi-display apply proof. The display-backed VM harness now has a
-required `multi-display-apply-proof.json` path that discovers the live Mutter
-DisplayConfig serial/connector/mode from `GetCurrentState`, posts the same-layout
-payload through `/v1/displays/apply` with `method=verify` and
-`method=temporary`, verifies persistent apply is refused without explicit
-confirmation, verifies stale serials are rejected, links the proof from
-`proof-manifest.json`, and makes `close-signoff.sh`,
-`verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing
-proof. This remains qemu-pending and does **not** ship the writable Displays
-panel or persistent Keep flow. The capture harness also resets the scoped
-`os/screenshots/hardware-gate/$ARCH/$RUN_DATE` directory before each run, so a
-same-date rerun cannot accidentally reuse stale proof files.
+The current source follow-up is still qemu-pending and does **not** mark more
+features shipped. It relaxes the Goblins shell from GNOME
+`RequiredComponents`/hard session `Requires=org.goblins.OS.Shell.target`, runs
+the shell as a wanted user service after session initialization, routes Mutter
+DisplayConfig `GetCurrentState`/`ApplyMonitorsConfig` through the allowlisted
+session bridge with bounded layout validation, and adds a capture honesty guard
+that crops the top bar before rejecting stale GDM screenshot sets. Local host
+gates for this follow-up are green: `cargo test -p goblins-os-core` (292
+passed), `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`cargo fmt --all -- --check`, `git diff --check`, hardware-gate shell syntax
+checks, and `cargo run -p goblins-os-verify -- --source-root .` →
+**blocked=0 (2782)**.
+
+The latest reviewed display-backed proof artifact before the current GDM
+regression is run `28530031330` at `d540563`. It passed bootc image publish,
+verification installer ISO build, model prep, and the in-session proof routes
+that existed at that head. The proof JSONs for firewall live toggle, keyboard
+shortcut rebind, input source roundtrip, Focus arm/disarm, app-keyed Per-app
+Privacy revoke, Preview PDF/image open/render, and Text Shortcuts through live
+IBus runtime/render all reported `status=pass`;
+`32-text-shortcuts-live-ibus-runtime-render.png` exists. That run is **not** a
+shipping signoff: `run-capture.sh` failed the duplicate surface honesty guard
+with only 28/35 distinct captures, several installer captures were stale
+desktop frames because the installer exited after completed first boot, Switch
+Control was visible over unrelated screenshots, and the run predates
+`multi-display-apply-proof.json`.
 
 Previous hardware-gate run `28517091135` at `fffea01` passed bootc image
 publish, verification installer ISO build, model serve, install/boot/session

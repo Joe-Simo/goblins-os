@@ -33,6 +33,29 @@ enum BridgeRequest<'a> {
         id: &'a str,
         app: &'a str,
     },
+    DisplayConfigGetCurrentState,
+    DisplayConfigGetApplyAllowed,
+    DisplayConfigApplyMonitors {
+        serial: u32,
+        method: u32,
+        logical_monitors: Vec<DisplayConfigLogicalMonitor<'a>>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct DisplayConfigLogicalMonitor<'a> {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) scale: f64,
+    pub(crate) transform: u32,
+    pub(crate) primary: bool,
+    pub(crate) monitors: Vec<DisplayConfigMonitor<'a>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct DisplayConfigMonitor<'a> {
+    pub(crate) connector: &'a str,
+    pub(crate) mode_id: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +84,26 @@ pub(crate) fn permission_store_delete_permission(
     app: &str,
 ) -> SessionBridgeResult {
     call_bridge(&BridgeRequest::PermissionStoreDelete { table, id, app })
+}
+
+pub(crate) fn display_config_get_current_state() -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::DisplayConfigGetCurrentState)
+}
+
+pub(crate) fn display_config_get_apply_allowed() -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::DisplayConfigGetApplyAllowed)
+}
+
+pub(crate) fn display_config_apply_monitors(
+    serial: u32,
+    method: u32,
+    logical_monitors: Vec<DisplayConfigLogicalMonitor<'_>>,
+) -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::DisplayConfigApplyMonitors {
+        serial,
+        method,
+        logical_monitors,
+    })
 }
 
 fn call_bridge(request: &BridgeRequest<'_>) -> SessionBridgeResult {

@@ -35,6 +35,12 @@ const PERMISSION_STORE_DEST: &str = "org.freedesktop.impl.portal.PermissionStore
 const PERMISSION_STORE_PATH: &str = "/org/freedesktop/impl/portal/PermissionStore";
 const PERMISSION_STORE_DELETE_PERMISSION: &str =
     "org.freedesktop.impl.portal.PermissionStore.DeletePermission";
+const MUTTER_DISPLAY_CONFIG_DEST: &str = "org.gnome.Mutter.DisplayConfig";
+const MUTTER_DISPLAY_CONFIG_PATH: &str = "/org/gnome/Mutter/DisplayConfig";
+const MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE: &str =
+    "org.gnome.Mutter.DisplayConfig.GetCurrentState";
+const MUTTER_DISPLAY_CONFIG_APPLY_MONITORS: &str =
+    "org.gnome.Mutter.DisplayConfig.ApplyMonitorsConfig";
 
 const KEYBOARD_KEYS: &[&str] = &[
     "repeat",
@@ -131,6 +137,29 @@ enum BridgeRequest {
         id: String,
         app: String,
     },
+    DisplayConfigGetCurrentState,
+    DisplayConfigGetApplyAllowed,
+    DisplayConfigApplyMonitors {
+        serial: u32,
+        method: u32,
+        logical_monitors: Vec<DisplayConfigLogicalMonitor>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DisplayConfigLogicalMonitor {
+    x: i32,
+    y: i32,
+    scale: f64,
+    transform: u32,
+    primary: bool,
+    monitors: Vec<DisplayConfigMonitor>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DisplayConfigMonitor {
+    connector: String,
+    mode_id: String,
 }
 
 #[derive(Serialize)]
@@ -203,6 +232,13 @@ fn handle_request(request: BridgeRequest) -> BridgeResponse {
         BridgeRequest::PermissionStoreDelete { table, id, app } => {
             permission_store_delete_response(&table, &id, &app)
         }
+        BridgeRequest::DisplayConfigGetCurrentState => display_config_get_current_state_response(),
+        BridgeRequest::DisplayConfigGetApplyAllowed => display_config_apply_allowed_response(),
+        BridgeRequest::DisplayConfigApplyMonitors {
+            serial,
+            method,
+            logical_monitors,
+        } => display_config_apply_monitors_response(serial, method, &logical_monitors),
     }
 }
 
@@ -275,6 +311,98 @@ fn permission_store_delete_response(table: &str, id: &str, app: &str) -> BridgeR
             failure("gdbus is unavailable in this desktop session.")
         }
         Err(_) => failure("the desktop session could not update app permissions."),
+    }
+}
+
+fn display_config_get_current_state_response() -> BridgeResponse {
+    gdbus_session_response(
+        &[
+            "call",
+            "--session",
+            "--dest",
+            MUTTER_DISPLAY_CONFIG_DEST,
+            "--object-path",
+            MUTTER_DISPLAY_CONFIG_PATH,
+            "--method",
+            MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE,
+        ],
+        "gdbus is unavailable in this desktop session.",
+        "the desktop session could not read display configuration.",
+    )
+}
+
+fn display_config_apply_allowed_response() -> BridgeResponse {
+    gdbus_session_response(
+        &[
+            "call",
+            "--session",
+            "--dest",
+            MUTTER_DISPLAY_CONFIG_DEST,
+            "--object-path",
+            MUTTER_DISPLAY_CONFIG_PATH,
+            "--method",
+            "org.freedesktop.DBus.Properties.Get",
+            MUTTER_DISPLAY_CONFIG_DEST,
+            "ApplyMonitorsConfigAllowed",
+        ],
+        "gdbus is unavailable in this desktop session.",
+        "the desktop session could not read display apply permission.",
+    )
+}
+
+fn display_config_apply_monitors_response(
+    serial: u32,
+    method: u32,
+    logical_monitors: &[DisplayConfigLogicalMonitor],
+) -> BridgeResponse {
+    if serial == 0 {
+        return failure("Display changes require the current compositor serial.");
+    }
+    if method > 2 {
+        return failure("Display apply method must be verify, temporary, or persistent.");
+    }
+    if let Err(error) = validate_display_config_logical_monitors(logical_monitors) {
+        return failure(error);
+    }
+    let serial = serial.to_string();
+    let method = method.to_string();
+    let logical_monitors = encode_display_config_logical_monitors(logical_monitors);
+    gdbus_session_response(
+        &[
+            "call",
+            "--session",
+            "--dest",
+            MUTTER_DISPLAY_CONFIG_DEST,
+            "--object-path",
+            MUTTER_DISPLAY_CONFIG_PATH,
+            "--method",
+            MUTTER_DISPLAY_CONFIG_APPLY_MONITORS,
+            &serial,
+            &method,
+            &logical_monitors,
+            "{}",
+        ],
+        "gdbus is unavailable in this desktop session.",
+        "the desktop session could not apply display configuration.",
+    )
+}
+
+fn gdbus_session_response(
+    args: &[&str],
+    missing_message: &'static str,
+    generic_message: &'static str,
+) -> BridgeResponse {
+    match Command::new("gdbus")
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            success(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        }
+        Ok(output) => failure(command_error_detail(&output.stderr, &output.stdout)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => failure(missing_message),
+        Err(_) => failure(generic_message),
     }
 }
 
@@ -478,6 +606,117 @@ fn validate_permission_store_delete(table: &str, id: &str, app: &str) -> Result<
     Ok(())
 }
 
+fn validate_display_config_logical_monitors(
+    monitors: &[DisplayConfigLogicalMonitor],
+) -> Result<(), String> {
+    if monitors.is_empty() {
+        return Err("At least one logical monitor is required.".to_string());
+    }
+    if monitors.len() > 8 {
+        return Err("Display layout changes are limited to eight logical monitors.".to_string());
+    }
+    let primary_count = monitors.iter().filter(|monitor| monitor.primary).count();
+    if primary_count != 1 {
+        return Err("Exactly one logical monitor must be primary.".to_string());
+    }
+    let mut seen_connectors = std::collections::HashSet::new();
+    for monitor in monitors {
+        if !(-65535..=65535).contains(&monitor.x) || !(-65535..=65535).contains(&monitor.y) {
+            return Err("Display positions must stay within compositor layout bounds.".to_string());
+        }
+        if !monitor.scale.is_finite() || monitor.scale < 1.0 || monitor.scale > 4.0 {
+            return Err("Display scale must be between 1.0 and 4.0.".to_string());
+        }
+        if monitor.transform > 7 {
+            return Err(
+                "Display transform must be a Wayland transform value from 0 through 7.".to_string(),
+            );
+        }
+        if monitor.monitors.is_empty() {
+            return Err("Each logical monitor needs at least one physical monitor.".to_string());
+        }
+        if monitor.monitors.len() > 4 {
+            return Err("Each logical monitor is limited to four mirrored outputs.".to_string());
+        }
+        for physical in &monitor.monitors {
+            if !display_connector_is_safe(&physical.connector) {
+                return Err("Display connector names must be safe desktop IDs.".to_string());
+            }
+            if !display_mode_id_is_safe(&physical.mode_id) {
+                return Err("Display mode IDs must be safe compositor mode IDs.".to_string());
+            }
+            if !seen_connectors.insert(physical.connector.clone()) {
+                return Err(
+                    "A physical display can appear in only one logical monitor.".to_string()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn encode_display_config_logical_monitors(monitors: &[DisplayConfigLogicalMonitor]) -> String {
+    let encoded = monitors
+        .iter()
+        .map(|monitor| {
+            let physical = monitor
+                .monitors
+                .iter()
+                .map(|physical| {
+                    format!(
+                        "('{}', '{}', {{}})",
+                        escape_gvariant_string(&physical.connector),
+                        escape_gvariant_string(&physical.mode_id)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "({}, {}, {}, uint32 {}, {}, [{}])",
+                monitor.x,
+                monitor.y,
+                encode_display_scale(monitor.scale),
+                monitor.transform,
+                if monitor.primary { "true" } else { "false" },
+                physical
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{encoded}]")
+}
+
+fn display_connector_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 80
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn display_mode_id_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 120
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
+}
+
+fn encode_display_scale(scale: f64) -> String {
+    let mut text = format!("{scale:.3}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.push('0');
+    }
+    text
+}
+
+fn escape_gvariant_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 fn permission_id_is_safe(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 160
@@ -616,6 +855,32 @@ fn self_test() -> Result<(), String> {
         "org.goblins.GatePrivacyProof",
         "org.goblins.GatePrivacyProof",
     )?;
+    validate_display_config_logical_monitors(&[DisplayConfigLogicalMonitor {
+        x: 0,
+        y: 0,
+        scale: 1.25,
+        transform: 0,
+        primary: true,
+        monitors: vec![DisplayConfigMonitor {
+            connector: "eDP-1".to_string(),
+            mode_id: "2560x1440@60.000".to_string(),
+        }],
+    }])?;
+    if validate_display_config_logical_monitors(&[DisplayConfigLogicalMonitor {
+        x: 0,
+        y: 0,
+        scale: 0.5,
+        transform: 0,
+        primary: true,
+        monitors: vec![DisplayConfigMonitor {
+            connector: "eDP-1".to_string(),
+            mode_id: "2560x1440@60.000".to_string(),
+        }],
+    }])
+    .is_ok()
+    {
+        return Err("unsafe display scale was accepted.".to_string());
+    }
     if validate_gsettings_args(&[
         "set".to_string(),
         "org.gnome.desktop.background".to_string(),
@@ -642,10 +907,11 @@ fn self_test() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
+        encode_display_config_logical_monitors, validate_display_config_logical_monitors,
         validate_gsettings_args, validate_permission_store_delete, validate_schema_arg,
-        FOCUS_SCHEMA, INPUT_SOURCES_SCHEMA, KEYBOARD_SCHEMA, MOUSE_SCHEMA,
-        NOTIFICATION_APPLICATION_BASE_PATH, NOTIFICATION_APPLICATION_SCHEMA, TOUCHPAD_SCHEMA,
-        WM_SCHEMA,
+        DisplayConfigLogicalMonitor, DisplayConfigMonitor, FOCUS_SCHEMA, INPUT_SOURCES_SCHEMA,
+        KEYBOARD_SCHEMA, MOUSE_SCHEMA, NOTIFICATION_APPLICATION_BASE_PATH,
+        NOTIFICATION_APPLICATION_SCHEMA, TOUCHPAD_SCHEMA, WM_SCHEMA,
     };
 
     #[test]
@@ -750,5 +1016,43 @@ mod tests {
             "org.goblins.GatePrivacyProof;rm",
         )
         .is_err());
+    }
+
+    #[test]
+    fn display_config_bridge_is_limited_to_safe_monitor_layouts() {
+        let valid = vec![DisplayConfigLogicalMonitor {
+            x: 0,
+            y: 0,
+            scale: 1.25,
+            transform: 0,
+            primary: true,
+            monitors: vec![DisplayConfigMonitor {
+                connector: "eDP-1".to_string(),
+                mode_id: "2560x1440@60.000".to_string(),
+            }],
+        }];
+        assert!(validate_display_config_logical_monitors(&valid).is_ok());
+        assert_eq!(
+            encode_display_config_logical_monitors(&valid),
+            "[(0, 0, 1.25, uint32 0, true, [('eDP-1', '2560x1440@60.000', {})])]"
+        );
+
+        let mut duplicate = valid.clone();
+        duplicate.push(DisplayConfigLogicalMonitor {
+            x: 2560,
+            y: 0,
+            scale: 1.0,
+            transform: 0,
+            primary: false,
+            monitors: vec![DisplayConfigMonitor {
+                connector: "eDP-1".to_string(),
+                mode_id: "2560x1440@60.000".to_string(),
+            }],
+        });
+        assert!(validate_display_config_logical_monitors(&duplicate).is_err());
+
+        let mut unsafe_mode = valid;
+        unsafe_mode[0].monitors[0].mode_id = "2560x1440;rm".to_string();
+        assert!(validate_display_config_logical_monitors(&unsafe_mode).is_err());
     }
 }

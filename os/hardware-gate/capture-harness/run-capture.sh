@@ -543,6 +543,43 @@ if [ "${_distinct:-0}" -lt "${_total:-1}" ]; then
   exit 3
 fi
 
+stable_frame_hash() {
+  local file="$1"
+  # Ignore the top shell/GDM bar: its clock changes can make one stale screen
+  # look byte-distinct while the actual proof surface never foregrounded.
+  convert "$file" -gravity South -crop '100%x86%+0+0' \
+    -resize 64x64! -colorspace Gray -depth 8 gray:- 2>/dev/null | md5cmd | awk '{print $1}'
+}
+
+_surface_shots=(
+  04-desktop.png
+  07-home.png
+  08-shell-home.png
+  10-settings.png
+  11-settings-models.png
+  12-settings-dark.png
+  13-studio-before.png
+  14-studio-running.png
+  15-studio-app-detail.png
+  16-built-app-open.png
+  29-preview-pdf-open.png
+  30-preview-image-open.png
+  31-text-shortcuts-candidate-bubble-render.png
+)
+_stable_hashes="$(
+  for shot in "${_surface_shots[@]}"; do
+    [ -f "$RUN_DIR/$shot" ] || continue
+    stable_frame_hash "$RUN_DIR/$shot" || true
+  done | sort -u
+)"
+_stable_distinct="$(printf '%s\n' "$_stable_hashes" | sed '/^$/d' | wc -l | tr -d ' ')"
+if [ "${_stable_distinct:-0}" -lt 8 ]; then
+  echo "HONESTY GUARD: only $_stable_distinct stable app-surface frame(s) after cropping the top bar."
+  echo "This usually means the VM is still on GDM, the login session timed out, or"
+  echo "foregrounded proof windows were not captured. Refusing stale screenshot signoff."
+  exit 3
+fi
+
 # Write the proof manifest + run close-signoff.
 python3 - "$RUN_DIR" "$ARCH" "$ISO" "$ISO_SHA" "$DATE" <<'PY'
 import json,sys

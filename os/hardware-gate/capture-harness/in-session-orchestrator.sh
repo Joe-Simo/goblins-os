@@ -220,14 +220,24 @@ text_shortcuts_session_enable_proof(){
     return 1
   fi
 
-  ibus read-cache >/dev/null 2>&1 || true
-  if ibus list-engine 2>/dev/null | grep -Fq 'goblins-textshortcuts'; then
-    engine_listed=true
-  else
-    engine_listed=false
-  fi
+  ibus read-cache >/tmp/gate-text-shortcuts-session-read-cache.log 2>&1 || true
+  systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-session-ibus-restart.log 2>&1 || true
+  for _ in $(seq 1 30); do
+    service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
+    [ "$service_state" = "active" ] && break
+    sleep 0.5
+  done
+  engine_listed=false
+  for _ in $(seq 1 20); do
+    ibus read-cache >/tmp/gate-text-shortcuts-session-read-cache.log 2>&1 || true
+    if ibus list-engine 2>/tmp/gate-text-shortcuts-session-list-engine.err | grep -Fq 'goblins-textshortcuts'; then
+      engine_listed=true
+      break
+    fi
+    sleep 0.5
+  done
   if [ "$engine_listed" != "true" ]; then
-    proof_text_shortcuts "status=fail&stage=engine-list&service=active&input_source_configured=true&preload_configured=true&engine_listed=false"
+    proof_text_shortcuts "status=fail&stage=engine-list&service=${service_state:-missing}&input_source_configured=true&preload_configured=true&engine_listed=false&cache_refreshed=true&daemon_restarted=true"
     return 1
   fi
 

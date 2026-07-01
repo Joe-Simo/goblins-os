@@ -7,7 +7,7 @@ After=gnome-session-initialized.target org.gnome.Shell@user.service
 
 [Service]
 Type=simple
-Environment=GOBLINS_OS_SESSION_BRIDGE_SOCKET=%t/goblins-os/session-bridge.sock
+Environment=GOBLINS_OS_SESSION_BRIDGE_SOCKET=/run/goblins-os-session/session-bridge.sock
 EnvironmentFile=-/etc/goblins-os/environment
 ExecStart=/usr/libexec/goblins-os/goblins-os-session-bridge
 Restart=on-failure

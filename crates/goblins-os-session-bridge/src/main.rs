@@ -11,7 +11,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_SOCKET: &str = "/run/user/1000/goblins-os/session-bridge.sock";
+const DEFAULT_SOCKET: &str = "/run/goblins-os-session/session-bridge.sock";
 const SOCKET_GROUP: &str = "goblins-session-bridge";
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 

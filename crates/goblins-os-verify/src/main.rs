@@ -788,6 +788,36 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "UnixStream::connect",
     ));
     checks.push(contains_check(
+        root.join("crates/goblins-os-core/src/session_bridge.rs"),
+        "core-session-bridge-default-socket-is-group-traversable",
+        "/run/goblins-os-session/session-bridge.sock",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-session-bridge/src/main.rs"),
+        "session-bridge-default-socket-is-group-traversable",
+        "/run/goblins-os-session/session-bridge.sock",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-user/org.goblins.OS.SessionBridge.service"),
+        "session-bridge-user-service-uses-group-traversable-socket",
+        "GOBLINS_OS_SESSION_BRIDGE_SOCKET=/run/goblins-os-session/session-bridge.sock",
+    ));
+    checks.push(contains_check(
+        root.join("os/tmpfiles/goblins-os-session.conf"),
+        "session-bridge-runtime-dir-group-traversable",
+        "d /run/goblins-os-session 0770 goblin goblins-session-bridge -",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/Containerfile"),
+        "container-installs-session-bridge-tmpfiles",
+        "COPY os/tmpfiles/goblins-os-session.conf /usr/lib/tmpfiles.d/goblins-os-session.conf",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/Containerfile"),
+        "container-verifies-session-bridge-tmpfiles",
+        "grep -Fq 'd /run/goblins-os-session 0770 goblin goblins-session-bridge -' /usr/lib/tmpfiles.d/goblins-os-session.conf",
+    ));
+    checks.push(contains_check(
         root.join("os/etc/goblins-os/environment"),
         "environment-primary-core-url-is-goblins-native",
         "GOBLINS_OS_CORE_URL=http://127.0.0.1:8787",
@@ -795,7 +825,7 @@ fn source_checks(root: &Path) -> Vec<Check> {
     checks.push(contains_check(
         root.join("os/etc/goblins-os/environment"),
         "environment-session-bridge-socket-is-stable",
-        "GOBLINS_OS_SESSION_BRIDGE_SOCKET=/run/user/1000/goblins-os/session-bridge.sock",
+        "GOBLINS_OS_SESSION_BRIDGE_SOCKET=/run/goblins-os-session/session-bridge.sock",
     ));
     checks.push(contains_check(
         root.join("os/etc/goblins-os/environment"),
@@ -5902,6 +5932,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-verifies-textshortcuts-user-service",
             "org.goblins.OS.IBus.service",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-refreshes-textshortcuts-ibus-cache",
+            "gate-text-shortcuts-session-read-cache.log",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-restarts-textshortcuts-ibus-after-cache-refresh",
+            "gate-text-shortcuts-session-ibus-restart.log",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),

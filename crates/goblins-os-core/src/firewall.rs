@@ -219,7 +219,7 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
 
 fn wait_for_firewall_state(enabled: bool) -> FirewallStatus {
     let mut status = build_firewall_status();
-    for _ in 0..10 {
+    for _ in 0..60 {
         if status.available && status.active == enabled {
             return status;
         }

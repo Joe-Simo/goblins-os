@@ -8,7 +8,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_SOCKET: &str = "/run/user/1000/goblins-os/session-bridge.sock";
+const DEFAULT_SOCKET: &str = "/run/goblins-os-session/session-bridge.sock";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]

@@ -32,23 +32,28 @@
 
 ---
 
-## ⏩ Session status — RESUME HERE (updated 2026-06-30)
+## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Current hardware-gate proof run is `28463342553` at `5aec4a1` on `main`; it
+Current hardware-gate proof run is `28483079955` at `4b54b1` on `main`; it
 failed inside the display-backed VM capture after the image push, verification
 ISO, model prep, installed boot, first-boot diagnostics, private unlock helper
 download, root session-orchestrator starter, GNOME autostart fallback path, host
-publish of `/orchestrator.sh`, and HTTP `200` orchestrator download all ran.
-The artifact includes real display captures through
-`28-bootloader-efi-summary.png` plus
-`31-text-shortcuts-candidate-bubble-render.png`; the Text Shortcuts session
-enable, overlay intent, candidate bubble frame/layout, and candidate render
-intent proofs passed. The new hard blocker is the session orchestrator launching
-twice: `httpd.log` shows two `/orchestrator.sh` `200` downloads and two
-`/ready/ORCH_START` signals, which likely caused proof-file overwrites and
-competing IBus/focus/app-open state. The blocker is no longer CI billing, image
-export, ISO build, GDM autologin, first-boot helper availability, or session
-orchestrator startup.
+publish of `/orchestrator.sh`, HTTP `200` orchestrator download, one
+`/ready/ORCH_START`, and `/ready/ORCH_ALLDONE` all ran. The artifact includes
+51 files with real display captures through `28-bootloader-efi-summary.png`
+plus `31-text-shortcuts-candidate-bubble-render.png`. The single-instance
+orchestrator lock fixed the competing proof execution path: the launcher still
+fetches `/orchestrator.sh` twice, but only one orchestrator run entered the
+proof sequence. The blocker is no longer CI billing, image export, ISO build,
+GDM autologin, first-boot helper availability, session orchestrator startup, or
+duplicate orchestrator execution.
+
+Previous hardware-gate run `28463342553` at `5aec4a1` failed after the image
+push, verification ISO, model prep, installed boot, first-boot diagnostics,
+private unlock helper download, root session-orchestrator starter, GNOME
+autostart fallback path, host publish of `/orchestrator.sh`, and HTTP `200`
+orchestrator download all ran. That run exposed the duplicate
+`/ready/ORCH_START` race that `4b54b1` addressed.
 
 Previous hardware-gate run `28457665098` at `e1127ad` failed before signoff, but
 it proved the earlier `/etc` helper-location fix. The image push, verification
@@ -90,33 +95,39 @@ current blocker is narrowed to verification-only helper files/units not being
 available to the installed booted deployment, not CI billing, image export, ISO
 build, GDM autologin, or GNOME session launch.
 
-The remaining failing live proofs in `28463342553` are now concrete: firewall
+The remaining failing live proofs in `28483079955` are now concrete: firewall
 disable succeeded but re-enable returned HTTP `502` after the target state was
 set but before `firewall-cmd --state` reported active; keyboard shortcut and
-input source writes returned HTTP `200` but failed immediate readback gates;
-Focus activation returned HTTP `400`; PermissionStore seeding for the per-app
-revoke proof failed before the route could be exercised; Preview returned HTTP
-`200` for PDF open but the process/render wait failed; and the later Text
-Shortcuts live/candidate proof files were empty or missing after the duplicate
-orchestrators raced. Screenshots `29-preview-pdf-open.png`,
-`30-preview-image-open.png`, and
+input source writes returned HTTP `200` but failed session readback gates; Focus
+activation returned HTTP `400`; PermissionStore seeding for the per-app revoke
+proof failed before the route could be exercised; Preview returned HTTP `200`
+for PDF open but the process/render wait failed; Text Shortcuts IBus service was
+active but `ibus list-engine` did not list `goblins-textshortcuts`; and later
+Text Shortcuts live/candidate proof files were still missing. Screenshots
+`29-preview-pdf-open.png`, `30-preview-image-open.png`, and
 `32-text-shortcuts-live-ibus-runtime-render.png` were not produced.
 
-The current source follow-up is source-gated only so far: single-instance the
-in-session orchestrator with `/tmp/goblins-hwgate-orchestrator.lock`; keep the
-duplicate launcher honest with `GOBLINS_HWGATE_ORCHESTRATOR_ALREADY_RUNNING`;
-wait for firewall state to settle after the allowlisted systemd bridge starts
-or stops firewalld; wait for keyboard shortcut, modifier, and input-source
-readbacks before failing; seed Focus through `/v1/focus/mode` before activating;
-and wait for `org.freedesktop.impl.portal.PermissionStore` to own its session
-bus name before seeding per-app permissions. Local gates so far: hardware-gate
-shell `bash -n`, `git diff --check`, `cargo fmt -p goblins-os-core -p
-goblins-os-verify --check`, focused `cargo test -p goblins-os-core firewall`,
+The current source follow-up is source-gated only so far: move the desktop
+session bridge socket from owner-only `/run/user/1000/...` into the
+group-traversable `/run/goblins-os-session/session-bridge.sock`; install a
+tmpfiles rule for `/run/goblins-os-session` owned by `goblin` and
+`goblins-session-bridge`; keep the single-instance orchestrator lock and
+duplicate-launcher honesty; wait up to 30 seconds for firewall state to settle
+after the allowlisted systemd bridge starts or stops firewalld; refresh the IBus
+cache and restart `org.goblins.OS.IBus.service` before failing the Text
+Shortcuts engine-list proof; wait for keyboard shortcut, modifier, and
+input-source readbacks before failing; seed Focus through `/v1/focus/mode`
+before activating; and wait for `org.freedesktop.impl.portal.PermissionStore` to
+own its session bus name before seeding per-app permissions. Local gates so far:
+hardware-gate shell `bash -n`, `git diff --check`, `cargo fmt -p
+goblins-os-core -p goblins-os-session-bridge -p goblins-os-verify -- --check`,
+focused `cargo test -p goblins-os-session-bridge`, `cargo test -p
+goblins-os-core session_bridge`, `cargo test -p goblins-os-core firewall`,
 `cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, and
 `cargo run -p goblins-os-verify -- --source-root .` →
-**blocked=0 (2656)**. A fresh hardware-gate run is still required before any
-failed live proof can move to shipped.
+**blocked=0 (2664)** before this roadmap edit. A fresh hardware-gate run is
+still required before any failed live proof can move to shipped.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,
@@ -358,8 +369,9 @@ run reaches the real desktop and produces the installed-session proof JSONs.
 Current session bridge continuation: core desktop writes now prefer a
 session-owned Unix-socket bridge before falling back to direct host `gsettings`.
 The user service `org.goblins.OS.SessionBridge.service` owns
-`/run/user/1000/goblins-os/session-bridge.sock`; the system core service can
-connect through the scoped `goblins-session-bridge` group only. The bridge
+`/run/goblins-os-session/session-bridge.sock`; tmpfiles creates the parent
+directory as `0770 goblin:goblins-session-bridge` so the system core service can
+traverse it through the scoped `goblins-session-bridge` group only. The bridge
 allowlists the GNOME/Goblins schemas already surfaced by Settings input,
 Accessibility, Focus, Notifications, keyboard shortcuts, and the Preview open
 handoff, rejects arbitrary schemas/control-character values, and runs

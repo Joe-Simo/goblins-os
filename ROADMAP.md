@@ -34,39 +34,46 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Head `9f5ca8b` is CI-green for the fast Rust build: GitHub Actions build run
-`28538659073` passed. Hardware-gate run `28538674596` at that head passed bootc
-image publish, verification installer ISO build, model prep, install, first
-boot diagnostics, the `%post` marker, and in-session orchestrator startup. It
-failed final signoff on three proof rows:
-`text-shortcuts-live-keystroke=fail`,
-`text-shortcuts-live-ibus-runtime-render=fail`, and
-`multi-display-apply=fail`.
+Head `2493d53` is CI-green for the fast Rust build: GitHub Actions build run
+`28542786276` passed on x86_64 and aarch64. Hardware-gate run `28542796380` at
+that head passed bootc image publish, verification installer ISO build, model
+prep, install/first boot, in-session orchestrator, and every runtime proof JSON:
+firewall live toggle, Text Shortcuts session enable, Text Shortcuts live
+keystroke, Text Shortcuts live IBus runtime/render, keyboard shortcut rebind,
+input source roundtrip, multi-display apply, Focus arm/disarm, app-keyed
+Per-app Privacy revoke, and Preview PDF/image open/render all reported
+`status=pass`.
 
-The artifact narrowed the apparent two-day stall: the Text Shortcuts engine was
-selected and the session-enable proof passed, but the visible proof screenshots
-were GDM login screens with "Login Attempt Timed Out" instead of foregrounded
-app surfaces. That makes the current blocker a session/signoff problem, not a
-fresh Text Shortcuts substrate problem. The multi-display failure was separate:
-the core route could not reach Mutter DisplayConfig from the system service
-context, so `display_config_available=false` and the same-layout apply proof
-could not run.
+That run still failed close-signoff, honestly, because the screenshot set was
+not signoff-quality: `run-capture.sh` hit the duplicate framebuffer guard before
+writing `proof-manifest.json`. The downloaded artifact had 35 PNGs but only 26
+byte-distinct frames, and 31 required non-debug PNGs with only 24 distinct
+frames. The stale duplicates were concrete: Settings models / Studio before /
+audio output reused a desktop frame with the Switch Control overlay, shell dark
+and Settings dark duplicated, desktop and onboarding duplicated, and some
+installer review pages duplicated. This is no longer a Text Shortcuts,
+DisplayConfig, firewall, IME, Focus, Preview, or Per-app Privacy proof failure;
+it is the remaining display-capture honesty/signoff blocker.
 
-The current source follow-up is still qemu-pending and does **not** mark more
-features shipped. It relaxes the Goblins shell from GNOME
-`RequiredComponents`/hard session `Requires=org.goblins.OS.Shell.target`, runs
-the shell as a wanted user service after session initialization, routes Mutter
-DisplayConfig `GetCurrentState`/`ApplyMonitorsConfig` through the allowlisted
-session bridge with bounded layout validation, and adds a capture honesty guard
-that crops the top bar before rejecting stale GDM screenshot sets. Local host
-gates for this follow-up are green: `cargo test -p goblins-os-core` (292
-passed), `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
-`cargo fmt --all -- --check`, `git diff --check`, hardware-gate shell syntax
-checks, and `cargo run -p goblins-os-verify -- --source-root .` →
-**blocked=0 (2782)**.
+The current source follow-up is qemu-pending and does **not** mark more features
+shipped. It keeps the previously verified session/DisplayConfig bridge fix,
+then makes Switch Control's shell `hide()` hook stop the overlay immediately,
+has the hardware orchestrator call `globalThis.goblinsSwitchControl.hide()`
+instead of relying only on gsettings propagation, makes the host capture driver
+wait up to `GOS_REQUIRED_FRAME_SETTLE_SECONDS` for each required screenshot to
+produce a unique framebuffer before saving, and excludes `_debug-*` PNGs from
+the required distinct-surface denominator. If a required frame still does not
+become unique, the guard continues to fail closed and no signoff is written.
 
-The latest reviewed display-backed proof artifact before the current GDM
-regression is run `28530031330` at `d540563`. It passed bootc image publish,
+Previous hardware-gate run `28538674596` at `9f5ca8b` passed bootc image
+publish, verification installer ISO build, model prep, install, first boot
+diagnostics, the `%post` marker, and in-session orchestrator startup, but failed
+on `text-shortcuts-live-keystroke`,
+`text-shortcuts-live-ibus-runtime-render`, and `multi-display-apply`. The
+follow-up at `2493d53` cleared those proof rows.
+
+The latest reviewed display-backed proof artifact before the current close-
+signoff work was run `28530031330` at `d540563`. It passed bootc image publish,
 verification installer ISO build, model prep, and the in-session proof routes
 that existed at that head. The proof JSONs for firewall live toggle, keyboard
 shortcut rebind, input source roundtrip, Focus arm/disarm, app-keyed Per-app

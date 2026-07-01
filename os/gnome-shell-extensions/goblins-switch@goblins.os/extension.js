@@ -179,8 +179,7 @@ export default class GoblinsSwitchControl extends Extension {
     hide() {
         if (this._settings)
             this._settings.set_boolean('enabled', false);
-        else
-            this._stopScanner();
+        this._stopScanner();
     }
 
     _buildActors() {

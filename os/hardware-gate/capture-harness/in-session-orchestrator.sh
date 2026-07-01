@@ -136,7 +136,13 @@ dismiss_shell_overview(){
 }
 switch_control_off(){
   gsettings set org.goblins.os.a11y.switch-control enabled false 2>/dev/null || true
-  sleep 0.2
+  gdbus call --session \
+    --dest org.gnome.Shell \
+    --object-path /org/gnome/Shell \
+    --method org.gnome.Shell.Eval \
+    "if (globalThis.goblinsSwitchControl) globalThis.goblinsSwitchControl.hide(); 'switch-control-hidden';" \
+    >/dev/null 2>&1 || true
+  sleep 0.8
 }
 json_field(){
   python3 - "$1" "$2" <<'PY'

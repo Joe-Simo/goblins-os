@@ -533,10 +533,18 @@ fi
 # (the gate's by-design path) visually confirms each surface; an unattended agent
 # cannot. Fail loudly rather than commit a dishonest run.
 md5cmd() { command -v md5sum >/dev/null && md5sum "$@" || md5 -r "$@"; }
-_total="$(ls "$RUN_DIR"/*.png 2>/dev/null | wc -l | tr -d ' ')"
-_distinct="$(md5cmd "$RUN_DIR"/*.png 2>/dev/null | awk '{print $1}' | sort -u | wc -l | tr -d ' ')"
+_required_pngs=()
+while IFS= read -r -d '' png; do
+  _required_pngs+=("$png")
+done < <(find "$RUN_DIR" -maxdepth 1 -type f -name '*.png' ! -name '_debug-*' -print0)
+_total="${#_required_pngs[@]}"
+if [ "${_total:-0}" -eq 0 ]; then
+  echo "HONESTY GUARD: no required screenshot surfaces were captured."
+  exit 3
+fi
+_distinct="$(md5cmd "${_required_pngs[@]}" 2>/dev/null | awk '{print $1}' | sort -u | wc -l | tr -d ' ')"
 if [ "${_distinct:-0}" -lt "${_total:-1}" ]; then
-  echo "HONESTY GUARD: only $_distinct/$_total captured surfaces are distinct."
+  echo "HONESTY GUARD: only $_distinct/$_total required captured surfaces are distinct."
   echo "GNOME Wayland blocks scripted per-window capture (AccessDenied); duplicate"
   echo "surfaces cannot be passed off as distinct proof. This run requires a human"
   echo "operator at the display (run-external-gate.sh) — refusing to close-signoff."

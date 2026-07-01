@@ -5871,6 +5871,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "cropping the top bar",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-harness-distinct-guard-ignores-debug-frames",
+            "! -name '_debug-*'",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-waits-for-unique-required-frame",
+            "REQUIRED_FRAME_SETTLE_SECONDS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-fail-closes-on-duplicate-frame",
+            "framebuffer stayed duplicate",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-firewall-live-toggle-proof",
             "/proof/firewall-live-toggle",
@@ -5889,6 +5904,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-switch-control-off-uses-gsettings",
             "gsettings set org.goblins.os.a11y.switch-control enabled false",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-switch-control-off-uses-shell-hide-hook",
+            "goblinsSwitchControl.hide",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+            "switch-control-hide-stops-overlay-immediately",
+            "this._stopScanner();",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),

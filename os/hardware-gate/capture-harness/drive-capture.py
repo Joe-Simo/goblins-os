@@ -28,6 +28,7 @@ ORCHESTRATOR_DEST = os.environ.get("GOS_ORCHESTRATOR_DEST")
 ABS_MAX = 0x7fff
 INSTALL_POST_TIMEOUT = int(os.environ.get("GOS_INSTALL_POST_TIMEOUT", "900"))
 INSTALL_POST_TIMEOUT_EXIT = int(os.environ.get("GOS_INSTALL_POST_TIMEOUT_EXIT", "70"))
+REQUIRED_FRAME_SETTLE_SECONDS = int(os.environ.get("GOS_REQUIRED_FRAME_SETTLE_SECONDS", "24"))
 REQUIRED_PROOFS = (
     "firewall-live-toggle",
     "text-shortcuts-session-enable",
@@ -359,6 +360,40 @@ def handle_input(path):
         return
     raise SystemExit(f"unsupported input path: {path}")
 
+def capture_ready_frame(name, frame_hashes):
+    ppm = f"{OUTDIR}/{name}.ppm"
+    out = f"{OUTDIR}/{name}.png"
+    deadline = time.time() + REQUIRED_FRAME_SETTLE_SECONDS
+    last_hash = None
+    attempts = 0
+    while True:
+        attempts += 1
+        dump(ppm)
+        try:
+            with open(ppm, "rb") as fh:
+                data = fh.read()
+            last_hash = hashlib.md5(data).hexdigest()
+        except OSError:
+            last_hash = None
+        if not last_hash or last_hash not in frame_hashes:
+            break
+        if time.time() >= deadline:
+            print(
+                f"{name}: framebuffer stayed duplicate for {REQUIRED_FRAME_SETTLE_SECONDS}s; "
+                "saving it so the signoff guard can fail closed",
+                flush=True,
+            )
+            break
+        time.sleep(1)
+    if last_hash:
+        frame_hashes.add(last_hash)
+    png(ppm, out)
+    try:
+        os.remove(ppm)
+    except OSError:
+        pass
+    print(f"captured {name} after {attempts} framebuffer sample(s)", flush=True)
+
 def require_proofs(proofs):
     bad = [
         f"{name}={proofs.get(name, {}).get('status', 'missing')}"
@@ -403,7 +438,7 @@ pos = os.path.getsize(HTTPLOG) if os.path.exists(HTTPLOG) else 0
 publish_orchestrator()
 wait_http_contains_after("in-session orchestrator download", '"GET /orchestrator.sh HTTP/1.1" 200', pos, 180)
 # 5. capture on signals
-seen = set(); proofs = {}; t = time.time()
+seen = set(); frame_hashes = set(); proofs = {}; t = time.time()
 while time.time() - t < 600:
     with open(HTTPLOG, errors="ignore") as fh:
         fh.seek(pos); chunk = fh.read(); pos = fh.tell()
@@ -424,22 +459,8 @@ while time.time() - t < 600:
                 require_proofs(proofs)
                 print("ORCH_ALLDONE", flush=True); raise SystemExit(0)
             if name and name not in seen and name not in ("ORCH_START", "FIRSTBOOT_UNLOCK"):
-                seen.add(name); ppm = f"{OUTDIR}/{name}.ppm"
-                # Re-dump until the frame differs from the previous shot: a
-                # launched window can render slower than the orchestrator's fixed
-                # delay, so one dump may catch the prior/desktop frame.
-                import hashlib
-                last = globals().get("_last_md5")
-                for _try in range(5):
-                    dump(ppm)
-                    try: h = hashlib.md5(open(ppm, "rb").read()).hexdigest()
-                    except OSError: h = None
-                    if h != last or _try == 4:
-                        globals()["_last_md5"] = h; break
-                    time.sleep(1.3)
-                png(ppm, f"{OUTDIR}/{name}.png")
-                try: os.remove(ppm)
-                except OSError: pass
+                seen.add(name)
+                capture_ready_frame(name, frame_hashes)
                 print(f"captured {name} ({len(seen)})", flush=True)
     time.sleep(0.3)
 require_proofs(proofs)

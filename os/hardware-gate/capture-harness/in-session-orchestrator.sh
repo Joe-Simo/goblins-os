@@ -129,7 +129,7 @@ active_ibus_engine(){
 activate_goblins_textshortcuts_engine(){
   local active_engine
   for _ in $(seq 1 20); do
-    ibus read-cache >/dev/null 2>&1 || true
+    ibus write-cache >/dev/null 2>&1 || true
     ibus engine goblins-textshortcuts >/dev/null 2>&1 || true
     active_engine="$(active_ibus_engine)"
     [ "$active_engine" = "goblins-textshortcuts" ] && return 0
@@ -220,7 +220,7 @@ text_shortcuts_session_enable_proof(){
     return 1
   fi
 
-  ibus read-cache >/tmp/gate-text-shortcuts-session-read-cache.log 2>&1 || true
+  ibus write-cache >/tmp/gate-text-shortcuts-session-write-cache.log 2>&1 || true
   systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-session-ibus-restart.log 2>&1 || true
   for _ in $(seq 1 30); do
     service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
@@ -229,7 +229,7 @@ text_shortcuts_session_enable_proof(){
   done
   engine_listed=false
   for _ in $(seq 1 20); do
-    ibus read-cache >/tmp/gate-text-shortcuts-session-read-cache.log 2>&1 || true
+    ibus write-cache >/tmp/gate-text-shortcuts-session-write-cache.log 2>&1 || true
     if ibus list-engine 2>/tmp/gate-text-shortcuts-session-list-engine.err | grep -Fq 'goblins-textshortcuts'; then
       engine_listed=true
       break
@@ -675,7 +675,7 @@ text_shortcuts_live_ibus_runtime_render_proof(){
     return 1
   fi
 
-  ibus read-cache >/dev/null 2>&1 || true
+  ibus write-cache >/dev/null 2>&1 || true
   if ! activate_goblins_textshortcuts_engine; then
     active_engine="$(active_ibus_engine)"
     proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=engine-set&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=wtype&active_engine=${active_engine:-missing}&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
@@ -995,11 +995,16 @@ permission_store_get_permission(){
     "$1" "$2" "$3" 2>/dev/null || true
 }
 permission_store_set_permission(){
+  local permissions="$4"
+  case "$permissions" in
+    @as*) ;;
+    *) permissions="@as $permissions" ;;
+  esac
   gdbus call --session \
     --dest org.freedesktop.impl.portal.PermissionStore \
     --object-path /org/freedesktop/impl/portal/PermissionStore \
     --method org.freedesktop.impl.portal.PermissionStore.SetPermission \
-    "$1" true "$2" "$3" "$4" >/dev/null 2>&1
+    "$1" true "$2" "$3" "$permissions" >/tmp/gate-app-privacy-permission-store-set.log 2>&1
 }
 permission_store_delete_permission(){
   gdbus call --session \

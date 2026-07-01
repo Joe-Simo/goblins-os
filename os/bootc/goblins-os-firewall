@@ -3,10 +3,12 @@ set -eu
 
 case "${1:-}" in
   enable)
-    exec /usr/bin/systemctl enable --now firewalld.service
+    /usr/bin/systemctl start firewalld.service
+    exec /usr/bin/systemctl enable firewalld.service
     ;;
   disable)
-    exec /usr/bin/systemctl disable --now firewalld.service
+    /usr/bin/systemctl stop firewalld.service
+    exec /usr/bin/systemctl disable firewalld.service
     ;;
   *)
     printf '%s\n' "usage: goblins-os-firewall enable|disable" >&2

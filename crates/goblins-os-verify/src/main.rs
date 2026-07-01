@@ -5973,7 +5973,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-refreshes-textshortcuts-ibus-cache",
-            "gate-text-shortcuts-session-read-cache.log",
+            "gate-text-shortcuts-session-write-cache.log",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -10841,7 +10841,22 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/bootc/goblins-os-firewall"),
             "bootc-firewall-helper-controls-only-firewalld",
-            "systemctl enable --now firewalld.service",
+            "systemctl start firewalld.service",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-persists-enabled-state",
+            "systemctl enable firewalld.service",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-stops-before-disabling",
+            "systemctl stop firewalld.service",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-firewall"),
+            "bootc-firewall-helper-persists-disabled-state",
+            "systemctl disable firewalld.service",
         ),
         contains_check(
             root.join("os/systemd-system/goblins-os-firewall@.service"),
@@ -11516,6 +11531,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-installs-textshortcuts-component",
             "COPY os/goblins-os-textshortcuts/goblins-textshortcuts.xml /usr/share/ibus/component/goblins-textshortcuts.xml",
+        ),
+        container_contains_check(
+            root,
+            "bootc-writes-textshortcuts-ibus-system-cache",
+            "ibus write-cache --system",
+        ),
+        container_contains_check(
+            root,
+            "bootc-asserts-textshortcuts-ibus-system-cache",
+            "ibus read-cache --system | grep -Fq 'goblins-textshortcuts'",
         ),
         container_contains_check(
             root,
@@ -12989,6 +13014,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-shell/src/main.rs"),
             "shell-textshortcuts-proof-file-env",
             "GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-prewrites-static-proof-file",
+            "prewrite_static_text_shortcuts_proof",
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),

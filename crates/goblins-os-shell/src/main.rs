@@ -2610,14 +2610,58 @@ fn write_text_shortcuts_live_render_proof(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn prewrite_static_text_shortcuts_proof(
+    mode: TextShortcutsProofMode,
+    proof_file: Option<&str>,
+) -> std::io::Result<()> {
+    let Some(path) = proof_file else {
+        return Ok(());
+    };
+    let payload = match mode {
+        TextShortcutsProofMode::Candidate => Some(
+            "replacement=on my way\naccept_on=word-boundary\ndismiss_key=Escape\nrendered_bubble_ready_claim=false\n",
+        ),
+        TextShortcutsProofMode::CandidateRender => Some(concat!(
+            "surface=goblins-os-shell-text-shortcuts-candidate-bubble-render\n",
+            "render_intent_surface=goblins-textshortcuts-accept-bubble-render-intent\n",
+            "layout_surface=goblins-textshortcuts-accept-bubble-layout\n",
+            "frame_surface=goblins-textshortcuts-accept-bubble-frame\n",
+            "replacement=on my way\n",
+            "accept_on=word-boundary\n",
+            "dismiss_key=Escape\n",
+            "style_class=gos-text-shortcuts-candidate\n",
+            "text_style_class=gos-text-shortcuts-candidate-text\n",
+            "hint_style_class=gos-text-shortcuts-candidate-hint\n",
+            "font_family=Inter\n",
+            "screenshot=31-text-shortcuts-candidate-bubble-render.png\n",
+            "rendered_candidate_surface=true\n",
+            "rendered_bubble_ready_claim=false\n",
+            "live_overlay_claim=false\n",
+            "runtime_ready_claim=false\n",
+        )),
+        _ => None,
+    };
+    if let Some(payload) = payload {
+        std::fs::write(path, payload)?;
+    }
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<()> {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
     let proof_file = env::var("GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE").ok();
     let proof_events_file = env::var("GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS").ok();
+    prewrite_static_text_shortcuts_proof(mode, proof_file.as_deref())?;
     if let Some(path) = &proof_file {
-        std::fs::write(path, "")?;
+        if !matches!(
+            mode,
+            TextShortcutsProofMode::Candidate | TextShortcutsProofMode::CandidateRender
+        ) {
+            std::fs::write(path, "")?;
+        }
     }
 
     let application = gtk::Application::builder()
@@ -2710,8 +2754,11 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
                             .as_deref()
                             .map(text_shortcuts_live_ledger_state)
                             .unwrap_or_default();
-                        let _ =
-                            write_text_shortcuts_live_render_proof(&path, entry.text().as_str(), state);
+                        let _ = write_text_shortcuts_live_render_proof(
+                            &path,
+                            entry.text().as_str(),
+                            state,
+                        );
                     } else {
                         let _ = std::fs::write(&path, entry.text().as_str());
                     }
@@ -2726,43 +2773,14 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
                 | TextShortcutsProofMode::CandidateRender
                 | TextShortcutsProofMode::LiveRuntimeRender
         ) {
-            if let Some(path) = proof_file.clone() {
-                let payload = match mode {
-                    TextShortcutsProofMode::Candidate => {
-                        "replacement=on my way\naccept_on=word-boundary\ndismiss_key=Escape\nrendered_bubble_ready_claim=false\n".to_string()
-                    }
-                    TextShortcutsProofMode::CandidateRender => concat!(
-                        "surface=goblins-os-shell-text-shortcuts-candidate-bubble-render\n",
-                        "render_intent_surface=goblins-textshortcuts-accept-bubble-render-intent\n",
-                        "layout_surface=goblins-textshortcuts-accept-bubble-layout\n",
-                        "frame_surface=goblins-textshortcuts-accept-bubble-frame\n",
-                        "replacement=on my way\n",
-                        "accept_on=word-boundary\n",
-                        "dismiss_key=Escape\n",
-                        "style_class=gos-text-shortcuts-candidate\n",
-                        "text_style_class=gos-text-shortcuts-candidate-text\n",
-                        "hint_style_class=gos-text-shortcuts-candidate-hint\n",
-                        "font_family=Inter\n",
-                        "screenshot=31-text-shortcuts-candidate-bubble-render.png\n",
-                        "rendered_candidate_surface=true\n",
-                        "rendered_bubble_ready_claim=false\n",
-                        "live_overlay_claim=false\n",
-                        "runtime_ready_claim=false\n",
+            if mode == TextShortcutsProofMode::LiveRuntimeRender {
+                if let Some(path) = proof_file.clone() {
+                    write_text_shortcuts_live_render_proof(
+                        &path,
+                        entry.text().as_str(),
+                        TextShortcutsLiveLedgerState::default(),
                     )
-                    .to_string(),
-                    TextShortcutsProofMode::LiveRuntimeRender => {
-                        write_text_shortcuts_live_render_proof(
-                            &path,
-                            entry.text().as_str(),
-                            TextShortcutsLiveLedgerState::default(),
-                        )
-                        .ok();
-                        String::new()
-                    }
-                    _ => unreachable!("candidate proof payload only exists for candidate modes"),
-                };
-                if !payload.is_empty() {
-                    let _ = std::fs::write(&path, payload);
+                    .ok();
                 }
             }
             let candidate = gtk::Box::new(gtk::Orientation::Horizontal, 10);

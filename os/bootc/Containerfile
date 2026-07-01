@@ -562,6 +562,8 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && /usr/libexec/goblins-os/goblins-textshortcuts-engine --component-check /usr/share/ibus/component/goblins-textshortcuts.xml \
     && grep -Fq '<name>goblins-textshortcuts</name>' /usr/share/ibus/component/goblins-textshortcuts.xml \
     && grep -Fq '/usr/libexec/goblins-os/goblins-textshortcuts-ibus' /usr/share/ibus/component/goblins-textshortcuts.xml \
+    && ibus write-cache --system \
+    && ibus read-cache --system | grep -Fq 'goblins-textshortcuts' \
     && test -x /usr/libexec/goblins-os/goblins-os-firewall \
     && test -f /usr/lib/systemd/system/goblins-os-firewall@.service \
     && test -f /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules \

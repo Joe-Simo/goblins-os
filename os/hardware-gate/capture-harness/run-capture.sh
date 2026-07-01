@@ -113,6 +113,15 @@ fi
 [ -n "$CODE" ] || { echo "no UEFI code firmware found for $ARCH"; exit 1; }
 PFLASH=(-drive "if=pflash,format=raw,file=$WORK/code.fd,readonly=on" -drive "if=pflash,format=raw,file=$WORK/vars.fd")
 
+case "$RUN_DIR" in
+  "$REPO"/os/screenshots/hardware-gate/"$ARCH"/*)
+    rm -rf "$RUN_DIR"
+    ;;
+  *)
+    echo "refusing to reset unexpected hardware-gate run dir: $RUN_DIR"
+    exit 2
+    ;;
+esac
 mkdir -p "$WORK" "$RUN_DIR"
 cp "$CODE" "$WORK/code.fd"
 if [ -n "$VARS_TEMPLATE" ]; then

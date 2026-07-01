@@ -6461,6 +6461,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "HONESTY GUARD: missing or failing live firewall toggle proof",
         ),
         contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-capture-run-dir-reset-check",
+            "capture harness resets dated run dir before capture",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-dir-reset-is-scoped-to-arch-date",
+            "refusing to reset unexpected hardware-gate run dir",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-session-proof",
             "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof",

@@ -78,7 +78,9 @@ without explicit confirmation, verifies stale serials are rejected, links the
 proof from `proof-manifest.json`, and makes `close-signoff.sh`,
 `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing
 proof. This remains qemu-pending and does **not** ship the writable Displays
-panel or persistent Keep flow.
+panel or persistent Keep flow. The capture harness also now resets the scoped
+`os/screenshots/hardware-gate/$ARCH/$RUN_DATE` directory before each run, so a
+same-date rerun cannot accidentally reuse stale proof files.
 
 Previous hardware-gate run `28517091135` at `fffea01` passed bootc image
 publish, verification installer ISO build, model serve, install/boot/session

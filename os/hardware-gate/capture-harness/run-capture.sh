@@ -20,7 +20,8 @@ case "$ARCH" in arm64|aarch64) ARCH=aarch64; QEMU=qemu-system-aarch64;; x86_64|a
 REPO="${REPO_ROOT:-$(pwd)}"
 ISO="$REPO/os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso"
 SHA_FILE="$ISO.sha256"
-WORK="${WORK_DIR:-/tmp/gos-hwgate-$ARCH}"
+BASE_WORK="${WORK_DIR:-/tmp/gos-hwgate-$ARCH}"
+WORK="$BASE_WORK"
 PORT="${HTTP_PORT:-8099}"
 DATE="${RUN_DATE:?set RUN_DATE=YYYY-MM-DD (scripts cannot read the clock)}"
 RUN_DIR="$REPO/os/screenshots/hardware-gate/$ARCH/$DATE"
@@ -40,11 +41,16 @@ dump_file_tail() {
 }
 
 copy_capture_logs() {
-  mkdir -p "$RUN_DIR/_capture-logs"
+  local suffix="${1:-}"
+  local target="$RUN_DIR/_capture-logs"
+  if [ -n "$suffix" ]; then
+    target="$target/$suffix"
+  fi
+  mkdir -p "$target"
   local name
   for name in qemu.log serial.log httpd.log; do
     if [ -e "$WORK/$name" ]; then
-      cp -f "$WORK/$name" "$RUN_DIR/_capture-logs/$name" || true
+      cp -f "$WORK/$name" "$target/$name" || true
     fi
   done
 }
@@ -123,13 +129,49 @@ case "$RUN_DIR" in
     ;;
 esac
 mkdir -p "$WORK" "$RUN_DIR"
-cp "$CODE" "$WORK/code.fd"
-if [ -n "$VARS_TEMPLATE" ]; then
-  cp "$VARS_TEMPLATE" "$WORK/vars.fd"
-else
-  : > "$WORK/vars.fd"; truncate -s 67108864 "$WORK/vars.fd" 2>/dev/null || dd if=/dev/zero of="$WORK/vars.fd" bs=1m count=64 2>/dev/null
-fi
-qemu-img create -f qcow2 "$WORK/scratch.qcow2" 16G >/dev/null
+
+stop_qemu() {
+  if [ -n "${QEMU_PID:-}" ]; then
+    kill "$QEMU_PID" 2>/dev/null || true
+    wait "$QEMU_PID" 2>/dev/null || true
+    QEMU_PID=""
+  fi
+}
+
+prepare_vm_state() {
+  local attempt="$1"
+  echo "capture attempt $attempt: preparing fresh VM state"
+  rm -f "$WORK/qmp.sock" "$WORK/serial.log" "$WORK/qemu.log" "$WORK/scratch.qcow2" "$WORK/orchestrator.sh"
+  cp "$CODE" "$WORK/code.fd"
+  if [ -n "$VARS_TEMPLATE" ]; then
+    cp "$VARS_TEMPLATE" "$WORK/vars.fd"
+  else
+    : > "$WORK/vars.fd"; truncate -s 67108864 "$WORK/vars.fd" 2>/dev/null || dd if=/dev/zero of="$WORK/vars.fd" bs=1m count=64 2>/dev/null
+  fi
+  qemu-img create -f qcow2 "$WORK/scratch.qcow2" 16G >/dev/null
+}
+
+start_qemu() {
+  local attempt="$1"
+  echo "capture attempt $attempt: starting QEMU"
+  "$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp "$QEMU_SMP" -m 5120 "${PFLASH[@]}" \
+    -cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" \
+    -boot d \
+    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+    -device virtio-gpu-pci,id=video0 -device qemu-xhci -device usb-tablet -device usb-kbd \
+    -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &
+  QEMU_PID=$!
+  export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT" GOS_QMP_DISPLAY_DEVICE=video0
+  export GOS_ORCHESTRATOR_SOURCE="$HERE/in-session-orchestrator.sh" GOS_ORCHESTRATOR_DEST="$WORK/orchestrator.sh"
+}
+
+run_driver() {
+  set +e
+  python3 "$HERE/drive-capture.py"
+  local driver_rc=$?
+  set -e
+  return "$driver_rc"
+}
 
 # Serve first-boot helper and receive capture signals. The orchestrator is
 # published by drive-capture.py only after the host has recorded the post-unlock
@@ -140,20 +182,28 @@ rm -f "$WORK/orchestrator.sh"
     && python3 -m http.server "$PORT" --bind 0.0.0.0 >"$WORK/httpd.log" 2>&1 ) &
 HTTPD=$!
 
-rm -f "$WORK/qmp.sock"
-"$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp "$QEMU_SMP" -m 5120 "${PFLASH[@]}" \
-  -cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" \
-  -boot d \
-  -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
-  -device virtio-gpu-pci,id=video0 -device qemu-xhci -device usb-tablet -device usb-kbd \
-  -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &
-QEMU_PID=$!
-
-export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT" GOS_QMP_DISPLAY_DEVICE=video0
-export GOS_ORCHESTRATOR_SOURCE="$HERE/in-session-orchestrator.sh" GOS_ORCHESTRATOR_DEST="$WORK/orchestrator.sh"
 # Phase the run with the QMP driver (waits for Anaconda, drives it, waits for the
 # desktop, dismisses onboarding, launches the orchestrator, captures on signals).
-python3 "$HERE/drive-capture.py"
+MAX_ATTEMPTS="${GOS_CAPTURE_MAX_ATTEMPTS:-2}"
+INSTALL_TIMEOUT_RC="${GOS_INSTALL_POST_TIMEOUT_EXIT:-70}"
+attempt=1
+while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+  prepare_vm_state "$attempt"
+  start_qemu "$attempt"
+  if run_driver; then
+    break
+  else
+    driver_rc=$?
+  fi
+  copy_capture_logs "attempt-$attempt"
+  if [ "$driver_rc" -eq "$INSTALL_TIMEOUT_RC" ] && [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+    echo "capture attempt $attempt stalled before kickstart marker; retrying with fresh VM state"
+    stop_qemu
+    attempt=$((attempt + 1))
+    continue
+  fi
+  exit "$driver_rc"
+done
 
 FIREWALL_PROOF="$RUN_DIR/firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_PROOF="$RUN_DIR/text-shortcuts-session-enable-proof.json"

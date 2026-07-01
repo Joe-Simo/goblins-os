@@ -6812,6 +6812,36 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-bounds-install-post-timeout",
+            "GOS_INSTALL_POST_TIMEOUT",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-tags-install-post-timeout-exit",
+            "exit_code=INSTALL_POST_TIMEOUT_EXIT",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-bounds-pre-kickstart-retries",
+            "GOS_CAPTURE_MAX_ATTEMPTS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-retries-only-install-timeout-exit",
+            "driver_rc\" -eq \"$INSTALL_TIMEOUT_RC",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-resets-vm-state-between-install-timeout-attempts",
+            "prepare_vm_state \"$attempt\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-preserves-attempt-logs-before-retry",
+            "copy_capture_logs \"attempt-$attempt\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-waits-for-automated-kickstart-progress-diagnostics",
             "Anaconda automated kickstart progress",
         ),

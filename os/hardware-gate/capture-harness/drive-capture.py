@@ -26,6 +26,8 @@ DISPLAY_DEVICE = os.environ.get("GOS_QMP_DISPLAY_DEVICE", "video0")
 ORCHESTRATOR_SOURCE = os.environ.get("GOS_ORCHESTRATOR_SOURCE")
 ORCHESTRATOR_DEST = os.environ.get("GOS_ORCHESTRATOR_DEST")
 ABS_MAX = 0x7fff
+INSTALL_POST_TIMEOUT = int(os.environ.get("GOS_INSTALL_POST_TIMEOUT", "900"))
+INSTALL_POST_TIMEOUT_EXIT = int(os.environ.get("GOS_INSTALL_POST_TIMEOUT_EXIT", "70"))
 REQUIRED_PROOFS = (
     "firewall-live-toggle",
     "text-shortcuts-session-enable",
@@ -145,6 +147,10 @@ def serial_text():
     except OSError:
         return ""
 
+def fail(message, exit_code=1):
+    print(message, flush=True)
+    raise SystemExit(exit_code)
+
 def http_log_text():
     try:
         with open(HTTPLOG, errors="ignore") as fh:
@@ -152,7 +158,7 @@ def http_log_text():
     except OSError:
         return ""
 
-def wait_serial_contains(label, needle, timeout, debug_label=None, debug_every=0):
+def wait_serial_contains(label, needle, timeout, debug_label=None, debug_every=0, exit_code=1):
     t = time.time()
     last_tail = ""
     last_debug = 0.0
@@ -166,9 +172,10 @@ def wait_serial_contains(label, needle, timeout, debug_label=None, debug_every=0
             last_debug = time.time()
         last_tail = data[-500:]
         time.sleep(1)
-    raise SystemExit(
+    fail(
         f"{label} did not appear in serial log within {timeout}s; "
-        f"expected {needle!r}; serial_tail={last_tail!r}"
+        f"expected {needle!r}; serial_tail={last_tail!r}",
+        exit_code=exit_code,
     )
 
 def observe_serial_contains(label, needle, timeout):
@@ -375,9 +382,10 @@ observe_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 3
 wait_serial_contains(
     "kickstart install post",
     "GOBLINS_VERIFY_INSTALL_DONE",
-    1800,
+    INSTALL_POST_TIMEOUT,
     debug_label="Anaconda automated kickstart progress",
     debug_every=120,
+    exit_code=INSTALL_POST_TIMEOUT_EXIT,
 )
 # 2. Wait for first boot before treating install progress as real.
 observe_serial_contains("first boot hardware diagnostics", "GOBLINS_HWGATE_DIAG_DONE", 180)

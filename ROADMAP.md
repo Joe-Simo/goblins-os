@@ -34,15 +34,17 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Base head `e7a928f` is CI-green for the fast Rust build: GitHub Actions build
-run `28533362530` passed on x86_64 and aarch64. The current source follow-up
-targets display-backed capture honesty on top of that head: explicit
-`GOBLINS_OS_INSTALLER_PAGE` proof requests now bypass the completed-first-boot
-early exit, the capture harness turns Switch Control off before ordinary
-screenshots, and both `goblins-os-verify` plus `verify-shipping-status.sh`
-require those guards. Hardware-gate run `28534087254` started at `e7a928f` but
-was canceled as superseded before the fix landed; dispatch a fresh current-head
-hardware gate after this commit is pushed.
+Head `a6521f1` is CI-green for the fast Rust build: GitHub Actions build run
+`28534596298` passed on x86_64 and aarch64. Hardware-gate run `28534607015` at
+that head passed bootc image publish, verification installer ISO build, and
+model prep, then failed before any in-session proof: the ISO booted past GRUB
+far enough for the debug framebuffer to show early initrd/switch-root output,
+but the verification `%post` marker `GOBLINS_VERIFY_INSTALL_DONE` never appeared
+within the old 1800s wait. The current source follow-up bounds that pre-proof
+install marker wait to `GOS_INSTALL_POST_TIMEOUT` (default 900s), returns a
+distinct driver code for that exact failure, and lets `run-capture.sh` retry
+once with fresh QEMU firmware/disk/log state while preserving attempt logs.
+Later proof failures still fail closed and are not retried.
 
 The latest reviewed display-backed proof artifact is run `28530031330` at
 `d540563`. It passed bootc image publish, verification installer ISO build,

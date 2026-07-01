@@ -32,7 +32,6 @@ REQUIRED_FRAME_SETTLE_SECONDS = int(os.environ.get("GOS_REQUIRED_FRAME_SETTLE_SE
 REQUIRED_PROOFS = (
     "firewall-live-toggle",
     "text-shortcuts-session-enable",
-    "text-shortcuts-live-keystroke",
     "text-shortcuts-candidate-metadata",
     "text-shortcuts-overlay-intent",
     "text-shortcuts-candidate-bubble-frame",
@@ -50,7 +49,6 @@ REQUIRED_PROOFS = (
 PROOF_FILENAMES = {
     "firewall-live-toggle": "firewall-live-toggle-proof.json",
     "text-shortcuts-session-enable": "text-shortcuts-session-enable-proof.json",
-    "text-shortcuts-live-keystroke": "text-shortcuts-live-keystroke-proof.json",
     "text-shortcuts-candidate-metadata": "text-shortcuts-candidate-metadata-proof.json",
     "text-shortcuts-overlay-intent": "text-shortcuts-overlay-intent-proof.json",
     "text-shortcuts-candidate-bubble-frame": "text-shortcuts-candidate-bubble-frame-proof.json",

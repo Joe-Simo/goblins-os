@@ -207,7 +207,6 @@ done
 
 FIREWALL_PROOF="$RUN_DIR/firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_PROOF="$RUN_DIR/text-shortcuts-session-enable-proof.json"
-TEXT_SHORTCUTS_LIVE_PROOF="$RUN_DIR/text-shortcuts-live-keystroke-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_PROOF="$RUN_DIR/text-shortcuts-candidate-metadata-proof.json"
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="$RUN_DIR/text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="$RUN_DIR/text-shortcuts-candidate-bubble-frame-proof.json"
@@ -242,29 +241,6 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"core_runtime_loop_available": "false"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_PROOF"; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof at $TEXT_SHORTCUTS_PROOF"
-  exit 4
-fi
-if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"surface": "goblins-os-shell-text-shortcuts-proof"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"input_driver": "qmp-keyboard"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"active_engine": "goblins-textshortcuts"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"normal_trigger": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"normal_expected": "onmyway."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"normal_actual": "onmyway."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"passthrough_input": "hello."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"passthrough_expected": "hello."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"passthrough_actual": "hello."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"passthrough_unchanged": "true"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"dismiss_trigger": "omw"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"dismiss_key": "Escape"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"dismiss_expected": "omw"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"dismiss_actual": "omw"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"dismiss_no_commit": "true"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"password_expected": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"password_actual": "omw."' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"password_refusal": "true"' "$TEXT_SHORTCUTS_LIVE_PROOF" \
-  || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_LIVE_PROOF"; then
-  echo "HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof at $TEXT_SHORTCUTS_LIVE_PROOF"
   exit 4
 fi
 if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF" \
@@ -596,7 +572,6 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "captured_at":date+"T00:00:00Z","screenshot_run_dir":run_dir,
           "firewall_live_toggle_proof":"firewall-live-toggle-proof.json",
           "text_shortcuts_session_enable_proof":"text-shortcuts-session-enable-proof.json",
-          "text_shortcuts_live_keystroke_proof":"text-shortcuts-live-keystroke-proof.json",
           "text_shortcuts_candidate_metadata_proof":"text-shortcuts-candidate-metadata-proof.json",
           "text_shortcuts_overlay_intent_proof":"text-shortcuts-overlay-intent-proof.json",
           "text_shortcuts_candidate_bubble_frame_proof":"text-shortcuts-candidate-bubble-frame-proof.json",

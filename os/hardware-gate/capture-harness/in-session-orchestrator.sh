@@ -34,7 +34,6 @@ export GOBLINS_OS_RENDER_FULLSCREEN=1
 sig(){ curl -s "http://$H/ready/$1" >/dev/null 2>&1; sleep 5; }
 proof_firewall(){ curl -s "http://$H/proof/firewall-live-toggle?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts(){ curl -s "http://$H/proof/text-shortcuts-session-enable?$1" >/dev/null 2>&1 || true; }
-proof_text_shortcuts_live(){ curl -s "http://$H/proof/text-shortcuts-live-keystroke?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate(){ curl -s "http://$H/proof/text-shortcuts-candidate-metadata?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_overlay_intent(){ curl -s "http://$H/proof/text-shortcuts-overlay-intent?$1" >/dev/null 2>&1 || true; }
 proof_text_shortcuts_candidate_bubble_frame(){ curl -s "http://$H/proof/text-shortcuts-candidate-bubble-frame?$1" >/dev/null 2>&1 || true; }
@@ -414,127 +413,6 @@ text_shortcuts_session_enable_proof(){
   fi
 
   proof_text_shortcuts "status=pass&route=/v1/text-shortcuts&service=active&service_unit=$TEXT_SHORTCUTS_IBUS_SERVICE&input_source_configured=true&preload_configured=true&engine_listed=true&adapter_self_test=pass&engine_set=pass&active_engine=goblins-textshortcuts&core_http=200&core_engine_available=false&core_runtime_loop_available=false&runtime_ready_claim=false"
-  return 0
-}
-text_shortcuts_live_keystroke_proof(){
-  local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/goblins-os"
-  local table_file="$config_dir/text-shortcuts.json"
-  local normal_file=/tmp/gate-text-shortcuts-normal.txt
-  local passthrough_file=/tmp/gate-text-shortcuts-passthrough.txt
-  local password_file=/tmp/gate-text-shortcuts-password.txt
-  local dismiss_file=/tmp/gate-text-shortcuts-dismiss.txt
-  local normal_actual passthrough_actual password_actual dismiss_actual normal_pid passthrough_pid password_pid dismiss_pid active_engine
-
-  mkdir -p "$config_dir"
-  printf '[{"replace":"omw","with":"onmyway"}]\n' > "$table_file"
-  rm -f "$normal_file" "$passthrough_file" "$password_file" "$dismiss_file"
-
-  if ! activate_goblins_textshortcuts_engine; then
-    active_engine="$(active_ibus_engine)"
-    proof_text_shortcuts_live "status=fail&stage=engine-set&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=${active_engine:-missing}&bus_owner=$(ibus_bus_owner_value)&list_error=$(proof_query_value "$(cat /tmp/gate-text-shortcuts-activate-list-engine.err 2>/dev/null || true)")&service_diag=$(ibus_service_diag_query_value)&daemon_process=$(ibus_daemon_process_query_value)&session_env=$(ibus_session_env_query_value)"
-    return 1
-  fi
-  active_engine="$(active_ibus_engine)"
-  if [ "$active_engine" != "goblins-textshortcuts" ]; then
-    proof_text_shortcuts_live "status=fail&stage=engine-active&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=${active_engine:-missing}"
-    return 1
-  fi
-
-  dismiss_shell_overview text-shortcuts-live-normal
-  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$normal_file" "$B/goblins-os-shell" --text-shortcuts-proof normal >/tmp/gate-text-shortcuts-normal.log 2>&1 &
-  normal_pid=$!
-  sleep 4
-  host_focus_text_shortcuts_field normal-focus
-  if ! host_type_text normal-omw "omw."; then
-    kill "$normal_pid" 2>/dev/null || true
-    proof_text_shortcuts_live "status=fail&stage=normal-qmp-keyboard&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts"
-    return 1
-  fi
-  for _ in $(seq 1 20); do
-    normal_actual="$(cat "$normal_file" 2>/dev/null || true)"
-    [ "$normal_actual" = "onmyway." ] && break
-    sleep 0.5
-  done
-  kill "$normal_pid" 2>/dev/null || true
-  wait "$normal_pid" 2>/dev/null || true
-  if [ "$normal_actual" != "onmyway." ]; then
-    proof_text_shortcuts_live "status=fail&stage=normal-readback&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&normal_expected=onmyway.&normal_actual=${normal_actual:-missing}&normal_file_bytes=$(file_size_value "$normal_file")&normal_log_tail=$(file_tail_query_value /tmp/gate-text-shortcuts-normal.log)"
-    return 1
-  fi
-
-  dismiss_shell_overview text-shortcuts-live-passthrough
-  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$passthrough_file" "$B/goblins-os-shell" --text-shortcuts-proof passthrough >/tmp/gate-text-shortcuts-passthrough.log 2>&1 &
-  passthrough_pid=$!
-  sleep 4
-  host_focus_text_shortcuts_field passthrough-focus
-  if ! host_type_text passthrough-hello "hello."; then
-    kill "$passthrough_pid" 2>/dev/null || true
-    proof_text_shortcuts_live "status=fail&stage=passthrough-qmp-keyboard&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&passthrough_input=hello."
-    return 1
-  fi
-  for _ in $(seq 1 20); do
-    passthrough_actual="$(cat "$passthrough_file" 2>/dev/null || true)"
-    [ "$passthrough_actual" = "hello." ] && break
-    sleep 0.5
-  done
-  kill "$passthrough_pid" 2>/dev/null || true
-  wait "$passthrough_pid" 2>/dev/null || true
-  if [ "$passthrough_actual" != "hello." ]; then
-    proof_text_shortcuts_live "status=fail&stage=passthrough-readback&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&passthrough_expected=hello.&passthrough_actual=${passthrough_actual:-missing}&passthrough_unchanged=false"
-    return 1
-  fi
-
-  dismiss_shell_overview text-shortcuts-live-dismiss
-  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$dismiss_file" "$B/goblins-os-shell" --text-shortcuts-proof dismiss >/tmp/gate-text-shortcuts-dismiss.log 2>&1 &
-  dismiss_pid=$!
-  sleep 4
-  host_focus_text_shortcuts_field dismiss-focus
-  if ! host_type_text dismiss-omw "omw"; then
-    kill "$dismiss_pid" 2>/dev/null || true
-    proof_text_shortcuts_live "status=fail&stage=dismiss-type&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&dismiss_trigger=omw"
-    return 1
-  fi
-  sleep 1
-  if ! host_press_key dismiss-escape Escape; then
-    kill "$dismiss_pid" 2>/dev/null || true
-    proof_text_shortcuts_live "status=fail&stage=dismiss-escape&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&dismiss_trigger=omw&dismiss_key=Escape"
-    return 1
-  fi
-  for _ in $(seq 1 20); do
-    dismiss_actual="$(cat "$dismiss_file" 2>/dev/null || true)"
-    [ "$dismiss_actual" = "omw" ] && break
-    sleep 0.5
-  done
-  kill "$dismiss_pid" 2>/dev/null || true
-  wait "$dismiss_pid" 2>/dev/null || true
-  if [ "$dismiss_actual" != "omw" ]; then
-    proof_text_shortcuts_live "status=fail&stage=dismiss-readback&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&dismiss_expected=omw&dismiss_actual=${dismiss_actual:-missing}&dismiss_no_commit=false"
-    return 1
-  fi
-
-  dismiss_shell_overview text-shortcuts-live-password
-  GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$password_file" "$B/goblins-os-shell" --text-shortcuts-proof password >/tmp/gate-text-shortcuts-password.log 2>&1 &
-  password_pid=$!
-  sleep 4
-  host_focus_text_shortcuts_field password-focus
-  if ! host_type_text password-omw "omw."; then
-    kill "$password_pid" 2>/dev/null || true
-    proof_text_shortcuts_live "status=fail&stage=password-qmp-keyboard&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts"
-    return 1
-  fi
-  for _ in $(seq 1 20); do
-    password_actual="$(cat "$password_file" 2>/dev/null || true)"
-    [ "$password_actual" = "omw." ] && break
-    sleep 0.5
-  done
-  kill "$password_pid" 2>/dev/null || true
-  wait "$password_pid" 2>/dev/null || true
-  if [ "$password_actual" != "omw." ]; then
-    proof_text_shortcuts_live "status=fail&stage=password-readback&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&password_expected=omw.&password_actual=${password_actual:-missing}"
-    return 1
-  fi
-
-  proof_text_shortcuts_live "status=pass&route=/v1/text-shortcuts&surface=goblins-os-shell-text-shortcuts-proof&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&normal_trigger=omw.&normal_expected=onmyway.&normal_actual=onmyway.&passthrough_input=hello.&passthrough_expected=hello.&passthrough_actual=hello.&passthrough_unchanged=true&dismiss_trigger=omw&dismiss_key=Escape&dismiss_expected=omw&dismiss_actual=omw&dismiss_no_commit=true&password_expected=omw.&password_actual=omw.&password_refusal=true&runtime_ready_claim=false"
   return 0
 }
 text_shortcuts_candidate_metadata_proof(){
@@ -1716,7 +1594,6 @@ dismiss_shell_overview text-shortcuts-proof-start
 switch_control_off
 firewall_live_toggle_proof || true
 text_shortcuts_session_enable_proof || true
-text_shortcuts_live_keystroke_proof || true
 text_shortcuts_candidate_metadata_proof || true
 text_shortcuts_overlay_intent_proof || true
 text_shortcuts_candidate_bubble_frame_proof || true

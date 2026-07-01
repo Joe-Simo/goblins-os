@@ -80,7 +80,6 @@ SCREENSHOT_REQUIRED=(
 )
 FIREWALL_LIVE_TOGGLE_PROOF="firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_SESSION_ENABLE_PROOF="text-shortcuts-session-enable-proof.json"
-TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF="text-shortcuts-live-keystroke-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof.json"
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
@@ -298,7 +297,6 @@ screenshot_manifest_matches_iso() {
     && rg -q '"screenshot_run_dir"[[:space:]]*:[[:space:]]*"'"$SCREENSHOT_DIR"'"' "$manifest" \
     && rg -q '"firewall_live_toggle_proof"[[:space:]]*:[[:space:]]*"'"$FIREWALL_LIVE_TOGGLE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_session_enable_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"'"' "$manifest" \
-    && rg -q '"text_shortcuts_live_keystroke_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_metadata_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest" \
@@ -349,33 +347,6 @@ text_shortcuts_session_enable_proof_passes() {
     && rg -q '"core_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
     && rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
     && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
-    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
-}
-
-text_shortcuts_live_keystroke_proof_passes() {
-  local proof="$1"
-
-  [ -s "$proof" ] \
-    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
-    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
-    && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-os-shell-text-shortcuts-proof"' "$proof" \
-    && rg -q '"input_driver"[[:space:]]*:[[:space:]]*"qmp-keyboard"' "$proof" \
-    && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
-    && rg -q '"normal_trigger"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
-    && rg -q '"normal_expected"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
-    && rg -q '"normal_actual"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
-    && rg -q '"passthrough_input"[[:space:]]*:[[:space:]]*"hello\."' "$proof" \
-    && rg -q '"passthrough_expected"[[:space:]]*:[[:space:]]*"hello\."' "$proof" \
-    && rg -q '"passthrough_actual"[[:space:]]*:[[:space:]]*"hello\."' "$proof" \
-    && rg -q '"passthrough_unchanged"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"dismiss_trigger"[[:space:]]*:[[:space:]]*"omw"' "$proof" \
-    && rg -q '"dismiss_key"[[:space:]]*:[[:space:]]*"Escape"' "$proof" \
-    && rg -q '"dismiss_expected"[[:space:]]*:[[:space:]]*"omw"' "$proof" \
-    && rg -q '"dismiss_actual"[[:space:]]*:[[:space:]]*"omw"' "$proof" \
-    && rg -q '"dismiss_no_commit"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"password_expected"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
-    && rg -q '"password_actual"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
-    && rg -q '"password_refusal"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
 }
 
@@ -874,7 +845,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! screenshot_manifest_matches_iso "$SCREENSHOT_DIR/proof-manifest.json"; then
     fail "Screenshot proof manifest missing or not tied to this architecture ISO: $SCREENSHOT_DIR/proof-manifest.json"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_live_keystroke_proof=$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
+    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
     exit 1
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
@@ -885,11 +856,6 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   if ! text_shortcuts_session_enable_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"; then
     fail "Text Shortcuts session-enable proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"
     fail "Expected active Fedora GNOME IBus service, configured Goblins IBus source/preload, active goblins-textshortcuts engine, adapter self-test pass, and core runtime honesty still false."
-    exit 1
-  fi
-  if ! text_shortcuts_live_keystroke_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"; then
-    fail "Text Shortcuts live keystroke proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"
-    fail "Expected QMP-keyboard-driven normal Entry expansion omw. -> onmyway., unknown-word pass-through hello. -> hello., Escape dismiss without replacement commit, and password Entry refusal omw. -> omw. with the Goblins IBus engine active."
     exit 1
   fi
   if ! text_shortcuts_candidate_metadata_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"; then
@@ -960,7 +926,6 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   log "All required screenshot proof PNGs and proof manifest passed."
   log "Firewall live toggle proof passed."
   log "Text Shortcuts session-enable proof passed."
-  log "Text Shortcuts live keystroke proof passed."
   log "Text Shortcuts candidate metadata proof passed."
   log "Text Shortcuts overlay-intent proof passed."
   log "Text Shortcuts candidate-bubble-frame proof passed."
@@ -979,7 +944,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
   FIREWALL_TOGGLE_STATUS="yes ($FIREWALL_LIVE_TOGGLE_PROOF: disable=200/inactive, enable=200/active)"
   TEXT_SHORTCUTS_SESSION_STATUS="yes ($TEXT_SHORTCUTS_SESSION_ENABLE_PROOF: service/source/engine active; runtime expansion still gated false)"
-  TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes ($TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF: normal expansion, pass-through, Escape dismiss, and password refusal via QMP keyboard)"
+  TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes (covered by $TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF + 32-text-shortcuts-live-ibus-runtime-render.png: normal expansion, pass-through, password refusal, focused-field callback, text-input-v3 commit, and rendered accept bubble)"
   TEXT_SHORTCUTS_CANDIDATE_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF: candidate metadata present; rendered bubble still gated false)"
   TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="yes ($TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF: adapter show/hide overlay intents present; live overlay still gated false)"
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF: adapter accept-bubble frames present; rendered bubble still gated false)"

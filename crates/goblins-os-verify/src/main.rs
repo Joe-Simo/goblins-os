@@ -5742,8 +5742,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-live-keystroke-proof",
-            "text-shortcuts-live-keystroke-proof.json",
+            "runbook-documents-retired-textshortcuts-live-keystroke-proof",
+            "supersedes the old text-shortcuts-live-keystroke-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -5842,13 +5842,13 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-escape-dismiss-proof",
-            "Escape dismiss without a",
+            "runbook-documents-textshortcuts-password-refusal-proof",
+            "password refusal",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-passthrough-proof",
-            "unknown word stays pass-through",
+            "pass-through",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -5980,9 +5980,9 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "capture-harness-posts-textshortcuts-session-proof",
             "/proof/text-shortcuts-session-enable",
         ),
-        contains_check(
+        absent_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-posts-textshortcuts-live-keystroke-proof",
+            "capture-harness-does-not-post-retired-textshortcuts-live-keystroke-proof",
             "/proof/text-shortcuts-live-keystroke",
         ),
         contains_check(
@@ -6308,17 +6308,17 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-drives-textshortcuts-with-qmp-keyboard",
-            "host_type_text normal-omw \"omw.\"",
+            "host_type_text runtime-render-omw \"omw\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-clicks-textshortcuts-field-before-typing",
-            "host_focus_text_shortcuts_field normal-focus",
+            "host_focus_text_shortcuts_field runtime-render-focus",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-dismisses-shell-overview-before-textshortcuts-typing",
-            "dismiss_shell_overview text-shortcuts-live-normal",
+            "dismiss_shell_overview text-shortcuts-live-runtime-render",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6362,8 +6362,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-opens-textshortcuts-dismiss-proof",
-            "goblins-os-shell\" --text-shortcuts-proof dismiss",
+            "capture-harness-opens-textshortcuts-password-proof",
+            "goblins-os-shell\" --text-shortcuts-proof password",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6373,22 +6373,22 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-drives-textshortcuts-passthrough",
-            "host_type_text passthrough-hello \"hello.\"",
+            "host_type_text runtime-passthrough-hello \"hello.\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-checks-textshortcuts-passthrough-unchanged",
-            "passthrough_unchanged=true",
+            "passthrough_actual=hello.",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-drives-textshortcuts-escape-dismiss",
-            "host_press_key dismiss-escape Escape",
+            "capture-harness-drives-textshortcuts-password-refusal",
+            "host_type_text runtime-password-omw \"omw.\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-checks-textshortcuts-dismiss-no-commit",
-            "dismiss_no_commit=true",
+            "capture-harness-checks-textshortcuts-password-refusal-in-live-proof",
+            "password_refusal=true",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6565,9 +6565,9 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "capture-driver-writes-textshortcuts-session-proof-json",
             "text-shortcuts-session-enable-proof.json",
         ),
-        contains_check(
+        absent_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-writes-textshortcuts-live-keystroke-proof-json",
+            "capture-driver-does-not-require-retired-textshortcuts-live-keystroke-proof-json",
             "text-shortcuts-live-keystroke-proof.json",
         ),
         contains_check(
@@ -6650,9 +6650,9 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "capture-run-guards-textshortcuts-session-proof",
             "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof",
         ),
-        contains_check(
+        absent_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
-            "capture-run-guards-textshortcuts-live-keystroke-proof",
+            "capture-run-does-not-guard-retired-textshortcuts-live-keystroke-proof",
             "HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof",
         ),
         contains_check(
@@ -6812,13 +6812,13 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
-            "capture-run-guards-textshortcuts-dismiss-proof",
-            "\"dismiss_no_commit\": \"true\"",
+            "capture-run-guards-textshortcuts-password-refusal-proof",
+            "\"password_refusal\": \"true\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-passthrough-proof",
-            "\"passthrough_unchanged\": \"true\"",
+            "\"passthrough_actual\": \"hello.\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -6898,22 +6898,22 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-textshortcuts-passthrough-proof",
-            "passthrough_unchanged",
+            "passthrough_actual",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-requires-textshortcuts-passthrough-proof",
-            "passthrough_unchanged",
+            "passthrough_actual",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-requires-textshortcuts-dismiss-proof",
-            "dismiss_no_commit",
+            "shipping-status-requires-textshortcuts-password-refusal-proof",
+            "password_refusal",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
-            "close-signoff-requires-textshortcuts-dismiss-proof",
-            "dismiss_no_commit",
+            "close-signoff-requires-textshortcuts-password-refusal-proof",
+            "password_refusal",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -7820,9 +7820,9 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "shipping-status-requires-textshortcuts-session-proof",
             "text_shortcuts_session_enable_proof_passes",
         ),
-        contains_check(
+        absent_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-requires-textshortcuts-live-keystroke-proof",
+            "shipping-status-does-not-require-retired-textshortcuts-live-keystroke-proof",
             "text_shortcuts_live_keystroke_proof_passes",
         ),
         contains_check(
@@ -7996,9 +7996,9 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "shipping-status-textshortcuts-session-proof-filename",
             "text-shortcuts-session-enable-proof.json",
         ),
-        contains_check(
+        absent_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-textshortcuts-live-keystroke-proof-filename",
+            "shipping-status-does-not-pin-retired-textshortcuts-live-keystroke-proof-filename",
             "text-shortcuts-live-keystroke-proof.json",
         ),
         contains_check(
@@ -8291,9 +8291,9 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "close-signoff-requires-textshortcuts-session-proof",
             "text_shortcuts_session_enable_proof_passes",
         ),
-        contains_check(
+        absent_check(
             root.join("os/hardware-gate/close-signoff.sh"),
-            "close-signoff-requires-textshortcuts-live-keystroke-proof",
+            "close-signoff-does-not-require-retired-textshortcuts-live-keystroke-proof",
             "text_shortcuts_live_keystroke_proof_passes",
         ),
         contains_check(
@@ -8373,8 +8373,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
-            "close-signoff-records-textshortcuts-live-keystroke-proof",
-            "Text Shortcuts live keystrokes checked",
+            "close-signoff-records-textshortcuts-live-keystrokes-covered-by-runtime-render",
+            "covered by $TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),

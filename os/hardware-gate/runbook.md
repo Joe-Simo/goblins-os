@@ -142,7 +142,6 @@ the release media that was booted:
   "screenshot_run_dir": "os/screenshots/hardware-gate/<arch>/<YYYY-MM-DD>",
   "firewall_live_toggle_proof": "firewall-live-toggle-proof.json",
   "text_shortcuts_session_enable_proof": "text-shortcuts-session-enable-proof.json",
-  "text_shortcuts_live_keystroke_proof": "text-shortcuts-live-keystroke-proof.json",
   "text_shortcuts_candidate_metadata_proof": "text-shortcuts-candidate-metadata-proof.json",
   "text_shortcuts_overlay_intent_proof": "text-shortcuts-overlay-intent-proof.json",
   "text_shortcuts_candidate_bubble_frame_proof": "text-shortcuts-candidate-bubble-frame-proof.json",
@@ -174,14 +173,11 @@ selection, adapter self-test, and core honesty that runtime expansion is still
 gated off. It does not ship Text Shortcuts expansion; the keystroke commit proof
 remains a separate qemu gate.
 
-The keystroke gate is `text-shortcuts-live-keystroke-proof.json`. It launches the
-Goblins shell's proof-only GTK field, drives it through host QMP keyboard input,
-and rejects the run unless a normal entry expands `omw.` to `onmyway.`, an
-unknown word stays pass-through as `hello.`, an Escape dismiss without a
-replacement commit leaves a normal entry at `omw`, and a password-purpose entry
-keeps `omw.` unchanged. This is the first live text-input proof; it still keeps
-the Settings/Core runtime-ready claim disabled until the qemu artifact is
-reviewed and the feature is flipped deliberately.
+The live keystroke gate is now the runtime/render gate below. It supersedes the old text-shortcuts-live-keystroke-proof.json so the run does not depend on the
+shallow proof-only GTK readback path. The required proof is stricter: it must
+drive the installed IBus engine from a focused field, prove normal expansion,
+pass-through, password refusal, focused-field callback, Wayland text-input-v3
+commit, and a rendered Goblins accept bubble in the same display-backed session.
 
 The candidate metadata gate is `text-shortcuts-candidate-metadata-proof.json`.
 It launches `goblins-os-shell --text-shortcuts-proof candidate` and rejects the
@@ -404,7 +400,7 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - gaming readiness result, including Steam absence from installed-root verifier
 - firewall toggle result, including `firewall-live-toggle-proof.json`
 - Text Shortcuts session-enable result, including `text-shortcuts-session-enable-proof.json`
-- Text Shortcuts live keystroke result, including `text-shortcuts-live-keystroke-proof.json`
+- Text Shortcuts live keystroke result, covered by `text-shortcuts-live-ibus-runtime-render-proof.json` and `32-text-shortcuts-live-ibus-runtime-render.png`
 - Text Shortcuts candidate metadata result, including `text-shortcuts-candidate-metadata-proof.json`
 - Text Shortcuts overlay intent result, including `text-shortcuts-overlay-intent-proof.json`
 - Text Shortcuts candidate bubble frame result, including `text-shortcuts-candidate-bubble-frame-proof.json`

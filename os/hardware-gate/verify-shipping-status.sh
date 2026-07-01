@@ -50,7 +50,6 @@ REQ_SCREENSHOTS=(
 )
 FIREWALL_LIVE_TOGGLE_PROOF="firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_SESSION_ENABLE_PROOF="text-shortcuts-session-enable-proof.json"
-TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF="text-shortcuts-live-keystroke-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF="text-shortcuts-candidate-metadata-proof.json"
 TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF="text-shortcuts-overlay-intent-proof.json"
 TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF="text-shortcuts-candidate-bubble-frame-proof.json"
@@ -230,7 +229,6 @@ screenshot_run_is_complete() {
   screenshot_manifest_matches_iso "$run_dir" "$arch" || return 1
   firewall_live_toggle_proof_passes "$run_dir/$FIREWALL_LIVE_TOGGLE_PROOF" || return 1
   text_shortcuts_session_enable_proof_passes "$run_dir/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF" || return 1
-  text_shortcuts_live_keystroke_proof_passes "$run_dir/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF" || return 1
   text_shortcuts_candidate_metadata_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF" || return 1
   text_shortcuts_overlay_intent_proof_passes "$run_dir/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF" || return 1
   text_shortcuts_candidate_bubble_frame_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF" || return 1
@@ -290,7 +288,6 @@ screenshot_manifest_matches_iso() {
     && rg -q '"screenshot_run_dir"[[:space:]]*:[[:space:]]*"'"$run_dir"'"' "$manifest" \
     && rg -q '"firewall_live_toggle_proof"[[:space:]]*:[[:space:]]*"'"$FIREWALL_LIVE_TOGGLE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_session_enable_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"'"' "$manifest" \
-    && rg -q '"text_shortcuts_live_keystroke_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_metadata_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_overlay_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_frame_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF"'"' "$manifest" \
@@ -341,33 +338,6 @@ text_shortcuts_session_enable_proof_passes() {
     && rg -q '"core_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
     && rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
     && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
-    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
-}
-
-text_shortcuts_live_keystroke_proof_passes() {
-  local proof="$1"
-
-  [ -s "$proof" ] \
-    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
-    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
-    && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-os-shell-text-shortcuts-proof"' "$proof" \
-    && rg -q '"input_driver"[[:space:]]*:[[:space:]]*"qmp-keyboard"' "$proof" \
-    && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
-    && rg -q '"normal_trigger"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
-    && rg -q '"normal_expected"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
-    && rg -q '"normal_actual"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
-    && rg -q '"passthrough_input"[[:space:]]*:[[:space:]]*"hello\."' "$proof" \
-    && rg -q '"passthrough_expected"[[:space:]]*:[[:space:]]*"hello\."' "$proof" \
-    && rg -q '"passthrough_actual"[[:space:]]*:[[:space:]]*"hello\."' "$proof" \
-    && rg -q '"passthrough_unchanged"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"dismiss_trigger"[[:space:]]*:[[:space:]]*"omw"' "$proof" \
-    && rg -q '"dismiss_key"[[:space:]]*:[[:space:]]*"Escape"' "$proof" \
-    && rg -q '"dismiss_expected"[[:space:]]*:[[:space:]]*"omw"' "$proof" \
-    && rg -q '"dismiss_actual"[[:space:]]*:[[:space:]]*"omw"' "$proof" \
-    && rg -q '"dismiss_no_commit"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"password_expected"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
-    && rg -q '"password_actual"[[:space:]]*:[[:space:]]*"omw\."' "$proof" \
-    && rg -q '"password_refusal"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
 }
 
@@ -700,10 +670,6 @@ print_missing_screenshot_paths() {
     echo "  $run_dir/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"
     missing=1
   fi
-  if ! text_shortcuts_live_keystroke_proof_passes "$run_dir/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"; then
-    echo "  $run_dir/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"
-    missing=1
-  fi
   if ! text_shortcuts_candidate_metadata_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"; then
     echo "  $run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"
     missing=1
@@ -848,12 +814,6 @@ print_screenshot_run_checks() {
     echo "[FAIL] $TEXT_SHORTCUTS_SESSION_ENABLE_PROOF (missing or Text Shortcuts session-enable proof failed)"
     missing=1
   fi
-  if text_shortcuts_live_keystroke_proof_passes "$run_dir/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"; then
-    echo "[PASS] $TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF"
-  else
-    echo "[FAIL] $TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF (missing or Text Shortcuts live keystroke proof failed)"
-    missing=1
-  fi
   if text_shortcuts_candidate_metadata_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"; then
     echo "[PASS] $TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"
   else
@@ -976,7 +936,6 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/proof-manifest.json
   os/screenshots/hardware-gate/$arch/<date>/$FIREWALL_LIVE_TOGGLE_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF
-  os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_LIVE_KEYSTROKE_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF
@@ -1328,8 +1287,8 @@ check "capture driver persists App privacy revoke proof" "rg -q 'app-privacy-rev
 check "capture harness proves Text Shortcuts session plumbing without runtime claim" "rg -q '/proof/text-shortcuts-session-enable' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'TEXT_SHORTCUTS_IBUS_SERVICE=org.freedesktop.IBus.session.GNOME.service' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'service_unit=\$TEXT_SHORTCUTS_IBUS_SERVICE' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'systemctl --user restart \"\$TEXT_SHORTCUTS_IBUS_SERVICE\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ibus engine goblins-textshortcuts' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ensure_textshortcuts_ibus_component' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wait_ibus_cli_ready' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wait_ibus_bus_owned' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'user_component_seeded=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'list_error=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'bus_owner=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'service_diag=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'daemon_process=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'session_env=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! test -f os/systemd-user/org.goblins.OS.IBus.service && rg -q 'Wants=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'Before=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/org.goblins.OS.InputSourcesSeed.service && ! rg -q 'org.goblins.OS.IBus.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf os/systemd-user/org.goblins.OS.InputSourcesSeed.service os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -Fq 'application.run_with_args(&[\"goblins-os-shell\", \"--text-shortcuts-proof\"]);' crates/goblins-os-shell/src/main.rs && rg -q 'systemctl --user import-environment' os/session/goblins-os-session && rg -q 'dbus-update-activation-environment --systemd' os/session/goblins-os-session && rg -q 'WAYLAND_DISPLAY' os/session/goblins-os-session && rg -q '/var/home/goblin/.local/share/ibus/component/goblins-textshortcuts.xml' os/bootc/Containerfile && rg -q 'core_runtime_loop_available=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts session proof" "rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-session-enable' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts session-enable proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "Text Shortcuts one-shot input source seed is source-gated" "test -x os/input/goblins-os-input-source-seed && rg -q 'input-source-seeded' os/input/goblins-os-input-source-seed && rg -q 'gsettings set org.gnome.desktop.input-sources sources' os/input/goblins-os-input-source-seed && rg -q 'gsettings set org.freedesktop.ibus.general preload-engines' os/input/goblins-os-input-source-seed && rg -q 'COPY --chmod=0755 os/input/goblins-os-input-source-seed /usr/libexec/goblins-os/goblins-os-input-source-seed' os/bootc/Containerfile && rg -q 'bash -n /usr/libexec/goblins-os/goblins-os-input-source-seed' os/bootc/Containerfile && rg -q 'Wants=org.goblins.OS.InputSourcesSeed.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'Wants=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'Before=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/org.goblins.OS.InputSourcesSeed.service"
-check "capture harness proves Text Shortcuts live keystrokes through focused GTK fields" "rg -q '/proof/text-shortcuts-live-keystroke' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof normal' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof password' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof dismiss' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof passthrough' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'host_focus_text_shortcuts_field normal-focus' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'host_click \"\${token}-entry-a\" 0.5 0.53' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'normal_log_tail' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'host_type_text normal-omw \"omw\\.\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'host_type_text passthrough-hello \"hello\\.\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'host_press_key dismiss-escape Escape' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'TEXT_SHORTCUTS_INPUT_DRIVER=qmp-keyboard' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/input/text/' os/hardware-gate/capture-harness/drive-capture.py && rg -q '/input/key/' os/hardware-gate/capture-harness/drive-capture.py && rg -q '/input/click/' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'password_refusal=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismiss_no_commit=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'passthrough_unchanged=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
-check "capture driver persists Text Shortcuts live keystroke proof" "rg -q 'text-shortcuts-live-keystroke-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-live-keystroke' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof' os/hardware-gate/capture-harness/run-capture.sh"
+check "capture harness retired superseded Text Shortcuts live keystroke proof" "! rg -q '/proof/text-shortcuts-live-keystroke|text_shortcuts_live_keystroke_proof|proof_text_shortcuts_live[[:space:]]*\\(\\)' os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -q 'text-shortcuts-live-keystroke|TEXT_SHORTCUTS_LIVE_PROOF|HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh"
+check "Text Shortcuts live keystrokes are covered by the runtime/render proof" "rg -q '/proof/text-shortcuts-live-ibus-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'normal_actual=onmyway\\.' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'passthrough_actual=hello\\.' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'password_refusal=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'focused_field_callback=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'text_input_v3_commit=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_accept_bubble=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '32-text-shortcuts-live-ibus-runtime-render.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts candidate metadata without live overlay claim" "rg -q '/proof/text-shortcuts-candidate-metadata' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'replacement=on my way' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'accept_on=word-boundary' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismiss_key=Escape' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts candidate metadata proof" "rg -q 'text-shortcuts-candidate-metadata-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-metadata' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate metadata proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts overlay intent without live overlay claim" "rg -q '/proof/text-shortcuts-overlay-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--overlay-intent-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-ibus-adapter-overlay-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'show_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hide_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismissed_reason=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'committed_reason=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
@@ -1362,7 +1321,7 @@ check "capture driver fail-closes on QMP command errors" "rg -q 'QMP command .* 
 check "hardware gate uploads failure diagnostics" "rg -q 'copy_capture_logs' os/hardware-gate/capture-harness/run-capture.sh && rg -q '_capture-logs' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'if: always()' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate requires live firewall proof in signoff" "rg -q 'firewall_live_toggle_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Firewall live toggle checked' os/hardware-gate/close-signoff.sh && rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts session proof in signoff" "rg -q 'text_shortcuts_session_enable_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts session enablement checked' os/hardware-gate/close-signoff.sh && rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/runbook.md"
-check "hardware gate requires Text Shortcuts live keystroke proof in signoff" "rg -q 'text_shortcuts_live_keystroke_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts live keystrokes checked' os/hardware-gate/close-signoff.sh && rg -q 'text-shortcuts-live-keystroke-proof.json' os/hardware-gate/runbook.md"
+check "hardware gate records Text Shortcuts live keystrokes through runtime/render signoff" "! rg -q 'text_shortcuts_live_keystroke_proof_passe[s][[:space:]]*\\(|text-shortcuts-live-keystroke-proof[.]json' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts live keystrokes checked' os/hardware-gate/close-signoff.sh && rg -q 'covered by \$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF' os/hardware-gate/close-signoff.sh && rg -q 'supersedes the old text-shortcuts-live-keystroke-proof[.]json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts candidate metadata proof in signoff" "rg -q 'text_shortcuts_candidate_metadata_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate metadata checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-metadata-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts overlay intent proof in signoff" "rg -q 'text_shortcuts_overlay_intent_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts overlay intent checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-overlay-intent-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts candidate bubble frame proof in signoff" "rg -q 'text_shortcuts_candidate_bubble_frame_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate bubble frame checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-bubble-frame-proof.json' os/hardware-gate/runbook.md"

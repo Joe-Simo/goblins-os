@@ -34,39 +34,36 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Head `84622d7` is CI-green for the fast Rust build: GitHub Actions build run
-`28546231184` passed on x86_64 and aarch64. Hardware-gate run `28546242264` at
+Head `b5ddaca` is CI-green for the fast Rust build: GitHub Actions build run
+`28549840219` passed on x86_64 and aarch64. Hardware-gate run `28549856369` at
 that head passed bootc image publish, verification installer ISO build, model
-prep, install/first boot, in-session orchestrator, and every runtime proof JSON:
-firewall live toggle, Text Shortcuts session enable, Text Shortcuts live
-keystroke, Text Shortcuts live IBus runtime/render, keyboard shortcut rebind,
-input source roundtrip, multi-display apply, Focus arm/disarm, app-keyed
-Per-app Privacy revoke, and Preview PDF/image open/render all reported
-`status=pass`.
+prep, install/first boot, and the display-backed VM orchestrator. The artifact
+contains the new screenshot set, `31-text-shortcuts-candidate-bubble-render.png`,
+`32-text-shortcuts-live-ibus-runtime-render.png`, and all runtime proof JSONs
+except `proof-manifest.json` because close-signoff failed before manifest write.
 
-That run still failed close-signoff, honestly, because the screenshot set was
-not signoff-quality: `run-capture.sh` hit the duplicate framebuffer guard before
-writing `proof-manifest.json`. The downloaded artifact had 35 PNGs; the required
-non-debug denominator had only 28 distinct surfaces out of 31. The stale
-duplicates were concrete: Studio before and audio output reused the same desktop
-frame, shell dark and Settings dark duplicated, and installer / install-network
-duplicated. Several otherwise unique frames were still not valid product
-surfaces because the Switch Control overlay remained visible or the requested
-app did not foreground. This is no longer a Text Shortcuts, DisplayConfig,
-firewall, IME, Focus, Preview, or Per-app Privacy proof failure; it is the
-remaining display-capture honesty/signoff blocker.
+That failure is now narrowed to a stale proof contract, not to the runtime engine
+itself. `text-shortcuts-live-ibus-runtime-render-proof.json` passed with
+`normal_actual=onmyway.`, `passthrough_actual=hello.`, `password_refusal=true`,
+`focused_field_callback=true`, `text_input_v3_commit=true`,
+`rendered_accept_bubble=true`, `runtime_ready_claim=true`, and
+`core_readiness_flip=deferred`. The older shallow
+`text-shortcuts-live-keystroke-proof.json` still remained mandatory and failed at
+`stage=normal-readback` with `normal_actual=missing` and
+`normal_file_bytes=0`. That legacy proof is superseded by the stronger
+runtime/render proof because the stronger proof covers normal expansion,
+pass-through, password refusal, focused-field callback, Wayland text-input-v3
+commit, and the rendered accept bubble in one installed GNOME/Wayland session.
 
 The current source follow-up is qemu-pending and does **not** mark more features
-shipped. It keeps the previously verified session/DisplayConfig bridge fix and
-the duplicate-frame wait, then makes capture-only GTK proof launches non-unique
-for Shell, Settings, and Installer so a proof window is created even if the
-session service already owns the normal application ID. The hardware
-orchestrator now launches proof windows in the current GNOME session instead of
-a nested `dbus-run-session`, forwards capture env vars explicitly, disables the
-Switch Control extension before ordinary screenshots, and kills stale proof
-windows by both short process name and full command path before the next shot.
-If a required frame still does not become unique, the guard continues to fail
-closed and no signoff is written.
+shipped. It retires the superseded `text-shortcuts-live-keystroke-proof.json`
+from the mandatory hardware signoff path while keeping
+`text-shortcuts-live-ibus-runtime-render-proof.json` and
+`32-text-shortcuts-live-ibus-runtime-render.png` required. The gate must still
+fail closed unless the runtime/render proof records active `goblins-textshortcuts`
+IBus engine selection, QMP keyboard input, normal expansion, pass-through,
+password refusal, focused-field callback, text-input-v3 commit, rendered accept
+bubble, Inter styling, and `core_readiness_flip=deferred`.
 
 Previous hardware-gate run `28538674596` at `9f5ca8b` passed bootc image
 publish, verification installer ISO build, model prep, install, first boot

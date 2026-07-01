@@ -13,7 +13,10 @@ use serde::Deserialize;
 // Rc/RefCell hold the Build Studio's active session id, shared between the sidebar
 // and the composer so opening a saved build continues it. Native desktop only.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
 const DEFAULT_CORE_WAIT_SECS: u64 = 45;
@@ -2822,9 +2825,24 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         window.set_child(Some(&root));
         window.present();
 
-        let entry = entry.clone();
+        let focus_attempts = Rc::new(Cell::new(0u8));
+        let entry_for_idle = entry.clone();
+        let focus_attempts_for_idle = focus_attempts.clone();
         gtk::glib::idle_add_local_once(move || {
-            entry.grab_focus();
+            entry_for_idle.grab_focus();
+            focus_attempts_for_idle.set(1);
+        });
+        let entry_for_timer = entry.clone();
+        let focus_attempts_for_timer = focus_attempts;
+        let _ = gtk::glib::timeout_add_local(Duration::from_millis(250), move || {
+            entry_for_timer.grab_focus();
+            let attempts = focus_attempts_for_timer.get().saturating_add(1);
+            focus_attempts_for_timer.set(attempts);
+            if attempts >= 16 {
+                gtk::glib::ControlFlow::Break
+            } else {
+                gtk::glib::ControlFlow::Continue
+            }
         });
     });
 

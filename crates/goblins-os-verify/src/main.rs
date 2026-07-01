@@ -13382,6 +13382,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-entry-refocus-loop",
+            "saturating_add(1)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
             "shell-textshortcuts-proof-live-render-marker",
             "rendered_accept_bubble={rendered}",
         ),

@@ -34,36 +34,38 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest source commit `6f93a98` on `main` passed the fast Rust build
-(`28502658903`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
-tests, and release build all succeeded. Hardware-gate run `28502663530` at the
-same head passed bootc image publish and verification installer ISO build, then
-failed inside the display-backed VM capture. The artifact has real display
-captures through `31-text-shortcuts-candidate-bubble-render.png`;
-`29-preview-pdf-open.png` and `30-preview-image-open.png` exist, but
+Latest source commit `82f50ef` on `main` passed the fast Rust build
+(`28506136084`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
+tests, and release build all succeeded. Hardware-gate run `28506688097` at the
+same head passed bootc image publish, verification installer ISO build, model
+serve, install/boot/session automation, and all display-backed VM capture proof
+routes except the final Text Shortcuts live input/runtime render path. The
+artifact has real display captures through
+`31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png` and
+`30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-That run proves the firewall follow-up is now live-qemu green:
-`firewall-live-toggle-proof.json` is `pass` with disable HTTP `200`,
-`disable_active=false`, enable HTTP `200`, and `enable_active=true`. It also
-keeps the previous live qemu proofs green: app-keyed Per-app Privacy revoke,
-keyboard shortcut rebind, input source switching, Focus arm/disarm, Preview
-PDF/image open/render, Text Shortcuts candidate metadata, overlay intent,
-deterministic candidate bubble frame/layout, and deterministic candidate bubble
-render all pass their proof JSON. The remaining live failure is Text Shortcuts
-runtime: `text-shortcuts-session-enable-proof.json` now reaches
-`service=active` but fails at `stage=engine-list` with
-`list_error="Can't connect to IBus."`, and the live keystroke/runtime proofs
-still fail because `active_engine=missing`.
+That run proves the IBus session follow-up worked:
+`text-shortcuts-session-enable-proof.json` is `pass` with `service=active`,
+`engine_listed=true`, `engine_set=pass`, `active_engine=goblins-textshortcuts`,
+and `adapter_self_test=pass`. It also keeps the previous live qemu proofs green:
+firewall live toggle, app-keyed Per-app Privacy revoke, keyboard shortcut
+rebind, input source switching, Focus arm/disarm, Preview PDF/image
+open/render, Text Shortcuts candidate metadata, overlay intent, deterministic
+candidate bubble frame/layout, and deterministic candidate bubble render all
+pass their proof JSON. The remaining live failure is Text Shortcuts input:
+`text-shortcuts-live-keystroke-proof.json` fails at `stage=normal-readback` with
+`normal_actual=missing`, and `text-shortcuts-live-ibus-runtime-render-proof.json`
+fails at `stage=render-ledger` with `focused_field_callback=false`,
+`text_input_v3_commit=false`, `rendered_accept_bubble=false`, and no screenshot.
 
-Current follow-up source work imports the live display/session environment into
-`systemd --user` and D-Bus activation before `gnome-session` starts so the IBus
-daemon and later proof commands share the same compositor/session variables
-(`DISPLAY`, `WAYLAND_DISPLAY`, the GNOME/Goblins desktop identifiers, session
-type, and the session bus address). This remains qemu-pending until the next
-display-backed VM run proves `text-shortcuts-session-enable-proof.json`,
-`text-shortcuts-live-keystroke`, and `text-shortcuts-live-ibus-runtime-render`
-end-to-end.
+Current follow-up source work keeps the real pass criteria intact while making
+the focused GTK proof field deterministic under QMP keyboard input: the proof
+window repeatedly re-focuses its entry during the typing window, the harness
+clicks the entry region instead of only the window center, and bounded
+proof/log tails are included in failing proof JSON. This remains qemu-pending
+until the next display-backed VM run proves `text-shortcuts-live-keystroke` and
+`text-shortcuts-live-ibus-runtime-render` end-to-end.
 
 Previous hardware-gate run `28496717503` at `729ea69` on `main` proved the App
 Privacy follow-up worked: `app-privacy-revoke-proof.json` was `pass` with

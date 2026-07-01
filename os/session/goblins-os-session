@@ -27,6 +27,17 @@ export IBUS_ENABLE_SYNC_MODE="${IBUS_ENABLE_SYNC_MODE:-0}"
 # never presents stock GNOME chrome (no activities button, overview, or app grid).
 export GNOME_SHELL_SESSION_MODE="${GNOME_SHELL_SESSION_MODE:-goblins-os}"
 
+# User services that need to bind to the live compositor, including IBus, are
+# launched by systemd --user after this wrapper. Import the display/session
+# environment before gnome-session starts those units so their bus/socket state
+# matches the interactive shell process that later drives input-method checks.
+/usr/bin/systemctl --user import-environment \
+  DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
+  DESKTOP_SESSION XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS 2>/dev/null || true
+/usr/bin/dbus-update-activation-environment --systemd \
+  DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
+  DESKTOP_SESSION XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS 2>/dev/null || true
+
 # When the display manager launches us it already owns the session bus and the
 # systemd --user instance, so start GNOME directly. Wrapping that case in
 # dbus-run-session creates a nested bus where gnome-session cannot reach

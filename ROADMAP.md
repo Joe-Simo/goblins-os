@@ -34,16 +34,16 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest source commit `e73590d` on `main` passed the fast Rust build
-(`28499432989`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
-tests, and release build all succeeded. Hardware-gate run `28499442352` at the
+Latest source commit `6f93a98` on `main` passed the fast Rust build
+(`28502658903`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
+tests, and release build all succeeded. Hardware-gate run `28502663530` at the
 same head passed bootc image publish and verification installer ISO build, then
 failed inside the display-backed VM capture. The artifact has real display
 captures through `31-text-shortcuts-candidate-bubble-render.png`;
 `29-preview-pdf-open.png` and `30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-That run proves the firewall follow-up worked:
+That run proves the firewall follow-up is now live-qemu green:
 `firewall-live-toggle-proof.json` is `pass` with disable HTTP `200`,
 `disable_active=false`, enable HTTP `200`, and `enable_active=true`. It also
 keeps the previous live qemu proofs green: app-keyed Per-app Privacy revoke,
@@ -51,18 +51,19 @@ keyboard shortcut rebind, input source switching, Focus arm/disarm, Preview
 PDF/image open/render, Text Shortcuts candidate metadata, overlay intent,
 deterministic candidate bubble frame/layout, and deterministic candidate bubble
 render all pass their proof JSON. The remaining live failure is Text Shortcuts
-runtime: `text-shortcuts-session-enable-proof.json` fails at `stage=user-service`
-with `service=inactive`, and the live keystroke/runtime proofs fail because
-`active_engine=missing`. The `Type=dbus` IBus user-unit follow-up is therefore
-wrong for this installed session shape.
+runtime: `text-shortcuts-session-enable-proof.json` now reaches
+`service=active` but fails at `stage=engine-list` with
+`list_error="Can't connect to IBus."`, and the live keystroke/runtime proofs
+still fail because `active_engine=missing`.
 
-Current follow-up source work reverts the IBus user unit to `Type=simple`,
-restarts and cache-refreshes `org.goblins.OS.IBus.service` before the session
-proof declares the service unavailable, and keeps explicit `ibus list-engine`
-readiness waits before listing or setting `goblins-textshortcuts`. This remains
-qemu-pending until the next display-backed VM run proves
-`text-shortcuts-session-enable-proof.json`, `text-shortcuts-live-keystroke`, and
-`text-shortcuts-live-ibus-runtime-render` end-to-end.
+Current follow-up source work imports the live display/session environment into
+`systemd --user` and D-Bus activation before `gnome-session` starts so the IBus
+daemon and later proof commands share the same compositor/session variables
+(`DISPLAY`, `WAYLAND_DISPLAY`, the GNOME/Goblins desktop identifiers, session
+type, and the session bus address). This remains qemu-pending until the next
+display-backed VM run proves `text-shortcuts-session-enable-proof.json`,
+`text-shortcuts-live-keystroke`, and `text-shortcuts-live-ibus-runtime-render`
+end-to-end.
 
 Previous hardware-gate run `28496717503` at `729ea69` on `main` proved the App
 Privacy follow-up worked: `app-privacy-revoke-proof.json` was `pass` with

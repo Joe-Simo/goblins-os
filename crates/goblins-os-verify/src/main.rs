@@ -1127,6 +1127,21 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "session-keeps-ibus-sync-mode-conservative",
         "IBUS_ENABLE_SYNC_MODE",
     ));
+    checks.push(session_contains_check(
+        root,
+        "session-imports-display-env-into-systemd-user",
+        "systemctl --user import-environment",
+    ));
+    checks.push(session_contains_check(
+        root,
+        "session-updates-dbus-activation-display-env",
+        "dbus-update-activation-environment --systemd",
+    ));
+    checks.push(session_contains_check(
+        root,
+        "session-imports-wayland-display-for-user-services",
+        "WAYLAND_DISPLAY",
+    ));
     checks.push(contains_check(
         root.join("os/dconf/db/local.d/10-goblins-os-desktop"),
         "super-space-launcher",
@@ -12874,6 +12889,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf"),
             "textshortcuts-ibus-user-service-wanted-by-session",
             "Wants=org.goblins.OS.IBus.service",
+        ),
+        contains_check(
+            root.join("os/session/goblins-os-session"),
+            "textshortcuts-session-imports-user-service-display-env",
+            "systemctl --user import-environment",
+        ),
+        contains_check(
+            root.join("os/session/goblins-os-session"),
+            "textshortcuts-session-updates-dbus-activation-display-env",
+            "dbus-update-activation-environment --systemd",
+        ),
+        contains_check(
+            root.join("os/session/goblins-os-session"),
+            "textshortcuts-session-imports-wayland-display-env",
+            "WAYLAND_DISPLAY",
         ),
         container_absent_check(
             root,

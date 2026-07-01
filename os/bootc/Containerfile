@@ -129,6 +129,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       snapper \
       btrfs-progs \
       libbtrfsutil \
+      cryptsetup \
+      tpm2-tss \
       deja-dup \
       localsearch \
       sushi \
@@ -153,6 +155,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       snapper \
       btrfs-progs \
       libbtrfsutil \
+      cryptsetup \
+      tpm2-tss \
       deja-dup \
       sushi \
       gnome-font-viewer \
@@ -235,6 +239,9 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && test -f /usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so \
     && command -v snapper \
     && command -v btrfs \
+    && command -v cryptsetup \
+    && command -v systemd-cryptenroll \
+    && test -f /usr/lib64/libtss2-esys.so.0 \
     && command -v xdg-open \
     && command -v papers \
     && command -v loupe \

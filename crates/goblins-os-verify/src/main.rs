@@ -11299,6 +11299,63 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         container_contains_check(root, "snapshots-command-asserts-btrfs", "command -v btrfs"),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
+            "core-exposes-encryption-status-route",
+            "/v1/security/encryption",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/encryption.rs"),
+            "core-encryption-mountinfo-reader",
+            "/proc/self/mountinfo",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/encryption.rs"),
+            "core-encryption-crypttab-reader",
+            "/etc/crypttab",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/encryption.rs"),
+            "core-encryption-cryptsetup-status-reader",
+            "cryptsetup\", &[\"status\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/encryption.rs"),
+            "core-encryption-cryptenroll-list-reader",
+            "systemd-cryptenroll\", &[\"--list\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/encryption.rs"),
+            "core-encryption-no-enrollment-write",
+            "executes_enrollment: false",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/encryption.rs"),
+            "core-encryption-recovery-key-required-copy",
+            "must not enable TPM-only install without escrow",
+        ),
+        container_package_lockstep_check(root, "encryption-cryptsetup-packaged", "cryptsetup"),
+        container_package_lockstep_check(root, "encryption-tpm2-tss-packaged", "tpm2-tss"),
+        container_package_not_installed_check(
+            root,
+            "encryption-no-systemd-cryptsetup-rpm",
+            "systemd-cryptsetup",
+        ),
+        container_contains_check(
+            root,
+            "encryption-command-asserts-cryptsetup",
+            "command -v cryptsetup",
+        ),
+        container_contains_check(
+            root,
+            "encryption-command-asserts-systemd-cryptenroll",
+            "command -v systemd-cryptenroll",
+        ),
+        container_contains_check(
+            root,
+            "encryption-command-asserts-tpm2-tss-lib",
+            "/usr/lib64/libtss2-esys.so.0",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
             "core-exposes-focus-status-route",
             "/v1/focus/status",
         ),

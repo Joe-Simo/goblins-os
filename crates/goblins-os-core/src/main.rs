@@ -10,6 +10,7 @@ mod bluetooth;
 mod boot_lock;
 mod codex;
 mod displays;
+mod encryption;
 mod fingerprint;
 mod firewall;
 mod focus;
@@ -82,6 +83,7 @@ use crate::{
     boot_lock::boot_lock_status,
     codex::{codex_login_start, codex_login_url, codex_status},
     displays::{apply_displays, displays_status},
+    encryption::encryption_status,
     fingerprint::fingerprint_status,
     firewall::{firewall_status, set_firewall_enabled},
     hardware::hardware_status,
@@ -172,6 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(install_progress_status),
         )
         .route("/v1/recovery/status", get(recovery_status))
+        .route("/v1/security/encryption", get(encryption_status))
         .route("/v1/snapshots/status", get(snapshots_status))
         .route("/v1/snapshots/restore", post(restore_snapshot))
         .route("/v1/session/gate", get(session_gate_status))

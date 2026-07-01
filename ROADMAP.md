@@ -34,32 +34,31 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Current hardware-gate run `28488700949` at `31f8094` on `main` has passed the
-bootc image build and verification ISO build and is still inside the
-display-backed VM capture step. It is testing the follow-ups for IBus cache
-registration, firewall re-enable, PermissionStore seeding, and deterministic
-Text Shortcuts candidate proof prewrite. No screenshot/proof artifact from this
-run has been reviewed yet, so firewall, per-app revoke, and Text Shortcuts stay
-`in-progress`.
-
-Latest completed hardware-gate run `28486096503` at `00b0950` on `main` passed the bootc
+Latest hardware-gate run `28488700949` at `31f8094` on `main` passed the bootc
 image build and verification ISO build, then failed inside the display-backed VM
 capture after the installed session reached `/ready/ORCH_START` and
 `/ready/ORCH_ALLDONE`. The artifact has real display captures through
 `31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png` and
-`30-preview-image-open.png` now exist, but
+`30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-That run proves the shared session-bridge socket follow-up worked for several
-previously blocked writes: keyboard shortcut rebind, input source switching,
-Focus arm/disarm, and Preview PDF/image open/render now pass their live proof
-JSON. The remaining live failures are concrete and narrower: firewall disable
-succeeded but re-enable returned HTTP `502` after `firewall-cmd --state` did not
-return active; PermissionStore seeding failed before the per-app revoke route
-could be exercised; Text Shortcuts IBus service was active and dconf was seeded,
-but `ibus list-engine` still did not list `goblins-textshortcuts`, so the live
-engine, live keystroke, candidate metadata, candidate-render file, and live
-runtime/render proofs remain failing.
+That run proves several qemu-gated writes and renders now work: keyboard
+shortcut rebind, input source switching, Focus arm/disarm, Preview PDF/image
+open/render, Text Shortcuts engine registration/listing/activation, and the
+deterministic Text Shortcuts candidate bubble render proof all pass their live
+proof JSON. The remaining live failures are now narrow and concrete: firewall
+disable succeeds but re-enable returns HTTP `502` after active state remains
+false; PermissionStore `SetPermission` seeding fails before the per-app revoke
+route can be exercised; Text Shortcuts live keystroke and live runtime render
+fail after the engine is active because `wtype` input does not reach the
+focused field callback/text-input-v3 commit path. Firewall, per-app revoke, and
+Text Shortcuts live runtime stay `in-progress`.
+
+Previous hardware-gate run `28486096503` at `00b0950` on `main` passed the bootc
+image build and verification ISO build, then failed inside the display-backed VM
+capture after the installed session reached `/ready/ORCH_START` and
+`/ready/ORCH_ALLDONE`. It first proved Preview PDF/image screenshots existed but
+still missed `32-text-shortcuts-live-ibus-runtime-render.png`.
 
 Previous hardware-gate run `28485602839` at `5ec6b27` failed during the bootc
 image build before qemu because the in-image verifier checked
@@ -127,20 +126,16 @@ current blocker is narrowed to verification-only helper files/units not being
 available to the installed booted deployment, not CI billing, image export, ISO
 build, GDM autologin, or GNOME session launch.
 
-The current source follow-up is source-gated only so far: write and assert the
-IBus system registry cache after installing the Goblins component XML; use
-`ibus write-cache` in the live harness before engine listing/activation instead
-of the read-only cache command; prewrite the deterministic Text Shortcuts
-candidate proof files before the GTK proof window enters the activation loop;
-seed PermissionStore `SetPermission` with an explicit `@as` string-array
-variant; and make the firewall helper start/stop `firewalld.service` before
-persisting enablement state. Local gates so far: hardware-gate shell syntax,
-`git diff --check`, fmt check for `goblins-os-shell` and `goblins-os-verify`,
-focused shell/verify tests, workspace clippy with `-D warnings`, workspace
-tests, Rust 1.88 GTK container clippy for `goblins-os-shell` with
-`native-desktop`, and `cargo run -p goblins-os-verify -- --source-root .` →
-**blocked=0 (2671)**. A fresh hardware-gate run is still required before
-firewall, per-app revoke, or Text Shortcuts can move to shipped.
+The previous source follow-up is now qemu-tested: writing/asserting the IBus
+system registry cache and using `ibus write-cache` fixed engine listing and
+activation; prewriting deterministic Text Shortcuts candidate proof files fixed
+the candidate-render proof; the PermissionStore `SetPermission` and firewall
+firewalld start/stop follow-ups were not sufficient. Local gates for that pass:
+hardware-gate shell syntax, `git diff --check`, fmt check for `goblins-os-shell`
+and `goblins-os-verify`, focused shell/verify tests, workspace clippy with
+`-D warnings`, workspace tests, Rust 1.88 GTK container clippy for
+`goblins-os-shell` with `native-desktop`, and
+`cargo run -p goblins-os-verify -- --source-root .` → **blocked=0 (2671)**.
 
 Batch 5 btrfs `/home` + snapshots has its first source-only substrate in this
 tree: `GET /v1/snapshots/status`, fail-closed
@@ -159,6 +154,27 @@ passed), `cargo test -p goblins-os-core` (287 passed),
 **blocked=0 (2680)**. Full `verify-shipping-status.sh` still fails on missing
 complete architecture ISO/screenshot/signoff artifacts; the new snapshots source
 check passes there, but release proof is still incomplete.
+
+Batch 5 FileVault-style encryption now has its first source-only posture
+substrate in this tree: `GET /v1/security/encryption`, `/proc/self/mountinfo`
+root mapping, `/etc/crypttab` parsing, read-only `cryptsetup status` and
+`systemd-cryptenroll --list` probing, Secure Boot and TPM device posture, Fedora
+44 `cryptsetup`/`tpm2-tss` package lockstep, and verifier/shipping-status
+exact-string gates. It does **not** enable install-time encryption, mint or
+escrow recovery keys, enroll TPM tokens, edit crypttab, change the installer
+block setup, or flip any root filesystem. Package verification found
+`systemd-cryptsetup` is not a Fedora 44 RPM name; the image gates
+`systemd-cryptenroll` as a command from the Fedora `systemd` package instead.
+Local gates for this pass: `cargo fmt -p goblins-os-core -p goblins-os-verify`,
+`cargo fmt --all -- --check`, `cargo test -p goblins-os-core encryption` (5
+passed), `cargo test -p goblins-os-core` (292 passed),
+`cargo test -p goblins-os-verify` (19 passed),
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`git diff --check`, `bash -n os/hardware-gate/verify-shipping-status.sh`, and
+`cargo run -p goblins-os-verify -- --source-root .` →
+**blocked=0 (2693)**. Full `verify-shipping-status.sh` still fails on missing
+complete architecture ISO/screenshot/signoff artifacts; the new encryption
+source check passes there, but release proof is still incomplete.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`
 jobs passed the cache-only bootc build, in-image packaging verifier, self-test,
@@ -185,7 +201,7 @@ not mark Batch 5 shipped.
 - **Web-verify** — `WebSearch`/`WebFetch` confirm Fedora-44 package names + D-Bus
   shapes before any Containerfile/D-Bus change (did seahorse + the PermissionStore).
 
-**Done so far (24 of 26 features advanced):**
+**Done so far (25 of 26 features advanced):**
 - **Batch 1 (Bucket A) — complete:** Live Text/OCR (core+handoff+markup Copy Text),
   Color picker. *(IME read+list also shipped; Preview viewer package/default
   app wiring and Fingerprint package/status substrate are source-gated.)*
@@ -200,10 +216,12 @@ not mark Batch 5 shipped.
 - **Batch 4 (engines) — 7 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**
   Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today,
   Sound Recognition, Live Captions.
-- **Batch 5 (storage) — 1 of 2 source substrates started:** btrfs `/home` +
-  snapshots now has a read-only core status/restore-fail-closed substrate and
-  package gates. It is **not shipped**; install-layout changes, timers, Settings
-  UI, real snapshot creation, and restore proof remain CI/qemu-pending.
+- **Batch 5 (storage/security) — 2 of 2 source substrates started:** btrfs
+  `/home` + snapshots now has a read-only core status/restore-fail-closed
+  substrate and package gates; FileVault-style encryption now has a read-only
+  posture endpoint and package gates. Neither is **shipped**; install-layout
+  changes, encryption at install, recovery-key escrow, timers, Settings UI,
+  real snapshot creation/restore, and boot/reboot proof remain CI/qemu-pending.
 
 **Current local feature pass:** Firewall toggle substrate + Settings binding are
 implemented and locally gated, but the feature remains `in-progress` until the
@@ -2328,9 +2346,10 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 
 **Land last.** These touch the install path / on-disk layout / boot unlock. Every item is gated behind the qemu kickstarts + the hardware gate, and several require **coordinated verify-crate rewrites** in the same change (the single biggest source of a red gate).
 
-### `TODO` FileVault-style full-disk encryption at install
+### `in-progress` FileVault-style full-disk encryption at install
 - [ ] LUKS2 root bound to **TPM2 for auto-unlock**, with a **mandatory escrowed recovery key** — a first-class "Encrypt this disk" choice in the Goblins installer + a read-only Encryption posture row in Settings ▸ Security. Encrypt by default with transparent TPM boot, but **never** without a captured recovery key, and fall back to a recovery-key prompt whenever the TPM measurement changes (matching FileVault: hardware auto-unlock is convenience over an always-present credential).
-- **Packages:** `systemd-cryptsetup`, `cryptsetup`, `tpm2-tss` (add + `rpm -q` explicitly for the initramfs unlock path; `systemd-cryptenroll` ships with systemd). `clevis` NOT needed.
+- [x] **Read-only encryption posture substrate source-gated (CI/qemu-pending):** core exposes `GET /v1/security/encryption`, parses `/proc/self/mountinfo` and `/etc/crypttab`, reads `cryptsetup status` and `systemd-cryptenroll --list` only when present, reports Secure Boot and TPM-device posture, and always returns `executes_enrollment=false`. The bootc image now installs and `rpm -q` asserts Fedora 44 `cryptsetup` and `tpm2-tss`, plus `command -v cryptsetup`, `command -v systemd-cryptenroll`, and the TPM2 TSS runtime library. This does **not** enable install-time encryption, mint or escrow recovery keys, enroll TPM tokens, edit crypttab, change installer block setup, or flip any root filesystem.
+- **Packages:** `cryptsetup`, `tpm2-tss` (add + `rpm -q` explicitly for the initramfs unlock path; `systemd-cryptenroll` ships with Fedora's `systemd` package). `systemd-cryptsetup` is **not** a Fedora 44 RPM package name, so it is not installed directly. `clevis` NOT needed.
 - **gsettings/dconf:** none — it's a one-time install-engine decision, **not** a runtime toggle. Settings surfaces read-only live status via a new `/v1/security/encryption` (shells `cryptsetup status` + `systemd-cryptenroll --list`).
 - **Files:** `crates/goblins-os-core/src/install_targets.rs` (accept `tpm2-luks`; build `--block-setup tpm2-luks`; tpm-absent→key-only degradation; recovery-key-required gate), `crates/goblins-os-installer/src/main.rs` (the encryption card + the mandatory recovery-key step), `crates/goblins-os-settings/src/main.rs` (Encryption posture row in `build_security`), `crates/goblins-os-verify/src/main.rs` (**REWRITE** the gate strings that currently pin the opposite reject-contract — `install-simple-api-routes-tpm2-luks-to-full-storage` / `install-policy-tpm2-luks-guidance` / `install-simple-api-direct-block-only-contract`), `os/bootc/Containerfile`, `os/iso/verify-install.ks` + `verify-install-dark.ks`, `crates/goblins-os-design/src/lib.rs`.
 - **APIs:** `bootc install to-disk --block-setup tpm2-luks --filesystem xfs --wipe <dev>` (the documented LUKS-on-TPM2 path); `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7` for auto-unlock + `--recovery-key` for escrow; `cryptsetup luksDump`/`status` for read posture; `/etc/crypttab tpm2-device=auto,tpm2-pcrs=…`; **Plymouth** (existing goblins-os theme) for the branded recovery-key fallback prompt.

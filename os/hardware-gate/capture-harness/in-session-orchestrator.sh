@@ -117,6 +117,15 @@ host_press_key(){
   curl -s "http://$H/input/key/$token?key=$(proof_query_value "$key_name")" >/dev/null 2>&1 || true
   sleep 0.5
 }
+dismiss_shell_overview(){
+  local token="$1"
+  # The installed session can be left in GNOME overview/search after first boot.
+  # Dismiss it before typing into proof windows so QMP keyboard events target
+  # the foreground GTK entry instead of the shell search field.
+  host_press_key "${token}-escape-a" Escape
+  host_press_key "${token}-escape-b" Escape
+  sleep 0.5
+}
 json_field(){
   python3 - "$1" "$2" <<'PY'
 import json
@@ -410,6 +419,7 @@ text_shortcuts_live_keystroke_proof(){
     return 1
   fi
 
+  dismiss_shell_overview text-shortcuts-live-normal
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$normal_file" "$B/goblins-os-shell" --text-shortcuts-proof normal >/tmp/gate-text-shortcuts-normal.log 2>&1 &
   normal_pid=$!
   sleep 4
@@ -431,6 +441,7 @@ text_shortcuts_live_keystroke_proof(){
     return 1
   fi
 
+  dismiss_shell_overview text-shortcuts-live-passthrough
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$passthrough_file" "$B/goblins-os-shell" --text-shortcuts-proof passthrough >/tmp/gate-text-shortcuts-passthrough.log 2>&1 &
   passthrough_pid=$!
   sleep 4
@@ -452,6 +463,7 @@ text_shortcuts_live_keystroke_proof(){
     return 1
   fi
 
+  dismiss_shell_overview text-shortcuts-live-dismiss
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$dismiss_file" "$B/goblins-os-shell" --text-shortcuts-proof dismiss >/tmp/gate-text-shortcuts-dismiss.log 2>&1 &
   dismiss_pid=$!
   sleep 4
@@ -479,6 +491,7 @@ text_shortcuts_live_keystroke_proof(){
     return 1
   fi
 
+  dismiss_shell_overview text-shortcuts-live-password
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$password_file" "$B/goblins-os-shell" --text-shortcuts-proof password >/tmp/gate-text-shortcuts-password.log 2>&1 &
   password_pid=$!
   sleep 4
@@ -725,9 +738,11 @@ text_shortcuts_candidate_bubble_render_proof(){
   local render_pid
 
   rm -f "$render_file"
+  dismiss_shell_overview text-shortcuts-candidate-render
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$render_file" "$B/goblins-os-shell" --text-shortcuts-proof candidate-render >/tmp/gate-text-shortcuts-candidate-bubble-render.log 2>&1 &
   render_pid=$!
   sleep 4
+  host_focus_text_shortcuts_field candidate-render-focus
   wait_proof_file_nonempty "$render_file" 40 || true
   sig 31-text-shortcuts-candidate-bubble-render
   kill "$render_pid" 2>/dev/null || true
@@ -810,6 +825,7 @@ text_shortcuts_live_ibus_runtime_render_proof(){
     return 1
   fi
 
+  dismiss_shell_overview text-shortcuts-live-runtime-render
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$render_file" \
     GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS="$ledger_file" \
     "$B/goblins-os-shell" --text-shortcuts-proof live-runtime-render >/tmp/gate-text-shortcuts-live-ibus-runtime-render.log 2>&1 &
@@ -1470,6 +1486,7 @@ darkoff(){ gsettings set org.gnome.desktop.interface color-scheme default 2>/dev
 sleep 3
 curl -s "http://$H/ready/ORCH_START" >/dev/null 2>&1
 pkill -f goblins-os-login 2>/dev/null; pkill -f goblins-os-installer 2>/dev/null; sleep 2
+dismiss_shell_overview text-shortcuts-proof-start
 firewall_live_toggle_proof || true
 text_shortcuts_session_enable_proof || true
 text_shortcuts_live_keystroke_proof || true

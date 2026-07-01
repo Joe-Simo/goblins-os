@@ -34,43 +34,68 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest pushed source commit `fffea01` on `main` passed the fast Rust build
-(`28517070368`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
-tests, and release build all succeeded. Hardware-gate run `28517091135` at the
+Latest pushed source commit `93426d6` on `main` passed the fast Rust build
+(`28521089306`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
+tests, and release build all succeeded. Hardware-gate run `28521105167` at the
 same head passed bootc image publish, verification installer ISO build, model
 serve, install/boot/session automation, and most display-backed VM proof
-routes, but still failed before the final Text Shortcuts live runtime render.
-The artifact has real display captures through
+routes, then failed in the Text Shortcuts live input/render proof. The Fedora
+GNOME IBus service change is qemu-proved: `text-shortcuts-session-enable` is
+`pass` with `service=active`,
+`service_unit=org.freedesktop.IBus.session.GNOME.service`,
+`engine_listed=true`, `engine_set=pass`, and
+`active_engine=goblins-textshortcuts`.
+
+Run `28521105167` still proves the firewall live toggle, app-keyed Per-app
+Privacy revoke, keyboard shortcut rebind, input source switching,
+Focus arm/disarm, Preview PDF/image open/render, Text Shortcuts candidate
+metadata, overlay intent, deterministic candidate bubble frame/layout, and
+candidate bubble render proof routes. The remaining blocker is now narrower and
+honest: `text-shortcuts-live-keystroke-proof.json` fails at
+`stage=normal-readback` with `normal_actual=missing` and
+`normal_file_bytes=0`; `text-shortcuts-live-ibus-runtime-render-proof.json`
+fails at `stage=render-ledger` with `render_file_bytes=0`, ledger bytes showing
+only `focus-in`, and no `process-key-event`, `commit-text`, or rendered accept
+bubble. The artifact has screenshots through
 `31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png` and
 `30-preview-image-open.png` exist, but
+`32-text-shortcuts-live-ibus-runtime-render.png` is still absent. The
+`31-text-shortcuts-candidate-bubble-render.png` frame shows GNOME overview/search
+instead of the proof window, so QMP text was likely targeting the shell search
+surface rather than the GTK proof Entry.
+
+Current follow-up source work keeps the real pass criteria intact and
+foregrounds the proof surfaces before typing. The hardware harness now dismisses
+GNOME overview/search with Escape before the Text Shortcuts live proof windows,
+keeps using the qemu keyboard input driver, and explicitly focuses the candidate
+render proof Entry before `31-text-shortcuts-candidate-bubble-render.png`.
+This remains qemu-pending until the next display-backed VM run proves
+`text-shortcuts-live-keystroke` and `text-shortcuts-live-ibus-runtime-render`
+end-to-end, including `process-key-event`, `commit-text`, password refusal,
+rendered accept bubble, and `32-text-shortcuts-live-ibus-runtime-render.png`.
+
+Previous hardware-gate run `28517091135` at `fffea01` passed bootc image
+publish, verification installer ISO build, model serve, install/boot/session
+automation, and most display-backed VM proof routes, but still failed before the
+final Text Shortcuts live runtime render. The artifact has real display captures
+through `31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png`
+and `30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-Run `28517091135` proves the firewall live toggle, app-keyed Per-app Privacy
+Run `28517091135` proved the firewall live toggle, app-keyed Per-app Privacy
 revoke, keyboard shortcut rebind, input source switching, Focus arm/disarm,
 Preview PDF/image open/render, Text Shortcuts candidate metadata, overlay
 intent, deterministic candidate bubble frame/layout, deterministic candidate
 bubble render proof routes, and active `goblins-textshortcuts` selection for the
-basic live-keystroke path still pass. The remaining blocker is concrete:
+basic live-keystroke path still pass. The remaining blocker then was concrete:
 `text-shortcuts-session-enable-proof.json` and
 `text-shortcuts-live-ibus-runtime-render-proof.json` failed at
 `stage=user-service` with `bus_owner=true`,
 `daemon_process=/usr/bin/ibus-daemon --panel disable`, but `service=inactive`
-for the custom Goblins IBus unit. The live-keystroke proof no longer hits the
-GTK `Unknown option --text-shortcuts-proof` parser failure; it now reaches
-`stage=normal-readback`, proving the flag-strip fix worked and narrowing the
-next failure back to session IBus ownership/readiness.
-
-Current follow-up source work keeps the real pass criteria intact and stops
-competing with Fedora's GNOME IBus D-Bus service. The Goblins session now wants
-`org.freedesktop.IBus.session.GNOME.service`, the Text Shortcuts input-source
-seed runs before that Fedora service, the custom `org.goblins.OS.IBus.service`
-is removed, and the hardware proof restarts/records
-`org.freedesktop.IBus.session.GNOME.service` before requiring the seeded source,
-preload, active `goblins-textshortcuts` engine, adapter self-test, live
-keystroke commits, password refusal, rendered accept bubble, and deferred core
-readiness flip. This remains qemu-pending until the next display-backed VM run
-proves `text-shortcuts-session-enable`, `text-shortcuts-live-keystroke`, and
-`text-shortcuts-live-ibus-runtime-render` end-to-end.
+for the custom Goblins IBus unit. The live-keystroke proof no longer hit the GTK
+`Unknown option --text-shortcuts-proof` parser failure; it reached
+`stage=normal-readback`, proving the flag-strip fix worked and narrowing that
+failure back to session IBus ownership/readiness.
 
 Previous hardware-gate run `28510121319` at `118402b` passed bootc image
 publish, verification installer ISO build, model serve, install/boot/session

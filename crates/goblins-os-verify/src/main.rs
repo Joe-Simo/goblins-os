@@ -6142,6 +6142,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-dismisses-shell-overview-before-textshortcuts-typing",
+            "dismiss_shell_overview text-shortcuts-live-normal",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-focuses-textshortcuts-candidate-render-window",
+            "host_focus_text_shortcuts_field candidate-render-focus",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-declares-qmp-keyboard-driver",
             "TEXT_SHORTCUTS_INPUT_DRIVER=qmp-keyboard",
         ),

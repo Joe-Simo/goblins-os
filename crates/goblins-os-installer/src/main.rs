@@ -1107,9 +1107,12 @@ fn run_native_installer(config: InstallerConfig, state: InstallerState) -> Insta
     use gtk::prelude::*;
     use gtk4 as gtk;
 
-    let application = gtk::Application::builder()
-        .application_id("org.goblins.OS.Installer")
-        .build();
+    let mut application_builder =
+        gtk::Application::builder().application_id("org.goblins.OS.Installer");
+    if std::env::var_os("GOBLINS_OS_CAPTURE_NON_UNIQUE").is_some() {
+        application_builder = application_builder.flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
+    }
+    let application = application_builder.build();
 
     application.connect_activate(move |app| {
         goblins_os_ui::init_theming(GOBLINS_OS_INSTALLER_CSS);

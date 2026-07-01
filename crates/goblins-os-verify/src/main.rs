@@ -5887,6 +5887,31 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-launches-nonunique-proof-windows",
+            "GOBLINS_OS_CAPTURE_NON_UNIQUE=1",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-bounds-proof-window-settle",
+            "GOS_SHOT_SETTLE_SECONDS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-kills-stale-proof-window-processes",
+            "pkill -x \"$base\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-kills-long-proof-window-commands",
+            "pkill -f -- \"$bin\"",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-does-not-launch-proof-windows-on-nested-dbus",
+            "dbus-run-session -- \"$@\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-firewall-live-toggle-proof",
             "/proof/firewall-live-toggle",
         ),
@@ -5911,9 +5936,44 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "goblinsSwitchControl.hide",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-disables-switch-overlay-extension",
+            "gnome-extensions disable goblins-switch@goblins.os",
+        ),
+        contains_check(
             root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
             "switch-control-hide-stops-overlay-immediately",
             "this._stopScanner();",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-capture-proof-instances-are-nonunique",
+            "GOBLINS_OS_CAPTURE_NON_UNIQUE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-capture-proof-uses-gtk-nonunique-flag",
+            "ApplicationFlags::NON_UNIQUE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-capture-proof-instances-are-nonunique",
+            "GOBLINS_OS_CAPTURE_NON_UNIQUE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-capture-proof-uses-gtk-nonunique-flag",
+            "ApplicationFlags::NON_UNIQUE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-capture-proof-instances-are-nonunique",
+            "GOBLINS_OS_CAPTURE_NON_UNIQUE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-capture-proof-uses-gtk-nonunique-flag",
+            "ApplicationFlags::NON_UNIQUE",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),

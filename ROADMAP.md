@@ -34,8 +34,8 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Head `2493d53` is CI-green for the fast Rust build: GitHub Actions build run
-`28542786276` passed on x86_64 and aarch64. Hardware-gate run `28542796380` at
+Head `84622d7` is CI-green for the fast Rust build: GitHub Actions build run
+`28546231184` passed on x86_64 and aarch64. Hardware-gate run `28546242264` at
 that head passed bootc image publish, verification installer ISO build, model
 prep, install/first boot, in-session orchestrator, and every runtime proof JSON:
 firewall live toggle, Text Shortcuts session enable, Text Shortcuts live
@@ -46,24 +46,27 @@ Per-app Privacy revoke, and Preview PDF/image open/render all reported
 
 That run still failed close-signoff, honestly, because the screenshot set was
 not signoff-quality: `run-capture.sh` hit the duplicate framebuffer guard before
-writing `proof-manifest.json`. The downloaded artifact had 35 PNGs but only 26
-byte-distinct frames, and 31 required non-debug PNGs with only 24 distinct
-frames. The stale duplicates were concrete: Settings models / Studio before /
-audio output reused a desktop frame with the Switch Control overlay, shell dark
-and Settings dark duplicated, desktop and onboarding duplicated, and some
-installer review pages duplicated. This is no longer a Text Shortcuts,
-DisplayConfig, firewall, IME, Focus, Preview, or Per-app Privacy proof failure;
-it is the remaining display-capture honesty/signoff blocker.
+writing `proof-manifest.json`. The downloaded artifact had 35 PNGs; the required
+non-debug denominator had only 28 distinct surfaces out of 31. The stale
+duplicates were concrete: Studio before and audio output reused the same desktop
+frame, shell dark and Settings dark duplicated, and installer / install-network
+duplicated. Several otherwise unique frames were still not valid product
+surfaces because the Switch Control overlay remained visible or the requested
+app did not foreground. This is no longer a Text Shortcuts, DisplayConfig,
+firewall, IME, Focus, Preview, or Per-app Privacy proof failure; it is the
+remaining display-capture honesty/signoff blocker.
 
 The current source follow-up is qemu-pending and does **not** mark more features
-shipped. It keeps the previously verified session/DisplayConfig bridge fix,
-then makes Switch Control's shell `hide()` hook stop the overlay immediately,
-has the hardware orchestrator call `globalThis.goblinsSwitchControl.hide()`
-instead of relying only on gsettings propagation, makes the host capture driver
-wait up to `GOS_REQUIRED_FRAME_SETTLE_SECONDS` for each required screenshot to
-produce a unique framebuffer before saving, and excludes `_debug-*` PNGs from
-the required distinct-surface denominator. If a required frame still does not
-become unique, the guard continues to fail closed and no signoff is written.
+shipped. It keeps the previously verified session/DisplayConfig bridge fix and
+the duplicate-frame wait, then makes capture-only GTK proof launches non-unique
+for Shell, Settings, and Installer so a proof window is created even if the
+session service already owns the normal application ID. The hardware
+orchestrator now launches proof windows in the current GNOME session instead of
+a nested `dbus-run-session`, forwards capture env vars explicitly, disables the
+Switch Control extension before ordinary screenshots, and kills stale proof
+windows by both short process name and full command path before the next shot.
+If a required frame still does not become unique, the guard continues to fail
+closed and no signoff is written.
 
 Previous hardware-gate run `28538674596` at `9f5ca8b` passed bootc image
 publish, verification installer ISO build, model prep, install, first boot

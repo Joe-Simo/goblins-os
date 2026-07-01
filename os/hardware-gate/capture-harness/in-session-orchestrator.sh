@@ -142,6 +142,9 @@ switch_control_off(){
     --method org.gnome.Shell.Eval \
     "if (globalThis.goblinsSwitchControl) globalThis.goblinsSwitchControl.hide(); 'switch-control-hidden';" \
     >/dev/null 2>&1 || true
+  if command -v gnome-extensions >/dev/null 2>&1; then
+    gnome-extensions disable goblins-switch@goblins.os >/dev/null 2>&1 || true
+  fi
   sleep 0.8
 }
 json_field(){
@@ -1658,24 +1661,46 @@ preview_open_render_proof(){
   return 0
 }
 # shot <name> <cmd...>  (env prefixes before `shot` propagate into the launch)
-# After capture, fully wait for the binary to exit before returning — GtkApplication
-# is single-instance, so relaunching the same binary (e.g. the installer with a new
-# GOBLINS_OS_INSTALLER_PAGE, or the shell in dark) before the prior instance dies
-# just re-focuses the old window, producing duplicate captures. Waiting for exit
-# guarantees the next launch creates a fresh window with the new args/env/theme.
+# Capture launches run in the current GNOME session with a capture-only non-unique
+# GtkApplication flag. We still kill/wait around each shot so stale windows cannot
+# re-focus or overlap the next proof surface.
 shot(){
   local n="$1"
   shift
+  local bin="$1"
+  local base
+  base="$(basename "$bin" 2>/dev/null || printf '%s' "$bin")"
+  local log="/tmp/gate-shot-$n.log"
+  local settle="${GOS_SHOT_SETTLE_SECONDS:-12}"
+  local env_args=(
+    "GOBLINS_OS_CAPTURE_NON_UNIQUE=1"
+    "GOBLINS_OS_RENDER_FULLSCREEN=1"
+  )
+  for key in GOBLINS_OS_THEME GOBLINS_OS_INSTALLER_PAGE GOBLINS_OS_CORE_URL; do
+    if [ "${!key+x}" ]; then
+      env_args+=("$key=${!key}")
+    fi
+  done
   switch_control_off
-  dbus-run-session -- "$@" >/dev/null 2>&1 &
+  pkill -x "$base" 2>/dev/null || true
+  pkill -f -- "$bin" 2>/dev/null || true
+  sleep 0.5
+  env "${env_args[@]}" "$@" >"$log" 2>&1 &
   local p=$!
-  sleep 7
+  sleep "$settle"
+  if ! kill -0 "$p" 2>/dev/null; then
+    echo "GOBLINS_HWGATE_SHOT_EXITED_BEFORE_CAPTURE name=$n command=$*"
+    tail -n 80 "$log" 2>/dev/null || true
+  fi
   switch_control_off
   sig "$n"
   kill "$p" 2>/dev/null || true
-  pkill -f "$1" 2>/dev/null || true
+  pkill -x "$base" 2>/dev/null || true
+  pkill -f -- "$bin" 2>/dev/null || true
   for _ in $(seq 1 24); do
-    pgrep -f "$1" >/dev/null 2>&1 || break
+    if ! pgrep -x "$base" >/dev/null 2>&1 && ! pgrep -f -- "$bin" >/dev/null 2>&1; then
+      break
+    fi
     sleep 0.3
   done
   switch_control_off

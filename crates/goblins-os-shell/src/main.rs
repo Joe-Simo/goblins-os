@@ -764,9 +764,12 @@ fn run_native_shell(config: ShellConfig, shell_state: ShellState) -> ShellResult
     use gtk::prelude::*;
     use gtk4 as gtk;
 
-    let application = gtk::Application::builder()
-        .application_id("org.goblins.OS.Shell")
-        .build();
+    let mut application_builder =
+        gtk::Application::builder().application_id("org.goblins.OS.Shell");
+    if std::env::var_os("GOBLINS_OS_CAPTURE_NON_UNIQUE").is_some() {
+        application_builder = application_builder.flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
+    }
+    let application = application_builder.build();
 
     application.connect_activate(move |app| {
         goblins_os_ui::init_theming(GOBLINS_OS_CSS);
@@ -2462,9 +2465,12 @@ fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<
     let boot_state = inspect_boot_state(&config);
     let shell_state = load_shell_state(&config, boot_state);
 
-    let application = gtk::Application::builder()
-        .application_id("org.goblins.OS.Shell.App")
-        .build();
+    let mut application_builder =
+        gtk::Application::builder().application_id("org.goblins.OS.Shell.App");
+    if std::env::var_os("GOBLINS_OS_CAPTURE_NON_UNIQUE").is_some() {
+        application_builder = application_builder.flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
+    }
+    let application = application_builder.build();
 
     application.connect_activate(move |app| {
         goblins_os_ui::init_theming(GOBLINS_OS_CSS);

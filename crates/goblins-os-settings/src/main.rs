@@ -4007,9 +4007,12 @@ fn run_native_settings(config: SettingsConfig, state: SettingsState) -> Settings
     use gtk::prelude::*;
     use gtk4 as gtk;
 
-    let application = gtk::Application::builder()
-        .application_id("org.goblins.OS.Settings")
-        .build();
+    let mut application_builder =
+        gtk::Application::builder().application_id("org.goblins.OS.Settings");
+    if std::env::var_os("GOBLINS_OS_CAPTURE_NON_UNIQUE").is_some() {
+        application_builder = application_builder.flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
+    }
+    let application = application_builder.build();
 
     application.connect_activate(move |app| {
         goblins_os_ui::init_theming(GOBLINS_OS_SETTINGS_CSS);

@@ -18,6 +18,8 @@ use std::process::{Command, Stdio};
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::session_bridge::{self, SessionBridgeResult};
+
 const PERMISSION_STORE_DEST: &str = "org.freedesktop.impl.portal.PermissionStore";
 const PERMISSION_STORE_PATH: &str = "/org/freedesktop/impl/portal/PermissionStore";
 const PERMISSION_STORE_LIST: &str = "org.freedesktop.impl.portal.PermissionStore.List";
@@ -207,6 +209,12 @@ fn list_table(table: &str) -> Option<Vec<String>> {
 }
 
 fn delete_permission(table: &str, id: &str, app: &str) -> Result<(), String> {
+    match session_bridge::permission_store_delete_permission(table, id, app) {
+        SessionBridgeResult::Success(_) => return Ok(()),
+        SessionBridgeResult::Failed(detail) => return Err(detail),
+        SessionBridgeResult::Unavailable => {}
+    }
+
     let output = Command::new("gdbus")
         .args([
             "call",

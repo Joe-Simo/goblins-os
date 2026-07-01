@@ -329,6 +329,15 @@ def handle_input(path):
     parsed = urlparse(path)
     values = {k: v[-1] for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
     name = parsed.path.rsplit("/", 1)[-1]
+    if parsed.path.startswith("/input/click/"):
+        try:
+            x = float(values.get("x", "0.5"))
+            y = float(values.get("y", "0.5"))
+        except ValueError as err:
+            raise SystemExit(f"invalid click coordinate for input route {name}: {err}") from err
+        print(f"input click {name}: x={x:.3f} y={y:.3f}", flush=True)
+        click(x, y)
+        return
     if parsed.path.startswith("/input/text/"):
         text = values.get("text", "")
         print(f"input text {name}: {text!r}", flush=True)

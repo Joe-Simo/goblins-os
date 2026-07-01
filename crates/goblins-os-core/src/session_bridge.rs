@@ -21,8 +21,18 @@ pub(crate) enum SessionBridgeResult {
 #[derive(Serialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 enum BridgeRequest<'a> {
-    GSettings { args: Vec<&'a str> },
-    OpenPreview { path: String, kind: &'a str },
+    GSettings {
+        args: Vec<&'a str>,
+    },
+    OpenPreview {
+        path: String,
+        kind: &'a str,
+    },
+    PermissionStoreDelete {
+        table: &'a str,
+        id: &'a str,
+        app: &'a str,
+    },
 }
 
 #[derive(Deserialize)]
@@ -43,6 +53,14 @@ pub(crate) fn open_preview(path: &Path, kind: &'static str) -> SessionBridgeResu
         path: path.display().to_string(),
         kind,
     })
+}
+
+pub(crate) fn permission_store_delete_permission(
+    table: &str,
+    id: &str,
+    app: &str,
+) -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::PermissionStoreDelete { table, id, app })
 }
 
 fn call_bridge(request: &BridgeRequest<'_>) -> SessionBridgeResult {

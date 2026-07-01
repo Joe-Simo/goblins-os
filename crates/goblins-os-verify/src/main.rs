@@ -783,9 +783,24 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "non-allowlisted schema was accepted",
     ));
     checks.push(contains_check(
+        root.join("crates/goblins-os-session-bridge/src/main.rs"),
+        "session-bridge-accepts-permission-store-delete-op",
+        "PermissionStoreDelete",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-session-bridge/src/main.rs"),
+        "session-bridge-limits-permission-store-delete-tables",
+        "PermissionStore deletes are limited to app-keyed tables",
+    ));
+    checks.push(contains_check(
         root.join("crates/goblins-os-core/src/session_bridge.rs"),
         "core-session-bridge-client-uses-unix-socket",
         "UnixStream::connect",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-core/src/session_bridge.rs"),
+        "core-session-bridge-client-supports-permission-store-delete",
+        "permission_store_delete_permission",
     ));
     checks.push(contains_check(
         root.join("crates/goblins-os-core/src/session_bridge.rs"),
@@ -5767,6 +5782,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-firewall-proof-carries-toggle-response-text",
+            "enable_text=$(proof_query_value",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-textshortcuts-session-proof",
             "/proof/text-shortcuts-session-enable",
         ),
@@ -5819,6 +5839,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-propagates-textshortcuts-live-proof-ledger-env",
             "systemctl --user set-environment GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-focuses-textshortcuts-field-before-live-runtime-input",
+            "host_focus_text_shortcuts_field runtime-render-focus",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6052,6 +6077,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-clicks-textshortcuts-field-before-typing",
+            "host_focus_text_shortcuts_field normal-focus",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-declares-qmp-keyboard-driver",
             "TEXT_SHORTCUTS_INPUT_DRIVER=qmp-keyboard",
         ),
@@ -6064,6 +6094,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-presses-qmp-keyboard-key",
             "/input/key/",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-clicks-qmp-pointer",
+            "/input/click/",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -11691,6 +11726,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/app_permissions.rs"),
             "core-app-privacy-uses-delete-permission",
             "PermissionStore.DeletePermission",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/app_permissions.rs"),
+            "core-app-privacy-revoke-uses-session-bridge",
+            "session_bridge::permission_store_delete_permission",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/app_permissions.rs"),

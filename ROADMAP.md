@@ -34,33 +34,37 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest hardware-gate run `28491393956` at `393e3cd` on `main` passed the bootc
-image build and verification ISO build, then failed inside the display-backed VM
-capture after the installed session reached `/ready/ORCH_START` and
-`/ready/ORCH_ALLDONE`. The artifact has real display captures through
+Latest hardware-gate run `28493666844` at `52f0403` on `main` passed the fast
+Rust build on both `ubuntu-24.04` and `ubuntu-24.04-arm`, then failed inside the
+display-backed VM capture after the installed session reached `/ready/ORCH_START`
+and `/ready/ORCH_ALLDONE`. The artifact has real display captures through
 `31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png` and
 `30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-That run proves several qemu-gated writes and renders now work: keyboard
-shortcut rebind, input source switching, Focus arm/disarm, Preview PDF/image
-open/render, Text Shortcuts candidate metadata, overlay intent, deterministic
-candidate bubble frame/layout, and deterministic candidate bubble render all
-pass their live proof JSON. The remaining live failures are narrow and
-concrete: firewall disable succeeds but re-enable returns HTTP `502` after
-active state remains false; PermissionStore `SetPermission` seeding fails
-because `/var/home/goblin/.local/share/flatpak/db` is absent; Text Shortcuts
-session enable, live keystroke, and live runtime render fail because the
-`goblins-textshortcuts` IBus engine is not listed/active in the user session.
-Firewall, per-app revoke, and Text Shortcuts live runtime stay `in-progress`.
+That run proves the previous IBus component/cache follow-up worked:
+`text-shortcuts-session-enable-proof.json` is now `pass` with
+`engine_listed=true`, `engine_set=pass`, and
+`active_engine=goblins-textshortcuts`. It also keeps the earlier qemu-gated
+writes/renders green: keyboard shortcut rebind, input source switching, Focus
+arm/disarm, Preview PDF/image open/render, Text Shortcuts candidate metadata,
+overlay intent, deterministic candidate bubble frame/layout, and deterministic
+candidate bubble render all pass their live proof JSON. The remaining live
+failures are narrower: firewall disable succeeds but re-enable returns HTTP
+`502` after active state remains false; App Privacy PermissionStore seed/readback
+now succeeds but the core revoke route returns HTTP `502`; Text Shortcuts live
+keystroke/runtime still fails because QMP keyboard input is not landing in the
+proof GTK fields even though `goblins-textshortcuts` is active. Firewall,
+per-app revoke, and Text Shortcuts live runtime stay `in-progress`.
 
-Current follow-up source work seeds the PermissionStore flatpak db directory in
-the image and harness, installs the Text Shortcuts IBus component into the
-`goblin` user's component directory, starts IBus with an explicit user+system
-component path and user cache refresh, and keeps sanitized engine-list
-diagnostics in the proof. This does not mark per-app revoke or Text Shortcuts
-runtime shipped; the next display-backed VM run must still prove
-seed/readback/revoke/restore and live GTK field expansion end-to-end.
+Current follow-up source work routes App Privacy revoke through the allowlisted
+user-session bridge instead of direct system-service `gdbus --session`, keeps the
+upstream `PermissionStore.DeletePermission(table, id, app)` contract
+web-verified, adds QMP pointer click/focus before each Text Shortcuts live proof
+typing step, and records firewall toggle response text in failing proof JSON.
+This does not mark per-app revoke, firewall, or Text Shortcuts runtime shipped;
+the next display-backed VM run must still prove live revoke/readback, re-enable
+with `enable_active=true`, and live GTK field expansion/render end-to-end.
 
 Current firewall follow-up source work hardens the privileged helper after the
 live proof showed disable succeeded but re-enable returned HTTP `502`: reset

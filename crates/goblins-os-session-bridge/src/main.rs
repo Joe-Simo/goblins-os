@@ -31,6 +31,10 @@ const NOTIFICATIONS_SCHEMA: &str = "org.gnome.desktop.notifications";
 const NOTIFICATION_APPLICATION_SCHEMA: &str = "org.gnome.desktop.notifications.application";
 const NOTIFICATION_APPLICATION_BASE_PATH: &str = "/org/gnome/desktop/notifications/application/";
 const WM_SCHEMA: &str = "org.goblins.shell.extensions.wm";
+const PERMISSION_STORE_DEST: &str = "org.freedesktop.impl.portal.PermissionStore";
+const PERMISSION_STORE_PATH: &str = "/org/freedesktop/impl/portal/PermissionStore";
+const PERMISSION_STORE_DELETE_PERMISSION: &str =
+    "org.freedesktop.impl.portal.PermissionStore.DeletePermission";
 
 const KEYBOARD_KEYS: &[&str] = &[
     "repeat",
@@ -115,8 +119,18 @@ const WM_KEYS: &[&str] = &[
 #[serde(tag = "op", rename_all = "kebab-case")]
 enum BridgeRequest {
     Ping,
-    GSettings { args: Vec<String> },
-    OpenPreview { path: String, kind: String },
+    GSettings {
+        args: Vec<String>,
+    },
+    OpenPreview {
+        path: String,
+        kind: String,
+    },
+    PermissionStoreDelete {
+        table: String,
+        id: String,
+        app: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -186,6 +200,9 @@ fn handle_request(request: BridgeRequest) -> BridgeResponse {
         BridgeRequest::Ping => success("pong".to_string()),
         BridgeRequest::GSettings { args } => gsettings_response(args),
         BridgeRequest::OpenPreview { path, kind } => open_preview_response(&path, &kind),
+        BridgeRequest::PermissionStoreDelete { table, id, app } => {
+            permission_store_delete_response(&table, &id, &app)
+        }
     }
 }
 
@@ -226,6 +243,38 @@ fn open_preview_response(path: &str, kind: &str) -> BridgeResponse {
             failure("xdg-open is unavailable in this desktop session.")
         }
         Err(_) => failure("the desktop session could not open that preview file."),
+    }
+}
+
+fn permission_store_delete_response(table: &str, id: &str, app: &str) -> BridgeResponse {
+    if let Err(error) = validate_permission_store_delete(table, id, app) {
+        return failure(error);
+    }
+    match Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            PERMISSION_STORE_DEST,
+            "--object-path",
+            PERMISSION_STORE_PATH,
+            "--method",
+            PERMISSION_STORE_DELETE_PERMISSION,
+            table,
+            id,
+            app,
+        ])
+        .stdin(Stdio::null())
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            success(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        }
+        Ok(output) => failure(command_error_detail(&output.stderr, &output.stdout)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            failure("gdbus is unavailable in this desktop session.")
+        }
+        Err(_) => failure("the desktop session could not update app permissions."),
     }
 }
 
@@ -414,6 +463,29 @@ fn validate_preview_open(path: &Path, kind: &str) -> Result<(), String> {
     }
 }
 
+fn validate_permission_store_delete(table: &str, id: &str, app: &str) -> Result<(), String> {
+    if !matches!(table, "location" | "background" | "notifications") {
+        return Err("PermissionStore deletes are limited to app-keyed tables.".to_string());
+    }
+    if !permission_id_is_safe(id) || !permission_id_is_safe(app) {
+        return Err("PermissionStore app and resource ids must be safe desktop ids.".to_string());
+    }
+    if id != app {
+        return Err(
+            "PermissionStore deletes from Settings must target app-keyed grants.".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn permission_id_is_safe(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 160
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
 fn write_response(stream: &mut UnixStream, response: &BridgeResponse) -> Result<(), String> {
     let json = serde_json::to_vec(response).map_err(|error| error.to_string())?;
     stream.write_all(&json).map_err(|error| error.to_string())?;
@@ -539,6 +611,11 @@ fn self_test() -> Result<(), String> {
         WM_SCHEMA.to_string(),
         "window-hud".to_string(),
     ])?;
+    validate_permission_store_delete(
+        "location",
+        "org.goblins.GatePrivacyProof",
+        "org.goblins.GatePrivacyProof",
+    )?;
     if validate_gsettings_args(&[
         "set".to_string(),
         "org.gnome.desktop.background".to_string(),
@@ -565,9 +642,10 @@ fn self_test() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_gsettings_args, validate_schema_arg, FOCUS_SCHEMA, INPUT_SOURCES_SCHEMA,
-        KEYBOARD_SCHEMA, MOUSE_SCHEMA, NOTIFICATION_APPLICATION_BASE_PATH,
-        NOTIFICATION_APPLICATION_SCHEMA, TOUCHPAD_SCHEMA, WM_SCHEMA,
+        validate_gsettings_args, validate_permission_store_delete, validate_schema_arg,
+        FOCUS_SCHEMA, INPUT_SOURCES_SCHEMA, KEYBOARD_SCHEMA, MOUSE_SCHEMA,
+        NOTIFICATION_APPLICATION_BASE_PATH, NOTIFICATION_APPLICATION_SCHEMA, TOUCHPAD_SCHEMA,
+        WM_SCHEMA,
     };
 
     #[test]
@@ -643,6 +721,34 @@ mod tests {
         assert!(validate_schema_arg(&format!(
             "{INPUT_SOURCES_SCHEMA}:{NOTIFICATION_APPLICATION_BASE_PATH}org-gnome-Console/"
         ))
+        .is_err());
+    }
+
+    #[test]
+    fn permission_store_delete_is_limited_to_app_keyed_safe_grants() {
+        assert!(validate_permission_store_delete(
+            "location",
+            "org.goblins.GatePrivacyProof",
+            "org.goblins.GatePrivacyProof",
+        )
+        .is_ok());
+        assert!(validate_permission_store_delete(
+            "devices",
+            "camera",
+            "org.goblins.GatePrivacyProof",
+        )
+        .is_err());
+        assert!(validate_permission_store_delete(
+            "location",
+            "camera",
+            "org.goblins.GatePrivacyProof",
+        )
+        .is_err());
+        assert!(validate_permission_store_delete(
+            "location",
+            "org.goblins.GatePrivacyProof;rm",
+            "org.goblins.GatePrivacyProof;rm",
+        )
         .is_err());
     }
 }

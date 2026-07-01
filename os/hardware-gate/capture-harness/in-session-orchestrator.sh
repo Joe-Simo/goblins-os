@@ -54,6 +54,18 @@ host_type_text(){
   curl -s "http://$H/input/text/$token?text=$(proof_query_value "$text")" >/dev/null 2>&1 || true
   sleep 1
 }
+host_click(){
+  local token="$1"
+  local x="${2:-0.5}"
+  local y="${3:-0.5}"
+  curl -s "http://$H/input/click/$token?x=$x&y=$y" >/dev/null 2>&1 || true
+  sleep 0.5
+}
+host_focus_text_shortcuts_field(){
+  local token="$1"
+  host_click "$token" 0.5 0.5
+  sleep 0.5
+}
 host_press_key(){
   local token="$1"
   local key_name="$2"
@@ -182,6 +194,7 @@ firewall_live_toggle_proof(){
   local enable_file=/tmp/gate-firewall-enable.json
   local status_code disable_code enable_code before_available before_manageable
   local disable_ok disable_enabled disable_active enable_ok enable_enabled enable_active
+  local disable_text enable_text
 
   for _ in $(seq 1 60); do
     curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
@@ -202,6 +215,7 @@ firewall_live_toggle_proof(){
     "$LIVE_URL/v1/firewall/enabled" || true)
   disable_ok=$(json_field "$disable_file" ok)
   disable_enabled=$(json_field "$disable_file" enabled)
+  disable_text=$(json_field "$disable_file" text)
   sleep 2
   curl -s -o "$status_file" "$LIVE_URL/v1/firewall/status" >/dev/null 2>&1 || true
   disable_active=$(json_field "$status_file" active)
@@ -212,6 +226,7 @@ firewall_live_toggle_proof(){
     "$LIVE_URL/v1/firewall/enabled" || true)
   enable_ok=$(json_field "$enable_file" ok)
   enable_enabled=$(json_field "$enable_file" enabled)
+  enable_text=$(json_field "$enable_file" text)
   sleep 2
   curl -s -o "$status_file" "$LIVE_URL/v1/firewall/status" >/dev/null 2>&1 || true
   enable_active=$(json_field "$status_file" active)
@@ -222,7 +237,7 @@ firewall_live_toggle_proof(){
     return 0
   fi
 
-  proof_firewall "status=fail&stage=toggle&disable_http=${disable_code:-000}&disable_ok=${disable_ok:-missing}&disable_enabled=${disable_enabled:-missing}&disable_active=${disable_active:-missing}&enable_http=${enable_code:-000}&enable_ok=${enable_ok:-missing}&enable_enabled=${enable_enabled:-missing}&enable_active=${enable_active:-missing}"
+  proof_firewall "status=fail&stage=toggle&disable_http=${disable_code:-000}&disable_ok=${disable_ok:-missing}&disable_enabled=${disable_enabled:-missing}&disable_active=${disable_active:-missing}&disable_text=$(proof_query_value "${disable_text:-missing}")&enable_http=${enable_code:-000}&enable_ok=${enable_ok:-missing}&enable_enabled=${enable_enabled:-missing}&enable_active=${enable_active:-missing}&enable_text=$(proof_query_value "${enable_text:-missing}")"
   return 1
 }
 text_shortcuts_session_enable_proof(){
@@ -332,6 +347,7 @@ text_shortcuts_live_keystroke_proof(){
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$normal_file" "$B/goblins-os-shell" --text-shortcuts-proof normal >/tmp/gate-text-shortcuts-normal.log 2>&1 &
   normal_pid=$!
   sleep 4
+  host_focus_text_shortcuts_field normal-focus
   if ! host_type_text normal-omw "omw."; then
     kill "$normal_pid" 2>/dev/null || true
     proof_text_shortcuts_live "status=fail&stage=normal-qmp-keyboard&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts"
@@ -352,6 +368,7 @@ text_shortcuts_live_keystroke_proof(){
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$passthrough_file" "$B/goblins-os-shell" --text-shortcuts-proof passthrough >/tmp/gate-text-shortcuts-passthrough.log 2>&1 &
   passthrough_pid=$!
   sleep 4
+  host_focus_text_shortcuts_field passthrough-focus
   if ! host_type_text passthrough-hello "hello."; then
     kill "$passthrough_pid" 2>/dev/null || true
     proof_text_shortcuts_live "status=fail&stage=passthrough-qmp-keyboard&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&passthrough_input=hello."
@@ -372,6 +389,7 @@ text_shortcuts_live_keystroke_proof(){
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$dismiss_file" "$B/goblins-os-shell" --text-shortcuts-proof dismiss >/tmp/gate-text-shortcuts-dismiss.log 2>&1 &
   dismiss_pid=$!
   sleep 4
+  host_focus_text_shortcuts_field dismiss-focus
   if ! host_type_text dismiss-omw "omw"; then
     kill "$dismiss_pid" 2>/dev/null || true
     proof_text_shortcuts_live "status=fail&stage=dismiss-type&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&dismiss_trigger=omw"
@@ -398,6 +416,7 @@ text_shortcuts_live_keystroke_proof(){
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$password_file" "$B/goblins-os-shell" --text-shortcuts-proof password >/tmp/gate-text-shortcuts-password.log 2>&1 &
   password_pid=$!
   sleep 4
+  host_focus_text_shortcuts_field password-focus
   if ! host_type_text password-omw "omw."; then
     kill "$password_pid" 2>/dev/null || true
     proof_text_shortcuts_live "status=fail&stage=password-qmp-keyboard&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts"
@@ -724,6 +743,7 @@ text_shortcuts_live_ibus_runtime_render_proof(){
     "$B/goblins-os-shell" --text-shortcuts-proof live-runtime-render >/tmp/gate-text-shortcuts-live-ibus-runtime-render.log 2>&1 &
   render_pid=$!
   sleep 4
+  host_focus_text_shortcuts_field runtime-render-focus
   if ! host_type_text runtime-render-omw "omw"; then
     kill "$render_pid" 2>/dev/null || true
     proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=render-qmp-keyboard&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
@@ -763,6 +783,7 @@ text_shortcuts_live_ibus_runtime_render_proof(){
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$passthrough_file" "$B/goblins-os-shell" --text-shortcuts-proof passthrough >/tmp/gate-text-shortcuts-live-ibus-passthrough.log 2>&1 &
   passthrough_pid=$!
   sleep 4
+  host_focus_text_shortcuts_field runtime-passthrough-focus
   if ! host_type_text runtime-passthrough-hello "hello."; then
     kill "$passthrough_pid" 2>/dev/null || true
     proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=passthrough-qmp-keyboard&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&normal_actual=onmyway.&passthrough_actual=missing&password_refusal=false&focused_field_callback=true&text_input_v3_commit=false&rendered_accept_bubble=true&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=true&live_overlay_claim=true&runtime_ready_claim=false&core_readiness_flip=deferred"
@@ -783,6 +804,7 @@ text_shortcuts_live_ibus_runtime_render_proof(){
   GOBLINS_OS_TEXT_SHORTCUTS_PROOF_FILE="$password_file" "$B/goblins-os-shell" --text-shortcuts-proof password >/tmp/gate-text-shortcuts-live-ibus-password.log 2>&1 &
   password_pid=$!
   sleep 4
+  host_focus_text_shortcuts_field runtime-password-focus
   if ! host_type_text runtime-password-omw "omw."; then
     kill "$password_pid" 2>/dev/null || true
     proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=password-qmp-keyboard&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=goblins-textshortcuts&normal_actual=onmyway.&passthrough_actual=hello.&password_refusal=false&focused_field_callback=true&text_input_v3_commit=false&rendered_accept_bubble=true&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=true&live_overlay_claim=true&runtime_ready_claim=false&core_readiness_flip=deferred"

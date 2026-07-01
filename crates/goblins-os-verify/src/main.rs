@@ -6057,6 +6057,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-waits-for-textshortcuts-ibus-bus-owner",
+            "wait_ibus_bus_owned",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-reports-textshortcuts-user-component-seed",
             "user_component_seeded=true",
         ),
@@ -6064,6 +6069,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-reports-textshortcuts-engine-list-error",
             "list_error=",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-reports-textshortcuts-ibus-bus-owner",
+            "bus_owner=",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-reports-textshortcuts-ibus-service-diagnostics",
+            "service_diag=",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-reports-textshortcuts-ibus-daemon-process",
+            "daemon_process=",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-reports-textshortcuts-ibus-session-env",
+            "session_env=",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6079,6 +6104,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),
             "ibus-service-refreshes-user-cache-before-start",
             "ExecStartPre=-/usr/bin/ibus write-cache",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "ibus-service-uses-fedora-gnome-dbus-service-model",
+            "Type=dbus",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "ibus-service-owns-freedesktop-ibus-bus-name",
+            "BusName=org.freedesktop.IBus",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "ibus-service-uses-wayland-safe-xim-guard",
+            "XDG_SESSION_TYPE",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -12867,13 +12907,28 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         file_check(root, "os/systemd-user/org.goblins.OS.IBus.service"),
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-process-supervised",
-            "Type=simple",
+            "textshortcuts-ibus-user-service-dbus-supervised",
+            "Type=dbus",
         ),
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),
-            "textshortcuts-ibus-user-service-exec",
-            "ExecStart=/usr/bin/ibus-daemon --replace --xim --panel disable",
+            "textshortcuts-ibus-user-service-owns-ibus-bus",
+            "BusName=org.freedesktop.IBus",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "textshortcuts-ibus-user-service-wayland-safe-exec",
+            "--panel disable",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "textshortcuts-ibus-user-service-guards-xim-to-x11",
+            "XDG_SESSION_TYPE",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "textshortcuts-ibus-user-service-restarts-on-abnormal",
+            "Restart=on-abnormal",
         ),
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),

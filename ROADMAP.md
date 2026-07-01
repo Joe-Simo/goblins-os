@@ -34,38 +34,49 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest source commit `82f50ef` on `main` passed the fast Rust build
-(`28506136084`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
-tests, and release build all succeeded. Hardware-gate run `28506688097` at the
+Latest pushed source commit `118402b` on `main` passed the fast Rust build
+(`28510110929`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
+tests, and release build all succeeded. Hardware-gate run `28510121319` at the
 same head passed bootc image publish, verification installer ISO build, model
-serve, install/boot/session automation, and all display-backed VM capture proof
-routes except the final Text Shortcuts live input/runtime render path. The
-artifact has real display captures through
+serve, install/boot/session automation, and most display-backed VM proof
+routes, but failed before the final Text Shortcuts live input/runtime render
+path. The artifact has real display captures through
 `31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png` and
 `30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-That run proves the IBus session follow-up worked:
-`text-shortcuts-session-enable-proof.json` is `pass` with `service=active`,
-`engine_listed=true`, `engine_set=pass`, `active_engine=goblins-textshortcuts`,
-and `adapter_self_test=pass`. It also keeps the previous live qemu proofs green:
-firewall live toggle, app-keyed Per-app Privacy revoke, keyboard shortcut
-rebind, input source switching, Focus arm/disarm, Preview PDF/image
-open/render, Text Shortcuts candidate metadata, overlay intent, deterministic
-candidate bubble frame/layout, and deterministic candidate bubble render all
-pass their proof JSON. The remaining live failure is Text Shortcuts input:
-`text-shortcuts-live-keystroke-proof.json` fails at `stage=normal-readback` with
-`normal_actual=missing`, and `text-shortcuts-live-ibus-runtime-render-proof.json`
-fails at `stage=render-ledger` with `focused_field_callback=false`,
-`text_input_v3_commit=false`, `rendered_accept_bubble=false`, and no screenshot.
+Run `28510121319` proves the firewall live toggle, app-keyed Per-app Privacy
+revoke, keyboard shortcut rebind, input source switching, Focus arm/disarm,
+Preview PDF/image open/render, Text Shortcuts candidate metadata, overlay
+intent, deterministic candidate bubble frame/layout, and deterministic
+candidate bubble render proof routes still pass. The blocker moved earlier than
+the prior focus-field follow-up: `text-shortcuts-session-enable-proof.json`
+fails at `stage=engine-list` with `service=active`,
+`input_source_configured=true`, `preload_configured=true`,
+`engine_listed=false`, and `list_error="Can't connect to IBus."`. The later
+live proofs then fail at `stage=engine-set` because `active_engine=missing`.
 
 Current follow-up source work keeps the real pass criteria intact while making
-the focused GTK proof field deterministic under QMP keyboard input: the proof
-window repeatedly re-focuses its entry during the typing window, the harness
-clicks the entry region instead of only the window center, and bounded
-proof/log tails are included in failing proof JSON. This remains qemu-pending
-until the next display-backed VM run proves `text-shortcuts-live-keystroke` and
-`text-shortcuts-live-ibus-runtime-render` end-to-end.
+IBus startup match Fedora 44 GNOME's service model: `org.goblins.OS.IBus.service`
+now uses D-Bus supervision (`Type=dbus`, `BusName=org.freedesktop.IBus`),
+keeps the Goblins component path, guards `--xim` to X11 sessions, refreshes the
+session environment before proof restarts, waits for the session bus owner
+before trusting `ibus list-engine`, and publishes bounded IBus service/process
+diagnostics in early failing proof JSON. This remains qemu-pending until the
+next display-backed VM run proves `text-shortcuts-session-enable`,
+`text-shortcuts-live-keystroke`, and `text-shortcuts-live-ibus-runtime-render`
+end-to-end.
+
+Previous hardware-gate run `28506688097` at `82f50ef` proved the earlier IBus
+session follow-up once: `text-shortcuts-session-enable-proof.json` was `pass`
+with `service=active`, `engine_listed=true`, `engine_set=pass`,
+`active_engine=goblins-textshortcuts`, and `adapter_self_test=pass`. That run
+narrowed the remaining live failure to Text Shortcuts input:
+`text-shortcuts-live-keystroke-proof.json` failed at `stage=normal-readback`
+with `normal_actual=missing`, and
+`text-shortcuts-live-ibus-runtime-render-proof.json` failed at
+`stage=render-ledger` with `focused_field_callback=false`,
+`text_input_v3_commit=false`, `rendered_accept_bubble=false`, and no screenshot.
 
 Previous hardware-gate run `28496717503` at `729ea69` on `main` proved the App
 Privacy follow-up worked: `app-privacy-revoke-proof.json` was `pass` with

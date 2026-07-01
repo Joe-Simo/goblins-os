@@ -58,6 +58,38 @@ file_size_value(){
 file_tail_query_value(){
   proof_query_value "$(tail -n 30 "$1" 2>/dev/null || true)"
 }
+ibus_session_bus_owned(){
+  command -v gdbus >/dev/null 2>&1 \
+    && gdbus call --session \
+      --dest org.freedesktop.DBus \
+      --object-path /org/freedesktop/DBus \
+      --method org.freedesktop.DBus.NameHasOwner \
+      org.freedesktop.IBus 2>/dev/null | grep -Fq "true"
+}
+ibus_bus_owner_value(){
+  if ibus_session_bus_owned; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+wait_ibus_bus_owned(){
+  local attempts="${1:-80}"
+  for _ in $(seq 1 "$attempts"); do
+    ibus_session_bus_owned && return 0
+    sleep 0.5
+  done
+  return 1
+}
+ibus_service_diag_query_value(){
+  proof_query_value "$(systemctl --user show org.goblins.OS.IBus.service -p Type -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus 2>/dev/null | tr '\n' ' ')"
+}
+ibus_daemon_process_query_value(){
+  proof_query_value "$(pgrep -af 'ibus-daemon' 2>/dev/null | head -n 3 | tr '\n' ';')"
+}
+ibus_session_env_query_value(){
+  proof_query_value "session_type=${XDG_SESSION_TYPE:-missing} wayland_display=${WAYLAND_DISPLAY:+present} display=${DISPLAY:+present} dbus_session_bus=${DBUS_SESSION_BUS_ADDRESS:+present}"
+}
 host_type_text(){
   local token="$1"
   local text="$2"
@@ -179,6 +211,7 @@ wait_ibus_cli_ready(){
   : > "$out_file"
   : > "$err_file"
   for _ in $(seq 1 "$attempts"); do
+    wait_ibus_bus_owned 1 || true
     if ibus list-engine >"$out_file" 2>"$err_file"; then
       return 0
     fi
@@ -277,16 +310,21 @@ text_shortcuts_session_enable_proof(){
   local input_source_configured preload_configured engine_listed adapter_self_test active_engine engine_set
 
   ensure_textshortcuts_ibus_component
+  systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS 2>/dev/null || true
+  dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS 2>/dev/null || true
   ibus write-cache >/tmp/gate-text-shortcuts-session-write-cache.log 2>&1 || true
+  systemctl --user reset-failed org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-session-ibus-reset-failed.log 2>&1 || true
   systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-session-ibus-restart.log 2>&1 || true
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 80); do
     service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
-    [ "$service_state" = "active" ] && break
+    if [ "$service_state" = "active" ] && wait_ibus_bus_owned 1; then
+      break
+    fi
     sleep 0.5
   done
 
   if [ "$service_state" != "active" ]; then
-    proof_text_shortcuts "status=fail&stage=user-service&service=${service_state:-missing}&service_unit=org.goblins.OS.IBus.service&cache_refreshed=true&daemon_restarted=true&user_component_seeded=true"
+    proof_text_shortcuts "status=fail&stage=user-service&service=${service_state:-missing}&service_unit=org.goblins.OS.IBus.service&cache_refreshed=true&daemon_restarted=true&user_component_seeded=true&bus_owner=$(ibus_bus_owner_value)&service_diag=$(ibus_service_diag_query_value)&daemon_process=$(ibus_daemon_process_query_value)&session_env=$(ibus_session_env_query_value)"
     return 1
   fi
 
@@ -311,7 +349,7 @@ text_shortcuts_session_enable_proof(){
     sleep 0.5
   done
   if [ "$engine_listed" != "true" ]; then
-    proof_text_shortcuts "status=fail&stage=engine-list&service=${service_state:-missing}&input_source_configured=true&preload_configured=true&engine_listed=false&cache_refreshed=true&daemon_restarted=true&user_component_seeded=true&list_error=$(proof_query_value "$(cat /tmp/gate-text-shortcuts-session-list-engine.err 2>/dev/null || true)")"
+    proof_text_shortcuts "status=fail&stage=engine-list&service=${service_state:-missing}&input_source_configured=true&preload_configured=true&engine_listed=false&cache_refreshed=true&daemon_restarted=true&user_component_seeded=true&bus_owner=$(ibus_bus_owner_value)&list_error=$(proof_query_value "$(cat /tmp/gate-text-shortcuts-session-list-engine.err 2>/dev/null || true)")&service_diag=$(ibus_service_diag_query_value)&daemon_process=$(ibus_daemon_process_query_value)&session_env=$(ibus_session_env_query_value)"
     return 1
   fi
 
@@ -332,7 +370,7 @@ text_shortcuts_session_enable_proof(){
   fi
   active_engine="$(active_ibus_engine)"
   if [ "$engine_set" != "pass" ] || [ "$active_engine" != "goblins-textshortcuts" ]; then
-    proof_text_shortcuts "status=fail&stage=active-engine&service=active&engine_set=$engine_set&active_engine=${active_engine:-missing}"
+    proof_text_shortcuts "status=fail&stage=active-engine&service=active&engine_set=$engine_set&active_engine=${active_engine:-missing}&bus_owner=$(ibus_bus_owner_value)&service_diag=$(ibus_service_diag_query_value)&daemon_process=$(ibus_daemon_process_query_value)&session_env=$(ibus_session_env_query_value)"
     return 1
   fi
 
@@ -362,7 +400,7 @@ text_shortcuts_live_keystroke_proof(){
 
   if ! activate_goblins_textshortcuts_engine; then
     active_engine="$(active_ibus_engine)"
-    proof_text_shortcuts_live "status=fail&stage=engine-set&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=${active_engine:-missing}"
+    proof_text_shortcuts_live "status=fail&stage=engine-set&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=${active_engine:-missing}&bus_owner=$(ibus_bus_owner_value)&list_error=$(proof_query_value "$(cat /tmp/gate-text-shortcuts-activate-list-engine.err 2>/dev/null || true)")&service_diag=$(ibus_service_diag_query_value)&daemon_process=$(ibus_daemon_process_query_value)&session_env=$(ibus_session_env_query_value)"
     return 1
   fi
   active_engine="$(active_ibus_engine)"
@@ -742,14 +780,19 @@ text_shortcuts_live_ibus_runtime_render_proof(){
     proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=proof-env&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=missing&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
     return 1
   fi
+  systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS 2>/dev/null || true
+  dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS 2>/dev/null || true
+  systemctl --user reset-failed org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-live-ibus-reset-failed.log 2>&1 || true
   systemctl --user restart org.goblins.OS.IBus.service >/tmp/gate-text-shortcuts-live-ibus-service.log 2>&1 || true
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 80); do
     service_state="$(systemctl --user is-active org.goblins.OS.IBus.service 2>/dev/null || true)"
-    [ "$service_state" = "active" ] && break
+    if [ "$service_state" = "active" ] && wait_ibus_bus_owned 1; then
+      break
+    fi
     sleep 0.5
   done
   if [ "$service_state" != "active" ]; then
-    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=user-service&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=missing&service=${service_state:-missing}&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=user-service&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=missing&service=${service_state:-missing}&bus_owner=$(ibus_bus_owner_value)&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred&service_diag=$(ibus_service_diag_query_value)&daemon_process=$(ibus_daemon_process_query_value)&session_env=$(ibus_session_env_query_value)"
     return 1
   fi
 
@@ -757,7 +800,7 @@ text_shortcuts_live_ibus_runtime_render_proof(){
   wait_ibus_cli_ready /tmp/gate-text-shortcuts-live-ibus-list-engine.out /tmp/gate-text-shortcuts-live-ibus-list-engine.err 80 || true
   if ! activate_goblins_textshortcuts_engine; then
     active_engine="$(active_ibus_engine)"
-    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=engine-set&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=${active_engine:-missing}&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred"
+    proof_text_shortcuts_live_ibus_runtime_render "status=fail&stage=engine-set&route=/v1/text-shortcuts&surface=goblins-textshortcuts-live-ibus-runtime-render&input_driver=$TEXT_SHORTCUTS_INPUT_DRIVER&active_engine=${active_engine:-missing}&bus_owner=$(ibus_bus_owner_value)&list_error=$(proof_query_value "$(cat /tmp/gate-text-shortcuts-activate-list-engine.err 2>/dev/null || true)")&normal_actual=missing&passthrough_actual=missing&password_refusal=false&focused_field_callback=false&text_input_v3_commit=false&rendered_accept_bubble=false&screenshot=32-text-shortcuts-live-ibus-runtime-render.png&style_class=gos-text-shortcuts-candidate&font_family=Inter&rendered_bubble_ready_claim=false&live_overlay_claim=false&runtime_ready_claim=false&core_readiness_flip=deferred&service_diag=$(ibus_service_diag_query_value)&daemon_process=$(ibus_daemon_process_query_value)&session_env=$(ibus_session_env_query_value)"
     return 1
   fi
   active_engine="$(active_ibus_engine)"

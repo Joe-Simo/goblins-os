@@ -34,38 +34,48 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Latest pushed source commit `118402b` on `main` passed the fast Rust build
-(`28510110929`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
-tests, and release build all succeeded. Hardware-gate run `28510121319` at the
+Latest pushed source commit `5f74fe4` on `main` passed the fast Rust build
+(`28513849128`) on both `ubuntu-24.04` and `ubuntu-24.04-arm`: format, clippy,
+tests, and release build all succeeded. Hardware-gate run `28513853150` at the
 same head passed bootc image publish, verification installer ISO build, model
 serve, install/boot/session automation, and most display-backed VM proof
-routes, but failed before the final Text Shortcuts live input/runtime render
-path. The artifact has real display captures through
+routes, but still failed before the final Text Shortcuts live runtime render.
+The artifact has real display captures through
 `31-text-shortcuts-candidate-bubble-render.png`; `29-preview-pdf-open.png` and
 `30-preview-image-open.png` exist, but
 `32-text-shortcuts-live-ibus-runtime-render.png` is still absent.
 
-Run `28510121319` proves the firewall live toggle, app-keyed Per-app Privacy
+Run `28513853150` proves the firewall live toggle, app-keyed Per-app Privacy
 revoke, keyboard shortcut rebind, input source switching, Focus arm/disarm,
 Preview PDF/image open/render, Text Shortcuts candidate metadata, overlay
-intent, deterministic candidate bubble frame/layout, and deterministic
-candidate bubble render proof routes still pass. The blocker moved earlier than
-the prior focus-field follow-up: `text-shortcuts-session-enable-proof.json`
-fails at `stage=engine-list` with `service=active`,
-`input_source_configured=true`, `preload_configured=true`,
-`engine_listed=false`, and `list_error="Can't connect to IBus."`. The later
-live proofs then fail at `stage=engine-set` because `active_engine=missing`.
+intent, deterministic candidate bubble frame/layout, deterministic candidate
+bubble render proof routes, and active `goblins-textshortcuts` selection for the
+basic live-keystroke path still pass. The remaining blockers are concrete:
+`text-shortcuts-session-enable-proof.json` failed at `stage=user-service` with
+`bus_owner=true`, `daemon_process=/usr/bin/ibus-daemon --panel disable`, but
+`service=inactive` because the Goblins unit did not replace the pre-existing
+session IBus daemon. `text-shortcuts-live-keystroke-proof.json` then failed at
+`stage=normal-readback` with `normal_log_tail="Unknown option --text-shortcuts-proof"`,
+which came from handing the already-parsed qemu proof flag back into GTK
+`Application::run_with_args`.
 
-Current follow-up source work keeps the real pass criteria intact while making
-IBus startup match Fedora 44 GNOME's service model: `org.goblins.OS.IBus.service`
-now uses D-Bus supervision (`Type=dbus`, `BusName=org.freedesktop.IBus`),
-keeps the Goblins component path, guards `--xim` to X11 sessions, refreshes the
-session environment before proof restarts, waits for the session bus owner
-before trusting `ibus list-engine`, and publishes bounded IBus service/process
-diagnostics in early failing proof JSON. This remains qemu-pending until the
-next display-backed VM run proves `text-shortcuts-session-enable`,
-`text-shortcuts-live-keystroke`, and `text-shortcuts-live-ibus-runtime-render`
-end-to-end.
+Current follow-up source work keeps the real pass criteria intact: the qemu
+proof windows now strip `--text-shortcuts-proof` before GTK argument parsing,
+and `org.goblins.OS.IBus.service` keeps Fedora 44 GNOME D-Bus supervision while
+adding `--replace` so the user unit owns the session daemon instead of exiting
+behind an already-running IBus process. The verifier and hardware-gate source
+checks pin both fixes. This remains qemu-pending until the next display-backed
+VM run proves `text-shortcuts-session-enable`, `text-shortcuts-live-keystroke`,
+and `text-shortcuts-live-ibus-runtime-render` end-to-end.
+
+Previous hardware-gate run `28510121319` at `118402b` passed bootc image
+publish, verification installer ISO build, model serve, install/boot/session
+automation, and most display-backed VM proof routes, but failed before the final
+Text Shortcuts live input/runtime render path. That run narrowed the prior
+blocker to `text-shortcuts-session-enable-proof.json` failing at
+`stage=engine-list` with `service=active`, `input_source_configured=true`,
+`preload_configured=true`, `engine_listed=false`, and
+`list_error="Can't connect to IBus."`.
 
 Previous hardware-gate run `28506688097` at `82f50ef` proved the earlier IBus
 session follow-up once: `text-shortcuts-session-enable-proof.json` was `pass`

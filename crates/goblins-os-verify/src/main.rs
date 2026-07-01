@@ -6121,6 +6121,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "XDG_SESSION_TYPE",
         ),
         contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "ibus-service-replaces-preexisting-session-daemon",
+            "--replace",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-strips-custom-gtk-flag",
+            "application.run_with_args(&[\"goblins-os-shell\", \"--text-shortcuts-proof\"]);",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-activates-goblins-ibus-engine",
             "ibus engine goblins-textshortcuts",
@@ -12919,6 +12929,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),
             "textshortcuts-ibus-user-service-wayland-safe-exec",
             "--panel disable",
+        ),
+        contains_check(
+            root.join("os/systemd-user/org.goblins.OS.IBus.service"),
+            "textshortcuts-ibus-user-service-replaces-session-daemon",
+            "--replace",
         ),
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.IBus.service"),

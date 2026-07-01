@@ -12,7 +12,7 @@ Conflicts=org.freedesktop.IBus.session.GNOME.service org.freedesktop.IBus.sessio
 Type=dbus
 Environment=IBUS_COMPONENT_PATH=%h/.local/share/ibus/component:/usr/share/ibus/component
 ExecStartPre=-/usr/bin/ibus write-cache
-ExecStart=sh -c 'exec /usr/bin/ibus-daemon --panel disable $([ "$XDG_SESSION_TYPE" = "x11" ] && echo "--xim")'
+ExecStart=sh -c 'exec /usr/bin/ibus-daemon --replace --panel disable $([ "$XDG_SESSION_TYPE" = "x11" ] && echo "--xim")'
 Restart=on-abnormal
 RestartSec=1
 BusName=org.freedesktop.IBus

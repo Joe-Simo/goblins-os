@@ -2846,7 +2846,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         });
     });
 
-    application.run_with_args(&["goblins-os-shell", "--text-shortcuts-proof"]);
+    application.run_with_args(&["goblins-os-shell"]);
     Ok(())
 }
 

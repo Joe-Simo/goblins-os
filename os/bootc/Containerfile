@@ -333,6 +333,7 @@ COPY os/applications/ /usr/share/applications/
 # Goblins-owned system GSettings schemas (e.g. Focus modes). Compiled below with
 # the rest of the system schema set.
 COPY os/glib-schemas/ /usr/share/glib-2.0/schemas/
+COPY os/tmpfiles/goblins-os-session.conf /usr/lib/tmpfiles.d/goblins-os-session.conf
 RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && test -x /usr/libexec/goblins-os/goblins-os-session-bridge \
     && /usr/libexec/goblins-os/goblins-os-session-bridge --self-test \
@@ -387,7 +388,6 @@ COPY os/gtk-4.0/ /etc/gtk-4.0/
 COPY os/nautilus/ /usr/share/goblins-os/nautilus/
 COPY os/codex/config.toml /usr/share/goblins-os/codex/config.toml
 COPY os/tmpfiles/goblins-os-codex.conf /usr/lib/tmpfiles.d/goblins-os-codex.conf
-COPY os/tmpfiles/goblins-os-session.conf /usr/lib/tmpfiles.d/goblins-os-session.conf
 COPY os/plymouth/goblins-os/ /usr/share/plymouth/themes/goblins-os/
 COPY os/icons/ /usr/share/icons/
 COPY os/sounds/GoblinsOS/index.theme /usr/share/sounds/GoblinsOS/index.theme

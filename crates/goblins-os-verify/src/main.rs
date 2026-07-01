@@ -817,6 +817,12 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "container-verifies-session-bridge-tmpfiles",
         "grep -Fq 'd /run/goblins-os-session 0770 goblin goblins-session-bridge -' /usr/lib/tmpfiles.d/goblins-os-session.conf",
     ));
+    checks.push(container_order_check(
+        root,
+        "container-copies-session-bridge-tmpfiles-before-verifier",
+        "COPY os/tmpfiles/goblins-os-session.conf /usr/lib/tmpfiles.d/goblins-os-session.conf",
+        "test -f /usr/lib/tmpfiles.d/goblins-os-session.conf",
+    ));
     checks.push(contains_check(
         root.join("os/etc/goblins-os/environment"),
         "environment-primary-core-url-is-goblins-native",
@@ -2590,6 +2596,10 @@ fn container_contains_check(root: &Path, id: &str, needle: &str) -> Check {
     contains_check(root.join("os/bootc/Containerfile"), id, needle)
 }
 
+fn container_order_check(root: &Path, id: &str, first: &str, second: &str) -> Check {
+    ordered_contains_check(root.join("os/bootc/Containerfile"), id, first, second)
+}
+
 fn container_absent_check(root: &Path, id: &str, needle: &str) -> Check {
     absent_check(root.join("os/bootc/Containerfile"), id, needle)
 }
@@ -2679,6 +2689,33 @@ fn contains_check(path: PathBuf, id: &str, needle: &str) -> Check {
         ready(id, &format!("{} contains {}", path.display(), needle))
     } else {
         blocked(id, &format!("{} is missing {}", path.display(), needle))
+    }
+}
+
+fn ordered_contains_check(path: PathBuf, id: &str, first: &str, second: &str) -> Check {
+    let text = read_to_string(&path);
+    let Some(first_index) = text.find(first) else {
+        return blocked(id, &format!("{} is missing {}", path.display(), first));
+    };
+    let Some(second_index) = text.find(second) else {
+        return blocked(id, &format!("{} is missing {}", path.display(), second));
+    };
+
+    if first_index < second_index {
+        ready(
+            id,
+            &format!("{} orders {} before {}", path.display(), first, second),
+        )
+    } else {
+        blocked(
+            id,
+            &format!(
+                "{} orders {} after {}; expected before",
+                path.display(),
+                first,
+                second
+            ),
+        )
     }
 }
 
@@ -14139,11 +14176,12 @@ mod tests {
     use super::{
         cargo_lock_packages, contains_realish_openai_key, desktop_field, install_files,
         is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
-        rg_secret_scan_hit, should_skip_secret_scan_path, source_manifest_classifies_top_level,
-        stable_id, write_release_evidence, CheckState, APPLICATIONS, AUTOSTART, BINARIES,
-        DCONF_FILES, GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES,
-        NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS, SETTINGS_INTERACTION_SCREENSHOTS,
-        SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS, SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
+        ordered_contains_check, rg_secret_scan_hit, should_skip_secret_scan_path,
+        source_manifest_classifies_top_level, stable_id, write_release_evidence, CheckState,
+        APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES, GLIB_SCHEMA_FILES,
+        GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS,
+        SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS,
+        SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
     };
     use std::collections::HashSet;
     use std::fs;
@@ -14163,6 +14201,21 @@ mod tests {
             stable_id("systemd-goblins-os-core.service-NoNewPrivileges=yes"),
             "systemd-goblins-os-core-service-nonewprivileges-yes"
         );
+    }
+
+    #[test]
+    fn ordered_contains_check_reports_order() {
+        let path =
+            std::env::temp_dir().join(format!("goblins-os-verify-ordered-{}", std::process::id()));
+        fs::write(&path, "COPY first\nRUN second\n").expect("write temp source");
+
+        let ready = ordered_contains_check(path.clone(), "ordered", "COPY first", "RUN second");
+        assert_eq!(ready.state, CheckState::Ready);
+
+        let blocked = ordered_contains_check(path.clone(), "ordered", "RUN second", "COPY first");
+        assert_eq!(blocked.state, CheckState::Blocked);
+
+        fs::remove_file(path).expect("remove temp source");
     }
 
     #[test]

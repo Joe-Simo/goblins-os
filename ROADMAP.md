@@ -34,14 +34,23 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-01)
 
-Current hardware-gate proof run is `28483079955` at `4b54b1` on `main`; it
-failed inside the display-backed VM capture after the image push, verification
-ISO, model prep, installed boot, first-boot diagnostics, private unlock helper
-download, root session-orchestrator starter, GNOME autostart fallback path, host
-publish of `/orchestrator.sh`, HTTP `200` orchestrator download, one
-`/ready/ORCH_START`, and `/ready/ORCH_ALLDONE` all ran. The artifact includes
-51 files with real display captures through `28-bootloader-efi-summary.png`
-plus `31-text-shortcuts-candidate-bubble-render.png`. The single-instance
+Latest hardware-gate run `28485602839` at `5ec6b27` on `main` failed during
+the bootc image build before qemu: the in-image verifier checked
+`/usr/lib/tmpfiles.d/goblins-os-session.conf` before the Containerfile copied
+`os/tmpfiles/goblins-os-session.conf` into place. The source follow-up under
+validation moves that `COPY` before the verifier `RUN`. This run does not change
+the live-proof status because it never reached ISO build or the display-backed
+VM capture.
+
+Last qemu-reaching hardware-gate proof run is `28483079955` at `4b54b1` on
+`main`; it failed inside the display-backed VM capture after the image push,
+verification ISO, model prep, installed boot, first-boot diagnostics, private
+unlock helper download, root session-orchestrator starter, GNOME autostart
+fallback path, host publish of `/orchestrator.sh`, HTTP `200` orchestrator
+download, one `/ready/ORCH_START`, and `/ready/ORCH_ALLDONE` all ran. The
+artifact includes 51 files with real display captures through
+`28-bootloader-efi-summary.png` plus
+`31-text-shortcuts-candidate-bubble-render.png`. The single-instance
 orchestrator lock fixed the competing proof execution path: the launcher still
 fetches `/orchestrator.sh` twice, but only one orchestrator run entered the
 proof sequence. The blocker is no longer CI billing, image export, ISO build,
@@ -126,7 +135,7 @@ goblins-os-core session_bridge`, `cargo test -p goblins-os-core firewall`,
 `cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
 `cargo test --workspace`, and
 `cargo run -p goblins-os-verify -- --source-root .` →
-**blocked=0 (2664)** before this roadmap edit. A fresh hardware-gate run is
+**blocked=0 (2665)**. A fresh hardware-gate run is
 still required before any failed live proof can move to shipped.
 
 CI/qemu image proof is green for run `28287964440` at `7c8c76d`: both `image`

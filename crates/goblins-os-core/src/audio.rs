@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_SINK: &str = "@DEFAULT_AUDIO_SINK@";
 const DEFAULT_SOURCE: &str = "@DEFAULT_AUDIO_SOURCE@";
 const SOUND_SCHEMA: &str = "org.gnome.desktop.sound";
-const WPCTL_TIMEOUT_MS_DEFAULT: u64 = 1_500;
-const WPCTL_TIMEOUT_MS_MIN: u64 = 250;
+const WPCTL_TIMEOUT_MS_DEFAULT: u64 = 500;
+const WPCTL_TIMEOUT_MS_MIN: u64 = 100;
 const WPCTL_TIMEOUT_MS_MAX: u64 = 5_000;
 
 #[derive(Serialize)]
@@ -136,8 +136,9 @@ pub async fn set_sound_preference(
 
 fn build_audio_status() -> AudioStatus {
     let wireplumber_available = executable_exists("wpctl") || executable_exists("wireplumber");
-    let output = audio_endpoint_status(AudioTarget::Output);
-    let input = audio_endpoint_status(AudioTarget::Input);
+    let (output_devices, input_devices) = audio_device_snapshot();
+    let output = audio_endpoint_status(AudioTarget::Output, output_devices);
+    let input = audio_endpoint_status(AudioTarget::Input, input_devices);
     let sound = build_sound_preferences_status();
     let detail = audio_status_detail(wireplumber_available, &output, &input);
 
@@ -188,8 +189,10 @@ impl AudioTarget {
     }
 }
 
-fn audio_endpoint_status(target: AudioTarget) -> AudioEndpointStatus {
-    let devices = audio_devices(target);
+fn audio_endpoint_status(
+    target: AudioTarget,
+    devices: Vec<AudioDeviceStatus>,
+) -> AudioEndpointStatus {
     let default_device_id = devices
         .iter()
         .find(|device| device.active)
@@ -241,10 +244,21 @@ fn audio_endpoint_status(target: AudioTarget) -> AudioEndpointStatus {
 }
 
 fn audio_devices(target: AudioTarget) -> Vec<AudioDeviceStatus> {
-    wpctl(&["status"])
-        .ok()
-        .map(|stdout| parse_wpctl_devices(&stdout, target))
-        .unwrap_or_default()
+    let (output, input) = audio_device_snapshot();
+    match target {
+        AudioTarget::Output => output,
+        AudioTarget::Input => input,
+    }
+}
+
+fn audio_device_snapshot() -> (Vec<AudioDeviceStatus>, Vec<AudioDeviceStatus>) {
+    match wpctl(&["status"]) {
+        Ok(stdout) => (
+            parse_wpctl_devices(&stdout, AudioTarget::Output),
+            parse_wpctl_devices(&stdout, AudioTarget::Input),
+        ),
+        Err(_) => (Vec::new(), Vec::new()),
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1008,10 +1022,10 @@ Audio
 
     #[test]
     fn wpctl_timeout_defaults_and_clamps() {
-        assert_eq!(clamp_wpctl_timeout_ms(None), 1_500);
-        assert_eq!(clamp_wpctl_timeout_ms(Some(1)), 250);
-        assert_eq!(clamp_wpctl_timeout_ms(Some(249)), 250);
-        assert_eq!(clamp_wpctl_timeout_ms(Some(250)), 250);
+        assert_eq!(clamp_wpctl_timeout_ms(None), 500);
+        assert_eq!(clamp_wpctl_timeout_ms(Some(1)), 100);
+        assert_eq!(clamp_wpctl_timeout_ms(Some(99)), 100);
+        assert_eq!(clamp_wpctl_timeout_ms(Some(100)), 100);
         assert_eq!(clamp_wpctl_timeout_ms(Some(1_500)), 1_500);
         assert_eq!(clamp_wpctl_timeout_ms(Some(5_000)), 5_000);
         assert_eq!(clamp_wpctl_timeout_ms(Some(10_000)), 5_000);

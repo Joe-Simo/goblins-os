@@ -6183,6 +6183,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-status-curl-budget-has-headroom",
+            r#"GOS_AUDIO_CURL_MAX_TIME_SECONDS:-4"#,
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-audio-status-attempts-are-bounded",
             "GOS_AUDIO_STATUS_ATTEMPTS",
         ),
@@ -6205,6 +6210,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/audio.rs"),
             "core-audio-wpctl-timeout-is-clamped",
             "clamp_wpctl_timeout_ms",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-status-uses-one-device-snapshot",
+            "audio_device_snapshot",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/audio.rs"),

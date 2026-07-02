@@ -34,30 +34,32 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-02)
 
-Head `df5479c` is source-verified and CI-green for the fast Rust build: GitHub
-Actions build run `28573994154` passed on x86_64 and aarch64 after bounding the
-audio proof preflight. Hardware-gate run `28574000072` at that head passed bootc
-image publish, verification installer ISO build, model setup, and completed the
-display-backed VM screenshot sequence: `24-audio-output.png` was captured, the
-proof WAV was generated, and `pw-play` started. The run still failed signoff with
+Head `95e4647` is source-verified and CI-green for the fast Rust build: GitHub
+Actions build run `28577539839` passed on x86_64 and aarch64 after bounding core
+`wpctl` calls. Hardware-gate run `28577563106` at that head passed bootc image
+publish, verification installer ISO build, model setup, and reached the
+display-backed VM proof sequence. It captured `24-audio-output.png`, generated
+the proof WAV, and started `pw-play`, but still failed signoff with
 `audio-output=fail`: the proof reported `stage=audio-status`,
 `status_http=000`, `wav_generated=true`, `player_started=true`, and
-`rendered_sound_panel=false`. This narrowed the blocker from a blind capture
-stall to the core `/v1/audio/status` route not returning under the bounded curl
-probe.
+`rendered_sound_panel=false`. This proves the route is still exceeding the
+harness curl budget, not that waveform generation or player startup is the
+blocker.
 
 The current source follow-up is qemu-pending and does **not** mark more features
 shipped. It keeps the strict audio proof contract from `05f0e0a`/`8bbbd02`,
 keeps the bounded Sound-panel title wait, keeps the one-second reused tone
-buffer, keeps the bounded harness curl/status/waveform preflight, and now bounds
-core `wpctl` itself: `GOBLINS_OS_WPCTL_TIMEOUT_MS` is parsed with a 250-5000ms
-clamp, the child process is polled with `try_wait()`, timed-out probes are
-killed and reaped, and `/v1/audio/status` reports "WirePlumber did not answer
-before the audio status timeout." instead of hanging the HTTP route. Local gates
-for this follow-up pass: hardware-gate shipping-status shell syntax,
-`cargo fmt --all -- --check`, `git diff --check`,
-`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
-`cargo run -p goblins-os-verify -- --source-root .` → **blocked=0 (2841)**.
+buffer, keeps the bounded harness curl/status/waveform preflight, and tightens
+the core status route: `GOBLINS_OS_WPCTL_TIMEOUT_MS` now defaults to 500ms with a
+100-5000ms clamp, `/v1/audio/status` uses one `wpctl status` device snapshot for
+both endpoints, and the harness status curl default has 4 seconds of headroom.
+Timed-out probes are still killed and reaped, and the route still reports
+"WirePlumber did not answer before the audio status timeout." instead of hanging
+the HTTP route. Local gates for this follow-up pass: hardware-gate shell syntax,
+`git diff --check`, `cargo fmt --all -- --check`,
+`cargo test -p goblins-os-core audio::`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, and
+`cargo run -p goblins-os-verify -- --source-root .` -> **blocked=0 (2843)**.
 `verify-shipping-status.sh` passes the Audio output proof source check, but
 still fails closed because the final release artifacts/signoff evidence and
 older source-gated unshipped rows are not complete. Final shipping status still

@@ -412,7 +412,7 @@ audio_status_http_code(){
   : >"$status_file"
   curl \
     --connect-timeout "${GOS_AUDIO_CURL_CONNECT_TIMEOUT_SECONDS:-1}" \
-    --max-time "${GOS_AUDIO_CURL_MAX_TIME_SECONDS:-2}" \
+    --max-time "${GOS_AUDIO_CURL_MAX_TIME_SECONDS:-4}" \
     -s -o "$status_file" -w '%{http_code}' \
     "$LIVE_URL/v1/audio/status" || true
 }

@@ -1103,6 +1103,7 @@ check "hardware gate pushes bootc image without daemon export" "rg -q 'docker/bu
 check "hardware gate uses verification ISO config" "rg -q 'GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate uses nonblocking BuildKit GHA cache and cancels superseded runs" "rg -q 'docker/setup-buildx-action@v3' .github/workflows/hardware-gate-capture.yml && rg -q --fixed-strings 'type=gha,scope=goblins-os-bootc-\${{ matrix.arch }}' .github/workflows/hardware-gate-capture.yml && rg -q 'mode=max,ignore-error=true' .github/workflows/hardware-gate-capture.yml && rg -q 'cancel-in-progress: true' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate prepares readable writable KVM for qemu" "rg -q 'sudo chmod a[+]rw /dev/kvm' .github/workflows/hardware-gate-capture.yml && rg -q 'test -r /dev/kvm && test -w /dev/kvm' .github/workflows/hardware-gate-capture.yml"
+check "hardware gate installs close-signoff search dependency" "rg -q 'ripgrep' .github/workflows/hardware-gate-capture.yml && rg -q '\\brg -q\\b' os/hardware-gate/close-signoff.sh"
 check "external gate supports qemu-system-aarch64" "rg -q 'qemu-system-aarch64' os/hardware-gate/run-external-gate.sh"
 check "external gate supports qemu-system-x86_64" "rg -q 'qemu-system-x86_64' os/hardware-gate/run-external-gate.sh"
 check "external gate passes container runtime to ISO builder" "rg -q 'GOBLINS_OS_CONTAINER_RUNTIME=\"[$]CONTAINER_RUNTIME\"' os/hardware-gate/run-external-gate.sh"

@@ -5657,6 +5657,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-installs-close-signoff-search-dependency",
+            "ripgrep",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-uses-ripgrep-for-proof-contracts",
+            "rg -q",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
             "hardware-gate-skips-local-iso-image-build",
             "GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1",
         ),

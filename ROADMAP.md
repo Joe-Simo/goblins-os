@@ -32,33 +32,27 @@
 
 ---
 
-## ⏩ Session status — RESUME HERE (updated 2026-07-01)
+## ⏩ Session status — RESUME HERE (updated 2026-07-02)
 
-Head `1ce3f6a` is source-verified (`goblins_os_verify_result total=2807
+Head `906f7e8` is source-verified (`goblins_os_verify_result total=2811
 blocked=0`) and CI-green for the fast Rust build: GitHub Actions build run
-`28558194215` passed on x86_64 and aarch64. Hardware-gate run `28558197147` at
+`28560993234` passed on x86_64 and aarch64. Hardware-gate run `28561000333` at
 that head passed bootc image publish, verification installer ISO build, model
 prep, install/first boot, and the display-backed VM proof routes for Firewall
 toggle, IME/input-source switching, Focus arm/disarm, keyboard rebind,
 app-keyed Per-app Privacy revoke, Preview PDF/image open, Multi-display apply,
-and Text Shortcuts live IBus runtime/render. The artifact contains
-`31-text-shortcuts-candidate-bubble-render.png`,
-`32-text-shortcuts-live-ibus-runtime-render.png`,
-`22-mangohud-overlay.png`, `21-gamescope-session.png`, and the three studio-live
-shots (`14-studio-running.png`, `15-studio-app-detail.png`,
-`16-built-app-open.png`), and all required runtime proof JSONs with
-`status=pass`. It still did **not** produce `proof-manifest.json` because
-`run-capture.sh` failed closed before close-signoff.
+and Text Shortcuts live IBus runtime/render. The artifact contains all 31
+required screenshot PNGs, all 31 required PNGs are distinct, `proof-manifest.json`
+exists, and all 15 required runtime proof JSONs report `status=pass`.
 
-That latest failure moved beyond the previous host ready-signal timeout. The run
-reached `ORCH_ALLDONE` after capturing all 31 required PNG names, but the
-distinctness guard rejected the screenshot set with
-`HONESTY GUARD: only 30/31 required captured surfaces are distinct.` Artifact
-inspection showed `01-installer.png` and `02-install-network.png` were byte-
-identical stale desktop frames. `25-install-destination.png` and
-`26-install-storage-summary.png` were also stale desktop frames on visual
-inspection, so this is an installer-window foreground/readiness issue, not a
-valid signoff artifact.
+That latest failure moved beyond the stale-installer-screenshot blocker. The run
+reached `ORCH_ALLDONE`, wrote the screenshot/proof artifact, and then failed in
+`close-signoff.sh` before writing the signoff row because the Ubuntu hardware
+runner had no `rg` binary:
+`/os/hardware-gate/close-signoff.sh: line 701: rg: command not found`. The
+reported `SHIP.md does not declare Fedora bootc as the OS foundation` message was
+a false consequence of the missing search tool; `SHIP.md` still contains
+`Fedora bootc remains the OS foundation`.
 `text-shortcuts-live-ibus-runtime-render-proof.json` passed with
 `normal_actual=onmyway.`, `passthrough_actual=hello.`,
 `password_refusal=true`, `focused_field_callback=true`,
@@ -68,13 +62,12 @@ valid signoff artifact.
 hardware signoff path.
 
 The current source follow-up is qemu-pending and does **not** mark more features
-shipped. It keeps the progress-aware capture driver and fixes the next
-installer-capture blocker by routing every installer screenshot through the
-deterministic fixture core (`FIX_URL`) with a bounded
-`GOBLINS_OS_INSTALLER_CORE_WAIT_SECS`, plus an explicit `welcome` page override
-for `06-onboarding`. The gate must still fail closed unless the required PNGs
-are real foregrounded surfaces, pass-status proof JSONs exist, and
-`proof-manifest.json` is produced by the display-backed VM.
+shipped. It adds the missing `ripgrep` runner dependency to
+`hardware-gate-capture.yml` and pins that dependency in both verifier layers so
+`close-signoff.sh` can run its existing proof-contract checks in CI. The gate
+must still fail closed unless the required PNGs, pass-status proof JSONs,
+`proof-manifest.json`, and close-signoff row are produced by the display-backed
+VM and committed back to `main`.
 
 Previous hardware-gate run `28538674596` at `9f5ca8b` passed bootc image
 publish, verification installer ISO build, model prep, install, first boot
@@ -312,10 +305,10 @@ not mark Batch 5 shipped.
 - **Batch 3 (Settings surfaces) — all 9 have a shipped read/status/UI surface:**
   Accessibility rows, Firewall, Keyboard shortcuts, Focus (substrate+gschema),
   Migration (substrate), Multi-display (read side via `displays.rs`), Personal
-  Hotspot, Per-app privacy, Keychain. **Gated WRITES still qemu-pending** for
-  multi-display apply only. Firewall toggle, IME/input-source switching, Focus
-  arm/disarm, keyboard rebind, and app-keyed Per-app Privacy revoke now have
-  live display-backed VM proof.
+  Hotspot, Per-app privacy, Keychain. Firewall toggle, IME/input-source
+  switching, Focus arm/disarm, keyboard rebind, app-keyed Per-app Privacy
+  revoke, and Multi-display apply now have live display-backed VM proof in the
+  failed `28561000333` artifact; the close-signoff row is still pending.
 - **Batch 4 (engines) — 7 of 7 SUBSTRATES shipped (cores only; UI/engines deferred):**
   Text Shortcuts, Voice Control, Visual Look Up, Switch Control, Widgets/Today,
   Sound Recognition, Live Captions.
@@ -326,15 +319,15 @@ not mark Batch 5 shipped.
   changes, encryption at install, recovery-key escrow, timers, Settings UI,
   real snapshot creation/restore, and boot/reboot proof remain CI/qemu-pending.
 
-**Current local gate pass:** Capture-driver progress timeout follow-up and the
-installer-capture fixture-core follow-up are implemented and locally gated, but
-they remain qemu-pending and do **not** move more features to `shipped` until
-the hardware gate proves real foregrounded installer surfaces, produces
-`proof-manifest.json`, and writes the close-signoff row. Local proof:
+**Current local gate pass:** Capture-driver progress timeout follow-up, the
+installer-capture fixture-core follow-up, and the hardware-runner `ripgrep`
+dependency fix are implemented and locally gated, but the latest fix remains
+qemu-pending and does **not** move more features to `shipped` until the hardware
+gate writes the close-signoff row and commits it back to `main`. Local proof:
 `python3 -m py_compile os/hardware-gate/capture-harness/drive-capture.py`,
 `bash -n` for the hardware-gate scripts, `cargo fmt -p goblins-os-installer -p goblins-os-verify -- --check`,
 `cargo test -p goblins-os-installer`, `cargo test -p goblins-os-verify`,
-`cargo run -p goblins-os-verify -- --source-root .` → **blocked=0 (2811)**,
+`cargo run -p goblins-os-verify -- --source-root .` → **blocked=0 (2813)**,
 `cargo fmt --all -- --check`, `git diff --check`,
 `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`. Full
 `verify-shipping-status.sh` still fails on missing complete hardware

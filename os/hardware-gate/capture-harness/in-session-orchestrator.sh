@@ -1590,7 +1590,7 @@ shot(){
     "GOBLINS_OS_CAPTURE_NON_UNIQUE=1"
     "GOBLINS_OS_RENDER_FULLSCREEN=1"
   )
-  for key in GOBLINS_OS_THEME GOBLINS_OS_INSTALLER_PAGE GOBLINS_OS_CORE_URL; do
+  for key in GOBLINS_OS_THEME GOBLINS_OS_INSTALLER_PAGE GOBLINS_OS_INSTALLER_CORE_WAIT_SECS GOBLINS_OS_CORE_URL; do
     if [ "${!key+x}" ]; then
       env_args+=("$key=${!key}")
     fi
@@ -1622,6 +1622,14 @@ shot(){
   done
   switch_control_off
   sleep 1
+}
+installer_shot(){
+  local page="$1"
+  local name="$2"
+  GOBLINS_OS_CORE_URL="$FIX_URL" \
+    GOBLINS_OS_INSTALLER_CORE_WAIT_SECS="${GOS_INSTALLER_CAPTURE_CORE_WAIT_SECS:-3}" \
+    GOBLINS_OS_INSTALLER_PAGE="$page" \
+    shot "$name" "$B/goblins-os-installer"
 }
 darkon(){ gsettings set org.gnome.desktop.interface color-scheme prefer-dark 2>/dev/null; sleep 1; }
 darkoff(){ gsettings set org.gnome.desktop.interface color-scheme default 2>/dev/null; sleep 1; }
@@ -1667,7 +1675,7 @@ FIX_URL=http://127.0.0.1:8788
 
 # ---- login + onboarding ----
 shot 03-login         "$B/goblins-os-login"
-shot 06-onboarding    "$B/goblins-os-installer"
+installer_shot welcome 06-onboarding
 sig 04-desktop
 
 # ---- session apps (light) ----
@@ -1690,15 +1698,14 @@ GOBLINS_OS_THEME=dark shot 17-dark-motion   "$B/goblins-os-shell"
 darkoff
 
 # ---- installer pages (real core = this VM's blank scratch disk) ----
-GOBLINS_OS_INSTALLER_PAGE=appearance     shot 01-installer "$B/goblins-os-installer"
-GOBLINS_OS_INSTALLER_PAGE=network        shot 02-install-network "$B/goblins-os-installer"
-GOBLINS_OS_INSTALLER_PAGE=install-disk   shot 25-install-destination "$B/goblins-os-installer"
-GOBLINS_OS_INSTALLER_PAGE=install-review shot 26-install-storage-summary "$B/goblins-os-installer"
-GOBLINS_OS_INSTALLER_PAGE=details        shot 28-bootloader-efi-summary "$B/goblins-os-installer"
+installer_shot appearance 01-installer
+installer_shot network 02-install-network
+installer_shot install-disk 25-install-destination
+installer_shot install-review 26-install-storage-summary
+installer_shot details 28-bootloader-efi-summary
 
 # ---- dual-boot preservation (fixture core shows the multi-OS disk) ----
-GOBLINS_OS_CORE_URL=$FIX_URL GOBLINS_OS_INSTALLER_PAGE=install-disk \
-  shot 27-dual-boot-preserve-existing-os "$B/goblins-os-installer"
+installer_shot install-disk 27-dual-boot-preserve-existing-os
 
 # ---- gaming stack (real software substrate) ----
 shot 19-vulkan-vkcube  vkcube

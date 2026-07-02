@@ -1218,6 +1218,7 @@ fn build_installer(
     // Onboarding opens on Welcome; an explicit page may be requested (used by the
     // packaging-time render harness to prove each first-boot screen).
     let initial = match env::var("GOBLINS_OS_INSTALLER_PAGE").ok().as_deref() {
+        Some("welcome") => "welcome",
         Some("network") => "network",
         Some("appearance") => "appearance",
         Some("accessibility") => "accessibility",

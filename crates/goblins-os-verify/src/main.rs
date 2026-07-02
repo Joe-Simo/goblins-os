@@ -5932,6 +5932,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-forwards-installer-core-wait",
+            "GOBLINS_OS_INSTALLER_CORE_WAIT_SECS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-routes-installer-shots-through-fixture-core",
+            "installer_shot()",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-bounds-installer-capture-core-wait",
+            "GOS_INSTALLER_CAPTURE_CORE_WAIT_SECS",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-page-override-explicitly-supports-welcome",
+            "Some(\"welcome\") => \"welcome\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-logs-bounded-helper-timeouts",
             "GOBLINS_HWGATE_BOUNDED_COMMAND_TIMED_OUT",
         ),

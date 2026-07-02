@@ -34,33 +34,33 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-02)
 
-Head `05f0e0a` is source-verified and CI-green for the fast Rust build: GitHub
-Actions build run `28565935159` passed on x86_64 and aarch64 after requiring
-audio-output proof in the hardware gate. Hardware-gate run `28566344916` at that
-head passed bootc image publish, verification installer ISO build, model setup,
-and reached the display-backed VM proof sequence, but then stalled after
+Head `8bbbd02` is source-verified and CI-green for the fast Rust build: GitHub
+Actions build run `28568776821` passed on x86_64 and aarch64 after bounding the
+audio proof title wait. Hardware-gate run `28568783912` at that head passed
+bootc image publish, verification installer ISO build, model setup, and reached
+the display-backed VM proof sequence, but still stalled after
 `13-studio-before`: the capture driver timed out after 180 seconds with
 `24-audio-output.png` and `audio-output-proof.json` missing, so close-signoff and
-the commit-back step were skipped. This is now the current release blocker, not
-a broad feature-code blocker.
+the commit-back step were skipped. The run proved the previous title-wait fix
+was not reached; the stall is earlier inside audio proof setup, not in the Sound
+panel title wait.
 
 The current source follow-up is qemu-pending and does **not** mark more features
-shipped. It keeps the strict audio proof contract from `05f0e0a` while bounding
-the audio-specific title wait to `GOS_AUDIO_SHOT_WINDOW_WAIT_ATTEMPTS=8` and
-`GOS_AUDIO_SHOT_HELPER_TIMEOUT_SECONDS=1` by default. The goal is to make the
-display-backed run emit `24-audio-output.png` and `audio-output-proof.json`
-explicitly, pass or fail, instead of letting the progress watchdog expire before
-the audio proof reports. Local gates for this follow-up pass:
-hardware-gate shell syntax, `cargo fmt --all -- --check`,
+shipped. It keeps the strict audio proof contract from `05f0e0a`/`8bbbd02`,
+keeps the bounded Sound-panel title wait, and changes the test-tone generator to
+compute one second of tone once (`one_second = bytearray()`) and reuse that
+buffer for the 45-second proof. The previous per-sample 45-second Python loop
+can exceed the display-capture inactivity window in qemu before it emits
+`24-audio-output.png` or `audio-output-proof.json`. Local gates for this
+follow-up pass: hardware-gate shell syntax, `cargo fmt --all -- --check`,
 `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
 `git diff --check`, and `cargo run -p goblins-os-verify -- --source-root .` →
-**blocked=0 (2831)**. `verify-shipping-status.sh` passes the new Audio output
-proof source checks, but still fails closed because the final release
-artifacts/signoff evidence and older source-gated unshipped rows are not
-complete. Final shipping status still fails closed until the display-backed VM
-produces the audio proof, distinct screenshots, `proof-manifest.json`, all
-required pass status proof JSONs, and a close-signoff row committed back to
-`main`.
+**blocked=0 (2833)**. `verify-shipping-status.sh` passes the Audio output proof
+source checks, but still fails closed because the final release artifacts/signoff
+evidence and older source-gated unshipped rows are not complete. Final shipping
+status still fails closed until the display-backed VM produces the audio proof,
+distinct screenshots, `proof-manifest.json`, all required pass status proof
+JSONs, and a close-signoff row committed back to `main`.
 
 Previous hardware-gate run `28561000333` at `906f7e8` passed bootc image
 publish, verification installer ISO build, model prep, install/first boot, and

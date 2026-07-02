@@ -6168,6 +6168,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-proof-buffers-one-second-tone",
+            "one_second = bytearray()",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-proof-reuses-tone-buffer",
+            "for _ in range(seconds):",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-app-privacy-seeds-permission-store",
             "PermissionStore.SetPermission",
         ),

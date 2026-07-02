@@ -367,14 +367,16 @@ with wave.open(path, "wb") as out:
     out.setnchannels(2)
     out.setsampwidth(2)
     out.setframerate(sample_rate)
-    for i in range(sample_rate * seconds):
+    one_second = bytearray()
+    for i in range(sample_rate):
         # Two quiet tones make the proof audibly distinct without being harsh.
         value = int(32767 * amplitude * (
             math.sin(2 * math.pi * 440 * i / sample_rate) * 0.65
             + math.sin(2 * math.pi * 660 * i / sample_rate) * 0.35
         ))
-        frame = struct.pack("<hh", value, value)
-        out.writeframesraw(frame)
+        one_second.extend(struct.pack("<hh", value, value))
+    for _ in range(seconds):
+        out.writeframesraw(one_second)
 PY
 }
 audio_output_status_ready(){

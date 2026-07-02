@@ -34,46 +34,47 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-02)
 
-Latest pushed head `dcf3625` is CI-green for the build/render workflow:
-GitHub Actions build run `28614271218` passed the Rust and image/render jobs on
-x86_64 and aarch64. Downloaded artifacts from that run contain 300 PNGs total
-(56 desktop/shell render PNGs across both arches). Spot-reviewed renders show
-Live Captions waiting, Switch Control point scan, Today light/dark honest empty
-states, menu-bar input source/Focus/Today indicators, Text Shortcuts candidate
-bubble, Security Fingerprint/Disk encryption rows, Storage first viewport, and
-Recovery local snapshot restore rows. Security/Storage lower-scroll rows that
-are not visible in the captured viewport are still not treated as reviewed.
+Latest pushed head `bb3b5e6` is CI-green for the build/render workflow:
+GitHub Actions build run `28618604851` passed Rust and image/render jobs on
+x86_64 and aarch64. Previous build run `28614271218` at `dcf3625` also passed
+and its downloaded artifacts contained 300 PNGs total (56 desktop/shell render
+PNGs across both arches). Spot-reviewed renders from that earlier green run
+show Live Captions waiting, Switch Control point scan, Today light/dark honest
+empty states, menu-bar input source/Focus/Today indicators, Text Shortcuts
+candidate bubble, Security Fingerprint/Disk encryption rows, Storage first
+viewport, and Recovery local snapshot restore rows. Security/Storage
+lower-scroll rows that are not visible in the captured viewport are still not
+treated as reviewed.
 
-Hardware-gate run `28614315236` at `dcf3625` built and published the bootc image,
+Hardware-gate run `28618616020` at `bb3b5e6` built and published the bootc image,
 built the verification installer ISO, ran the display-backed VM capture, and
 uploaded a failure artifact with all required screenshot PNGs through
-`32-text-shortcuts-live-ibus-runtime-render.png`. The artifact has 31 distinct
-required PNGs. Runtime proof JSONs passed for Firewall live toggle, Text
-Shortcuts session enable/candidate/overlay/frame/layout/render/live IBus
-runtime render, keyboard rebind, input-source roundtrip, multi-display apply,
-Focus arm, app-keyed App Privacy revoke, and Preview open/render. The only
-failing proof remains `audio-output-proof.json`: `stage=audio-status`,
-`status_http=000`, `wav_generated=true`, `player_started=true`,
-`rendered_sound_panel=false`, and missing WirePlumber/output fields. The Sound
-panel screenshot exists but shows the audio rows stuck in Waiting because
-`/v1/audio/status` did not answer within the proof curl window. Close-signoff
-failed with `missing or failing required proof signals: audio-output=fail`, so
+`32-text-shortcuts-live-ibus-runtime-render.png`. Runtime proof JSONs passed for
+Firewall live toggle, Text Shortcuts session
+enable/candidate/overlay/frame/layout/render/live IBus runtime render, keyboard
+rebind, input-source roundtrip, multi-display apply, Focus arm, app-keyed App
+Privacy revoke, and Preview open/render. The only failing proof remains
+`audio-output-proof.json`: `stage=audio-status`, `status_http=000`,
+`wav_generated=true`, `player_started=true`, `rendered_sound_panel=false`, and
+missing WirePlumber/output fields. The Sound panel screenshot exists but shows
+the audio rows stuck in Waiting because `/v1/audio/status` did not answer within
+the proof curl window. Close-signoff failed before committing a signoff row, so
 no features are newly shipped from that run.
 
 Current local audio follow-up is source-gated only and does **not** mark more
 features shipped. It keeps the strict audio proof contract from
 `05f0e0a`/`8bbbd02`, the bounded Sound-panel title wait, the reused one-second
 tone buffer, bounded harness curl/status/waveform preflight, the QEMU HDA output
-device, and the allowlisted session bridge for `/v1/audio/status`. The follow-up
-makes audio status endpoint readiness come from the already-required
-`wpctl status` device snapshot instead of a second `wpctl get-volume` subprocess,
-preserves inline volume/mute when `wpctl status` reports it, and adds a bounded
-core Unix-socket read/write timeout for session-bridge calls so a stale bridge
-cannot pin the core HTTP route indefinitely. Local gates pass: `cargo fmt --all
--- --check`, hardware-gate shell syntax, focused core audio/session_bridge tests,
-`cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
-`cargo test --workspace`, `git diff --check`, and `goblins-os-verify` ->
-**blocked=0 (2864)**.
+device, the `wpctl status` device-snapshot readiness from `bb3b5e6`, and the
+bounded session-bridge socket read/write timeout. The follow-up collapses sound
+preference status into one allowlisted `gsettings list-recursively
+org.gnome.desktop.sound` snapshot and parses the keys locally, so
+`/v1/audio/status` no longer serially waits on list-schemas/list-keys/get calls
+before returning audio endpoint readiness. Local gates pass: `cargo fmt --all
+-- --check`, hardware-gate shell syntax, `git diff --check`, focused core audio
+tests, session-bridge tests, `cargo test -p goblins-os-verify`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
+`goblins-os-verify` -> **blocked=0 (2867)**.
 Final shipping status still fails closed until a fresh display-backed VM produces
 a passing audio proof, distinct screenshots, `proof-manifest.json`, all required
 pass status proof JSONs, and a close-signoff row committed back to `main`.

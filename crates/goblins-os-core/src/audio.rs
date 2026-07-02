@@ -5,6 +5,7 @@
 //! so Settings can choose defaults without accepting arbitrary object names.
 
 use std::{
+    collections::BTreeMap,
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
@@ -500,8 +501,7 @@ fn audio_default_device_outcome(
 }
 
 fn build_sound_preferences_status() -> SoundPreferencesStatus {
-    let gsettings_available = gsettings(&["list-schemas"]).is_ok();
-    let schema = sound_schema_snapshot(gsettings_available);
+    let (gsettings_available, schema) = sound_schema_snapshot();
 
     SoundPreferencesStatus {
         gsettings_available,
@@ -518,7 +518,8 @@ fn sound_preference_outcome(
     request: SetSoundPreferenceRequest,
 ) -> (StatusCode, Json<SoundPreferenceOutcome>) {
     let spec = sound_preference_spec(request.target);
-    if gsettings(&["list-schemas"]).is_err() {
+    let (gsettings_available, schema) = sound_schema_snapshot();
+    if !gsettings_available {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(SoundPreferenceOutcome {
@@ -529,7 +530,6 @@ fn sound_preference_outcome(
         );
     }
 
-    let schema = sound_schema_snapshot(true);
     if !schema.available || !schema.has_key(spec.key) {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -599,19 +599,23 @@ fn audio_control_outcome(
 
 struct SoundSchemaSnapshot {
     available: bool,
-    keys: Vec<String>,
+    values: BTreeMap<String, String>,
 }
 
 impl SoundSchemaSnapshot {
     fn unavailable() -> Self {
         Self {
             available: false,
-            keys: Vec::new(),
+            values: BTreeMap::new(),
         }
     }
 
     fn has_key(&self, key: &str) -> bool {
-        self.keys.iter().any(|candidate| candidate == key)
+        self.values.contains_key(key)
+    }
+
+    fn value(&self, key: &str) -> Option<&str> {
+        self.values.get(key).map(String::as_str)
     }
 }
 
@@ -622,41 +626,53 @@ struct SoundPreferenceSpec {
     label: &'static str,
 }
 
-fn sound_schema_snapshot(gsettings_available: bool) -> SoundSchemaSnapshot {
-    if !gsettings_available {
-        return SoundSchemaSnapshot::unavailable();
-    }
-
-    match gsettings(&["list-keys", SOUND_SCHEMA]) {
-        Ok(stdout) => SoundSchemaSnapshot {
-            available: true,
-            keys: stdout
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
-                .collect(),
-        },
-        Err(_) => SoundSchemaSnapshot::unavailable(),
+fn sound_schema_snapshot() -> (bool, SoundSchemaSnapshot) {
+    match gsettings(&["list-recursively", SOUND_SCHEMA]) {
+        Ok(stdout) => (true, parse_sound_schema_snapshot(&stdout)),
+        Err(GSettingsError::Missing) => (false, SoundSchemaSnapshot::unavailable()),
+        Err(GSettingsError::Failed(_)) => (true, SoundSchemaSnapshot::unavailable()),
     }
 }
 
 fn setting_bool(schema: &SoundSchemaSnapshot, key: &str) -> Option<bool> {
-    if !schema.has_key(key) {
-        return None;
-    }
-    gsettings(&["get", SOUND_SCHEMA, key])
-        .ok()
-        .and_then(|value| parse_gsettings_bool(&value))
+    schema.value(key).and_then(parse_gsettings_bool)
 }
 
 fn setting_string(schema: &SoundSchemaSnapshot, key: &str) -> Option<String> {
-    if !schema.has_key(key) {
-        return None;
+    schema.value(key).and_then(parse_gsettings_string)
+}
+
+fn parse_sound_schema_snapshot(stdout: &str) -> SoundSchemaSnapshot {
+    let mut values = BTreeMap::new();
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Some(rest) = line
+            .strip_prefix(SOUND_SCHEMA)
+            .map(str::trim_start)
+            .filter(|rest| !rest.is_empty())
+        else {
+            continue;
+        };
+        let Some((key, value)) = rest.split_once(' ') else {
+            continue;
+        };
+        if matches!(
+            key,
+            "event-sounds"
+                | "input-feedback-sounds"
+                | "allow-volume-above-100-percent"
+                | "theme-name"
+        ) {
+            values.insert(key.to_string(), value.trim().to_string());
+        }
     }
-    gsettings(&["get", SOUND_SCHEMA, key])
-        .ok()
-        .and_then(|value| parse_gsettings_string(&value))
+    SoundSchemaSnapshot {
+        available: !values.is_empty(),
+        values,
+    }
 }
 
 fn parse_gsettings_bool(value: &str) -> Option<bool> {
@@ -984,9 +1000,10 @@ mod tests {
         audio_endpoint_detail, audio_endpoint_status, audio_mute_success_detail,
         audio_status_detail, clamp_wpctl_timeout_ms, interface_sounds_detail, is_wpctl_numeric_id,
         normalized_audio_volume_percent, parse_gsettings_bool, parse_gsettings_string,
-        parse_wpctl_devices, parse_wpctl_volume, sound_preference_spec,
-        sound_preference_success_detail, title_case_audio_target, AudioDeviceStatus,
-        AudioEndpointStatus, AudioTarget, SoundPreferenceTarget,
+        parse_sound_schema_snapshot, parse_wpctl_devices, parse_wpctl_volume, setting_bool,
+        setting_string, sound_preference_spec, sound_preference_success_detail,
+        title_case_audio_target, AudioDeviceStatus, AudioEndpointStatus, AudioTarget,
+        SoundPreferenceTarget,
     };
 
     #[test]
@@ -1106,6 +1123,31 @@ Audio
             Some("freedesktop".to_string())
         );
         assert_eq!(parse_gsettings_string(""), None);
+    }
+
+    #[test]
+    fn sound_schema_snapshot_parses_single_recursive_gsettings_read() {
+        let snapshot = parse_sound_schema_snapshot(
+            "org.gnome.desktop.sound event-sounds true\n\
+             org.gnome.desktop.sound input-feedback-sounds false\n\
+             org.gnome.desktop.sound allow-volume-above-100-percent true\n\
+             org.gnome.desktop.sound theme-name 'freedesktop'\n",
+        );
+
+        assert!(snapshot.available);
+        assert_eq!(setting_bool(&snapshot, "event-sounds"), Some(true));
+        assert_eq!(
+            setting_bool(&snapshot, "input-feedback-sounds"),
+            Some(false)
+        );
+        assert_eq!(
+            setting_bool(&snapshot, "allow-volume-above-100-percent"),
+            Some(true)
+        );
+        assert_eq!(
+            setting_string(&snapshot, "theme-name").as_deref(),
+            Some("freedesktop")
+        );
     }
 
     #[test]

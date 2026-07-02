@@ -500,6 +500,9 @@ fn validate_gsettings_args(args: &[String]) -> Result<(), String> {
     match args {
         [command] if command == "list-schemas" => Ok(()),
         [command, schema] if command == "list-keys" => validate_list_keys_schema(schema),
+        [command, schema] if command == "list-recursively" => {
+            validate_list_recursively_schema(schema)
+        }
         [command, schema, key] if command == "get" => validate_schema_key(schema, key),
         [command, schema, key] if command == "reset" => {
             let (base_schema, path) = validate_schema_arg(schema)?;
@@ -585,6 +588,11 @@ fn validate_list_keys_schema(schema: &str) -> Result<(), String> {
             "{base_schema} is not an allowlisted session schema."
         )),
     }
+}
+
+fn validate_list_recursively_schema(schema: &str) -> Result<(), String> {
+    validate_list_keys_schema(schema)
+        .map_err(|error| error.replace("list-keys", "list-recursively"))
 }
 
 fn validate_schema_arg_for_list_keys(schema_arg: &str) -> Result<(&str, &str), String> {
@@ -947,6 +955,7 @@ fn failure(detail: impl Into<String>) -> BridgeResponse {
 fn self_test() -> Result<(), String> {
     validate_gsettings_args(&["list-schemas".to_string()])?;
     validate_gsettings_args(&["list-keys".to_string(), INPUT_SOURCES_SCHEMA.to_string()])?;
+    validate_gsettings_args(&["list-recursively".to_string(), SOUND_SCHEMA.to_string()])?;
     validate_gsettings_args(&[
         "set".to_string(),
         INPUT_SOURCES_SCHEMA.to_string(),
@@ -1124,6 +1133,11 @@ mod tests {
             "get".to_string(),
             SOUND_SCHEMA.to_string(),
             "theme-name".to_string(),
+        ])
+        .is_ok());
+        assert!(validate_gsettings_args(&[
+            "list-recursively".to_string(),
+            SOUND_SCHEMA.to_string(),
         ])
         .is_ok());
         assert!(validate_gsettings_args(&[

@@ -6258,6 +6258,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-allowlists-recursive-sound-gsettings-read",
+            "\"list-recursively\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
             "session-bridge-bounds-gsettings-probe",
             "gsettings did not answer before the session bridge preference timeout.",
         ),
@@ -6290,6 +6295,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/audio.rs"),
             "core-audio-sound-preferences-use-session-bridge-gsettings-first",
             "session_bridge::gsettings(args)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-sound-preferences-use-single-recursive-snapshot",
+            "[\"list-recursively\", SOUND_SCHEMA]",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-sound-preferences-parse-recursive-snapshot",
+            "parse_sound_schema_snapshot",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),

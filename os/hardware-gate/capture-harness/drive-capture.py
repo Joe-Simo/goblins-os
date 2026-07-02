@@ -29,6 +29,41 @@ ABS_MAX = 0x7fff
 INSTALL_POST_TIMEOUT = int(os.environ.get("GOS_INSTALL_POST_TIMEOUT", "900"))
 INSTALL_POST_TIMEOUT_EXIT = int(os.environ.get("GOS_INSTALL_POST_TIMEOUT_EXIT", "70"))
 REQUIRED_FRAME_SETTLE_SECONDS = int(os.environ.get("GOS_REQUIRED_FRAME_SETTLE_SECONDS", "24"))
+CAPTURE_TOTAL_TIMEOUT_SECONDS = int(os.environ.get("GOS_CAPTURE_TOTAL_TIMEOUT_SECONDS", "1200"))
+CAPTURE_INACTIVITY_TIMEOUT_SECONDS = int(os.environ.get("GOS_CAPTURE_INACTIVITY_TIMEOUT_SECONDS", "180"))
+EXPECTED_READY_SHOTS = (
+    "01-installer",
+    "02-install-network",
+    "03-login",
+    "04-desktop",
+    "06-onboarding",
+    "07-home",
+    "08-shell-home",
+    "09-shell-dark",
+    "10-settings",
+    "11-settings-models",
+    "12-settings-dark",
+    "13-studio-before",
+    "14-studio-running",
+    "15-studio-app-detail",
+    "16-built-app-open",
+    "17-dark-motion",
+    "18-light-motion",
+    "19-vulkan-vkcube",
+    "20-gamemode-active",
+    "21-gamescope-session",
+    "22-mangohud-overlay",
+    "23-controller-detection",
+    "24-audio-output",
+    "25-install-destination",
+    "26-install-storage-summary",
+    "27-dual-boot-preserve-existing-os",
+    "28-bootloader-efi-summary",
+    "29-preview-pdf-open",
+    "30-preview-image-open",
+    "31-text-shortcuts-candidate-bubble-render",
+    "32-text-shortcuts-live-ibus-runtime-render",
+)
 REQUIRED_PROOFS = (
     "firewall-live-toggle",
     "text-shortcuts-session-enable",
@@ -435,9 +470,28 @@ os.makedirs(OUTDIR, exist_ok=True)
 pos = os.path.getsize(HTTPLOG) if os.path.exists(HTTPLOG) else 0
 publish_orchestrator()
 wait_http_contains_after("in-session orchestrator download", '"GET /orchestrator.sh HTTP/1.1" 200', pos, 180)
-# 5. capture on signals
-seen = set(); frame_hashes = set(); proofs = {}; t = time.time()
-while time.time() - t < 600:
+# 5. capture on signals. The VM can legitimately spend more than ten minutes
+# moving through proof windows, but only while it is still producing fresh proof,
+# input, or ready events. Fail closed on inactivity so a stuck guest cannot spin
+# forever.
+seen = set(); frame_hashes = set(); proofs = {}
+capture_started = time.time()
+last_progress = capture_started
+timeout_reason = "total"
+print(
+    "capture signal timeouts: "
+    f"total={CAPTURE_TOTAL_TIMEOUT_SECONDS}s "
+    f"inactivity={CAPTURE_INACTIVITY_TIMEOUT_SECONDS}s",
+    flush=True,
+)
+while True:
+    now = time.time()
+    if now - capture_started >= CAPTURE_TOTAL_TIMEOUT_SECONDS:
+        timeout_reason = "total"
+        break
+    if now - last_progress >= CAPTURE_INACTIVITY_TIMEOUT_SECONDS:
+        timeout_reason = "inactivity"
+        break
     with open(HTTPLOG, errors="ignore") as fh:
         fh.seek(pos); chunk = fh.read(); pos = fh.tell()
     for line in chunk.splitlines():
@@ -446,10 +500,12 @@ while time.time() - t < 600:
             continue
         if path.startswith("/input/"):
             handle_input(path)
+            last_progress = time.time()
             continue
         if path.startswith("/proof/"):
             write_proof(path, proofs)
             print(f"proof {path.split('?', 1)[0].rsplit('/', 1)[-1]}={proofs[path.split('?', 1)[0].rsplit('/', 1)[-1]].get('status', 'unknown')}", flush=True)
+            last_progress = time.time()
             continue
         if path.startswith("/ready/"):
             name = path.split("/ready/")[1].split("?")[0]
@@ -460,7 +516,14 @@ while time.time() - t < 600:
                 seen.add(name)
                 capture_ready_frame(name, frame_hashes)
                 print(f"captured {name} ({len(seen)})", flush=True)
+                last_progress = time.time()
     time.sleep(0.3)
+missing = [f"{shot}.png" for shot in EXPECTED_READY_SHOTS if shot not in seen]
+print(
+    f"timeout reason={timeout_reason}; captured {len(seen)}; "
+    f"missing={','.join(missing) if missing else 'none'}; "
+    f"seconds_since_progress={int(time.time() - last_progress)}",
+    flush=True,
+)
 require_proofs(proofs)
-print(f"timeout; captured {len(seen)}", flush=True)
 raise SystemExit(1)

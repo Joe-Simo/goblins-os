@@ -5886,6 +5886,31 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "framebuffer stayed duplicate",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-bounds-total-ready-signal-window",
+            "GOS_CAPTURE_TOTAL_TIMEOUT_SECONDS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-bounds-ready-signal-inactivity",
+            "GOS_CAPTURE_INACTIVITY_TIMEOUT_SECONDS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-resets-timeout-on-progress",
+            "last_progress = time.time()",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-reports-missing-ready-shots",
+            "EXPECTED_READY_SHOTS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-reports-time-since-progress",
+            "seconds_since_progress",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-launches-nonunique-proof-windows",
             "GOBLINS_OS_CAPTURE_NON_UNIQUE=1",

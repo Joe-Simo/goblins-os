@@ -6307,6 +6307,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "parse_sound_schema_snapshot",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-status-defers-sound-preference-reads",
+            "Audio endpoint readiness does not wait for desktop sound preference reads.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-status-uses-default-volume-readiness",
+            "audio_endpoint_default_volume_status",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-status-reads-default-output-volume",
+            r#"wpctl(&["get-volume", target.wpctl_id()])"#,
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-vm-attaches-dummy-audio-backend",
             "-audiodev none,id=audio0",

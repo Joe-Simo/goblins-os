@@ -144,9 +144,8 @@ pub async fn set_sound_preference(
 
 fn build_audio_status() -> AudioStatus {
     let wireplumber_available = executable_exists("wpctl") || executable_exists("wireplumber");
-    let (output_devices, input_devices) = audio_device_snapshot();
-    let output = audio_endpoint_status(AudioTarget::Output, output_devices);
-    let input = audio_endpoint_status(AudioTarget::Input, input_devices);
+    let output = audio_endpoint_default_volume_status(AudioTarget::Output);
+    let input = audio_endpoint_default_volume_status(AudioTarget::Input);
     let sound = build_sound_preferences_status();
     let detail = audio_status_detail(wireplumber_available, &output, &input);
 
@@ -197,6 +196,7 @@ impl AudioTarget {
     }
 }
 
+#[cfg(test)]
 fn audio_endpoint_status(
     target: AudioTarget,
     devices: Vec<AudioDeviceStatus>,
@@ -268,6 +268,47 @@ fn audio_device_snapshot() -> (Vec<AudioDeviceStatus>, Vec<AudioDeviceStatus>) {
             parse_wpctl_devices(&stdout, AudioTarget::Input),
         ),
         Err(_) => (Vec::new(), Vec::new()),
+    }
+}
+
+fn audio_endpoint_default_volume_status(target: AudioTarget) -> AudioEndpointStatus {
+    match wpctl(&["get-volume", target.wpctl_id()]) {
+        Ok(stdout) => {
+            audio_endpoint_status_from_default_volume(target, parse_wpctl_volume(&stdout))
+        }
+        Err(WpctlError::Missing) => AudioEndpointStatus {
+            available: false,
+            volume_percent: None,
+            muted: None,
+            default_device_id: None,
+            devices: Vec::new(),
+            detail: "WirePlumber control tooling is not ready in this session.".to_string(),
+        },
+        Err(WpctlError::Failed(detail)) => AudioEndpointStatus {
+            available: false,
+            volume_percent: None,
+            muted: None,
+            default_device_id: None,
+            devices: Vec::new(),
+            detail: wpctl_error_detail(&detail, target),
+        },
+    }
+}
+
+fn audio_endpoint_status_from_default_volume(
+    target: AudioTarget,
+    volume: Option<ParsedVolume>,
+) -> AudioEndpointStatus {
+    let detail = volume
+        .map(|volume| audio_endpoint_detail(target, volume.volume_percent, volume.muted))
+        .unwrap_or_else(|| audio_endpoint_ready_without_volume_detail(target));
+    AudioEndpointStatus {
+        available: true,
+        volume_percent: volume.map(|volume| volume.volume_percent),
+        muted: volume.map(|volume| volume.muted),
+        default_device_id: None,
+        devices: Vec::new(),
+        detail,
     }
 }
 
@@ -501,16 +542,14 @@ fn audio_default_device_outcome(
 }
 
 fn build_sound_preferences_status() -> SoundPreferencesStatus {
-    let (gsettings_available, schema) = sound_schema_snapshot();
-
     SoundPreferencesStatus {
-        gsettings_available,
-        schema_available: schema.available,
-        event_sounds: setting_bool(&schema, "event-sounds"),
-        input_feedback_sounds: setting_bool(&schema, "input-feedback-sounds"),
-        volume_boost: setting_bool(&schema, "allow-volume-above-100-percent"),
-        theme_name: setting_string(&schema, "theme-name"),
-        detail: sound_preferences_detail(gsettings_available, schema.available),
+        gsettings_available: executable_exists("gsettings"),
+        schema_available: false,
+        event_sounds: None,
+        input_feedback_sounds: None,
+        volume_boost: None,
+        theme_name: None,
+        detail: "Audio endpoint readiness does not wait for desktop sound preference reads. Changing system sounds still checks the session bridge live.".to_string(),
     }
 }
 
@@ -613,10 +652,6 @@ impl SoundSchemaSnapshot {
     fn has_key(&self, key: &str) -> bool {
         self.values.contains_key(key)
     }
-
-    fn value(&self, key: &str) -> Option<&str> {
-        self.values.get(key).map(String::as_str)
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -632,14 +667,6 @@ fn sound_schema_snapshot() -> (bool, SoundSchemaSnapshot) {
         Err(GSettingsError::Missing) => (false, SoundSchemaSnapshot::unavailable()),
         Err(GSettingsError::Failed(_)) => (true, SoundSchemaSnapshot::unavailable()),
     }
-}
-
-fn setting_bool(schema: &SoundSchemaSnapshot, key: &str) -> Option<bool> {
-    schema.value(key).and_then(parse_gsettings_bool)
-}
-
-fn setting_string(schema: &SoundSchemaSnapshot, key: &str) -> Option<String> {
-    schema.value(key).and_then(parse_gsettings_string)
 }
 
 fn parse_sound_schema_snapshot(stdout: &str) -> SoundSchemaSnapshot {
@@ -675,26 +702,6 @@ fn parse_sound_schema_snapshot(stdout: &str) -> SoundSchemaSnapshot {
     }
 }
 
-fn parse_gsettings_bool(value: &str) -> Option<bool> {
-    match value.trim() {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
-fn parse_gsettings_string(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let value = trimmed
-        .strip_prefix('\'')
-        .and_then(|value| value.strip_suffix('\''))
-        .unwrap_or(trimmed);
-    Some(value.to_string())
-}
-
 fn sound_preference_spec(target: SoundPreferenceTarget) -> SoundPreferenceSpec {
     match target {
         SoundPreferenceTarget::EventSounds => SoundPreferenceSpec {
@@ -713,16 +720,6 @@ fn sound_preference_spec(target: SoundPreferenceTarget) -> SoundPreferenceSpec {
             label: "Allow volume above 100%",
         },
     }
-}
-
-fn sound_preferences_detail(gsettings_available: bool, schema_available: bool) -> String {
-    if !gsettings_available {
-        return "Desktop preferences are not ready, so sound preferences are read-only in this session.".to_string();
-    }
-    if !schema_available {
-        return "The standard sound preferences are not supported in this session.".to_string();
-    }
-    "Sound preferences are ready for this desktop.".to_string()
 }
 
 fn sound_preference_success_detail(spec: SoundPreferenceSpec, enabled: bool) -> &'static str {
@@ -997,12 +994,12 @@ fn executable_exists(binary: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        audio_endpoint_detail, audio_endpoint_status, audio_mute_success_detail,
-        audio_status_detail, clamp_wpctl_timeout_ms, interface_sounds_detail, is_wpctl_numeric_id,
-        normalized_audio_volume_percent, parse_gsettings_bool, parse_gsettings_string,
-        parse_sound_schema_snapshot, parse_wpctl_devices, parse_wpctl_volume, setting_bool,
-        setting_string, sound_preference_spec, sound_preference_success_detail,
-        title_case_audio_target, AudioDeviceStatus, AudioEndpointStatus, AudioTarget,
+        audio_endpoint_detail, audio_endpoint_status, audio_endpoint_status_from_default_volume,
+        audio_mute_success_detail, audio_status_detail, build_sound_preferences_status,
+        clamp_wpctl_timeout_ms, interface_sounds_detail, is_wpctl_numeric_id,
+        normalized_audio_volume_percent, parse_sound_schema_snapshot, parse_wpctl_devices,
+        parse_wpctl_volume, sound_preference_spec, sound_preference_success_detail,
+        title_case_audio_target, AudioDeviceStatus, AudioEndpointStatus, AudioTarget, ParsedVolume,
         SoundPreferenceTarget,
     };
 
@@ -1084,7 +1081,7 @@ Audio
     }
 
     #[test]
-    fn audio_status_uses_device_snapshot_for_endpoint_readiness() {
+    fn device_snapshot_marks_default_device_for_selection() {
         let devices = vec![AudioDeviceStatus {
             id: "55".to_string(),
             name: "Built-in Audio Analog Stereo".to_string(),
@@ -1114,18 +1111,6 @@ Audio
     }
 
     #[test]
-    fn sound_gsettings_values_parse() {
-        assert_eq!(parse_gsettings_bool("true\n"), Some(true));
-        assert_eq!(parse_gsettings_bool("false"), Some(false));
-        assert_eq!(parse_gsettings_bool("'false'"), None);
-        assert_eq!(
-            parse_gsettings_string("'freedesktop'\n"),
-            Some("freedesktop".to_string())
-        );
-        assert_eq!(parse_gsettings_string(""), None);
-    }
-
-    #[test]
     fn sound_schema_snapshot_parses_single_recursive_gsettings_read() {
         let snapshot = parse_sound_schema_snapshot(
             "org.gnome.desktop.sound event-sounds true\n\
@@ -1135,19 +1120,37 @@ Audio
         );
 
         assert!(snapshot.available);
-        assert_eq!(setting_bool(&snapshot, "event-sounds"), Some(true));
-        assert_eq!(
-            setting_bool(&snapshot, "input-feedback-sounds"),
-            Some(false)
+        assert!(snapshot.has_key("event-sounds"));
+        assert!(snapshot.has_key("input-feedback-sounds"));
+        assert!(snapshot.has_key("allow-volume-above-100-percent"));
+        assert!(snapshot.has_key("theme-name"));
+        assert!(!snapshot.has_key("unknown-key"));
+    }
+
+    #[test]
+    fn audio_status_defers_sound_preference_reads() {
+        let sound = build_sound_preferences_status();
+        assert!(!sound.schema_available);
+        assert_eq!(sound.event_sounds, None);
+        assert!(sound.detail.contains("does not wait"));
+        assert!(sound.detail.contains("checks the session bridge live"));
+    }
+
+    #[test]
+    fn default_volume_read_marks_endpoint_ready_without_device_enumeration() {
+        let endpoint = audio_endpoint_status_from_default_volume(
+            AudioTarget::Output,
+            Some(ParsedVolume {
+                volume_percent: 42,
+                muted: false,
+            }),
         );
-        assert_eq!(
-            setting_bool(&snapshot, "allow-volume-above-100-percent"),
-            Some(true)
-        );
-        assert_eq!(
-            setting_string(&snapshot, "theme-name").as_deref(),
-            Some("freedesktop")
-        );
+        assert!(endpoint.available);
+        assert_eq!(endpoint.volume_percent, Some(42));
+        assert_eq!(endpoint.muted, Some(false));
+        assert_eq!(endpoint.default_device_id, None);
+        assert!(endpoint.devices.is_empty());
+        assert!(endpoint.detail.contains("42%"));
     }
 
     #[test]

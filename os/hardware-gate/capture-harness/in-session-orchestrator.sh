@@ -425,6 +425,8 @@ audio_output_shot(){
   fi
 
   if GOBLINS_OS_CAPTURE_EXPECT_TITLE="Goblins OS Settings - Sound" \
+    GOS_SHOT_WINDOW_WAIT_ATTEMPTS="${GOS_AUDIO_SHOT_WINDOW_WAIT_ATTEMPTS:-8}" \
+    GOS_SHOT_HELPER_TIMEOUT_SECONDS="${GOS_AUDIO_SHOT_HELPER_TIMEOUT_SECONDS:-1}" \
     GOBLINS_OS_SETTINGS_CORE_WAIT_SECS="${GOS_SETTINGS_CAPTURE_CORE_WAIT_SECS:-8}" \
     shot 24-audio-output "$B/goblins-os-settings" --panel=sound; then
     rendered_sound_panel=true

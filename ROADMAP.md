@@ -34,27 +34,33 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-02)
 
-Head `93d8111` is source-verified and CI-green for the fast Rust build: GitHub
-Actions build run `28563230147` passed on x86_64 and aarch64 after adding the
-missing `ripgrep` dependency for hardware close-signoff. Hardware-gate run
-`28563232984` at that head moved past the missing-`rg` failure, reached the
-display-backed VM proof sequence, and then failed the screenshot honesty guard:
-only 30/31 required captured surfaces were distinct because
-`24-audio-output.png` duplicated `13-studio-before.png`. The Sound panel never
-became a distinct mapped surface, so no final signoff row was produced. This is
-now the current release blocker, not a broad feature-code blocker.
+Head `05f0e0a` is source-verified and CI-green for the fast Rust build: GitHub
+Actions build run `28565935159` passed on x86_64 and aarch64 after requiring
+audio-output proof in the hardware gate. Hardware-gate run `28566344916` at that
+head passed bootc image publish, verification installer ISO build, model setup,
+and reached the display-backed VM proof sequence, but then stalled after
+`13-studio-before`: the capture driver timed out after 180 seconds with
+`24-audio-output.png` and `audio-output-proof.json` missing, so close-signoff and
+the commit-back step were skipped. This is now the current release blocker, not
+a broad feature-code blocker.
 
 The current source follow-up is qemu-pending and does **not** mark more features
-shipped. It tightens the audio proof contract instead of accepting a blind
-screenshot: `24-audio-output.png` must show the mapped `Goblins OS Settings -
-Sound` window, `/v1/audio/status` must report a default output path, a bounded
-local test tone must start through `pw-play` or `paplay`, and
-`audio-output-proof.json` must be present in the proof manifest, shipping-status
-guidance, close-signoff checks, and `goblins-os-verify`. Local source gates for
-this follow-up pass with `goblins_os_verify_result total=2829 blocked=0`; final
-shipping status still fails closed until the display-backed VM produces the new
-audio proof, distinct screenshots, `proof-manifest.json`, all required pass
-status proof JSONs, and a close-signoff row committed back to `main`.
+shipped. It keeps the strict audio proof contract from `05f0e0a` while bounding
+the audio-specific title wait to `GOS_AUDIO_SHOT_WINDOW_WAIT_ATTEMPTS=8` and
+`GOS_AUDIO_SHOT_HELPER_TIMEOUT_SECONDS=1` by default. The goal is to make the
+display-backed run emit `24-audio-output.png` and `audio-output-proof.json`
+explicitly, pass or fail, instead of letting the progress watchdog expire before
+the audio proof reports. Local gates for this follow-up pass:
+hardware-gate shell syntax, `cargo fmt --all -- --check`,
+`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`,
+`git diff --check`, and `cargo run -p goblins-os-verify -- --source-root .` →
+**blocked=0 (2831)**. `verify-shipping-status.sh` passes the new Audio output
+proof source checks, but still fails closed because the final release
+artifacts/signoff evidence and older source-gated unshipped rows are not
+complete. Final shipping status still fails closed until the display-backed VM
+produces the audio proof, distinct screenshots, `proof-manifest.json`, all
+required pass status proof JSONs, and a close-signoff row committed back to
+`main`.
 
 Previous hardware-gate run `28561000333` at `906f7e8` passed bootc image
 publish, verification installer ISO build, model prep, install/first boot, and

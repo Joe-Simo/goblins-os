@@ -34,11 +34,52 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-02)
 
-Head `ce412cd` is source-verified and CI-green for the fast Rust build: GitHub
-Actions build run `28605702444` passed on x86_64 and aarch64 after shortening
-the audio status probe. Hardware-gate run `28605704792` at that head passed
-bootc image publish, verification installer ISO build, model setup, and the
-display-backed VM capture produced all 31 required screenshot PNGs plus all
+The current Settings source-gate head is source-verified locally and pushed with
+an `[image]` marker so the build workflow runs the image/render proof on x86_64
+and aarch64. No completed CI/render artifact exists for this head yet; check the
+latest GitHub Actions `build` run before treating the Settings rows as rendered.
+
+Previous head `933d44f` is source-verified and CI-green for the fast Rust build:
+GitHub Actions build run `28609898514` passed on x86_64 and aarch64 after
+attaching a guest audio device to the proof VM. Hardware-gate run `28609903881`
+for that head is still in progress as of this update: the image publish step
+passed, and the workflow is currently building the verification installer ISO
+before the display-backed VM capture and close-signoff steps. No qemu artifact
+at `933d44f` has proved the audio output route or written the final signoff row
+yet.
+
+The pushed audio follow-up remains qemu-pending and does **not** mark more
+features shipped. It keeps the strict audio proof contract from
+`05f0e0a`/`8bbbd02`, keeps the bounded Sound-panel title wait, keeps the
+one-second reused tone buffer, keeps the bounded harness curl/status/waveform
+preflight, keeps the tightened core status route from `ce412cd`, and attaches a
+dummy QEMU audio backend plus an Intel HDA output codec:
+`-audiodev none,id=audio0 -device ich9-intel-hda -device hda-output,audiodev=audio0`.
+Timed-out probes are still killed and reaped, and the route still reports
+"WirePlumber did not answer before the audio status timeout." instead of hanging
+the HTTP route. The QEMU audio device names were checked with local
+`qemu-system-x86_64 -device help` and `qemu-system-aarch64 -device help`.
+The source-gated Batch 5 Settings follow-up adds read-only Settings rows for
+`/v1/security/encryption` and `/v1/snapshots/status`, plus matching
+`goblins-os-verify` and shipping-status source checks. It does **not** enable
+install-time encryption, mint recovery keys, enroll TPM tokens, flip any root
+filesystem, create snapshots, restore files, or claim GTK render proof from this
+host. Local gates for this follow-up pass: focused Settings helper tests,
+`bash -n os/hardware-gate/verify-shipping-status.sh`, `git diff --check`,
+`cargo fmt --all -- --check`, Rust 1.88 GTK container clippy for
+`goblins-os-settings` with `native-desktop`, and
+`cargo run -p goblins-os-verify -- --source-root .` -> **blocked=0 (2853)**.
+Full workspace `cargo clippy --workspace -- -D warnings` and
+`cargo test --workspace` also pass. Final shipping status still fails closed
+until the display-backed VM produces a passing audio proof, distinct
+screenshots, `proof-manifest.json`, all required pass status proof JSONs, and a
+close-signoff row committed back to `main`.
+
+Previous head `ce412cd` is source-verified and CI-green for the fast Rust build:
+GitHub Actions build run `28605702444` passed on x86_64 and aarch64 after
+shortening the audio status probe. Hardware-gate run `28605704792` at that head
+passed bootc image publish, verification installer ISO build, model setup, and
+the display-backed VM capture produced all 31 required screenshot PNGs plus all
 required proof JSONs. Every required proof JSON passed except
 `audio-output-proof.json`: firewall live toggle, Text Shortcuts session/live
 runtime-render, keyboard rebind, input-source roundtrip, multi-display apply,
@@ -48,28 +89,6 @@ Focus arm, app-keyed App Privacy revoke, and Preview open/render were all
 `rendered_sound_panel=false`. The run's QEMU startup diagnostics showed the VM
 still launched without a guest audio device, so Fedora/PipeWire had no virtual
 output sink to expose for the proof.
-
-The current source follow-up is qemu-pending and does **not** mark more features
-shipped. It keeps the strict audio proof contract from `05f0e0a`/`8bbbd02`,
-keeps the bounded Sound-panel title wait, keeps the one-second reused tone
-buffer, keeps the bounded harness curl/status/waveform preflight, keeps the
-tightened core status route from `ce412cd`, and now attaches a dummy QEMU audio
-backend plus an Intel HDA output codec:
-`-audiodev none,id=audio0 -device ich9-intel-hda -device hda-output,audiodev=audio0`.
-Timed-out probes are still killed and reaped, and the route still reports
-"WirePlumber did not answer before the audio status timeout." instead of hanging
-the HTTP route. The QEMU audio device names were checked with local
-`qemu-system-x86_64 -device help` and `qemu-system-aarch64 -device help`.
-Local gates for this follow-up pass: `bash -n` for the hardware-gate scripts,
-`git diff --check`, `cargo fmt --all -- --check`,
-`cargo run -p goblins-os-verify -- --source-root .` -> **blocked=0 (2846)**,
-`cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`.
-`verify-shipping-status.sh` passes both Audio output proof source checks, but
-still fails closed because the final release artifacts/signoff evidence and
-older source-gated unshipped rows are not complete. Final shipping status still
-fails closed until the display-backed VM produces a passing audio proof,
-distinct screenshots, `proof-manifest.json`, all required pass status proof
-JSONs, and a close-signoff row committed back to `main`.
 
 Previous head `95e4647` is source-verified and CI-green for the fast Rust build:
 GitHub Actions build run `28577539839` passed on x86_64 and aarch64 after
@@ -329,7 +348,7 @@ not mark Batch 5 shipped.
 - **Web-verify** — `WebSearch`/`WebFetch` confirm Fedora-44 package names + D-Bus
   shapes before any Containerfile/D-Bus change (did seahorse + the PermissionStore).
 
-**Done so far (25 of 26 features advanced):**
+**Done so far (26 of 26 features advanced; 6 of 26 fully shipped):**
 - **Batch 1 (Bucket A) — complete:** Live Text/OCR (core+handoff+markup Copy Text),
   Color picker. *(IME read+list also shipped; Preview viewer package/default
   app wiring and Fingerprint package/status substrate are source-gated.)*
@@ -349,8 +368,9 @@ not mark Batch 5 shipped.
   `/home` + snapshots now has a read-only core status/restore-fail-closed
   substrate and package gates; FileVault-style encryption now has a read-only
   posture endpoint and package gates. Neither is **shipped**; install-layout
-  changes, encryption at install, recovery-key escrow, timers, Settings UI,
-  real snapshot creation/restore, and boot/reboot proof remain CI/qemu-pending.
+  changes, encryption at install, recovery-key escrow, timers, rendered Settings
+  proof, real snapshot creation/restore, and boot/reboot proof remain
+  CI/qemu-pending.
 
 **Current local gate pass:** Capture-driver progress timeout follow-up, the
 installer-capture fixture-core follow-up, and the hardware-runner `ripgrep`
@@ -2499,6 +2519,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 ### `in-progress` FileVault-style full-disk encryption at install
 - [ ] LUKS2 root bound to **TPM2 for auto-unlock**, with a **mandatory escrowed recovery key** — a first-class "Encrypt this disk" choice in the Goblins installer + a read-only Encryption posture row in Settings ▸ Security. Encrypt by default with transparent TPM boot, but **never** without a captured recovery key, and fall back to a recovery-key prompt whenever the TPM measurement changes (matching FileVault: hardware auto-unlock is convenience over an always-present credential).
 - [x] **Read-only encryption posture substrate source-gated (CI/qemu-pending):** core exposes `GET /v1/security/encryption`, parses `/proc/self/mountinfo` and `/etc/crypttab`, reads `cryptsetup status` and `systemd-cryptenroll --list` only when present, reports Secure Boot and TPM-device posture, and always returns `executes_enrollment=false`. The bootc image now installs and `rpm -q` asserts Fedora 44 `cryptsetup` and `tpm2-tss`, plus `command -v cryptsetup`, `command -v systemd-cryptenroll`, and the TPM2 TSS runtime library. This does **not** enable install-time encryption, mint or escrow recovery keys, enroll TPM tokens, edit crypttab, change installer block setup, or flip any root filesystem.
+- [x] **Settings encryption posture row source-gated (CI/qemu-pending):** Settings ▸ Security now fetches `/v1/security/encryption` and renders read-only Root encryption, Recovery key, TPM auto-unlock, and Enrollment writes rows from the core posture. The copy explicitly keeps recovery-key minting and TPM enrollment installer/hardware-gated and does **not** enable install-time encryption, write crypttab, enroll TPM tokens, mint recovery keys, or claim render proof from this host.
 - **Packages:** `cryptsetup`, `tpm2-tss` (add + `rpm -q` explicitly for the initramfs unlock path; `systemd-cryptenroll` ships with Fedora's `systemd` package). `systemd-cryptsetup` is **not** a Fedora 44 RPM package name, so it is not installed directly. `clevis` NOT needed.
 - **gsettings/dconf:** none — it's a one-time install-engine decision, **not** a runtime toggle. Settings surfaces read-only live status via a new `/v1/security/encryption` (shells `cryptsetup status` + `systemd-cryptenroll --list`).
 - **Files:** `crates/goblins-os-core/src/install_targets.rs` (accept `tpm2-luks`; build `--block-setup tpm2-luks`; tpm-absent→key-only degradation; recovery-key-required gate), `crates/goblins-os-installer/src/main.rs` (the encryption card + the mandatory recovery-key step), `crates/goblins-os-settings/src/main.rs` (Encryption posture row in `build_security`), `crates/goblins-os-verify/src/main.rs` (**REWRITE** the gate strings that currently pin the opposite reject-contract — `install-simple-api-routes-tpm2-luks-to-full-storage` / `install-policy-tpm2-luks-guidance` / `install-simple-api-direct-block-only-contract`), `os/bootc/Containerfile`, `os/iso/verify-install.ks` + `verify-install-dark.ks`, `crates/goblins-os-design/src/lib.rs`.
@@ -2511,6 +2532,7 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 ### `in-progress` btrfs `/home` + local snapshots + restore UI (Time Machine analogue)
 - [ ] Automatic local snapshots + an honest "last snapshot" status surface + a timestamped restore browser that recovers files from a chosen snapshot — never silently mutating the live system, always explicit and reversible (default side-by-side, no in-place rollback from the GUI).
 - [x] **Read-only snapshots status substrate source-gated (CI/qemu-pending):** core exposes `GET /v1/snapshots/status` and fail-closed `POST /v1/snapshots/restore`, parses `/proc/self/mountinfo`, parses `snapper -c home list --machine-readable`, reports `available=false` with "Local snapshots need a btrfs /home" on xfs/missing-tool/config cases, and always returns `executes_restore=false` until a real non-destructive restore path is qemu-proved. The bootc image now installs and `rpm -q` asserts Fedora 44 `btrfs-progs` and `libbtrfsutil`, plus `command -v btrfs`. This does **not** flip the installer root filesystem, create snapper configs/timers, render Settings UI, create snapshots, or restore files.
+- [x] **Settings snapshot status rows source-gated (CI/qemu-pending):** Settings ▸ Storage now renders Local snapshots status/count from `/v1/snapshots/status`, and Settings ▸ Recovery now renders a Local snapshot restore group that remains read-only unless core reports a qemu-proven restore path. This does **not** flip the installer root filesystem, create snapper configs/timers, create snapshots, restore files, or claim GTK render proof from this host.
 - **Packages:** `btrfs-progs`, `libbtrfsutil`, `snapper`, `snapper-tools`, `python3-dnf-plugin-snapper`, `deja-dup` (snapper + deja-dup already installed + `rpm -q`-verified; **`btrfs-progs`/`libbtrfsutil` are the gap** — verify present in fc44 before adding).
 - **gsettings/dconf:** no GNOME schema governs btrfs snapshots — snapper is file-based (`/etc/snapper/configs/home`, `/etc/sysconfig/snapper`) + D-Bus `org.opensuse.Snapper`. `deja-dup` (external-target fallback only) exposes `org.gnome.DejaDup` keys. So local snapshots are config-only at the OS layer, surfaced through a NEW allowlisted core bridge — deliberately no gsettings panel.
 - **Files:** `os/bootc-install/00-goblins-os.toml` (**`[install.filesystem.root] type = "btrfs"`** replacing `xfs`), `os/bootc/Containerfile`, `crates/goblins-os-core/src/snapshots.rs` (NEW — read + restore engine; parse `snapper --machine-readable`; off-state when btrfs/snapper absent; **no fabrication**, mirroring `system_image.rs`), `crates/goblins-os-core/src/main.rs` (`GET /v1/snapshots/status`, `POST /v1/snapshots/restore`), `crates/goblins-os-settings/src/main.rs` (a "Snapshots" group in Recovery/Storage + the restore browser), `crates/goblins-os-verify/src/main.rs`, `os/snapper/home`, `os/systemd-system/goblins-os-snapshot-timeline.timer` + `…-cleanup.timer`.

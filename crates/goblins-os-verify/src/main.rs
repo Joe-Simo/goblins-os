@@ -1008,6 +1008,41 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "settings-desktop-startup-notify",
         "StartupNotify=true",
     ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-settings/src/main.rs"),
+        "settings-fetches-encryption-posture-status",
+        "/v1/security/encryption",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-settings/src/main.rs"),
+        "settings-renders-encryption-posture-row",
+        "append_security_encryption_status",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-settings/src/main.rs"),
+        "settings-keeps-encryption-enrollment-read-only",
+        "Recovery-key minting and TPM enrollment remain installer and hardware-gated",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-settings/src/main.rs"),
+        "settings-fetches-snapshots-status",
+        "/v1/snapshots/status",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-settings/src/main.rs"),
+        "settings-renders-storage-snapshots-row",
+        "append_storage_snapshots_status",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-settings/src/main.rs"),
+        "settings-renders-recovery-snapshots-row",
+        "append_recovery_snapshots_status",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-settings/src/main.rs"),
+        "settings-keeps-snapshot-restore-read-only",
+        "Restore remains CI/qemu-gated",
+    ));
     checks.extend(systemd_hardening_checks(root));
     checks.push(bootc_install_config_check(root));
     checks.extend(goblins_ai_contract_checks(root));

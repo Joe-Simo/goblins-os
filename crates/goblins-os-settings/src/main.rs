@@ -100,6 +100,8 @@ struct SettingsState {
     system_services: Option<SystemServicesStatus>,
     hardware: Option<HardwareStatus>,
     recovery: Option<RecoveryStatus>,
+    encryption: Option<EncryptionStatus>,
+    snapshots: Option<SnapshotsStatus>,
     local_models: Option<LocalModelCatalog>,
     resident: Option<ResidentStatus>,
     ai_actions: Option<AiActionCatalog>,
@@ -225,6 +227,58 @@ struct FingerprintStatus {
     reader_available: Option<bool>,
     enrolled_fingers: Vec<String>,
     detail: String,
+}
+
+/// Read-only root encryption posture from `GET /v1/security/encryption`.
+/// Settings mirrors the live state only; install-time enrollment remains
+/// installer/hardware-gated.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct EncryptionStatus {
+    available: bool,
+    encrypted: bool,
+    cryptsetup_available: bool,
+    systemd_cryptenroll_available: bool,
+    tpm_device_present: bool,
+    tpm2_enrolled: bool,
+    crypttab_tpm2_configured: bool,
+    recovery_key_enrolled: bool,
+    auto_unlock_ready: bool,
+    recovery_key_required: bool,
+    executes_enrollment: bool,
+    detail: String,
+}
+
+/// Read-only local snapshot posture from `GET /v1/snapshots/status`.
+/// Restore remains disabled until the qemu path proves a non-destructive copy.
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct SnapshotsStatus {
+    available: bool,
+    snapper_available: bool,
+    btrfs_tools_available: bool,
+    config_available: bool,
+    snapshots: Vec<SnapshotRecord>,
+    restore_ready: bool,
+    executes_restore: bool,
+    detail: String,
+}
+
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
+#[derive(Clone, Deserialize)]
+struct SnapshotRecord {
+    id: String,
+    date: Option<String>,
+    description: Option<String>,
 }
 
 /// Read-only Goblins keyboard shortcuts from `GET /v1/shortcuts/status`. The Settings
@@ -3316,6 +3370,8 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
             system_services: None,
             hardware: None,
             recovery: None,
+            encryption: None,
+            snapshots: None,
             local_models: None,
             resident: None,
             ai_actions: None,
@@ -3358,6 +3414,8 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
         system_services: get_core_json(&config.core_url, "/v1/system/services").ok(),
         hardware: get_core_json(&config.core_url, "/v1/system/hardware").ok(),
         recovery: get_core_json(&config.core_url, "/v1/recovery/status").ok(),
+        encryption: get_core_json(&config.core_url, "/v1/security/encryption").ok(),
+        snapshots: get_core_json(&config.core_url, "/v1/snapshots/status").ok(),
         local_models: get_core_json(&config.core_url, "/v1/local-models").ok(),
         resident: get_core_json(&config.core_url, "/v1/ai/runtime/status").ok(),
         ai_actions: get_core_json(&config.core_url, "/v1/ai/actions").ok(),
@@ -5757,6 +5815,8 @@ fn build_security(panel: &gtk4::Box, state: &SettingsState) {
     }
     panel.append(&health_summary_group(rows));
 
+    append_security_encryption_status(panel, state);
+
     panel.append(&label("Network protection", &["gos-subsection-title"]));
     match &state.firewall {
         Some(firewall) => append_firewall_control(panel, state, firewall),
@@ -5920,6 +5980,108 @@ fn fingerprint_security_label(status: &FingerprintStatus) -> (String, bool) {
         Some(false) => ("no reader".to_string(), false),
         None => ("packaged".to_string(), false),
     }
+}
+
+fn encryption_root_state(status: &EncryptionStatus) -> (&'static str, bool) {
+    if !status.available || !status.cryptsetup_available {
+        return ("unavailable", false);
+    }
+    if !status.encrypted {
+        return ("not encrypted", false);
+    }
+    if status.recovery_key_required {
+        return ("recovery key missing", false);
+    }
+    ("encrypted", true)
+}
+
+fn encryption_tpm_state(status: &EncryptionStatus) -> (&'static str, bool) {
+    if !status.encrypted {
+        return ("not enrolled", false);
+    }
+    if status.auto_unlock_ready {
+        return ("auto-unlock", true);
+    }
+    if status.tpm2_enrolled {
+        return ("token enrolled", false);
+    }
+    if status.crypttab_tpm2_configured {
+        return ("crypttab only", false);
+    }
+    if status.tpm_device_present {
+        return ("available", false);
+    }
+    ("no tpm", false)
+}
+
+fn encryption_recovery_key_state(status: &EncryptionStatus) -> (&'static str, bool) {
+    if status.recovery_key_enrolled {
+        return ("enrolled", true);
+    }
+    if status.recovery_key_required {
+        return ("missing", false);
+    }
+    if status.encrypted {
+        return ("not reported", false);
+    }
+    ("not enrolled", false)
+}
+
+fn encryption_enrollment_detail(status: &EncryptionStatus) -> &'static str {
+    if status.executes_enrollment {
+        "Core reports enrollment writes enabled; hardware proof must pass before this can ship."
+    } else if status.systemd_cryptenroll_available {
+        "Settings reads encryption posture only. Recovery-key minting and TPM enrollment remain installer and hardware-gated."
+    } else {
+        "Settings reads encryption posture only. systemd-cryptenroll is unavailable in this session."
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_security_encryption_status(panel: &gtk4::Box, state: &SettingsState) {
+    panel.append(&label("Disk encryption", &["gos-subsection-title"]));
+    let Some(status) = &state.encryption else {
+        panel.append(&system_row(
+            "Root encryption",
+            "Waiting for encryption posture from Goblins OS.",
+        ));
+        return;
+    };
+
+    let (root_state, root_ready) = encryption_root_state(status);
+    panel.append(&health_row(
+        "Root encryption",
+        root_state,
+        root_ready,
+        &status.detail,
+    ));
+
+    let (recovery_state, recovery_ready) = encryption_recovery_key_state(status);
+    panel.append(&health_row(
+        "Recovery key",
+        recovery_state,
+        recovery_ready,
+        "Goblins OS must never ship TPM-only encryption without a recovery-key token.",
+    ));
+
+    let (tpm_state, tpm_ready) = encryption_tpm_state(status);
+    panel.append(&health_row(
+        "TPM auto-unlock",
+        tpm_state,
+        tpm_ready,
+        "TPM unlock is treated as convenience over the always-required recovery path.",
+    ));
+
+    panel.append(&health_row(
+        "Enrollment writes",
+        if status.executes_enrollment {
+            "enabled"
+        } else {
+            "read-only"
+        },
+        false,
+        encryption_enrollment_detail(status),
+    ));
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -8368,6 +8530,7 @@ fn build_storage(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_storage_summary(panel, state);
     append_storage_pressure_plan(panel, state);
+    append_storage_snapshots_status(panel, state);
 
     let mut capacity_rows = Vec::new();
     match &state.hardware {
@@ -8406,6 +8569,128 @@ fn build_storage(panel: &gtk4::Box, state: &SettingsState) {
     );
 
     append_native_storage_handoffs(panel);
+}
+
+fn snapshots_state(status: &SnapshotsStatus) -> (&'static str, bool) {
+    if !status.available {
+        return ("off", false);
+    }
+    if status.snapshots.is_empty() {
+        return ("no snapshots", false);
+    }
+    ("on", true)
+}
+
+fn snapshots_count_label(status: &SnapshotsStatus) -> String {
+    match status.snapshots.len() {
+        0 => "0 snapshots".to_string(),
+        1 => "1 snapshot".to_string(),
+        count => format!("{count} snapshots"),
+    }
+}
+
+fn snapshots_count_detail(status: &SnapshotsStatus) -> String {
+    if !status.available {
+        let mut missing = Vec::new();
+        if !status.btrfs_tools_available {
+            missing.push("btrfs tools");
+        }
+        if !status.snapper_available {
+            missing.push("Snapper");
+        }
+        if !status.config_available {
+            missing.push("home snapshot config");
+        }
+        if !missing.is_empty() {
+            return format!("{} Missing: {}.", status.detail, missing.join(", "));
+        }
+        return status.detail.clone();
+    }
+    let latest = status
+        .snapshots
+        .first()
+        .map(|snapshot| {
+            let mut parts = Vec::new();
+            if !snapshot.id.trim().is_empty() {
+                parts.push(format!("#{}", snapshot.id.trim()));
+            }
+            if let Some(date) = snapshot
+                .date
+                .as_deref()
+                .filter(|date| !date.trim().is_empty())
+            {
+                parts.push(date.trim().to_string());
+            }
+            if let Some(description) = snapshot
+                .description
+                .as_deref()
+                .filter(|description| !description.trim().is_empty())
+            {
+                parts.push(description.trim().to_string());
+            }
+            if parts.is_empty() {
+                String::new()
+            } else {
+                format!(" Latest reported snapshot: {}.", parts.join(", "))
+            }
+        })
+        .filter(|latest| !latest.is_empty())
+        .unwrap_or_default();
+    format!("{}{}", status.detail, latest)
+}
+
+fn snapshots_restore_state(status: &SnapshotsStatus) -> (&'static str, bool) {
+    if status.restore_ready && status.executes_restore {
+        return ("ready", true);
+    }
+    if status.available {
+        return ("read-only", false);
+    }
+    ("unavailable", false)
+}
+
+fn snapshots_restore_detail(status: &SnapshotsStatus) -> String {
+    if status.restore_ready && status.executes_restore {
+        "Restore is enabled for the reported local snapshots.".to_string()
+    } else if status.available {
+        "Restore remains CI/qemu-gated; Settings does not mutate files from this substrate."
+            .to_string()
+    } else {
+        format!(
+            "{} Restore is unavailable until btrfs home storage and Snapper are ready.",
+            status.detail
+        )
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_storage_snapshots_status(panel: &gtk4::Box, state: &SettingsState) {
+    let Some(status) = &state.snapshots else {
+        append_preference_group(
+            panel,
+            "Local snapshots",
+            vec![system_row(
+                "Snapshot status",
+                "Waiting for local snapshot status from Goblins OS.",
+            )],
+        );
+        return;
+    };
+
+    let (state_label, ready) = snapshots_state(status);
+    append_preference_group(
+        panel,
+        "Local snapshots",
+        vec![
+            health_row("Snapshot status", state_label, ready, &status.detail),
+            health_row(
+                "Snapshot count",
+                &snapshots_count_label(status),
+                status.available && !status.snapshots.is_empty(),
+                &snapshots_count_detail(status),
+            ),
+        ],
+    );
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -11962,6 +12247,7 @@ fn build_recovery(panel: &gtk4::Box, state: &SettingsState) {
         "System image, service, private-state, and protected-resource readiness for recovery flows.",
     );
     append_recovery_summary(panel, state);
+    append_recovery_snapshots_status(panel, state);
 
     if let Some(status) = &state.system_services {
         panel.append(&label("Service health", &["gos-subsection-title"]));
@@ -12027,6 +12313,41 @@ fn build_recovery(panel: &gtk4::Box, state: &SettingsState) {
         "Repair, rollback, and reset",
         &recovery_actions_detail(state.recovery.as_ref()),
     ));
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_recovery_snapshots_status(panel: &gtk4::Box, state: &SettingsState) {
+    let Some(status) = &state.snapshots else {
+        append_preference_group(
+            panel,
+            "Local snapshot restore",
+            vec![system_row(
+                "Restore browser",
+                "Waiting for local snapshot status from Goblins OS.",
+            )],
+        );
+        return;
+    };
+
+    let (restore_state, restore_ready) = snapshots_restore_state(status);
+    append_preference_group(
+        panel,
+        "Local snapshot restore",
+        vec![
+            health_row(
+                "Restore browser",
+                restore_state,
+                restore_ready,
+                &snapshots_restore_detail(status),
+            ),
+            health_row(
+                "Snapshot source",
+                &snapshots_count_label(status),
+                status.available && !status.snapshots.is_empty(),
+                &snapshots_count_detail(status),
+            ),
+        ],
+    );
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -23759,6 +24080,53 @@ mod tests {
     }
 
     #[test]
+    fn encryption_helpers_require_recovery_key_before_ready_state() {
+        let mut status = super::EncryptionStatus {
+            available: true,
+            encrypted: true,
+            cryptsetup_available: true,
+            systemd_cryptenroll_available: true,
+            tpm_device_present: true,
+            tpm2_enrolled: true,
+            crypttab_tpm2_configured: true,
+            recovery_key_enrolled: false,
+            auto_unlock_ready: true,
+            recovery_key_required: true,
+            executes_enrollment: false,
+            detail: "Root is reported as LUKS-encrypted.".to_string(),
+        };
+
+        assert_eq!(
+            super::encryption_root_state(&status),
+            ("recovery key missing", false)
+        );
+        assert_eq!(super::encryption_tpm_state(&status), ("auto-unlock", true));
+        assert_eq!(
+            super::encryption_recovery_key_state(&status),
+            ("missing", false)
+        );
+        assert!(super::encryption_enrollment_detail(&status).contains("read"));
+
+        status.recovery_key_enrolled = true;
+        status.recovery_key_required = false;
+        assert_eq!(super::encryption_root_state(&status), ("encrypted", true));
+        assert_eq!(
+            super::encryption_recovery_key_state(&status),
+            ("enrolled", true)
+        );
+
+        status.encrypted = false;
+        assert_eq!(
+            super::encryption_root_state(&status),
+            ("not encrypted", false)
+        );
+        assert_eq!(
+            super::encryption_tpm_state(&status),
+            ("not enrolled", false)
+        );
+    }
+
+    #[test]
     fn keychain_collection_copy_is_metadata_only() {
         let unavailable = super::KeychainCollectionsStatus {
             available: false,
@@ -24879,6 +25247,54 @@ mod tests {
         .contains("included in the full Goblins OS image"));
         assert!(super::native_app_handoff_accessibility("Disks", false)
             .contains("not included in this build"));
+    }
+
+    #[test]
+    fn snapshots_helpers_keep_restore_read_only_until_core_proves_it() {
+        let unavailable = super::SnapshotsStatus {
+            available: false,
+            snapper_available: false,
+            btrfs_tools_available: false,
+            config_available: false,
+            snapshots: Vec::new(),
+            restore_ready: false,
+            executes_restore: false,
+            detail: "Local snapshots need a btrfs /home.".to_string(),
+        };
+        assert_eq!(super::snapshots_state(&unavailable), ("off", false));
+        assert_eq!(
+            super::snapshots_restore_state(&unavailable),
+            ("unavailable", false)
+        );
+        assert!(super::snapshots_restore_detail(&unavailable).contains("unavailable"));
+
+        let available = super::SnapshotsStatus {
+            available: true,
+            snapper_available: true,
+            btrfs_tools_available: true,
+            config_available: true,
+            snapshots: vec![super::SnapshotRecord {
+                id: "42".to_string(),
+                date: Some("2026-07-02 12:00".to_string()),
+                description: Some("timeline".to_string()),
+            }],
+            restore_ready: false,
+            executes_restore: false,
+            detail: "Snapper reported 1 local home snapshot.".to_string(),
+        };
+        assert_eq!(super::snapshots_state(&available), ("on", true));
+        assert_eq!(super::snapshots_count_label(&available), "1 snapshot");
+        assert!(super::snapshots_count_detail(&available).contains("2026-07-02"));
+        assert_eq!(
+            super::snapshots_restore_state(&available),
+            ("read-only", false)
+        );
+        assert!(super::snapshots_restore_detail(&available).contains("CI/qemu-gated"));
+
+        let mut empty = available.clone();
+        empty.snapshots.clear();
+        assert_eq!(super::snapshots_state(&empty), ("no snapshots", false));
+        assert_eq!(super::snapshots_count_label(&empty), "0 snapshots");
     }
 
     #[test]

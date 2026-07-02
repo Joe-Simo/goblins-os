@@ -379,11 +379,48 @@ with wave.open(path, "wb") as out:
         out.writeframesraw(one_second)
 PY
 }
+generate_audio_probe_wav_bounded(){
+  local wav="$1"
+  local seconds="${2:-10}"
+  local waited=0
+  local generator_pid
+
+  rm -f /tmp/gate-audio-output-generate.log "$wav"
+  generate_audio_probe_wav "$wav" >/tmp/gate-audio-output-generate.log 2>&1 &
+  generator_pid=$!
+  while kill -0 "$generator_pid" 2>/dev/null; do
+    if [ "$waited" -ge "$seconds" ]; then
+      echo "GOBLINS_HWGATE_AUDIO_WAV_GENERATION_TIMED_OUT seconds=$seconds"
+      kill "$generator_pid" 2>/dev/null || true
+      sleep 0.2
+      kill -9 "$generator_pid" 2>/dev/null || true
+      wait "$generator_pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  if ! wait "$generator_pid" 2>/dev/null; then
+    echo "GOBLINS_HWGATE_AUDIO_WAV_GENERATION_FAILED"
+    return 1
+  fi
+  [ -s "$wav" ]
+}
+audio_status_http_code(){
+  local status_file="$1"
+  : >"$status_file"
+  curl \
+    --connect-timeout "${GOS_AUDIO_CURL_CONNECT_TIMEOUT_SECONDS:-1}" \
+    --max-time "${GOS_AUDIO_CURL_MAX_TIME_SECONDS:-2}" \
+    -s -o "$status_file" -w '%{http_code}' \
+    "$LIVE_URL/v1/audio/status" || true
+}
 audio_output_status_ready(){
   local status_file="$1"
   local status_code output_available wireplumber_available
 
-  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/audio/status" || true)
+  status_code=$(audio_status_http_code "$status_file")
   output_available=$(json_field "$status_file" output.available)
   wireplumber_available=$(json_field "$status_file" wireplumber_available)
 
@@ -395,8 +432,11 @@ audio_output_shot(){
   local player="" player_pid="" audio_ready=false player_started=false
   local status_code output_available output_volume output_muted wireplumber_available
   local rendered_sound_panel=false
+  local wav_generated=false failure_stage=audio-output-preflight
+  local status_attempts="${GOS_AUDIO_STATUS_ATTEMPTS:-8}"
 
-  for _ in $(seq 1 40); do
+  echo "GOBLINS_HWGATE_AUDIO_PROOF_START"
+  for _ in $(seq 1 "$status_attempts"); do
     if audio_output_status_ready "$status_file"; then
       audio_ready=true
       break
@@ -404,11 +444,15 @@ audio_output_shot(){
     sleep 0.5
   done
 
-  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/audio/status" || true)
+  status_code=$(audio_status_http_code "$status_file")
   output_available=$(json_field "$status_file" output.available)
   output_volume=$(json_field "$status_file" output.volume_percent)
   output_muted=$(json_field "$status_file" output.muted)
   wireplumber_available=$(json_field "$status_file" wireplumber_available)
+  if [ "$audio_ready" != "true" ]; then
+    echo "GOBLINS_HWGATE_AUDIO_STATUS_ATTEMPTS_EXHAUSTED attempts=$status_attempts status_http=${status_code:-000}"
+    failure_stage=audio-status
+  fi
 
   if command -v pw-play >/dev/null 2>&1; then
     player="pw-play"
@@ -417,13 +461,21 @@ audio_output_shot(){
   fi
 
   if [ -n "$player" ]; then
-    generate_audio_probe_wav "$wav"
-    "$player" "$wav" >/tmp/gate-audio-output-play.log 2>&1 &
-    player_pid=$!
-    sleep 1
-    if kill -0 "$player_pid" 2>/dev/null; then
-      player_started=true
+    if generate_audio_probe_wav_bounded "$wav" "${GOS_AUDIO_WAV_TIMEOUT_SECONDS:-10}"; then
+      wav_generated=true
+      "$player" "$wav" >/tmp/gate-audio-output-play.log 2>&1 &
+      player_pid=$!
+      sleep 1
+      if kill -0 "$player_pid" 2>/dev/null; then
+        player_started=true
+      else
+        failure_stage=audio-player-start
+      fi
+    else
+      failure_stage=audio-wav-generation
     fi
+  else
+    failure_stage=audio-player-missing
   fi
 
   if GOBLINS_OS_CAPTURE_EXPECT_TITLE="Goblins OS Settings - Sound" \
@@ -437,7 +489,10 @@ audio_output_shot(){
   if [ "$audio_ready" = "true" ] && [ "$player_started" = "true" ] && [ "$rendered_sound_panel" = "true" ]; then
     proof_audio_output "status=pass&status_route=/v1/audio/status&status_http=200&wireplumber_available=true&output_available=true&output_volume=${output_volume:-unknown}&output_muted=${output_muted:-unknown}&player=$player&test_tone_seconds=45&screenshot=24-audio-output.png&rendered_sound_panel=true"
   else
-    proof_audio_output "status=fail&stage=audio-output-preflight&status_route=/v1/audio/status&status_http=${status_code:-000}&wireplumber_available=${wireplumber_available:-missing}&output_available=${output_available:-missing}&output_volume=${output_volume:-missing}&output_muted=${output_muted:-missing}&player=${player:-missing}&player_started=$player_started&screenshot=24-audio-output.png&rendered_sound_panel=$rendered_sound_panel&play_log_tail=$(file_tail_query_value /tmp/gate-audio-output-play.log)"
+    if [ "$rendered_sound_panel" != "true" ] && [ "$failure_stage" = "audio-output-preflight" ]; then
+      failure_stage=audio-sound-panel-render
+    fi
+    proof_audio_output "status=fail&stage=$failure_stage&status_route=/v1/audio/status&status_http=${status_code:-000}&wireplumber_available=${wireplumber_available:-missing}&output_available=${output_available:-missing}&output_volume=${output_volume:-missing}&output_muted=${output_muted:-missing}&player=${player:-missing}&wav_generated=$wav_generated&player_started=$player_started&screenshot=24-audio-output.png&rendered_sound_panel=$rendered_sound_panel&generate_log_tail=$(file_tail_query_value /tmp/gate-audio-output-generate.log)&play_log_tail=$(file_tail_query_value /tmp/gate-audio-output-play.log)"
   fi
 
   if [ -n "$player_pid" ]; then

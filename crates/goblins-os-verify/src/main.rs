@@ -6178,6 +6178,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-status-curl-is-bounded",
+            "GOS_AUDIO_CURL_MAX_TIME_SECONDS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-status-attempts-are-bounded",
+            "GOS_AUDIO_STATUS_ATTEMPTS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-wav-generation-is-bounded",
+            "GOBLINS_HWGATE_AUDIO_WAV_GENERATION_TIMED_OUT",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-proof-records-wav-generation-state",
+            "wav_generated=$wav_generated",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-app-privacy-seeds-permission-store",
             "PermissionStore.SetPermission",
         ),

@@ -48,6 +48,10 @@ pub struct AudioDeviceStatus {
     id: String,
     name: String,
     active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    volume_percent: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    muted: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -200,49 +204,51 @@ fn audio_endpoint_status(
         .iter()
         .find(|device| device.active)
         .map(|device| device.id.clone());
+    let default_device = default_device_id
+        .as_deref()
+        .and_then(|device_id| devices.iter().find(|device| device.id == device_id))
+        .or_else(|| devices.iter().find(|device| device.active));
 
-    match wpctl(&["get-volume", target.wpctl_id()]) {
-        Ok(stdout) => match parse_wpctl_volume(&stdout) {
-            Some(parsed) => AudioEndpointStatus {
-                available: true,
-                volume_percent: Some(parsed.volume_percent),
-                muted: Some(parsed.muted),
-                default_device_id,
-                devices,
-                detail: audio_endpoint_detail(target, parsed.volume_percent, parsed.muted),
-            },
-            None => AudioEndpointStatus {
-                available: false,
-                volume_percent: None,
-                muted: None,
-                default_device_id,
-                devices,
-                detail: format!(
-                    "WirePlumber did not report a readable {} volume.",
-                    target.label()
-                ),
-            },
-        },
-        Err(WpctlError::Missing) => AudioEndpointStatus {
-            available: false,
+    if let Some(device) = default_device {
+        let detail = match (device.volume_percent, device.muted) {
+            (Some(volume_percent), Some(muted)) => {
+                audio_endpoint_detail(target, volume_percent, muted)
+            }
+            _ => audio_endpoint_ready_without_volume_detail(target),
+        };
+
+        return AudioEndpointStatus {
+            available: true,
+            volume_percent: device.volume_percent,
+            muted: device.muted,
+            default_device_id,
+            devices,
+            detail,
+        };
+    }
+
+    if !devices.is_empty() {
+        return AudioEndpointStatus {
+            available: true,
             volume_percent: None,
             muted: None,
             default_device_id,
             devices,
-            detail: "WirePlumber control tooling is not ready in this build.".to_string(),
-        },
-        Err(WpctlError::Failed(detail)) => AudioEndpointStatus {
-            available: false,
-            volume_percent: None,
-            muted: None,
-            default_device_id,
-            devices,
-            detail: if detail.is_empty() {
-                format!("WirePlumber did not report the {}.", target.label())
-            } else {
-                detail
-            },
-        },
+            detail: format!(
+                "WirePlumber reported {} devices, but no default {} was marked.",
+                target.label(),
+                target.request_name()
+            ),
+        };
+    }
+
+    AudioEndpointStatus {
+        available: false,
+        volume_percent: None,
+        muted: None,
+        default_device_id,
+        devices,
+        detail: format!("WirePlumber did not report the {}.", target.label()),
     }
 }
 
@@ -296,6 +302,13 @@ fn audio_endpoint_detail(target: AudioTarget, volume_percent: u8, muted: bool) -
         title_case_audio_target(target),
         volume_percent,
         muted
+    )
+}
+
+fn audio_endpoint_ready_without_volume_detail(target: AudioTarget) -> String {
+    format!(
+        "{} is ready. Volume read-back is not required for endpoint readiness.",
+        title_case_audio_target(target)
     )
 }
 
@@ -795,10 +808,15 @@ fn parse_wpctl_device_line(line: &str) -> Option<AudioDeviceStatus> {
     if name.is_empty() {
         return None;
     }
+    let parsed_volume = rest
+        .split_once(" [")
+        .and_then(|(_, suffix)| parse_wpctl_volume(suffix));
     Some(AudioDeviceStatus {
         id: id.to_string(),
         name,
         active,
+        volume_percent: parsed_volume.map(|volume| volume.volume_percent),
+        muted: parsed_volume.map(|volume| volume.muted),
     })
 }
 
@@ -963,12 +981,12 @@ fn executable_exists(binary: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        audio_endpoint_detail, audio_mute_success_detail, audio_status_detail,
-        clamp_wpctl_timeout_ms, interface_sounds_detail, is_wpctl_numeric_id,
+        audio_endpoint_detail, audio_endpoint_status, audio_mute_success_detail,
+        audio_status_detail, clamp_wpctl_timeout_ms, interface_sounds_detail, is_wpctl_numeric_id,
         normalized_audio_volume_percent, parse_gsettings_bool, parse_gsettings_string,
         parse_wpctl_devices, parse_wpctl_volume, sound_preference_spec,
-        sound_preference_success_detail, title_case_audio_target, AudioEndpointStatus, AudioTarget,
-        SoundPreferenceTarget,
+        sound_preference_success_detail, title_case_audio_target, AudioDeviceStatus,
+        AudioEndpointStatus, AudioTarget, SoundPreferenceTarget,
     };
 
     #[test]
@@ -1034,14 +1052,37 @@ Audio
         assert_eq!(sinks[0].id, "55");
         assert_eq!(sinks[0].name, "Built-in Audio Analog Stereo");
         assert!(sinks[0].active);
+        assert_eq!(sinks[0].volume_percent, Some(62));
+        assert_eq!(sinks[0].muted, Some(false));
         assert_eq!(sinks[1].id, "56");
         assert!(!sinks[1].active);
 
         let sources = parse_wpctl_devices(stdout, AudioTarget::Input);
         assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].volume_percent, Some(52));
+        assert_eq!(sources[0].muted, Some(true));
         assert_eq!(sources[1].name, "USB Microphone");
         assert!(is_wpctl_numeric_id("58"));
         assert!(!is_wpctl_numeric_id("../58"));
+    }
+
+    #[test]
+    fn audio_status_uses_device_snapshot_for_endpoint_readiness() {
+        let devices = vec![AudioDeviceStatus {
+            id: "55".to_string(),
+            name: "Built-in Audio Analog Stereo".to_string(),
+            active: true,
+            volume_percent: None,
+            muted: None,
+        }];
+
+        let status = audio_endpoint_status(AudioTarget::Output, devices);
+        assert!(status.available);
+        assert_eq!(status.default_device_id.as_deref(), Some("55"));
+        assert_eq!(status.volume_percent, None);
+        assert!(status
+            .detail
+            .contains("Volume read-back is not required for endpoint readiness."));
     }
 
     #[test]

@@ -4,12 +4,14 @@ use std::{
     net::Shutdown,
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_SOCKET: &str = "/run/goblins-os-session/session-bridge.sock";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const BRIDGE_IO_TIMEOUT: Duration = Duration::from_millis(2_000);
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SessionBridgeResult {
@@ -132,6 +134,16 @@ fn call_bridge(request: &BridgeRequest<'_>) -> SessionBridgeResult {
             ));
         }
     };
+    if let Err(error) = stream.set_read_timeout(Some(BRIDGE_IO_TIMEOUT)) {
+        return SessionBridgeResult::Failed(format!(
+            "Goblins OS session bridge read timeout could not be set: {error}"
+        ));
+    }
+    if let Err(error) = stream.set_write_timeout(Some(BRIDGE_IO_TIMEOUT)) {
+        return SessionBridgeResult::Failed(format!(
+            "Goblins OS session bridge write timeout could not be set: {error}"
+        ));
+    }
     let request = match serde_json::to_vec(request) {
         Ok(request) => request,
         Err(_) => {
@@ -153,7 +165,7 @@ fn call_bridge(request: &BridgeRequest<'_>) -> SessionBridgeResult {
         .read_to_string(&mut response)
     {
         return SessionBridgeResult::Failed(format!(
-            "Goblins OS session bridge response failed: {error}"
+            "Goblins OS session bridge did not answer before the core bridge timeout: {error}"
         ));
     }
     match serde_json::from_str::<BridgeResponse>(&response) {

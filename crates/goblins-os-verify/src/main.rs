@@ -6267,9 +6267,24 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "pub(crate) fn wpctl",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-client-bounds-socket-io",
+            "BRIDGE_IO_TIMEOUT",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/audio.rs"),
             "core-audio-status-uses-session-bridge-wpctl-first",
             "session_bridge::wpctl(args)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-status-uses-device-snapshot-for-endpoint-readiness",
+            "audio_endpoint_ready_without_volume_detail",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-status-parses-inline-wpctl-volume",
+            "parse_wpctl_volume(suffix)",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/audio.rs"),

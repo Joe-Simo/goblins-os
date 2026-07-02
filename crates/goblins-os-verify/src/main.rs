@@ -6197,6 +6197,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "wav_generated=$wav_generated",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-wpctl-timeout-is-configurable",
+            "GOBLINS_OS_WPCTL_TIMEOUT_MS",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-wpctl-timeout-is-clamped",
+            "clamp_wpctl_timeout_ms",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-wpctl-probe-is-bounded",
+            "try_wait()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-wpctl-timeout-copy-is-truthful",
+            "WirePlumber did not answer before the audio status timeout.",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-app-privacy-seeds-permission-store",
             "PermissionStore.SetPermission",

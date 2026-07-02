@@ -4,7 +4,11 @@
 //! Device selection is constrained to sink/source IDs reported by WirePlumber,
 //! so Settings can choose defaults without accepting arbitrary object names.
 
-use std::process::Command;
+use std::{
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
@@ -12,6 +16,9 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_SINK: &str = "@DEFAULT_AUDIO_SINK@";
 const DEFAULT_SOURCE: &str = "@DEFAULT_AUDIO_SOURCE@";
 const SOUND_SCHEMA: &str = "org.gnome.desktop.sound";
+const WPCTL_TIMEOUT_MS_DEFAULT: u64 = 1_500;
+const WPCTL_TIMEOUT_MS_MIN: u64 = 250;
+const WPCTL_TIMEOUT_MS_MAX: u64 = 5_000;
 
 #[derive(Serialize)]
 pub struct AudioStatus {
@@ -792,8 +799,14 @@ enum GSettingsError {
     Failed(String),
 }
 
+enum BoundedCommandError {
+    Missing,
+    TimedOut,
+    Failed,
+}
+
 fn wpctl(args: &[&str]) -> Result<String, WpctlError> {
-    match Command::new("wpctl").args(args).output() {
+    match bounded_command_output("wpctl", args, wpctl_timeout_duration()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
@@ -806,10 +819,71 @@ fn wpctl(args: &[&str]) -> Result<String, WpctlError> {
                 stderr
             }))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(WpctlError::Missing),
-        Err(_) => Err(WpctlError::Failed(
+        Err(BoundedCommandError::Missing) => Err(WpctlError::Missing),
+        Err(BoundedCommandError::TimedOut) => Err(WpctlError::Failed(
+            "WirePlumber did not answer before the audio status timeout.".to_string(),
+        )),
+        Err(BoundedCommandError::Failed) => Err(WpctlError::Failed(
             "Audio routing controls are not ready in this session.".to_string(),
         )),
+    }
+}
+
+fn wpctl_timeout_duration() -> Duration {
+    Duration::from_millis(clamp_wpctl_timeout_ms(
+        std::env::var("GOBLINS_OS_WPCTL_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok()),
+    ))
+}
+
+fn clamp_wpctl_timeout_ms(parsed: Option<u64>) -> u64 {
+    parsed
+        .unwrap_or(WPCTL_TIMEOUT_MS_DEFAULT)
+        .clamp(WPCTL_TIMEOUT_MS_MIN, WPCTL_TIMEOUT_MS_MAX)
+}
+
+fn bounded_command_output(
+    binary: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output, BoundedCommandError> {
+    let mut child = Command::new(binary)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                BoundedCommandError::Missing
+            } else {
+                BoundedCommandError::Failed
+            }
+        })?;
+    let started = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|_| BoundedCommandError::Failed)
+            }
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait_with_output();
+                    return Err(BoundedCommandError::TimedOut);
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait_with_output();
+                return Err(BoundedCommandError::Failed);
+            }
+        }
     }
 }
 
@@ -852,10 +926,11 @@ fn executable_exists(binary: &str) -> bool {
 mod tests {
     use super::{
         audio_endpoint_detail, audio_mute_success_detail, audio_status_detail,
-        interface_sounds_detail, is_wpctl_numeric_id, normalized_audio_volume_percent,
-        parse_gsettings_bool, parse_gsettings_string, parse_wpctl_devices, parse_wpctl_volume,
-        sound_preference_spec, sound_preference_success_detail, title_case_audio_target,
-        AudioEndpointStatus, AudioTarget, SoundPreferenceTarget,
+        clamp_wpctl_timeout_ms, interface_sounds_detail, is_wpctl_numeric_id,
+        normalized_audio_volume_percent, parse_gsettings_bool, parse_gsettings_string,
+        parse_wpctl_devices, parse_wpctl_volume, sound_preference_spec,
+        sound_preference_success_detail, title_case_audio_target, AudioEndpointStatus, AudioTarget,
+        SoundPreferenceTarget,
     };
 
     #[test]
@@ -929,6 +1004,17 @@ Audio
         assert_eq!(sources[1].name, "USB Microphone");
         assert!(is_wpctl_numeric_id("58"));
         assert!(!is_wpctl_numeric_id("../58"));
+    }
+
+    #[test]
+    fn wpctl_timeout_defaults_and_clamps() {
+        assert_eq!(clamp_wpctl_timeout_ms(None), 1_500);
+        assert_eq!(clamp_wpctl_timeout_ms(Some(1)), 250);
+        assert_eq!(clamp_wpctl_timeout_ms(Some(249)), 250);
+        assert_eq!(clamp_wpctl_timeout_ms(Some(250)), 250);
+        assert_eq!(clamp_wpctl_timeout_ms(Some(1_500)), 1_500);
+        assert_eq!(clamp_wpctl_timeout_ms(Some(5_000)), 5_000);
+        assert_eq!(clamp_wpctl_timeout_ms(Some(10_000)), 5_000);
     }
 
     #[test]

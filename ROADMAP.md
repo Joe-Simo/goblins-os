@@ -34,38 +34,52 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-02)
 
-Head `95e4647` is source-verified and CI-green for the fast Rust build: GitHub
-Actions build run `28577539839` passed on x86_64 and aarch64 after bounding core
-`wpctl` calls. Hardware-gate run `28577563106` at that head passed bootc image
-publish, verification installer ISO build, model setup, and reached the
-display-backed VM proof sequence. It captured `24-audio-output.png`, generated
-the proof WAV, and started `pw-play`, but still failed signoff with
-`audio-output=fail`: the proof reported `stage=audio-status`,
+Head `ce412cd` is source-verified and CI-green for the fast Rust build: GitHub
+Actions build run `28605702444` passed on x86_64 and aarch64 after shortening
+the audio status probe. Hardware-gate run `28605704792` at that head passed
+bootc image publish, verification installer ISO build, model setup, and the
+display-backed VM capture produced all 31 required screenshot PNGs plus all
+required proof JSONs. Every required proof JSON passed except
+`audio-output-proof.json`: firewall live toggle, Text Shortcuts session/live
+runtime-render, keyboard rebind, input-source roundtrip, multi-display apply,
+Focus arm, app-keyed App Privacy revoke, and Preview open/render were all
+`status=pass`. Audio still failed with `stage=audio-status`,
 `status_http=000`, `wav_generated=true`, `player_started=true`, and
-`rendered_sound_panel=false`. This proves the route is still exceeding the
-harness curl budget, not that waveform generation or player startup is the
-blocker.
+`rendered_sound_panel=false`. The run's QEMU startup diagnostics showed the VM
+still launched without a guest audio device, so Fedora/PipeWire had no virtual
+output sink to expose for the proof.
 
 The current source follow-up is qemu-pending and does **not** mark more features
 shipped. It keeps the strict audio proof contract from `05f0e0a`/`8bbbd02`,
 keeps the bounded Sound-panel title wait, keeps the one-second reused tone
-buffer, keeps the bounded harness curl/status/waveform preflight, and tightens
-the core status route: `GOBLINS_OS_WPCTL_TIMEOUT_MS` now defaults to 500ms with a
-100-5000ms clamp, `/v1/audio/status` uses one `wpctl status` device snapshot for
-both endpoints, and the harness status curl default has 4 seconds of headroom.
+buffer, keeps the bounded harness curl/status/waveform preflight, keeps the
+tightened core status route from `ce412cd`, and now attaches a dummy QEMU audio
+backend plus an Intel HDA output codec:
+`-audiodev none,id=audio0 -device ich9-intel-hda -device hda-output,audiodev=audio0`.
 Timed-out probes are still killed and reaped, and the route still reports
 "WirePlumber did not answer before the audio status timeout." instead of hanging
-the HTTP route. Local gates for this follow-up pass: hardware-gate shell syntax,
+the HTTP route. The QEMU audio device names were checked with local
+`qemu-system-x86_64 -device help` and `qemu-system-aarch64 -device help`.
+Local gates for this follow-up pass: `bash -n` for the hardware-gate scripts,
 `git diff --check`, `cargo fmt --all -- --check`,
-`cargo test -p goblins-os-core audio::`, `cargo clippy --workspace -- -D warnings`,
-`cargo test --workspace`, and
-`cargo run -p goblins-os-verify -- --source-root .` -> **blocked=0 (2843)**.
-`verify-shipping-status.sh` passes the Audio output proof source check, but
+`cargo run -p goblins-os-verify -- --source-root .` -> **blocked=0 (2846)**,
+`cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`.
+`verify-shipping-status.sh` passes both Audio output proof source checks, but
 still fails closed because the final release artifacts/signoff evidence and
 older source-gated unshipped rows are not complete. Final shipping status still
 fails closed until the display-backed VM produces a passing audio proof,
 distinct screenshots, `proof-manifest.json`, all required pass status proof
 JSONs, and a close-signoff row committed back to `main`.
+
+Previous head `95e4647` is source-verified and CI-green for the fast Rust build:
+GitHub Actions build run `28577539839` passed on x86_64 and aarch64 after
+bounding core `wpctl` calls. Hardware-gate run `28577563106` at that head passed
+bootc image publish, verification installer ISO build, model setup, and reached
+the display-backed VM proof sequence. It captured `24-audio-output.png`,
+generated the proof WAV, and started `pw-play`, but still failed signoff with
+`audio-output=fail`: the proof reported `stage=audio-status`,
+`status_http=000`, `wav_generated=true`, `player_started=true`, and
+`rendered_sound_panel=false`.
 
 Previous head `8bbbd02` is source-verified and CI-green for the fast Rust build:
 GitHub Actions build run `28568776821` passed on x86_64 and aarch64 after

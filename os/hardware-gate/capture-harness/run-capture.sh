@@ -118,6 +118,7 @@ else
 fi
 [ -n "$CODE" ] || { echo "no UEFI code firmware found for $ARCH"; exit 1; }
 PFLASH=(-drive "if=pflash,format=raw,file=$WORK/code.fd,readonly=on" -drive "if=pflash,format=raw,file=$WORK/vars.fd")
+QEMU_AUDIO=(-audiodev none,id=audio0 -device ich9-intel-hda -device hda-output,audiodev=audio0)
 
 case "$RUN_DIR" in
   "$REPO"/os/screenshots/hardware-gate/"$ARCH"/*)
@@ -159,6 +160,7 @@ start_qemu() {
     -boot d \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     -device virtio-gpu-pci,id=video0 -device qemu-xhci -device usb-tablet -device usb-kbd \
+    "${QEMU_AUDIO[@]}" \
     -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &
   QEMU_PID=$!
   export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT" GOS_QMP_DISPLAY_DEVICE=video0

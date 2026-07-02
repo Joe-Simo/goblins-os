@@ -6202,6 +6202,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "wav_generated=$wav_generated",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-vm-attaches-dummy-audio-backend",
+            "-audiodev none,id=audio0",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-vm-attaches-hda-output-controller",
+            "ich9-intel-hda",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-vm-attaches-hda-output-codec",
+            "hda-output,audiodev=audio0",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/audio.rs"),
             "core-audio-wpctl-timeout-is-configurable",
             "GOBLINS_OS_WPCTL_TIMEOUT_MS",

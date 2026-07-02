@@ -2,6 +2,9 @@
 Description=Goblins OS local AI service core
 After=network-online.target
 Wants=network-online.target
+# Every Settings/status surface depends on this daemon; a one-off death must
+# never become a permanent outage through restart rate limiting.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -11,7 +14,7 @@ SupplementaryGroups=goblins-session-bridge
 EnvironmentFile=-/etc/goblins-os/environment
 EnvironmentFile=-/etc/goblins-os/openai-secrets.env
 ExecStart=/usr/libexec/goblins-os/goblins-os-core
-Restart=on-failure
+Restart=always
 RestartSec=2s
 StateDirectory=goblins-os/models goblins-os/ai
 NoNewPrivileges=yes

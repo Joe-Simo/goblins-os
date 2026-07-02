@@ -783,6 +783,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "SupplementaryGroups=goblins-session-bridge",
     ));
     checks.push(contains_check(
+        root.join("os/systemd/goblins-os-core.service"),
+        "core-service-restart-policy-always",
+        "Restart=always",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd/goblins-os-core.service"),
+        "core-service-start-limit-disabled",
+        "StartLimitIntervalSec=0",
+    ));
+    checks.push(contains_check(
         root.join("os/bootc/Containerfile"),
         "bootc-creates-session-bridge-group",
         "groupadd --system goblins-session-bridge",
@@ -6235,6 +6245,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-audio-proof-records-wav-generation-state",
             "wav_generated=$wav_generated",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-failure-probes-core-service-state",
+            "core_probe_http",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-proof-records-core-restarts",
+            "core_restarts=",
         ),
         contains_check(
             root.join("crates/goblins-os-session-bridge/src/main.rs"),

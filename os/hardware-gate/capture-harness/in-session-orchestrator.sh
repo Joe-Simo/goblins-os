@@ -416,6 +416,35 @@ audio_status_http_code(){
     -s -o "$status_file" -w '%{http_code}' \
     "$LIVE_URL/v1/audio/status" || true
 }
+audio_core_restart_count(){
+  timeout 3 systemctl show goblins-os-core -p NRestarts --value 2>/dev/null \
+    | head -n 1 | tr -cd '0-9' | cut -c1-8
+}
+audio_core_service_diag(){
+  # Unprivileged, bounded diagnostics for a failing /v1/audio/status probe: a
+  # second core route plus the systemd unit state distinguish "core daemon down
+  # (and why)" from "the audio route alone timing out".
+  local probe_http diag state key value
+  probe_http=$(curl \
+    --connect-timeout "${GOS_AUDIO_CURL_CONNECT_TIMEOUT_SECONDS:-1}" \
+    --max-time "${GOS_AUDIO_CURL_MAX_TIME_SECONDS:-4}" \
+    -s -o /dev/null -w '%{http_code}' \
+    "$LIVE_URL/v1/preview/status" || true)
+  diag="core_probe_route=/v1/preview/status&core_probe_http=${probe_http:-000}"
+  state=$(timeout 3 systemctl show goblins-os-core \
+    -p ActiveState,SubState,Result,NRestarts,ExecMainCode,ExecMainStatus 2>/dev/null || true)
+  for key in ActiveState:core_active SubState:core_substate Result:core_result \
+    NRestarts:core_restarts ExecMainCode:core_exec_code ExecMainStatus:core_exec_status; do
+    value=$(printf '%s\n' "$state" | sed -n "s/^${key%%:*}=//p" | head -n 1 \
+      | tr -cd 'A-Za-z0-9._-' | cut -c1-48)
+    diag="$diag&${key##*:}=${value:-unknown}"
+  done
+  value=$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
+  diag="$diag&mem_available_mb=${value:-unknown}"
+  value=$(df -Pm /var 2>/dev/null | awk 'NR==2 {print $4}')
+  diag="$diag&var_avail_mb=${value:-unknown}"
+  printf '%s' "$diag"
+}
 audio_output_status_ready(){
   local status_file="$1"
   local status_code output_available wireplumber_available
@@ -487,12 +516,14 @@ audio_output_shot(){
   fi
 
   if [ "$audio_ready" = "true" ] && [ "$player_started" = "true" ] && [ "$rendered_sound_panel" = "true" ]; then
-    proof_audio_output "status=pass&status_route=/v1/audio/status&status_http=200&wireplumber_available=true&output_available=true&output_volume=${output_volume:-unknown}&output_muted=${output_muted:-unknown}&player=$player&test_tone_seconds=45&screenshot=24-audio-output.png&rendered_sound_panel=true"
+    local core_restarts_now
+    core_restarts_now=$(audio_core_restart_count)
+    proof_audio_output "status=pass&status_route=/v1/audio/status&status_http=200&wireplumber_available=true&output_available=true&output_volume=${output_volume:-unknown}&output_muted=${output_muted:-unknown}&player=$player&test_tone_seconds=45&screenshot=24-audio-output.png&rendered_sound_panel=true&core_restarts=${core_restarts_now:-unknown}"
   else
     if [ "$rendered_sound_panel" != "true" ] && [ "$failure_stage" = "audio-output-preflight" ]; then
       failure_stage=audio-sound-panel-render
     fi
-    proof_audio_output "status=fail&stage=$failure_stage&status_route=/v1/audio/status&status_http=${status_code:-000}&wireplumber_available=${wireplumber_available:-missing}&output_available=${output_available:-missing}&output_volume=${output_volume:-missing}&output_muted=${output_muted:-missing}&player=${player:-missing}&wav_generated=$wav_generated&player_started=$player_started&screenshot=24-audio-output.png&rendered_sound_panel=$rendered_sound_panel&generate_log_tail=$(file_tail_query_value /tmp/gate-audio-output-generate.log)&play_log_tail=$(file_tail_query_value /tmp/gate-audio-output-play.log)"
+    proof_audio_output "status=fail&stage=$failure_stage&status_route=/v1/audio/status&status_http=${status_code:-000}&wireplumber_available=${wireplumber_available:-missing}&output_available=${output_available:-missing}&output_volume=${output_volume:-missing}&output_muted=${output_muted:-missing}&player=${player:-missing}&wav_generated=$wav_generated&player_started=$player_started&screenshot=24-audio-output.png&rendered_sound_panel=$rendered_sound_panel&generate_log_tail=$(file_tail_query_value /tmp/gate-audio-output-generate.log)&play_log_tail=$(file_tail_query_value /tmp/gate-audio-output-play.log)&$(audio_core_service_diag)"
   fi
 
   if [ -n "$player_pid" ]; then

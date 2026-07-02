@@ -1932,6 +1932,7 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         "image/jpeg=org.gnome.Loupe.desktop",
     ));
     checks.push(file_check(root, "usr/bin/pw-cli"));
+    checks.push(file_check(root, "usr/bin/pw-play"));
     checks.push(file_check(root, "usr/bin/pw-record"));
     checks.push(file_check(root, "usr/bin/pw-dump"));
     checks.push(file_check(root, "usr/bin/wpctl"));
@@ -5837,6 +5838,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-audio-output-proof",
+            "audio-output-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-audio-output-manifest-key",
+            "audio_output_proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-preview-open-render-screenshots",
             "29-preview-pdf-open.png",
         ),
@@ -6134,6 +6145,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-posts-app-privacy-revoke-proof",
             "/proof/app-privacy-revoke",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-posts-audio-output-proof",
+            "/proof/audio-output",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-waits-for-audio-settings-title",
+            "Goblins OS Settings - Sound",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6699,6 +6720,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-writes-preview-open-render-proof-json",
             "preview-open-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-writes-audio-output-proof-json",
+            "audio-output-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -7546,6 +7572,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "preview_open_render_proof",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-manifest-links-audio-output-proof",
+            "audio_output_proof",
+        ),
+        contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-rejects-legacy-non-arch-screenshot-roots",
             "Legacy/non-shipping screenshot roots",
@@ -7960,6 +7991,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "shipping-status-requires-preview-open-render-proof",
             "preview_open_render_proof_passes",
         ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-audio-output-proof",
+            "audio_output_proof_passes",
+        ),
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "screenshot_run_is_complete",
@@ -7995,6 +8031,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "screenshot_run_is_complete",
             "shipping-status-complete-run-requires-preview-open-render-proof",
             r#"preview_open_render_proof_passes "$run_dir/$PREVIEW_OPEN_RENDER_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "screenshot_run_is_complete",
+            "shipping-status-complete-run-requires-audio-output-proof",
+            r#"audio_output_proof_passes "$run_dir/$AUDIO_OUTPUT_PROOF""#,
         ),
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -8034,9 +8076,27 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "print_missing_screenshot_paths",
+            "shipping-status-missing-list-includes-audio-output-proof",
+            r#"echo "  $run_dir/$AUDIO_OUTPUT_PROOF""#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "print_arch_next_steps",
+            "shipping-status-next-steps-lists-audio-output-proof",
+            r#"os/screenshots/hardware-gate/$arch/<date>/$AUDIO_OUTPUT_PROOF"#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
             "signoff_block_required_proof_is_complete",
             "shipping-status-signoff-requires-preview-open-render-proof",
             r#"signoff_block_contains "$block" "^- Preview open/render checked: yes" || return 1"#,
+        ),
+        shell_function_contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "signoff_block_required_proof_is_complete",
+            "shipping-status-signoff-requires-audio-output-proof",
+            r#"signoff_block_contains "$block" "^- Audio output checked: yes" || return 1"#,
         ),
         shell_function_contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -8140,6 +8200,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-preview-open-render-proof-filename",
             "preview-open-render-proof.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-audio-output-proof-filename",
+            "audio-output-proof.json",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -8433,6 +8498,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-audio-output-proof",
+            "audio_output_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-records-firewall-live-toggle-proof",
             "Firewall live toggle checked",
         ),
@@ -8513,8 +8583,18 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-audio-output-proof",
+            "Audio output checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-preview-open-render-status-completes-project",
             r#"[[ "$PREVIEW_OPEN_RENDER_STATUS" == yes* ]]"#,
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-audio-output-status-completes-project",
+            r#"[[ "$GAMING_AUDIO_OUTPUT_STATUS" == yes* ]]"#,
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -8818,6 +8898,11 @@ fn gaming_readiness_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/runbook.md"),
             "runbook-gaming-pipewire-diagnostics",
             "wpctl status",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-gaming-audio-output-proof",
+            "audio-output-proof.json",
         ),
     ];
 

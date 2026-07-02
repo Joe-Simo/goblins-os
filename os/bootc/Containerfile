@@ -212,6 +212,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v vdpauinfo \
     && command -v flatpak \
     && command -v pw-cli \
+    && command -v pw-play \
     && command -v pw-record \
     && command -v pw-dump \
     && command -v wpctl \

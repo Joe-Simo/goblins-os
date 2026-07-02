@@ -93,7 +93,9 @@ MULTI_DISPLAY_APPLY_PROOF="multi-display-apply-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
+AUDIO_OUTPUT_PROOF="audio-output-proof.json"
 GAMING_SCREENSHOT_STATUS="not checked"
+GAMING_AUDIO_OUTPUT_STATUS="not checked"
 INSTALL_STORAGE_STATUS="not checked"
 RELEASE_EVIDENCE_STATUS="not checked"
 MOTION_INTERACTIONS_STATUS="not checked"
@@ -309,7 +311,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"multi_display_apply_proof"[[:space:]]*:[[:space:]]*"'"$MULTI_DISPLAY_APPLY_PROOF"'"' "$manifest" \
     && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"app_privacy_revoke_proof"[[:space:]]*:[[:space:]]*"'"$APP_PRIVACY_REVOKE_PROOF"'"' "$manifest" \
-    && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest"
+    && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest" \
+    && rg -q '"audio_output_proof"[[:space:]]*:[[:space:]]*"'"$AUDIO_OUTPUT_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -657,6 +660,21 @@ preview_open_render_proof_passes() {
     && rg -q '"unsupported_rejected"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
+audio_output_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/audio/status"' "$proof" \
+    && rg -q '"status_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"wireplumber_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"output_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"player"[[:space:]]*:[[:space:]]*"(pw-play|paplay)"' "$proof" \
+    && rg -q '"test_tone_seconds"[[:space:]]*:[[:space:]]*"45"' "$proof" \
+    && rg -q '"screenshot"[[:space:]]*:[[:space:]]*"24-audio-output\.png"' "$proof" \
+    && rg -q '"rendered_sound_panel"[[:space:]]*:[[:space:]]*"true"' "$proof"
+}
+
 validate_runtime_proof_fields() {
   local any_runtime_proof=0
 
@@ -845,7 +863,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! screenshot_manifest_matches_iso "$SCREENSHOT_DIR/proof-manifest.json"; then
     fail "Screenshot proof manifest missing or not tied to this architecture ISO: $SCREENSHOT_DIR/proof-manifest.json"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, and preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF."
+    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF, and audio_output_proof=$AUDIO_OUTPUT_PROOF."
     exit 1
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
@@ -923,6 +941,11 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Expected /v1/preview/status readiness, /v1/preview/open PDF/image launches, Papers/Loupe defaults, rendered screenshot frames, and unsupported-file rejection before signoff."
     exit 1
   fi
+  if ! audio_output_proof_passes "$SCREENSHOT_DIR/$AUDIO_OUTPUT_PROOF"; then
+    fail "Audio output proof missing or failed: $SCREENSHOT_DIR/$AUDIO_OUTPUT_PROOF"
+    fail "Expected /v1/audio/status output readiness plus a bounded pw-play/paplay test tone while 24-audio-output.png renders the Sound panel."
+    exit 1
+  fi
   log "All required screenshot proof PNGs and proof manifest passed."
   log "Firewall live toggle proof passed."
   log "Text Shortcuts session-enable proof passed."
@@ -939,6 +962,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   log "Focus arm roundtrip proof passed."
   log "App privacy revoke proof passed."
   log "Preview open/render proof passed."
+  log "Audio output proof passed."
   GAMING_SCREENSHOT_STATUS="yes (screenshots ${GAMING_SCREENSHOTS[*]} present)"
   INSTALL_STORAGE_STATUS="yes (screenshots ${INSTALL_STORAGE_SCREENSHOTS[*]} present)"
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
@@ -958,6 +982,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   FOCUS_ARM_ROUNDTRIP_STATUS="yes ($FOCUS_ARM_ROUNDTRIP_PROOF: Focus activate/deactivate writes round-tripped and notification banners restored)"
   APP_PRIVACY_REVOKE_STATUS="yes ($APP_PRIVACY_REVOKE_PROOF: seeded app permission revoked through PermissionStore and prior state restored)"
   PREVIEW_OPEN_RENDER_STATUS="yes ($PREVIEW_OPEN_RENDER_PROOF: Papers PDF and Loupe image windows opened/rendered in display-backed VM)"
+  GAMING_AUDIO_OUTPUT_STATUS="yes ($AUDIO_OUTPUT_PROOF + 24-audio-output.png: /v1/audio/status output ready and bounded local test tone played through PipeWire)"
 else
   warn "SCREENSHOT_DIR not set; proof screenshot presence check skipped."
 fi
@@ -1034,6 +1059,7 @@ if [ "$VERIFY_STATUS" = "pass" ] \
   && [[ "$FOCUS_ARM_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$APP_PRIVACY_REVOKE_STATUS" == yes* ]] \
   && [[ "$PREVIEW_OPEN_RENDER_STATUS" == yes* ]] \
+  && [[ "$GAMING_AUDIO_OUTPUT_STATUS" == yes* ]] \
   && [ "$ISO_PATH" != "not-found" ] \
   && [ "$ISO_SHA" != "not-found" ] \
   && proof_field_is_real "$RUNTIME_ENGINE_MODE" \
@@ -1092,6 +1118,7 @@ cat >> "$OUT" <<EOF2
 - Focus arm roundtrip checked: ${FOCUS_ARM_ROUNDTRIP_STATUS}
 - App privacy revoke checked: ${APP_PRIVACY_REVOKE_STATUS}
 - Preview open/render checked: ${PREVIEW_OPEN_RENDER_STATUS}
+- Audio output checked: ${GAMING_AUDIO_OUTPUT_STATUS}
 - Gaming readiness checked: ${GAMING_SCREENSHOT_STATUS}
 - Install storage/bootloader/dual-boot checked: ${INSTALL_STORAGE_STATUS}
 - Current project completion status: ${PROJECT_COMPLETION_STATUS}

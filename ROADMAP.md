@@ -34,40 +34,39 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-02)
 
-Head `906f7e8` is source-verified (`goblins_os_verify_result total=2811
-blocked=0`) and CI-green for the fast Rust build: GitHub Actions build run
-`28560993234` passed on x86_64 and aarch64. Hardware-gate run `28561000333` at
-that head passed bootc image publish, verification installer ISO build, model
-prep, install/first boot, and the display-backed VM proof routes for Firewall
-toggle, IME/input-source switching, Focus arm/disarm, keyboard rebind,
-app-keyed Per-app Privacy revoke, Preview PDF/image open, Multi-display apply,
-and Text Shortcuts live IBus runtime/render. The artifact contains all 31
-required screenshot PNGs, all 31 required PNGs are distinct, `proof-manifest.json`
-exists, and all 15 required runtime proof JSONs report `status=pass`.
-
-That latest failure moved beyond the stale-installer-screenshot blocker. The run
-reached `ORCH_ALLDONE`, wrote the screenshot/proof artifact, and then failed in
-`close-signoff.sh` before writing the signoff row because the Ubuntu hardware
-runner had no `rg` binary:
-`/os/hardware-gate/close-signoff.sh: line 701: rg: command not found`. The
-reported `SHIP.md does not declare Fedora bootc as the OS foundation` message was
-a false consequence of the missing search tool; `SHIP.md` still contains
-`Fedora bootc remains the OS foundation`.
-`text-shortcuts-live-ibus-runtime-render-proof.json` passed with
-`normal_actual=onmyway.`, `passthrough_actual=hello.`,
-`password_refusal=true`, `focused_field_callback=true`,
-`text_input_v3_commit=true`, `rendered_accept_bubble=true`,
-`runtime_ready_claim=true`, and `core_readiness_flip=deferred`; the older shallow
-`text-shortcuts-live-keystroke-proof.json` is no longer in the mandatory
-hardware signoff path.
+Head `93d8111` is source-verified and CI-green for the fast Rust build: GitHub
+Actions build run `28563230147` passed on x86_64 and aarch64 after adding the
+missing `ripgrep` dependency for hardware close-signoff. Hardware-gate run
+`28563232984` at that head moved past the missing-`rg` failure, reached the
+display-backed VM proof sequence, and then failed the screenshot honesty guard:
+only 30/31 required captured surfaces were distinct because
+`24-audio-output.png` duplicated `13-studio-before.png`. The Sound panel never
+became a distinct mapped surface, so no final signoff row was produced. This is
+now the current release blocker, not a broad feature-code blocker.
 
 The current source follow-up is qemu-pending and does **not** mark more features
-shipped. It adds the missing `ripgrep` runner dependency to
-`hardware-gate-capture.yml` and pins that dependency in both verifier layers so
-`close-signoff.sh` can run its existing proof-contract checks in CI. The gate
-must still fail closed unless the required PNGs, pass-status proof JSONs,
-`proof-manifest.json`, and close-signoff row are produced by the display-backed
-VM and committed back to `main`.
+shipped. It tightens the audio proof contract instead of accepting a blind
+screenshot: `24-audio-output.png` must show the mapped `Goblins OS Settings -
+Sound` window, `/v1/audio/status` must report a default output path, a bounded
+local test tone must start through `pw-play` or `paplay`, and
+`audio-output-proof.json` must be present in the proof manifest, shipping-status
+guidance, close-signoff checks, and `goblins-os-verify`. Local source gates for
+this follow-up pass with `goblins_os_verify_result total=2829 blocked=0`; final
+shipping status still fails closed until the display-backed VM produces the new
+audio proof, distinct screenshots, `proof-manifest.json`, all required pass
+status proof JSONs, and a close-signoff row committed back to `main`.
+
+Previous hardware-gate run `28561000333` at `906f7e8` passed bootc image
+publish, verification installer ISO build, model prep, install/first boot, and
+the display-backed VM proof routes for Firewall toggle, IME/input-source
+switching, Focus arm/disarm, keyboard rebind, app-keyed Per-app Privacy revoke,
+Preview PDF/image open, Multi-display apply, and Text Shortcuts live IBus
+runtime/render. The artifact contained all 31 required screenshot PNGs, all 31
+required PNGs were distinct, `proof-manifest.json` existed, and all 15 required
+runtime proof JSONs reported `status=pass`; the run failed before writing the
+signoff row because the Ubuntu hardware runner had no `rg` binary. The older
+shallow `text-shortcuts-live-keystroke-proof.json` remains outside the mandatory
+hardware signoff path.
 
 Previous hardware-gate run `28538674596` at `9f5ca8b` passed bootc image
 publish, verification installer ISO build, model prep, install, first boot

@@ -322,6 +322,14 @@ unsupported `.txt` fixture is rejected with HTTP 400. This proves the installed
 desktop open path in a display-backed qemu session; it does not mark Preview
 shipped until the qemu artifacts are reviewed.
 
+The audio-output gate is `audio-output-proof.json`, linked from
+`proof-manifest.json` as `audio_output_proof`. It queries `/v1/audio/status`,
+requires WirePlumber and a default output to be reported by the core, generates
+a bounded local WAV probe, plays it with `pw-play` or `paplay`, and captures
+`24-audio-output.png` only after the real Sound panel window is mapped. This
+proves PipeWire output readiness in qemu without claiming external speaker
+hardware, microphone capture, or arbitrary app audio routing.
+
 Capture exactly at minimum these names:
 1. `01-installer.png` — ISO boot + installer launch
 2. `02-install-network.png` — installer network/progress

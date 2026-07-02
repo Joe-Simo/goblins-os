@@ -63,6 +63,7 @@ MULTI_DISPLAY_APPLY_PROOF="multi-display-apply-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
+AUDIO_OUTPUT_PROOF="audio-output-proof.json"
 
 check() {
   local label="$1"
@@ -242,6 +243,7 @@ screenshot_run_is_complete() {
   focus_arm_roundtrip_proof_passes "$run_dir/$FOCUS_ARM_ROUNDTRIP_PROOF" || return 1
   app_privacy_revoke_proof_passes "$run_dir/$APP_PRIVACY_REVOKE_PROOF" || return 1
   preview_open_render_proof_passes "$run_dir/$PREVIEW_OPEN_RENDER_PROOF" || return 1
+  audio_output_proof_passes "$run_dir/$AUDIO_OUTPUT_PROOF" || return 1
   return 0
 }
 
@@ -300,7 +302,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"multi_display_apply_proof"[[:space:]]*:[[:space:]]*"'"$MULTI_DISPLAY_APPLY_PROOF"'"' "$manifest" \
     && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"app_privacy_revoke_proof"[[:space:]]*:[[:space:]]*"'"$APP_PRIVACY_REVOKE_PROOF"'"' "$manifest" \
-    && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest"
+    && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest" \
+    && rg -q '"audio_output_proof"[[:space:]]*:[[:space:]]*"'"$AUDIO_OUTPUT_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -648,6 +651,21 @@ preview_open_render_proof_passes() {
     && rg -q '"unsupported_rejected"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
+audio_output_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/audio/status"' "$proof" \
+    && rg -q '"status_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"wireplumber_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"output_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"player"[[:space:]]*:[[:space:]]*"(pw-play|paplay)"' "$proof" \
+    && rg -q '"test_tone_seconds"[[:space:]]*:[[:space:]]*"45"' "$proof" \
+    && rg -q '"screenshot"[[:space:]]*:[[:space:]]*"24-audio-output\.png"' "$proof" \
+    && rg -q '"rendered_sound_panel"[[:space:]]*:[[:space:]]*"true"' "$proof"
+}
+
 print_missing_screenshot_paths() {
   local run_dir="$1"
   local missing=0
@@ -720,6 +738,10 @@ print_missing_screenshot_paths() {
   fi
   if ! preview_open_render_proof_passes "$run_dir/$PREVIEW_OPEN_RENDER_PROOF"; then
     echo "  $run_dir/$PREVIEW_OPEN_RENDER_PROOF"
+    missing=1
+  fi
+  if ! audio_output_proof_passes "$run_dir/$AUDIO_OUTPUT_PROOF"; then
+    echo "  $run_dir/$AUDIO_OUTPUT_PROOF"
     missing=1
   fi
   return "$missing"
@@ -892,6 +914,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $PREVIEW_OPEN_RENDER_PROOF (missing or Preview open/render proof failed)"
     missing=1
   fi
+  if audio_output_proof_passes "$run_dir/$AUDIO_OUTPUT_PROOF"; then
+    echo "[PASS] $AUDIO_OUTPUT_PROOF"
+  else
+    echo "[FAIL] $AUDIO_OUTPUT_PROOF (missing or audio output proof failed)"
+    missing=1
+  fi
   return "$missing"
 }
 
@@ -949,6 +977,7 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$FOCUS_ARM_ROUNDTRIP_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$APP_PRIVACY_REVOKE_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$PREVIEW_OPEN_RENDER_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$AUDIO_OUTPUT_PROOF
 EOF
 }
 
@@ -1013,6 +1042,7 @@ signoff_block_required_proof_is_complete() {
   signoff_block_contains "$block" "^- Focus arm roundtrip checked: yes" || return 1
   signoff_block_contains "$block" "^- App privacy revoke checked: yes" || return 1
   signoff_block_contains "$block" "^- Preview open/render checked: yes" || return 1
+  signoff_block_contains "$block" "^- Audio output checked: yes" || return 1
   signoff_block_contains "$block" "^- Gaming readiness checked: yes" || return 1
   signoff_block_contains "$block" "^- Install storage/bootloader/dual-boot checked: yes" || return 1
   return 0
@@ -1253,6 +1283,7 @@ check "hardware gate requires Focus arm roundtrip proof" "rg -q 'focus-arm-round
 check "hardware gate requires App privacy revoke proof" "rg -q 'app-privacy-revoke-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/app-privacy-revoke' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/app-privacy/revoke' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'PermissionStore.SetPermission' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'PermissionStore.DeletePermission' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'PermissionStore.GetPermission' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'org.goblins.GatePrivacyProof' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'post_revoke_absent=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'restore_prior_state=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'resource_keyed_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'App privacy revoke checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "hardware gate records App privacy seed fallback diagnostics" "rg -q 'plain_permissions' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'seed_attempt=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'seed_error=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'proof_query_value' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/var/home/goblin/.local/share/flatpak/db' os/bootc/Containerfile && rg -q '.local/share/flatpak/db' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'permission-db-dir' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "hardware gate requires Preview open/render proof" "rg -q 'preview-open-render-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/preview-open-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/preview/status' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/preview/open' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'org.gnome.Papers.desktop' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'org.gnome.Loupe.desktop' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '29-preview-pdf-open.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '30-preview-image-open.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'unsupported_rejected=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'Preview open/render checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
+check "hardware gate requires Audio output proof" "rg -q 'audio-output-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh os/hardware-gate/runbook.md && rg -q '/proof/audio-output' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/audio/status' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'pw-play' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/bootc/Containerfile && rg -q 'GOBLINS_OS_CAPTURE_EXPECT_TITLE=\"Goblins OS Settings - Sound\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '24-audio-output.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Audio output checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "IME CJK engine packages are source-gated" "rg -q 'ibus-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/libpinyin.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/anthy.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/hangul.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so' os/bootc/Containerfile && rg -q 'CJK engine packages' crates/goblins-os-settings/src/main.rs"
 check "core keyboard rebinding exposes allowlisted write routes" "rg -q '/v1/keyboard/shortcuts/binding' crates/goblins-os-core/src/main.rs && rg -q '/v1/keyboard/modifier-remap' crates/goblins-os-core/src/main.rs && rg -q 'shortcut_conflict' crates/goblins-os-core/src/shortcuts.rs && rg -q 'remap_caps_lock_options' crates/goblins-os-core/src/shortcuts.rs"
 check "settings keyboard reports source-gated shortcut bridge" "rg -q 'Protected shortcut writes are source-gated' crates/goblins-os-settings/src/main.rs && rg -q 'Caps Lock to Control is source-gated' crates/goblins-os-settings/src/main.rs"
@@ -1334,6 +1365,7 @@ check "hardware gate requires Text Shortcuts candidate bubble render intent proo
 check "hardware gate requires Text Shortcuts candidate bubble render screenshot proof in signoff" "rg -q 'text_shortcuts_candidate_bubble_render_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate bubble render screenshot checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-bubble-render-proof.json' os/hardware-gate/runbook.md && rg -q '31-text-shortcuts-candidate-bubble-render.png' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts live IBus runtime/render proof in signoff" "rg -q 'text_shortcuts_live_ibus_runtime_render_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts live IBus runtime/render checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-live-ibus-runtime-render-proof.json' os/hardware-gate/runbook.md && rg -q '32-text-shortcuts-live-ibus-runtime-render.png' os/hardware-gate/runbook.md"
 check "hardware gate requires Preview open/render proof in signoff" "rg -q 'preview_open_render_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Preview open/render checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'preview-open-render-proof.json' os/hardware-gate/runbook.md"
+check "hardware gate requires Audio output proof in signoff" "rg -q 'audio_output_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Audio output checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'audio-output-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Focus arm roundtrip proof in signoff" "rg -q 'focus_arm_roundtrip_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Focus arm roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Multi-display apply proof in signoff" "rg -q 'multi_display_apply_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Multi-display apply checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'multi-display-apply-proof.json' os/hardware-gate/runbook.md && rg -q 'multi_display_apply_proof' os/hardware-gate/runbook.md"
 check "hardware gate requires App privacy revoke proof in signoff" "rg -q 'app_privacy_revoke_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'App privacy revoke checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'app-privacy-revoke-proof.json' os/hardware-gate/runbook.md"
@@ -1342,11 +1374,11 @@ check "core AI safe setting route has narrow allowlist" "rg -q 'appearance.color
 check "core AI safe setting route reuses settings wrappers" "rg -q 'apply_ai_color_scheme' crates/goblins-os-core/src/appearance.rs && rg -q 'apply_ai_reduce_motion' crates/goblins-os-core/src/accessibility.rs && rg -q 'apply_ai_notification_banners' crates/goblins-os-core/src/notifications.rs"
 check "installed self-test checks app-builder routes" "rg -q '/v1/apps/build-catalog' os/bootc/run-selftest.sh && rg -q '/v1/apps/builds' os/bootc/run-selftest.sh && rg -q 'GOBLINS_OS_APPS_DIR=/tmp/goblins-os-selftest-apps' os/bootc/run-selftest.sh"
 check "bootc image includes gaming Vulkan tools and compositor substrate" "rg -q 'mesa-vulkan-drivers' os/bootc/Containerfile && rg -q 'vulkan-tools' os/bootc/Containerfile && rg -q 'gamescope' os/bootc/Containerfile && rg -q 'gamemode' os/bootc/Containerfile && rg -q 'mangohud' os/bootc/Containerfile"
-check "bootc image includes gaming video audio and controller diagnostics" "rg -q 'mesa-va-drivers' os/bootc/Containerfile && rg -q 'libvdpau' os/bootc/Containerfile && rg -q 'vdpauinfo' os/bootc/Containerfile && rg -q 'pipewire-utils' os/bootc/Containerfile && rg -q 'pipewire-pulseaudio' os/bootc/Containerfile && rg -q 'pipewire-alsa' os/bootc/Containerfile && rg -q 'command -v pw-record' os/bootc/Containerfile && rg -q 'command -v pw-dump' os/bootc/Containerfile && rg -q 'evtest' os/bootc/Containerfile && rg -q 'usbutils' os/bootc/Containerfile"
+check "bootc image includes gaming video audio and controller diagnostics" "rg -q 'mesa-va-drivers' os/bootc/Containerfile && rg -q 'libvdpau' os/bootc/Containerfile && rg -q 'vdpauinfo' os/bootc/Containerfile && rg -q 'pipewire-utils' os/bootc/Containerfile && rg -q 'pipewire-pulseaudio' os/bootc/Containerfile && rg -q 'pipewire-alsa' os/bootc/Containerfile && rg -q 'command -v pw-play' os/bootc/Containerfile && rg -q 'command -v pw-record' os/bootc/Containerfile && rg -q 'command -v pw-dump' os/bootc/Containerfile && rg -q 'evtest' os/bootc/Containerfile && rg -q 'usbutils' os/bootc/Containerfile"
 check "bootc image excludes Steam and steam-devices packages" "! rg -q '^[[:space:]]+steam([[:space:]\\\\]|$)|^[[:space:]]+steam-devices([[:space:]\\\\]|$)' os/bootc/Containerfile && rg -q '! rpm -q steam' os/bootc/Containerfile && rg -q '! rpm -q steam-devices' os/bootc/Containerfile"
 check "settings Games panel explains Flatpak portals native architecture and user-initiated launchers" "rg -q 'App installs and desktop integration are ready' crates/goblins-os-settings/src/main.rs && rg -q 'Game tools run natively on this device' crates/goblins-os-settings/src/main.rs && rg -q 'Availability is checked per architecture at install time' crates/goblins-os-settings/src/main.rs && rg -q 'does not download Proton runtimes without user action' crates/goblins-os-settings/src/main.rs"
 check "settings and installer hide GNOME as user-facing prerequisite copy" "! rg -q 'GNOME desktop portals|GNOME accessibility keys|needs GNOME|requires GNOME' crates/goblins-os-settings/src/main.rs crates/goblins-os-installer/src/main.rs"
-check "installed-root verifier checks gaming tools and Steam absence" "rg -q 'usr/bin/pw-cli' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/pw-record' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/pw-dump' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/evtest' crates/goblins-os-verify/src/main.rs && rg -q 'installed-steam-binary-absent' crates/goblins-os-verify/src/main.rs && rg -q 'installed-steam-devices-rules-absent' crates/goblins-os-verify/src/main.rs"
+check "installed-root verifier checks gaming tools and Steam absence" "rg -q 'usr/bin/pw-cli' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/pw-play' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/pw-record' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/pw-dump' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/evtest' crates/goblins-os-verify/src/main.rs && rg -q 'installed-steam-binary-absent' crates/goblins-os-verify/src/main.rs && rg -q 'installed-steam-devices-rules-absent' crates/goblins-os-verify/src/main.rs"
 check "architecture contract records native non-Steam gaming policy" "rg -q 'non_steam_launcher_policy' os/release/architectures.toml && rg -q 'Steam and steam-devices are intentionally absent' os/release/architectures.toml && rg -q 'does not claim x86-only game runtimes work on Arm' os/release/architectures.toml"
 check "runbook captures video controller and PipeWire gaming diagnostics" "rg -q 'vainfo' os/hardware-gate/runbook.md && rg -q 'evtest --query' os/hardware-gate/runbook.md && rg -q 'wpctl status' os/hardware-gate/runbook.md && rg -q 'pw-cli info 0' os/hardware-gate/runbook.md && rg -q 'pw-dump' os/hardware-gate/runbook.md"
 check "release evidence mode exists" "rg -q -- '--release-evidence' crates/goblins-os-verify/src/main.rs"

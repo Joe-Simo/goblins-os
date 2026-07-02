@@ -80,6 +80,7 @@ REQUIRED_PROOFS = (
     "focus-arm-roundtrip",
     "app-privacy-revoke",
     "preview-open-render",
+    "audio-output",
 )
 PROOF_FILENAMES = {
     "firewall-live-toggle": "firewall-live-toggle-proof.json",
@@ -97,6 +98,7 @@ PROOF_FILENAMES = {
     "focus-arm-roundtrip": "focus-arm-roundtrip-proof.json",
     "app-privacy-revoke": "app-privacy-revoke-proof.json",
     "preview-open-render": "preview-open-render-proof.json",
+    "audio-output": "audio-output-proof.json",
 }
 
 def _conn():

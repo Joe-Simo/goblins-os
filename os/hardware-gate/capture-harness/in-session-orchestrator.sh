@@ -50,6 +50,7 @@ proof_multi_display_apply(){ curl -s "http://$H/proof/multi-display-apply?$1" >/
 proof_focus_arm_roundtrip(){ curl -s "http://$H/proof/focus-arm-roundtrip?$1" >/dev/null 2>&1 || true; }
 proof_app_privacy_revoke(){ curl -s "http://$H/proof/app-privacy-revoke?$1" >/dev/null 2>&1 || true; }
 proof_preview_open_render(){ curl -s "http://$H/proof/preview-open-render?$1" >/dev/null 2>&1 || true; }
+proof_audio_output(){ curl -s "http://$H/proof/audio-output?$1" >/dev/null 2>&1 || true; }
 proof_query_value(){
   python3 - "$1" <<'PY'
 import sys
@@ -68,6 +69,38 @@ file_size_value(){
 }
 file_tail_query_value(){
   proof_query_value "$(tail -n 30 "$1" 2>/dev/null || true)"
+}
+json_string_literal(){
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1]))
+PY
+}
+wait_for_window_title(){
+  local title="$1"
+  local attempts="${2:-40}"
+  local helper_timeout="${GOS_SHOT_HELPER_TIMEOUT_SECONDS:-3}"
+  local js_title script out
+
+  js_title="$(json_string_literal "$title")"
+  for _ in $(seq 1 "$attempts"); do
+    if command -v gdbus >/dev/null 2>&1; then
+      script="(() => { const expected = $js_title; for (const actor of global.get_window_actors()) { const w = actor.meta_window; if (!w) continue; const t = String(w.get_title ? w.get_title() : ''); if (t.includes(expected) && !w.minimized) { w.activate(global.get_current_time()); return 'found'; } } return 'missing'; })();"
+      out="$(gdbus call --session \
+        --timeout "$helper_timeout" \
+        --dest org.gnome.Shell \
+        --object-path /org/gnome/Shell \
+        --method org.gnome.Shell.Eval \
+        "$script" 2>/dev/null || true)"
+      case "$out" in
+        *found*) return 0 ;;
+      esac
+    fi
+    sleep 0.5
+  done
+  return 1
 }
 ibus_session_bus_owned(){
   command -v gdbus >/dev/null 2>&1 \
@@ -317,6 +350,97 @@ wait_proof_file_nonempty(){
     sleep 0.25
   done
   return 1
+}
+generate_audio_probe_wav(){
+  local wav="$1"
+  python3 - "$wav" <<'PY'
+import math
+import struct
+import sys
+import wave
+
+path = sys.argv[1]
+sample_rate = 48000
+seconds = 45
+amplitude = 0.18
+with wave.open(path, "wb") as out:
+    out.setnchannels(2)
+    out.setsampwidth(2)
+    out.setframerate(sample_rate)
+    for i in range(sample_rate * seconds):
+        # Two quiet tones make the proof audibly distinct without being harsh.
+        value = int(32767 * amplitude * (
+            math.sin(2 * math.pi * 440 * i / sample_rate) * 0.65
+            + math.sin(2 * math.pi * 660 * i / sample_rate) * 0.35
+        ))
+        frame = struct.pack("<hh", value, value)
+        out.writeframesraw(frame)
+PY
+}
+audio_output_status_ready(){
+  local status_file="$1"
+  local status_code output_available wireplumber_available
+
+  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/audio/status" || true)
+  output_available=$(json_field "$status_file" output.available)
+  wireplumber_available=$(json_field "$status_file" wireplumber_available)
+
+  [ "$status_code" = "200" ] && [ "$output_available" = "true" ] && [ "$wireplumber_available" = "true" ]
+}
+audio_output_shot(){
+  local status_file=/tmp/gate-audio-output-status.json
+  local wav=/tmp/gate-audio-output-proof.wav
+  local player="" player_pid="" audio_ready=false player_started=false
+  local status_code output_available output_volume output_muted wireplumber_available
+  local rendered_sound_panel=false
+
+  for _ in $(seq 1 40); do
+    if audio_output_status_ready "$status_file"; then
+      audio_ready=true
+      break
+    fi
+    sleep 0.5
+  done
+
+  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/audio/status" || true)
+  output_available=$(json_field "$status_file" output.available)
+  output_volume=$(json_field "$status_file" output.volume_percent)
+  output_muted=$(json_field "$status_file" output.muted)
+  wireplumber_available=$(json_field "$status_file" wireplumber_available)
+
+  if command -v pw-play >/dev/null 2>&1; then
+    player="pw-play"
+  elif command -v paplay >/dev/null 2>&1; then
+    player="paplay"
+  fi
+
+  if [ -n "$player" ]; then
+    generate_audio_probe_wav "$wav"
+    "$player" "$wav" >/tmp/gate-audio-output-play.log 2>&1 &
+    player_pid=$!
+    sleep 1
+    if kill -0 "$player_pid" 2>/dev/null; then
+      player_started=true
+    fi
+  fi
+
+  if GOBLINS_OS_CAPTURE_EXPECT_TITLE="Goblins OS Settings - Sound" \
+    GOBLINS_OS_SETTINGS_CORE_WAIT_SECS="${GOS_SETTINGS_CAPTURE_CORE_WAIT_SECS:-8}" \
+    shot 24-audio-output "$B/goblins-os-settings" --panel=sound; then
+    rendered_sound_panel=true
+  fi
+
+  if [ "$audio_ready" = "true" ] && [ "$player_started" = "true" ] && [ "$rendered_sound_panel" = "true" ]; then
+    proof_audio_output "status=pass&status_route=/v1/audio/status&status_http=200&wireplumber_available=true&output_available=true&output_volume=${output_volume:-unknown}&output_muted=${output_muted:-unknown}&player=$player&test_tone_seconds=45&screenshot=24-audio-output.png&rendered_sound_panel=true"
+  else
+    proof_audio_output "status=fail&stage=audio-output-preflight&status_route=/v1/audio/status&status_http=${status_code:-000}&wireplumber_available=${wireplumber_available:-missing}&output_available=${output_available:-missing}&output_volume=${output_volume:-missing}&output_muted=${output_muted:-missing}&player=${player:-missing}&player_started=$player_started&screenshot=24-audio-output.png&rendered_sound_panel=$rendered_sound_panel&play_log_tail=$(file_tail_query_value /tmp/gate-audio-output-play.log)"
+  fi
+
+  if [ -n "$player_pid" ]; then
+    kill "$player_pid" 2>/dev/null || true
+    wait "$player_pid" 2>/dev/null || true
+  fi
+  rm -f "$wav"
 }
 firewall_live_toggle_proof(){
   local status_file=/tmp/gate-firewall-status.json
@@ -1586,11 +1710,12 @@ shot(){
   base="$(basename "$bin" 2>/dev/null || printf '%s' "$bin")"
   local log="/tmp/gate-shot-$n.log"
   local settle="${GOS_SHOT_SETTLE_SECONDS:-12}"
+  local title_ready=true
   local env_args=(
     "GOBLINS_OS_CAPTURE_NON_UNIQUE=1"
     "GOBLINS_OS_RENDER_FULLSCREEN=1"
   )
-  for key in GOBLINS_OS_THEME GOBLINS_OS_INSTALLER_PAGE GOBLINS_OS_INSTALLER_CORE_WAIT_SECS GOBLINS_OS_CORE_URL; do
+  for key in GOBLINS_OS_THEME GOBLINS_OS_INSTALLER_PAGE GOBLINS_OS_INSTALLER_CORE_WAIT_SECS GOBLINS_OS_SETTINGS_CORE_WAIT_SECS GOBLINS_OS_CORE_URL; do
     if [ "${!key+x}" ]; then
       env_args+=("$key=${!key}")
     fi
@@ -1608,6 +1733,14 @@ shot(){
     tail -n 80 "$log" 2>/dev/null || true
   fi
   switch_control_off
+  if [ -n "${GOBLINS_OS_CAPTURE_EXPECT_TITLE:-}" ]; then
+    if wait_for_window_title "$GOBLINS_OS_CAPTURE_EXPECT_TITLE" "${GOS_SHOT_WINDOW_WAIT_ATTEMPTS:-40}"; then
+      echo "GOBLINS_HWGATE_SHOT_WINDOW_READY name=$n title=$GOBLINS_OS_CAPTURE_EXPECT_TITLE"
+    else
+      echo "GOBLINS_HWGATE_SHOT_WINDOW_MISSING name=$n title=$GOBLINS_OS_CAPTURE_EXPECT_TITLE"
+      title_ready=false
+    fi
+  fi
   echo "GOBLINS_HWGATE_SHOT_SIGNALING name=$n"
   sig "$n"
   echo "GOBLINS_HWGATE_SHOT_SIGNALED name=$n"
@@ -1622,6 +1755,7 @@ shot(){
   done
   switch_control_off
   sleep 1
+  [ "$title_ready" = "true" ]
 }
 installer_shot(){
   local page="$1"
@@ -1684,7 +1818,7 @@ shot 08-shell-home    "$B/goblins-os-shell"
 shot 10-settings      "$B/goblins-os-settings"
 shot 11-settings-models "$B/goblins-os-settings" --panel=models
 shot 13-studio-before "$B/goblins-os-shell" --studio
-shot 24-audio-output  "$B/goblins-os-settings" --panel=sound
+audio_output_shot
 shot 23-controller-detection "$B/goblins-os-settings" --panel=games
 
 # ---- light/dark motion (shell mid-interaction is the closest honest motion frame) ----

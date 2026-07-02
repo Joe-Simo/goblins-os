@@ -585,6 +585,7 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "focus_arm_roundtrip_proof":"focus-arm-roundtrip-proof.json",
           "app_privacy_revoke_proof":"app-privacy-revoke-proof.json",
           "preview_open_render_proof":"preview-open-render-proof.json",
+          "audio_output_proof":"audio-output-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY

@@ -6,7 +6,9 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -41,6 +43,11 @@ const MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE: &str =
     "org.gnome.Mutter.DisplayConfig.GetCurrentState";
 const MUTTER_DISPLAY_CONFIG_APPLY_MONITORS: &str =
     "org.gnome.Mutter.DisplayConfig.ApplyMonitorsConfig";
+const SOUND_SCHEMA: &str = "org.gnome.desktop.sound";
+const DEFAULT_SINK: &str = "@DEFAULT_AUDIO_SINK@";
+const DEFAULT_SOURCE: &str = "@DEFAULT_AUDIO_SOURCE@";
+const GSETTINGS_TIMEOUT: Duration = Duration::from_millis(1_500);
+const WPCTL_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 const KEYBOARD_KEYS: &[&str] = &[
     "repeat",
@@ -104,6 +111,12 @@ const NOTIFICATION_APPLICATION_KEYS: &[&str] = &[
     "details-in-lock-screen",
     "force-expanded",
 ];
+const SOUND_KEYS: &[&str] = &[
+    "event-sounds",
+    "input-feedback-sounds",
+    "allow-volume-above-100-percent",
+    "theme-name",
+];
 const WM_KEYS: &[&str] = &[
     "mission-control",
     "app-expose",
@@ -131,6 +144,9 @@ enum BridgeRequest {
     OpenPreview {
         path: String,
         kind: String,
+    },
+    Wpctl {
+        args: Vec<String>,
     },
     PermissionStoreDelete {
         table: String,
@@ -229,6 +245,7 @@ fn handle_request(request: BridgeRequest) -> BridgeResponse {
         BridgeRequest::Ping => success("pong".to_string()),
         BridgeRequest::GSettings { args } => gsettings_response(args),
         BridgeRequest::OpenPreview { path, kind } => open_preview_response(&path, &kind),
+        BridgeRequest::Wpctl { args } => wpctl_response(args),
         BridgeRequest::PermissionStoreDelete { table, id, app } => {
             permission_store_delete_response(&table, &id, &app)
         }
@@ -242,23 +259,45 @@ fn handle_request(request: BridgeRequest) -> BridgeResponse {
     }
 }
 
-fn gsettings_response(args: Vec<String>) -> BridgeResponse {
-    if let Err(error) = validate_gsettings_args(&args) {
+fn wpctl_response(args: Vec<String>) -> BridgeResponse {
+    if let Err(error) = validate_wpctl_args(&args) {
         return failure(error);
     }
-    match Command::new("gsettings")
-        .args(&args)
-        .stdin(Stdio::null())
-        .output()
-    {
+    match bounded_command_output("wpctl", &args, WPCTL_TIMEOUT) {
         Ok(output) if output.status.success() => {
             success(String::from_utf8_lossy(&output.stdout).trim().to_string())
         }
         Ok(output) => failure(command_error_detail(&output.stderr, &output.stdout)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(BoundedCommandError::Missing) => {
+            failure("wpctl is unavailable in this desktop session.")
+        }
+        Err(BoundedCommandError::TimedOut) => {
+            failure("WirePlumber did not answer before the session bridge audio timeout.")
+        }
+        Err(BoundedCommandError::Failed) => {
+            failure("Audio routing controls are not ready in this desktop session.")
+        }
+    }
+}
+
+fn gsettings_response(args: Vec<String>) -> BridgeResponse {
+    if let Err(error) = validate_gsettings_args(&args) {
+        return failure(error);
+    }
+    match bounded_command_output("gsettings", &args, GSETTINGS_TIMEOUT) {
+        Ok(output) if output.status.success() => {
+            success(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        }
+        Ok(output) => failure(command_error_detail(&output.stderr, &output.stdout)),
+        Err(BoundedCommandError::Missing) => {
             failure("gsettings is unavailable in this desktop session.")
         }
-        Err(_) => failure("gsettings could not run in this desktop session."),
+        Err(BoundedCommandError::TimedOut) => {
+            failure("gsettings did not answer before the session bridge preference timeout.")
+        }
+        Err(BoundedCommandError::Failed) => {
+            failure("gsettings could not run in this desktop session.")
+        }
     }
 }
 
@@ -406,6 +445,57 @@ fn gdbus_session_response(
     }
 }
 
+fn validate_wpctl_args(args: &[String]) -> Result<(), String> {
+    match args {
+        [command] if command == "status" => Ok(()),
+        [command, target] if command == "get-volume" => validate_wpctl_default_target(target),
+        [command, target, volume] if command == "set-volume" => {
+            validate_wpctl_default_target(target)?;
+            validate_wpctl_volume(volume)
+        }
+        [command, target, muted] if command == "set-mute" => {
+            validate_wpctl_default_target(target)?;
+            if muted == "0" || muted == "1" {
+                Ok(())
+            } else {
+                Err("wpctl mute writes must be encoded as 0 or 1.".to_string())
+            }
+        }
+        [command, device_id] if command == "set-default" => validate_wpctl_numeric_id(device_id),
+        _ => Err("unsupported session bridge wpctl operation.".to_string()),
+    }
+}
+
+fn validate_wpctl_default_target(target: &str) -> Result<(), String> {
+    if target == DEFAULT_SINK || target == DEFAULT_SOURCE {
+        Ok(())
+    } else {
+        Err("wpctl audio target must be the default sink or source token.".to_string())
+    }
+}
+
+fn validate_wpctl_volume(volume: &str) -> Result<(), String> {
+    let parsed = volume
+        .parse::<f64>()
+        .map_err(|_| "wpctl volume must be a bounded decimal value.".to_string())?;
+    if parsed.is_finite() && (0.0..=1.5).contains(&parsed) {
+        Ok(())
+    } else {
+        Err("wpctl volume must stay between 0% and 150%.".to_string())
+    }
+}
+
+fn validate_wpctl_numeric_id(device_id: &str) -> Result<(), String> {
+    if !device_id.is_empty()
+        && device_id.len() <= 12
+        && device_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        Ok(())
+    } else {
+        Err("wpctl default-device writes require a reported numeric device id.".to_string())
+    }
+}
+
 fn validate_gsettings_args(args: &[String]) -> Result<(), String> {
     match args {
         [command] if command == "list-schemas" => Ok(()),
@@ -448,6 +538,7 @@ fn validate_schema_key(schema_arg: &str, key: &str) -> Result<(), String> {
         FOCUS_SCHEMA => FOCUS_KEYS,
         NOTIFICATIONS_SCHEMA => NOTIFICATION_KEYS,
         NOTIFICATION_APPLICATION_SCHEMA => NOTIFICATION_APPLICATION_KEYS,
+        SOUND_SCHEMA => SOUND_KEYS,
         WM_SCHEMA => WM_KEYS,
         _ => return Err(format!("{schema} is not an allowlisted session schema.")),
     };
@@ -488,6 +579,7 @@ fn validate_list_keys_schema(schema: &str) -> Result<(), String> {
         | FOCUS_SCHEMA
         | NOTIFICATIONS_SCHEMA
         | NOTIFICATION_APPLICATION_SCHEMA
+        | SOUND_SCHEMA
         | WM_SCHEMA => Ok(()),
         _ => Err(format!(
             "{base_schema} is not an allowlisted session schema."
@@ -522,6 +614,7 @@ fn validate_schema_arg(schema_arg: &str) -> Result<(&str, &str), String> {
         | COLOR_SCHEMA
         | FOCUS_SCHEMA
         | NOTIFICATIONS_SCHEMA
+        | SOUND_SCHEMA
         | WM_SCHEMA => {
             if path.is_empty() {
                 Ok((schema, path))
@@ -725,6 +818,56 @@ fn permission_id_is_safe(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+enum BoundedCommandError {
+    Missing,
+    TimedOut,
+    Failed,
+}
+
+fn bounded_command_output(
+    binary: &str,
+    args: &[String],
+    timeout: Duration,
+) -> Result<Output, BoundedCommandError> {
+    let mut child = Command::new(binary)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                BoundedCommandError::Missing
+            } else {
+                BoundedCommandError::Failed
+            }
+        })?;
+    let started = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|_| BoundedCommandError::Failed)
+            }
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait_with_output();
+                    return Err(BoundedCommandError::TimedOut);
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait_with_output();
+                return Err(BoundedCommandError::Failed);
+            }
+        }
+    }
+}
+
 fn write_response(stream: &mut UnixStream, response: &BridgeResponse) -> Result<(), String> {
     let json = serde_json::to_vec(response).map_err(|error| error.to_string())?;
     stream.write_all(&json).map_err(|error| error.to_string())?;
@@ -842,6 +985,17 @@ fn self_test() -> Result<(), String> {
     ])?;
     validate_gsettings_args(&[
         "get".to_string(),
+        SOUND_SCHEMA.to_string(),
+        "event-sounds".to_string(),
+    ])?;
+    validate_gsettings_args(&[
+        "set".to_string(),
+        SOUND_SCHEMA.to_string(),
+        "allow-volume-above-100-percent".to_string(),
+        "false".to_string(),
+    ])?;
+    validate_gsettings_args(&[
+        "get".to_string(),
         format!("{NOTIFICATION_APPLICATION_SCHEMA}:{NOTIFICATION_APPLICATION_BASE_PATH}org-gnome-Console/"),
         "enable".to_string(),
     ])?;
@@ -855,6 +1009,19 @@ fn self_test() -> Result<(), String> {
         "org.goblins.GatePrivacyProof",
         "org.goblins.GatePrivacyProof",
     )?;
+    validate_wpctl_args(&["status".to_string()])?;
+    validate_wpctl_args(&["get-volume".to_string(), DEFAULT_SINK.to_string()])?;
+    validate_wpctl_args(&[
+        "set-volume".to_string(),
+        DEFAULT_SOURCE.to_string(),
+        "0.62".to_string(),
+    ])?;
+    validate_wpctl_args(&[
+        "set-mute".to_string(),
+        DEFAULT_SINK.to_string(),
+        "1".to_string(),
+    ])?;
+    validate_wpctl_args(&["set-default".to_string(), "42".to_string()])?;
     validate_display_config_logical_monitors(&[DisplayConfigLogicalMonitor {
         x: 0,
         y: 0,
@@ -909,9 +1076,10 @@ mod tests {
     use super::{
         encode_display_config_logical_monitors, validate_display_config_logical_monitors,
         validate_gsettings_args, validate_permission_store_delete, validate_schema_arg,
-        DisplayConfigLogicalMonitor, DisplayConfigMonitor, FOCUS_SCHEMA, INPUT_SOURCES_SCHEMA,
-        KEYBOARD_SCHEMA, MOUSE_SCHEMA, NOTIFICATION_APPLICATION_BASE_PATH,
-        NOTIFICATION_APPLICATION_SCHEMA, TOUCHPAD_SCHEMA, WM_SCHEMA,
+        validate_wpctl_args, DisplayConfigLogicalMonitor, DisplayConfigMonitor, DEFAULT_SINK,
+        DEFAULT_SOURCE, FOCUS_SCHEMA, INPUT_SOURCES_SCHEMA, KEYBOARD_SCHEMA, MOUSE_SCHEMA,
+        NOTIFICATION_APPLICATION_BASE_PATH, NOTIFICATION_APPLICATION_SCHEMA, SOUND_SCHEMA,
+        TOUCHPAD_SCHEMA, WM_SCHEMA,
     };
 
     #[test]
@@ -953,6 +1121,19 @@ mod tests {
         ])
         .is_ok());
         assert!(validate_gsettings_args(&[
+            "get".to_string(),
+            SOUND_SCHEMA.to_string(),
+            "theme-name".to_string(),
+        ])
+        .is_ok());
+        assert!(validate_gsettings_args(&[
+            "set".to_string(),
+            SOUND_SCHEMA.to_string(),
+            "event-sounds".to_string(),
+            "false".to_string(),
+        ])
+        .is_ok());
+        assert!(validate_gsettings_args(&[
             "reset".to_string(),
             WM_SCHEMA.to_string(),
             "mission-control".to_string(),
@@ -976,6 +1157,52 @@ mod tests {
             "bad\nvalue".to_string(),
         ])
         .is_err());
+    }
+
+    #[test]
+    fn wpctl_allowlist_accepts_audio_shapes() {
+        assert!(validate_wpctl_args(&["status".to_string()]).is_ok());
+        assert!(validate_wpctl_args(&["get-volume".to_string(), DEFAULT_SINK.to_string()]).is_ok());
+        assert!(
+            validate_wpctl_args(&["get-volume".to_string(), DEFAULT_SOURCE.to_string()]).is_ok()
+        );
+        assert!(validate_wpctl_args(&[
+            "set-volume".to_string(),
+            DEFAULT_SINK.to_string(),
+            "1.50".to_string(),
+        ])
+        .is_ok());
+        assert!(validate_wpctl_args(&[
+            "set-mute".to_string(),
+            DEFAULT_SOURCE.to_string(),
+            "0".to_string(),
+        ])
+        .is_ok());
+        assert!(validate_wpctl_args(&["set-default".to_string(), "58".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn wpctl_allowlist_rejects_arbitrary_commands() {
+        assert!(validate_wpctl_args(&["inspect".to_string(), "0".to_string()]).is_err());
+        assert!(validate_wpctl_args(&[
+            "set-volume".to_string(),
+            "42".to_string(),
+            "0.5".to_string(),
+        ])
+        .is_err());
+        assert!(validate_wpctl_args(&[
+            "set-volume".to_string(),
+            DEFAULT_SINK.to_string(),
+            "2.0".to_string(),
+        ])
+        .is_err());
+        assert!(validate_wpctl_args(&[
+            "set-mute".to_string(),
+            DEFAULT_SINK.to_string(),
+            "muted".to_string(),
+        ])
+        .is_err());
+        assert!(validate_wpctl_args(&["set-default".to_string(), "../58".to_string()]).is_err());
     }
 
     #[test]

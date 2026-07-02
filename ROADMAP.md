@@ -34,46 +34,44 @@
 
 ## ⏩ Session status — RESUME HERE (updated 2026-07-02)
 
-The current Settings source-gate head is source-verified locally and pushed with
-an `[image]` marker so the build workflow runs the image/render proof on x86_64
-and aarch64. No completed CI/render artifact exists for this head yet; check the
-latest GitHub Actions `build` run before treating the Settings rows as rendered.
+Current audio session-bridge follow-up is source-verified locally and pushed
+with an `[image]` marker; check the latest GitHub Actions build run for this
+amended head before treating the audio follow-up as rendered. Previous Settings
+source-gate head `0bf4e9f` completed build run `28611845201` successfully on
+x86_64 and aarch64, including the image/render jobs; its render artifacts still
+need inspection before the Settings rows are treated as reviewed.
 
-Previous head `933d44f` is source-verified and CI-green for the fast Rust build:
-GitHub Actions build run `28609898514` passed on x86_64 and aarch64 after
-attaching a guest audio device to the proof VM. Hardware-gate run `28609903881`
-for that head is still in progress as of this update: the image publish step
-passed, and the workflow is currently building the verification installer ISO
-before the display-backed VM capture and close-signoff steps. No qemu artifact
-at `933d44f` has proved the audio output route or written the final signoff row
-yet.
+Previous hardware-gate head `933d44f` proved the QEMU audio device is now
+attached (`-audiodev none,id=audio0 -device ich9-intel-hda -device
+hda-output,audiodev=audio0`), but hardware-gate run `28609903881` still failed
+close-signoff. The artifact contains all required screenshot PNGs through
+`32-text-shortcuts-live-ibus-runtime-render.png`; every required runtime proof
+JSON passed except `audio-output-proof.json`. Audio failed at
+`stage=audio-status` with `status_http=000`, `wav_generated=true`,
+`player_started=true`, `rendered_sound_panel=false`, and missing
+WirePlumber/output fields. Firewall live toggle, Text Shortcuts session/live
+runtime render, keyboard rebind, input-source roundtrip, multi-display apply,
+Focus arm, app-keyed App Privacy revoke, and Preview open/render all reported
+`status=pass`.
 
-The pushed audio follow-up remains qemu-pending and does **not** mark more
+The current audio follow-up remains qemu-pending and does **not** mark more
 features shipped. It keeps the strict audio proof contract from
 `05f0e0a`/`8bbbd02`, keeps the bounded Sound-panel title wait, keeps the
 one-second reused tone buffer, keeps the bounded harness curl/status/waveform
-preflight, keeps the tightened core status route from `ce412cd`, and attaches a
-dummy QEMU audio backend plus an Intel HDA output codec:
-`-audiodev none,id=audio0 -device ich9-intel-hda -device hda-output,audiodev=audio0`.
-Timed-out probes are still killed and reaped, and the route still reports
-"WirePlumber did not answer before the audio status timeout." instead of hanging
-the HTTP route. The QEMU audio device names were checked with local
-`qemu-system-x86_64 -device help` and `qemu-system-aarch64 -device help`.
-The source-gated Batch 5 Settings follow-up adds read-only Settings rows for
-`/v1/security/encryption` and `/v1/snapshots/status`, plus matching
-`goblins-os-verify` and shipping-status source checks. It does **not** enable
-install-time encryption, mint recovery keys, enroll TPM tokens, flip any root
-filesystem, create snapshots, restore files, or claim GTK render proof from this
-host. Local gates for this follow-up pass: focused Settings helper tests,
-`bash -n os/hardware-gate/verify-shipping-status.sh`, `git diff --check`,
-`cargo fmt --all -- --check`, Rust 1.88 GTK container clippy for
-`goblins-os-settings` with `native-desktop`, and
-`cargo run -p goblins-os-verify -- --source-root .` -> **blocked=0 (2853)**.
-Full workspace `cargo clippy --workspace -- -D warnings` and
-`cargo test --workspace` also pass. Final shipping status still fails closed
-until the display-backed VM produces a passing audio proof, distinct
-screenshots, `proof-manifest.json`, all required pass status proof JSONs, and a
-close-signoff row committed back to `main`.
+preflight, keeps the tightened core status route from `ce412cd`, keeps the QEMU
+HDA output device from `933d44f`, and moves `/v1/audio/status` audio routing and
+sound-preference probes onto the allowlisted session bridge. The bridge accepts
+only bounded `wpctl` shapes used by core (`status`, default sink/source
+volume/mute, numeric default device) and allowlisted `org.gnome.desktop.sound`
+gsettings keys, so the system core can inspect the logged-in PipeWire/WirePlumber
+session without broad shell access. Local gates for this follow-up pass: full
+format, hardware-gate shell syntax, focused session-bridge/core audio tests,
+`cargo test -p goblins-os-verify`, `cargo clippy --workspace -- -D warnings`,
+`cargo test --workspace`, `git diff --check`, and the source verifier ->
+**blocked=0 (2861)**.
+Final shipping status still fails closed until a fresh display-backed VM produces
+a passing audio proof, distinct screenshots, `proof-manifest.json`, all required
+pass status proof JSONs, and a close-signoff row committed back to `main`.
 
 Previous head `ce412cd` is source-verified and CI-green for the fast Rust build:
 GitHub Actions build run `28605702444` passed on x86_64 and aarch64 after

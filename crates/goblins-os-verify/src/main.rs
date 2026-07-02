@@ -6237,6 +6237,46 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "wav_generated=$wav_generated",
         ),
         contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-accepts-wpctl-op",
+            "Wpctl",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-validates-wpctl-allowlist",
+            "validate_wpctl_args",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-bounds-wpctl-probe",
+            "WirePlumber did not answer before the session bridge audio timeout.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-allowlists-sound-gsettings",
+            "org.gnome.desktop.sound",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-bounds-gsettings-probe",
+            "gsettings did not answer before the session bridge preference timeout.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-client-supports-wpctl",
+            "pub(crate) fn wpctl",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-status-uses-session-bridge-wpctl-first",
+            "session_bridge::wpctl(args)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/audio.rs"),
+            "core-audio-sound-preferences-use-session-bridge-gsettings-first",
+            "session_bridge::gsettings(args)",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-vm-attaches-dummy-audio-backend",
             "-audiodev none,id=audio0",

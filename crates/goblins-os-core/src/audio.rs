@@ -13,12 +13,15 @@ use std::{
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::session_bridge::{self, SessionBridgeResult};
+
 const DEFAULT_SINK: &str = "@DEFAULT_AUDIO_SINK@";
 const DEFAULT_SOURCE: &str = "@DEFAULT_AUDIO_SOURCE@";
 const SOUND_SCHEMA: &str = "org.gnome.desktop.sound";
 const WPCTL_TIMEOUT_MS_DEFAULT: u64 = 500;
 const WPCTL_TIMEOUT_MS_MIN: u64 = 100;
 const WPCTL_TIMEOUT_MS_MAX: u64 = 5_000;
+const GSETTINGS_TIMEOUT_MS: u64 = 1_500;
 
 #[derive(Serialize)]
 pub struct AudioStatus {
@@ -820,6 +823,12 @@ enum BoundedCommandError {
 }
 
 fn wpctl(args: &[&str]) -> Result<String, WpctlError> {
+    match session_bridge::wpctl(args) {
+        SessionBridgeResult::Success(stdout) => return Ok(stdout),
+        SessionBridgeResult::Failed(detail) => return Err(WpctlError::Failed(detail)),
+        SessionBridgeResult::Unavailable => {}
+    }
+
     match bounded_command_output("wpctl", args, wpctl_timeout_duration()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -902,7 +911,17 @@ fn bounded_command_output(
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
-    match Command::new("gsettings").args(args).output() {
+    match session_bridge::gsettings(args) {
+        SessionBridgeResult::Success(stdout) => return Ok(stdout),
+        SessionBridgeResult::Failed(detail) => return Err(GSettingsError::Failed(detail)),
+        SessionBridgeResult::Unavailable => {}
+    }
+
+    match bounded_command_output(
+        "gsettings",
+        args,
+        Duration::from_millis(GSETTINGS_TIMEOUT_MS),
+    ) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
@@ -910,8 +929,13 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
             &String::from_utf8_lossy(&output.stderr),
             &String::from_utf8_lossy(&output.stdout),
         ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(GSettingsError::Missing),
-        Err(_) => Err(GSettingsError::Missing),
+        Err(BoundedCommandError::Missing) => Err(GSettingsError::Missing),
+        Err(BoundedCommandError::TimedOut) => Err(GSettingsError::Failed(
+            "Desktop preferences did not answer before the sound preference timeout.".to_string(),
+        )),
+        Err(BoundedCommandError::Failed) => Err(GSettingsError::Failed(
+            "Desktop preferences are not ready in this session.".to_string(),
+        )),
     }
 }
 

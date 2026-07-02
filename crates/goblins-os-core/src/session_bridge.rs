@@ -28,6 +28,9 @@ enum BridgeRequest<'a> {
         path: String,
         kind: &'a str,
     },
+    Wpctl {
+        args: Vec<&'a str>,
+    },
     PermissionStoreDelete {
         table: &'a str,
         id: &'a str,
@@ -75,6 +78,12 @@ pub(crate) fn open_preview(path: &Path, kind: &'static str) -> SessionBridgeResu
     call_bridge(&BridgeRequest::OpenPreview {
         path: path.display().to_string(),
         kind,
+    })
+}
+
+pub(crate) fn wpctl(args: &[&str]) -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::Wpctl {
+        args: args.to_vec(),
     })
 }
 
@@ -168,7 +177,7 @@ fn socket_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{gsettings, SessionBridgeResult};
+    use super::{gsettings, wpctl, SessionBridgeResult};
 
     #[test]
     fn absent_bridge_reports_unavailable_for_host_tests() {
@@ -177,6 +186,7 @@ mod tests {
                 gsettings(&["list-schemas"]),
                 SessionBridgeResult::Unavailable
             );
+            assert_eq!(wpctl(&["status"]), SessionBridgeResult::Unavailable);
         }
     }
 }

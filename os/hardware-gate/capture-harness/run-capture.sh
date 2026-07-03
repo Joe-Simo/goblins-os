@@ -6,7 +6,7 @@
 # install + first-boot GDM-autologin desktop, completes first boot through the
 # same core API contracts as the private/offline UI path, publishes the
 # in-session orchestrator for the verification-only user service, captures
-# the 27 required shots by QMP-screendump on each HTTP signal,
+# the 32 required shots by QMP-screendump on each HTTP signal,
 # writes proof-manifest.json, and runs close-signoff.sh.
 #
 # Honest: every shot is a real framebuffer capture of the real installed OS.

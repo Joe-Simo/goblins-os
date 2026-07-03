@@ -1,7 +1,7 @@
 # Hardware-gate display-backed-VM capture, on NATIVE dual-arch runners.
 # Manual-dispatch only (never auto-runs) — it boots the shippable ISO in a
 # KVM-accelerated qemu VM, drives the install + the in-session capture harness,
-# writes the 27-shot screenshot run + proof-manifest, and runs close-signoff.
+# writes the 32-shot screenshot run + proof-manifest, and runs close-signoff.
 # This is the only route to the x86_64 hardware-gate track (x86_64 cannot be
 # produced on an Apple-Silicon dev host). Honest: real captures of the real OS;
 # gaming via the image's own lavapipe/gamescope/pipewire stack.

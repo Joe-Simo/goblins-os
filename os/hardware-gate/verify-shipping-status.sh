@@ -64,6 +64,7 @@ FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
 AUDIO_OUTPUT_PROOF="audio-output-proof.json"
+RUNTIME_BUILD_PROOF="runtime-build-proof.json"
 
 check() {
   local label="$1"
@@ -244,6 +245,7 @@ screenshot_run_is_complete() {
   app_privacy_revoke_proof_passes "$run_dir/$APP_PRIVACY_REVOKE_PROOF" || return 1
   preview_open_render_proof_passes "$run_dir/$PREVIEW_OPEN_RENDER_PROOF" || return 1
   audio_output_proof_passes "$run_dir/$AUDIO_OUTPUT_PROOF" || return 1
+  runtime_build_proof_passes "$run_dir/$RUNTIME_BUILD_PROOF" || return 1
   return 0
 }
 
@@ -303,7 +305,8 @@ screenshot_manifest_matches_iso() {
     && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"app_privacy_revoke_proof"[[:space:]]*:[[:space:]]*"'"$APP_PRIVACY_REVOKE_PROOF"'"' "$manifest" \
     && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest" \
-    && rg -q '"audio_output_proof"[[:space:]]*:[[:space:]]*"'"$AUDIO_OUTPUT_PROOF"'"' "$manifest"
+    && rg -q '"audio_output_proof"[[:space:]]*:[[:space:]]*"'"$AUDIO_OUTPUT_PROOF"'"' "$manifest" \
+    && rg -q '"runtime_build_proof"[[:space:]]*:[[:space:]]*"'"$RUNTIME_BUILD_PROOF"'"' "$manifest"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -666,6 +669,19 @@ audio_output_proof_passes() {
     && rg -q '"rendered_sound_panel"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
+runtime_build_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/apps/builds"' "$proof" \
+    && rg -q '"engine_mode"[[:space:]]*:[[:space:]]*"local-model"' "$proof" \
+    && rg -q '"engine_source"[[:space:]]*:[[:space:]]*"[A-Za-z0-9._:-]+-built"' "$proof" \
+    && rg -q '"built_artifact_id"[[:space:]]*:[[:space:]]*"[A-Za-z0-9._:-]+"' "$proof" \
+    && rg -q '"built_artifact_name"[[:space:]]*:[[:space:]]*"[^"]+"' "$proof" \
+    && rg -q '"intent"[[:space:]]*:[[:space:]]*"[^"]+"' "$proof"
+}
+
 print_missing_screenshot_paths() {
   local run_dir="$1"
   local missing=0
@@ -742,6 +758,10 @@ print_missing_screenshot_paths() {
   fi
   if ! audio_output_proof_passes "$run_dir/$AUDIO_OUTPUT_PROOF"; then
     echo "  $run_dir/$AUDIO_OUTPUT_PROOF"
+    missing=1
+  fi
+  if ! runtime_build_proof_passes "$run_dir/$RUNTIME_BUILD_PROOF"; then
+    echo "  $run_dir/$RUNTIME_BUILD_PROOF"
     missing=1
   fi
   return "$missing"
@@ -920,6 +940,12 @@ print_screenshot_run_checks() {
     echo "[FAIL] $AUDIO_OUTPUT_PROOF (missing or audio output proof failed)"
     missing=1
   fi
+  if runtime_build_proof_passes "$run_dir/$RUNTIME_BUILD_PROOF"; then
+    echo "[PASS] $RUNTIME_BUILD_PROOF"
+  else
+    echo "[FAIL] $RUNTIME_BUILD_PROOF (missing or runtime app-build proof failed)"
+    missing=1
+  fi
   return "$missing"
 }
 
@@ -978,6 +1004,7 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$APP_PRIVACY_REVOKE_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$PREVIEW_OPEN_RENDER_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$AUDIO_OUTPUT_PROOF
+  os/screenshots/hardware-gate/$arch/<date>/$RUNTIME_BUILD_PROOF
 EOF
 }
 
@@ -1368,6 +1395,7 @@ check "hardware gate requires Text Shortcuts candidate bubble render screenshot 
 check "hardware gate requires Text Shortcuts live IBus runtime/render proof in signoff" "rg -q 'text_shortcuts_live_ibus_runtime_render_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts live IBus runtime/render checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-live-ibus-runtime-render-proof.json' os/hardware-gate/runbook.md && rg -q '32-text-shortcuts-live-ibus-runtime-render.png' os/hardware-gate/runbook.md"
 check "hardware gate requires Preview open/render proof in signoff" "rg -q 'preview_open_render_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Preview open/render checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'preview-open-render-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Audio output proof in signoff" "rg -q 'audio_output_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Audio output checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'audio-output-proof.json' os/hardware-gate/runbook.md"
+check "hardware gate requires runtime app-build proof in signoff" "rg -q 'runtime_build_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'runtime-build-proof.json' os/hardware-gate/runbook.md && rg -q '/proof/runtime-build' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_build_proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "hardware gate requires Focus arm roundtrip proof in signoff" "rg -q 'focus_arm_roundtrip_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Focus arm roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Multi-display apply proof in signoff" "rg -q 'multi_display_apply_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Multi-display apply checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'multi-display-apply-proof.json' os/hardware-gate/runbook.md && rg -q 'multi_display_apply_proof' os/hardware-gate/runbook.md"
 check "hardware gate requires App privacy revoke proof in signoff" "rg -q 'app_privacy_revoke_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'App privacy revoke checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'app-privacy-revoke-proof.json' os/hardware-gate/runbook.md"

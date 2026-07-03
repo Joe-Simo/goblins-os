@@ -81,6 +81,7 @@ REQUIRED_PROOFS = (
     "app-privacy-revoke",
     "preview-open-render",
     "audio-output",
+    "runtime-build",
 )
 PROOF_FILENAMES = {
     "firewall-live-toggle": "firewall-live-toggle-proof.json",
@@ -99,6 +100,7 @@ PROOF_FILENAMES = {
     "app-privacy-revoke": "app-privacy-revoke-proof.json",
     "preview-open-render": "preview-open-render-proof.json",
     "audio-output": "audio-output-proof.json",
+    "runtime-build": "runtime-build-proof.json",
 }
 
 def _conn():

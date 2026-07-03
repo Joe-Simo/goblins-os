@@ -154,7 +154,9 @@ the release media that was booted:
   "multi_display_apply_proof": "multi-display-apply-proof.json",
   "focus_arm_roundtrip_proof": "focus-arm-roundtrip-proof.json",
   "app_privacy_revoke_proof": "app-privacy-revoke-proof.json",
-  "preview_open_render_proof": "preview-open-render-proof.json"
+  "preview_open_render_proof": "preview-open-render-proof.json",
+  "audio_output_proof": "audio-output-proof.json",
+  "runtime_build_proof": "runtime-build-proof.json"
 }
 ```
 
@@ -332,6 +334,13 @@ a bounded local WAV probe, plays it with `pw-play` or `paplay`, and captures
 `24-audio-output.png` only after the real Sound panel window is mapped. This
 proves PipeWire output readiness in qemu without claiming external speaker
 hardware, microphone capture, or arbitrary app audio routing.
+
+The runtime-build gate is `runtime-build-proof.json`, linked from
+`proof-manifest.json` as `runtime_build_proof`. It grants the app-builder
+control, calls `/v1/apps/builds` with a bounded app intent, waits for the live
+response, and records the returned build id, name, and engine source. A run
+without this proof cannot complete signoff because Build Studio screenshots
+alone do not prove a real app-build turn.
 
 Capture exactly at minimum these names:
 1. `01-installer.png` — ISO boot + installer launch

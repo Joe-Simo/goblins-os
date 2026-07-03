@@ -94,6 +94,7 @@ FOCUS_ARM_ROUNDTRIP_PROOF="focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
 AUDIO_OUTPUT_PROOF="audio-output-proof.json"
+RUNTIME_BUILD_PROOF="runtime-build-proof.json"
 GAMING_SCREENSHOT_STATUS="not checked"
 GAMING_AUDIO_OUTPUT_STATUS="not checked"
 INSTALL_STORAGE_STATUS="not checked"
@@ -120,6 +121,42 @@ RUNTIME_ENGINE_SOURCE="${RUNTIME_ENGINE_SOURCE:-}"
 RUNTIME_ENGINE_CONFIG="${RUNTIME_ENGINE_CONFIG:-}"
 BUILT_ARTIFACT_PATH_URL="${BUILT_ARTIFACT_PATH_URL:-}"
 
+ci_run_url() {
+  if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
+    printf '%s/%s/actions/runs/%s' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+  fi
+}
+
+signoff_runner() {
+  if [ -n "${SIGNOFF_RUNNER:-}" ]; then
+    printf '%s' "$SIGNOFF_RUNNER"
+    return
+  fi
+
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    local runner="${RUNNER_NAME:-github-actions}"
+    local os="${RUNNER_OS:-unknown-os}"
+    local arch="${RUNNER_ARCH:-unknown-arch}"
+    local workflow="${GITHUB_WORKFLOW:-unknown-workflow}"
+    local run_url
+    run_url="$(ci_run_url)"
+    if [ -n "$run_url" ]; then
+      printf '%s (%s/%s, %s, %s)' "$runner" "$os" "$arch" "$workflow" "$run_url"
+    else
+      printf '%s (%s/%s, %s)' "$runner" "$os" "$arch" "$workflow"
+    fi
+    return
+  fi
+
+  printf '%s' "${USER:-$(id -un 2>/dev/null || echo unknown)}@$(hostname 2>/dev/null || echo unknown-host)"
+}
+
+CI_RUN_URL="$(ci_run_url)"
+SIGNOFF_RUNNER_VALUE="$(signoff_runner)"
+CI_RUST_URL="${CI_RUST_URL:-${CI_RUN_URL:-}}"
+CI_IMAGE_URL="${CI_IMAGE_URL:-${CI_RUN_URL:-}}"
+CI_INSTALLER_ISO_URL="${CI_INSTALLER_ISO_URL:-${CI_RUN_URL:-}}"
+
 choose_runtime() {
   if command -v docker >/dev/null 2>&1; then
     echo "docker"
@@ -135,7 +172,7 @@ runtime_image_exists() {
 
   case "$runtime" in
     docker)
-      docker image inspect "$image" >/dev/null 2>&1
+      docker image inspect "$image" >/dev/null 2>&1 || docker pull "$image" >/dev/null 2>&1
       ;;
     *)
       return 1
@@ -679,6 +716,19 @@ audio_output_proof_passes() {
     && rg -q '"rendered_sound_panel"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
+runtime_build_proof_passes() {
+  local proof="$1"
+
+  [ -s "$proof" ] \
+    && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
+    && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/apps/builds"' "$proof" \
+    && rg -q '"engine_mode"[[:space:]]*:[[:space:]]*"local-model"' "$proof" \
+    && rg -q '"engine_source"[[:space:]]*:[[:space:]]*"[A-Za-z0-9._:-]+-built"' "$proof" \
+    && rg -q '"built_artifact_id"[[:space:]]*:[[:space:]]*"[A-Za-z0-9._:-]+"' "$proof" \
+    && rg -q '"built_artifact_name"[[:space:]]*:[[:space:]]*"[^"]+"' "$proof" \
+    && rg -q '"intent"[[:space:]]*:[[:space:]]*"[^"]+"' "$proof"
+}
+
 validate_runtime_proof_fields() {
   local any_runtime_proof=0
 
@@ -702,6 +752,12 @@ validate_runtime_proof_fields() {
   fi
   if ! built_artifact_reference_is_real "$BUILT_ARTIFACT_PATH_URL"; then
     fail "BUILT_ARTIFACT_PATH_URL must be an https URL, localhost URL, or existing local path for the real built app artifact."
+    exit 1
+  fi
+  if [ -f "$BUILT_ARTIFACT_PATH_URL" ] \
+    && [ "$(basename "$BUILT_ARTIFACT_PATH_URL")" = "$RUNTIME_BUILD_PROOF" ] \
+    && ! runtime_build_proof_passes "$BUILT_ARTIFACT_PATH_URL"; then
+    fail "$BUILT_ARTIFACT_PATH_URL must be a passing current-run /v1/apps/builds proof."
     exit 1
   fi
 }
@@ -1081,13 +1137,13 @@ fi
 cat >> "$OUT" <<EOF2
 
 ## Manual Gate Run: $STAMP (script assisted)
-- Runner: 
+- Runner: ${SIGNOFF_RUNNER_VALUE}
 - CI workflow references: verified in-repo at .github/workflows/build.yml
 - Architecture: ${ARCH}
 - CI run IDs/URLs:
-  - rust: 
-  - image: 
-  - installer-iso: 
+  - rust: ${CI_RUST_URL:-not provided}
+  - image: ${CI_IMAGE_URL:-not provided}
+  - installer-iso: ${CI_INSTALLER_ISO_URL:-not provided}
 - Image: ${IMAGE}
 - ISO: ${ISO_PATH}
 - ISO SHA256: ${ISO_SHA}

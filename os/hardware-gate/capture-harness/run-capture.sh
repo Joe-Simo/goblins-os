@@ -222,6 +222,7 @@ MULTI_DISPLAY_APPLY_PROOF="$RUN_DIR/multi-display-apply-proof.json"
 FOCUS_ARM_ROUNDTRIP_PROOF="$RUN_DIR/focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="$RUN_DIR/app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="$RUN_DIR/preview-open-render-proof.json"
+RUNTIME_BUILD_PROOF="$RUN_DIR/runtime-build-proof.json"
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
@@ -243,6 +244,13 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"core_runtime_loop_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"runtime_ready_claim": "true"' "$TEXT_SHORTCUTS_PROOF"; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof at $TEXT_SHORTCUTS_PROOF"
+  exit 4
+fi
+if ! grep -Fq '"status": "pass"' "$RUNTIME_BUILD_PROOF" \
+  || ! grep -Fq '"route": "/v1/apps/builds"' "$RUNTIME_BUILD_PROOF" \
+  || ! grep -Fq '"engine_mode": "local-model"' "$RUNTIME_BUILD_PROOF" \
+  || ! rg -q '"engine_source"[[:space:]]*:[[:space:]]*"[A-Za-z0-9._:-]+-built"' "$RUNTIME_BUILD_PROOF"; then
+  echo "HONESTY GUARD: missing or failing runtime app-build proof at $RUNTIME_BUILD_PROOF"
   exit 4
 fi
 if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_PROOF" \
@@ -591,10 +599,28 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
           "app_privacy_revoke_proof":"app-privacy-revoke-proof.json",
           "preview_open_render_proof":"preview-open-render-proof.json",
           "audio_output_proof":"audio-output-proof.json",
+          "runtime_build_proof":"runtime-build-proof.json",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY
 echo "capture complete: $RUN_DIR"
 # Close-signoff matches the committed repo-relative run dir and reads its own
 # relative paths (ISO, workflow) from the repo root.
-( cd "$REPO" && GOBLINS_OS_ARCH="$ARCH" SCREENSHOT_DIR="${RUN_DIR#"$REPO/"}" os/hardware-gate/close-signoff.sh )
+RUNTIME_ENGINE_SOURCE="$(python3 - "$RUNTIME_BUILD_PROOF" <<'PY'
+import json
+import sys
+
+try:
+    print(json.load(open(sys.argv[1], encoding="utf-8")).get("engine_source", ""))
+except Exception:
+    print("")
+PY
+)"
+( cd "$REPO" \
+  && GOBLINS_OS_ARCH="$ARCH" \
+    SCREENSHOT_DIR="${RUN_DIR#"$REPO/"}" \
+    RUNTIME_ENGINE_MODE="local-model" \
+    RUNTIME_ENGINE_SOURCE="$RUNTIME_ENGINE_SOURCE" \
+    RUNTIME_ENGINE_CONFIG="${RUN_DIR#"$REPO/"}/runtime-build-proof.json" \
+    BUILT_ARTIFACT_PATH_URL="${RUN_DIR#"$REPO/"}/runtime-build-proof.json" \
+    os/hardware-gate/close-signoff.sh )

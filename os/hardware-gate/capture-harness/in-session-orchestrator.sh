@@ -51,6 +51,7 @@ proof_focus_arm_roundtrip(){ curl -s "http://$H/proof/focus-arm-roundtrip?$1" >/
 proof_app_privacy_revoke(){ curl -s "http://$H/proof/app-privacy-revoke?$1" >/dev/null 2>&1 || true; }
 proof_preview_open_render(){ curl -s "http://$H/proof/preview-open-render?$1" >/dev/null 2>&1 || true; }
 proof_audio_output(){ curl -s "http://$H/proof/audio-output?$1" >/dev/null 2>&1 || true; }
+proof_runtime_build(){ curl -s "http://$H/proof/runtime-build?$1" >/dev/null 2>&1 || true; }
 proof_query_value(){
   python3 - "$1" <<'PY'
 import sys
@@ -2016,10 +2017,39 @@ shot 21-gamescope-session gamescope -W 960 -H 600 -b -- vkcube
 # ---- studio-live (needs the host model; best-effort) ----
 curl -s -X POST "$FIX_URL/v1/policy/permissions/grant" -H 'content-type: application/json' \
   -d '{"control_id":"app-builder","acknowledgement":"GRANT GOBLINS OS PERMISSION app-builder FOR consumer"}' >/dev/null 2>&1
-curl -s -X POST "$FIX_URL/v1/apps/builds" -H 'content-type: application/json' \
-  -d '{"intent":"A focus timer that counts down 25 minutes and rings."}' >/tmp/build.json 2>&1 &
+rm -f /tmp/build.json /tmp/build.err /tmp/build.rc
+(
+  set +e
+  curl -s -X POST "$FIX_URL/v1/apps/builds" -H 'content-type: application/json' \
+    -d '{"intent":"A focus timer that counts down 25 minutes and rings."}' >/tmp/build.json 2>/tmp/build.err
+  build_rc="$?"
+  set -e
+  echo "$build_rc" >/tmp/build.rc
+) &
+build_pid=$!
 GOBLINS_OS_CORE_URL=$FIX_URL shot 14-studio-running "$B/goblins-os-shell" --studio
-sleep 20  # let the build finish
+for _ in $(seq 1 60); do
+  if [ -s /tmp/build.rc ]; then
+    break
+  fi
+  sleep 1
+done
+if [ ! -s /tmp/build.rc ]; then
+  kill "$build_pid" 2>/dev/null || true
+  wait "$build_pid" 2>/dev/null || true
+  proof_runtime_build "status=fail&stage=timeout&route=/v1/apps/builds&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&error_tail=$(file_tail_query_value /tmp/build.err)"
+else
+  wait "$build_pid" || true
+  build_id="$(json_field /tmp/build.json app.id)"
+  build_name="$(json_field /tmp/build.json app.name)"
+  build_source="$(json_field /tmp/build.json app.source)"
+  build_intent="$(json_field /tmp/build.json app.intent)"
+  if [ -n "$build_id" ] && [ -n "$build_name" ] && [ -n "$build_source" ]; then
+    proof_runtime_build "status=pass&route=/v1/apps/builds&intent=$(proof_query_value "${build_intent:-A focus timer that counts down 25 minutes and rings.}")&engine_mode=local-model&engine_source=$(proof_query_value "$build_source")&built_artifact_id=$(proof_query_value "$build_id")&built_artifact_name=$(proof_query_value "$build_name")&response_bytes=$(file_size_value /tmp/build.json)"
+  else
+    proof_runtime_build "status=fail&stage=response&route=/v1/apps/builds&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=$(proof_query_value "${build_source:-missing}")&built_artifact_id=$(proof_query_value "${build_id:-missing}")&built_artifact_name=$(proof_query_value "${build_name:-missing}")&response_bytes=$(file_size_value /tmp/build.json)&response_tail=$(file_tail_query_value /tmp/build.json)&error_tail=$(file_tail_query_value /tmp/build.err)"
+  fi
+fi
 GOBLINS_OS_CORE_URL=$FIX_URL shot 15-studio-app-detail "$B/goblins-os-shell" --studio
 GOBLINS_OS_CORE_URL=$FIX_URL shot 16-built-app-open "$B/goblins-os-shell" --studio
 

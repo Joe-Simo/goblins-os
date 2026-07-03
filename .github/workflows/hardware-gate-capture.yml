@@ -100,7 +100,10 @@ jobs:
       - name: Run the display-backed-VM capture + close-signoff
         run: |
           chmod +x os/hardware-gate/capture-harness/*.sh os/hardware-gate/capture-harness/*.py
-          REPO_ROOT="$PWD" GOBLINS_OS_ARCH=${{ matrix.arch }} RUN_DATE="${{ inputs.run_date }}" \
+          REPO_ROOT="$PWD" \
+          GOBLINS_OS_ARCH=${{ matrix.arch }} \
+          GOBLINS_OS_IMAGE='${{ steps.ref.outputs.ref }}' \
+          RUN_DATE="${{ inputs.run_date }}" \
             bash os/hardware-gate/capture-harness/run-capture.sh
       - name: Commit the screenshot run + signoff back to the repo
         run: |

@@ -452,19 +452,19 @@ export default function Home() {
       </section>
 
       <section id="verify" className="scroll-mt-20 border-b bg-muted/35">
-        <div className="mx-auto grid w-full max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.72fr_0.28fr] lg:px-8">
-          <div className="flex flex-col gap-6">
+        <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.72fr_0.28fr] lg:px-8">
+          <div className="flex min-w-0 flex-col gap-6">
             <SectionHeading
               title="Verify your download"
               description="Download both parts for your architecture, verify the split files, reassemble the compressed ISO, decompress it, and verify the final ISO."
             />
-            <Tabs defaultValue="macos-linux" className="w-full">
-              <TabsList>
+            <Tabs defaultValue="macos-linux" className="w-full min-w-0">
+              <TabsList className="w-full justify-start overflow-x-auto sm:w-fit">
                 <TabsTrigger value="macos-linux">macOS / Linux</TabsTrigger>
                 <TabsTrigger value="windows">Windows</TabsTrigger>
               </TabsList>
-              <TabsContent value="macos-linux">
-                <Card>
+              <TabsContent value="macos-linux" className="min-w-0">
+                <Card className="min-w-0">
                   <CardHeader>
                     <CardTitle>Reassemble and verify</CardTitle>
                     <CardDescription>
@@ -472,8 +472,8 @@ export default function Home() {
                       <code>x86_64</code>. Requires <code>zstd</code>.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent>
-                    <pre className="overflow-x-auto rounded-md bg-muted p-4 text-sm leading-6">
+                  <CardContent className="min-w-0">
+                    <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-4 text-sm leading-6">
                       <code>{`shasum -a 256 -c goblins-os-<arch>.iso.zst.parts.sha256
 cat goblins-os-<arch>.iso.zst.part-* > goblins-os-<arch>.iso.zst
 shasum -a 256 -c goblins-os-<arch>.iso.zst.sha256
@@ -483,16 +483,16 @@ shasum -a 256 -c goblins-os-<arch>.iso.sha256`}</code>
                   </CardContent>
                 </Card>
               </TabsContent>
-              <TabsContent value="windows">
-                <Card>
+              <TabsContent value="windows" className="min-w-0">
+                <Card className="min-w-0">
                   <CardHeader>
                     <CardTitle>PowerShell checks</CardTitle>
                     <CardDescription>
                       Compare each hash with the published <code>.sha256</code> files before flashing.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent>
-                    <pre className="overflow-x-auto rounded-md bg-muted p-4 text-sm leading-6">
+                  <CardContent className="min-w-0">
+                    <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-4 text-sm leading-6">
                       <code>{`Get-FileHash .\\goblins-os-<arch>.iso.zst.part-00 -Algorithm SHA256
 Get-FileHash .\\goblins-os-<arch>.iso.zst.part-01 -Algorithm SHA256
 copy /b goblins-os-<arch>.iso.zst.part-00+goblins-os-<arch>.iso.zst.part-01 goblins-os-<arch>.iso.zst
@@ -506,7 +506,7 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
             </Tabs>
           </div>
 
-          <Card className="h-fit" data-gsap="reveal">
+          <Card className="h-fit min-w-0" data-gsap="reveal">
             <CardHeader>
               <CardTitle>Release checksums</CardTitle>
               <CardDescription>
@@ -527,8 +527,8 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
       </section>
 
       <section id="source" className="scroll-mt-20 bg-background">
-        <div className="mx-auto grid w-full max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.8fr_1.2fr] lg:px-8">
-          <div className="flex flex-col gap-5" data-gsap="reveal">
+        <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.8fr_1.2fr] lg:px-8">
+          <div className="flex min-w-0 flex-col gap-5" data-gsap="reveal">
             <SectionHeading
               title="Source and provenance"
               description="Goblins OS source is AGPL-3.0-or-later, with reserved project marks and separate upstream licenses for bundled OS components."
@@ -549,7 +549,7 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3" data-gsap="reveal">
+          <div className="grid min-w-0 gap-4 md:grid-cols-3" data-gsap="reveal">
             <EvidenceCard
               icon={FileCheck2Icon}
               title="Release policy"

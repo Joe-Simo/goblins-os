@@ -32,9 +32,27 @@
 
 ---
 
-## ⏩ Session status — RESUME HERE (updated 2026-07-03)
+## ⏩ Session status — RESUME HERE (updated 2026-07-03, later)
 
-Hardware-gate run `28644853356` at head `5f4c412` is the **first fully green
+**Second fully green signoff, now with the Text Shortcuts live readiness
+contract:** hardware-gate run `28655258122` at `1ba7b2e` passed everything
+end-to-end and committed its signoff row as `832f0d4`. The deliberate core
+readiness flip landed (`73dfe43` + `f6dce50` + `1ba7b2e`): the session
+bridge gained a read-only `IbusEngine` probe (with display-env fallback —
+the ibus CLI derives its socket from WAYLAND_DISPLAY/DISPLAY, which the
+bridge unit env lacked), core derives `runtime_loop_available` live from
+the active engine, and the whole proof contract (orchestrator,
+run-capture guards, close-signoff, verify-shipping, verify crate, runbook)
+now pins `core_readiness_flip=live` with session-enable requiring
+`true/true/true`. **Text Shortcuts (Text Replacement) is `shipped`**; the
+Autocorrect row stays a deliberately-off honest-gated follow-up. Next:
+continue the deferred `in-progress` scopes (writable Displays panel, Focus
+editor + per-app breakthroughs, recordable shortcut UI, resource-keyed
+device grants, CJK candidate windows), then Batch 5 LAST under the
+hardware gate (FileVault-at-install, btrfs `/home` + snapshots), plus the
+aarch64 track and release-evidence links for full shipping verify.
+
+Hardware-gate run `28644853356` at head `5f4c412` was the **first fully green
 display-backed signoff**: bootc image publish, verification installer ISO,
 model serve, install/first boot, the in-session orchestrator, **all 16
 required runtime proof JSONs `status=pass`** — including the first-ever
@@ -2493,7 +2511,8 @@ Genuinely new capability. Each carries an engine; weights are **never** bundled 
 - **Verifiable:** host — world-clock tz math, layout model (id+size order, add/remove/reorder), brief prompt assembly, weather-unit formatting, dconf layout parse. CI/qemu — layer-shell anchoring/slide-in, GTK render, menubar button + edge-swipe, geoclue/libgweather live data, EDS agenda (light+dark screenshots).
 - **Effort:** XL · **Risk:** MED. Keep the layer-shell call behind a feature with a borderless right-aligned window fallback (verify Mutter anchoring at qemu render time); `glib-compile-schemas` must run **after** the gschema COPY; not boot/login-critical (spawned on demand). EDS empty on a fresh image is the honest empty state, not a bug.
 
-### `in-progress` Autocorrect / Text Replacement (system-wide, own IBus engine)
+### `shipped` Autocorrect / Text Replacement (system-wide, own IBus engine)
+- [x] **Core readiness flip proven live (2026-07-03, shipped):** the session bridge gained a read-only `IbusEngine` probe and core now derives `runtime_loop_available` from the live active engine. Hardware-gate run `28655258122` at `1ba7b2e` proved the full contract on the display-backed VM — session-enable with `core_engine_available=true`/`core_runtime_loop_available=true` while `goblins-textshortcuts` is genuinely active, and the live IBus runtime/render proof green with `core_readiness_flip=live` (focused-field callback, text-input-v3 commit, normal expansion, pass-through, password refusal, rendered accept bubble) — signoff row committed in `832f0d4`. Text Replacement is shipped; the Autocorrect capability row remains a deliberately-off, honest-gated follow-up (no model/dictionary toggle shipped).
 - [x] **Curated-table substrate shipped** (`crates/goblins-os-core/src/text_shortcuts.rs` + `/v1/text-shortcuts` GET/POST + `/v1/text-shortcuts/preview`): the Replace→With table stored as JSON at `~/.config/goblins-os/text-shortcuts.json`, edited through the allowlisted bridge with the shared engine `sanitize_shortcuts` contract (trim, drop empties/identity, de-dupe last-wins, cap 500) and `find_replacement` (the exact word-boundary match the engine will perform) — both pure + unit-tested (185 core tests). `engine_available` honest-gating (the table is always editable; replacements apply only when the engine runs). The table needs no model — ships ready. clippy/fmt clean; route verify gate.
 - [x] **Settings table editor source-gated (CI/qemu-pending):** Settings ▸ Keyboard fetches `/v1/text-shortcuts`, shows engine readiness honestly, lists saved Replace→With entries, removes entries, and adds/replaces entries through the existing core bridge. The UI sanitizes empty/identity entries and preserves the core last-wins de-dupe contract before POSTing. No IBus engine, packages, component XML, input-source seed, candidate bubble, password-field handling, or live text expansion is claimed yet.
 - [x] **Engine-readiness gate source-gated (CI/qemu-pending):** core reports `engine_available=true` only when `ibus` is on PATH, the Goblins IBus component XML is installed, the Goblins engine binary is installed, the Goblins IBus input source is configured, and the live runtime loop is available. This keeps package/component installation from falsely marking Text Shortcuts expansion active before the session path is actually enabled and qemu-proven.

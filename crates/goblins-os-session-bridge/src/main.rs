@@ -264,9 +264,18 @@ fn handle_request(request: BridgeRequest) -> BridgeResponse {
 
 /// Read-only probe of the session's active IBus engine. Takes no arguments by
 /// construction, so there is nothing to validate: the bridge only ever runs
-/// the fixed `ibus engine` read.
+/// the fixed `ibus engine` read. The ibus CLI derives its socket path from the
+/// display environment; when the bridge unit was started without one, fall
+/// back to the session's real defaults — a wrong guess only fails the probe,
+/// which degrades readiness honestly.
 fn ibus_engine_response() -> BridgeResponse {
-    match bounded_command_output("ibus", &["engine".to_string()], IBUS_TIMEOUT) {
+    let mut command = Command::new("ibus");
+    command.arg("engine");
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+        command.env("WAYLAND_DISPLAY", "wayland-0");
+        command.env("DISPLAY", ":0");
+    }
+    match bounded_output_of(command, IBUS_TIMEOUT) {
         Ok(output) if output.status.success() => {
             success(String::from_utf8_lossy(&output.stdout).trim().to_string())
         }
@@ -859,8 +868,16 @@ fn bounded_command_output(
     args: &[String],
     timeout: Duration,
 ) -> Result<Output, BoundedCommandError> {
-    let mut child = Command::new(binary)
-        .args(args)
+    let mut command = Command::new(binary);
+    command.args(args);
+    bounded_output_of(command, timeout)
+}
+
+fn bounded_output_of(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<Output, BoundedCommandError> {
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

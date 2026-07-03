@@ -696,11 +696,20 @@ text_shortcuts_session_enable_proof(){
     return 1
   fi
 
-  core_code=$(curl -s -o "$core_file" -w '%{http_code}' "$LIVE_URL/v1/text-shortcuts" || true)
-  core_engine_available=$(json_field "$core_file" engine_available)
-  core_runtime_loop=$(json_field "$core_file" engine.runtime_loop_available)
+  # The live readiness flip propagates through the session bridge's ibus
+  # probe; poll briefly instead of failing on the first read.
+  for _ in $(seq 1 8); do
+    core_code=$(curl -s -o "$core_file" -w '%{http_code}' "$LIVE_URL/v1/text-shortcuts" || true)
+    core_engine_available=$(json_field "$core_file" engine_available)
+    core_runtime_loop=$(json_field "$core_file" engine.runtime_loop_available)
+    if [ "$core_code" = "200" ] && [ "$core_engine_available" = "true" ] && [ "$core_runtime_loop" = "true" ]; then
+      break
+    fi
+    sleep 1
+  done
   if [ "$core_code" != "200" ] || [ "$core_engine_available" != "true" ] || [ "$core_runtime_loop" != "true" ]; then
-    proof_text_shortcuts "status=fail&stage=core-honesty&core_http=${core_code:-000}&core_engine_available=${core_engine_available:-missing}&core_runtime_loop_available=${core_runtime_loop:-missing}"
+    bridge_env_probe=$(timeout 5 systemd-run --user --pipe --quiet ibus engine 2>&1 | tail -n 1)
+    proof_text_shortcuts "status=fail&stage=core-honesty&core_http=${core_code:-000}&core_engine_available=${core_engine_available:-missing}&core_runtime_loop_available=${core_runtime_loop:-missing}&core_engine_detail=$(proof_query_value "$(json_field "$core_file" engine.detail)")&session_ibus_engine=$(proof_query_value "$(active_ibus_engine)")&bridge_env_probe=$(proof_query_value "${bridge_env_probe:-empty}")"
     return 1
   fi
 

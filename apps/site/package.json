@@ -1,0 +1,43 @@
+{
+  "name": "goblins-os-site",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1.3.4",
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "render:demo": "remotion render src/remotion/index.tsx GoblinsOsDemo public/media/goblins-os-demo.mp4 --codec h264 --crf 30 --overwrite"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "latest",
+    "@react-three/drei": "latest",
+    "@react-three/fiber": "latest",
+    "@remotion/cli": "latest",
+    "class-variance-authority": "latest",
+    "clsx": "latest",
+    "gsap": "latest",
+    "lucide-react": "latest",
+    "next": "latest",
+    "radix-ui": "^1.6.1",
+    "react": "latest",
+    "react-dom": "latest",
+    "remotion": "latest",
+    "tailwind-merge": "latest",
+    "three": "latest"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "latest",
+    "@tailwindcss/postcss": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@types/three": "latest",
+    "eslint": "^9",
+    "eslint-config-next": "latest",
+    "tailwindcss": "latest",
+    "typescript": "latest"
+  }
+}

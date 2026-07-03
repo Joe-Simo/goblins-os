@@ -37,11 +37,11 @@ const HOT_CORNER_ACTIONS: &[HotCornerActionSpec] = &[
     },
     HotCornerActionSpec {
         id: "mission-control",
-        label: "Mission Control",
+        label: "Workspace Overview",
     },
     HotCornerActionSpec {
         id: "app-expose",
-        label: "App Exposé",
+        label: "Focused App Windows",
     },
 ];
 
@@ -177,7 +177,7 @@ fn set_hot_corner_outcome(request: SetHotCornerRequest) -> (StatusCode, HotCorne
         return hot_corner_response(
             StatusCode::BAD_REQUEST,
             false,
-            "Hot corners can open Mission Control, open App Exposé, or stay off.",
+            "Hot corners can open Workspace Overview, show Focused App Windows, or stay off.",
             corner.id.to_string(),
             request.action,
         );
@@ -230,8 +230,8 @@ fn hot_corner_action_by_id(id: &str) -> Option<HotCornerActionSpec> {
 
 fn hot_corner_action_detail(action: &str) -> &'static str {
     match action {
-        "mission-control" => "Pointing to this corner opens Mission Control.",
-        "app-expose" => "Pointing to this corner opens App Exposé for the focused app.",
+        "mission-control" => "Pointing to this corner opens Workspace Overview.",
+        "app-expose" => "Pointing to this corner shows windows from the focused app.",
         _ => "This corner is off.",
     }
 }
@@ -384,11 +384,11 @@ mod tests {
     fn hot_corner_actions_are_allowlisted() {
         assert_eq!(
             hot_corner_action_by_id("mission-control").unwrap().label,
-            "Mission Control"
+            "Workspace Overview"
         );
         assert_eq!(
             hot_corner_action_detail("app-expose"),
-            "Pointing to this corner opens App Exposé for the focused app."
+            "Pointing to this corner shows windows from the focused app."
         );
         assert!(hot_corner_action_by_id("lock-screen").is_none());
     }
@@ -414,7 +414,7 @@ mod tests {
     fn hot_corner_saved_copy_is_specific() {
         assert_eq!(
             hot_corner_saved_text("Top-left corner", "mission-control"),
-            "Top-left corner now opens Mission Control."
+            "Top-left corner now opens Workspace Overview."
         );
         assert_eq!(
             hot_corner_saved_text("Top-left corner", "none"),

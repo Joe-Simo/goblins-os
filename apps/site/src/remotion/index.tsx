@@ -4,7 +4,7 @@ import { Composition, Img, interpolate, staticFile, useCurrentFrame } from "remo
 const frames = [
   "screenshots/home.png",
   "screenshots/build-studio.png",
-  "screenshots/mission-control.png",
+  "screenshots/workspace-overview.png",
   "screenshots/installer-disk.png",
 ];
 

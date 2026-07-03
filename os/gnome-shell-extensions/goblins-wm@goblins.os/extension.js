@@ -1,7 +1,7 @@
 // Goblins OS window management.
 //
 // Mutter remains the real compositor/window manager. This extension adds the
-// macOS-grade surfaces Goblins OS owns: Mission Control, Spaces, snap previews,
+// Goblins-owned surfaces: Workspace Overview, workspaces, snap previews,
 // a window-actions HUD, and a thumbnail app switcher. Every thumbnail is a live
 // Clutter.Clone of an actual window actor; every move/resize uses Meta.Window.
 
@@ -32,8 +32,8 @@ const HOT_CORNERS = [
 const ACTION_MODE = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW | Shell.ActionMode.POPUP;
 
 const KEYBINDINGS = [
-    ['mission-control', '_showMissionControl'],
-    ['app-expose', '_showAppExpose'],
+    ['mission-control', '_showWorkspaceOverview'],
+    ['app-expose', '_showFocusedAppWindows'],
     ['window-switcher', '_showSwitcher'],
     ['window-hud', '_showHud'],
     ['snap-left', '_snapLeft'],
@@ -149,11 +149,11 @@ export default class GoblinsWindowManagement extends Extension {
         this._recentWindows = null;
     }
 
-    // ── macOS-style screenshot thumbnail ──────────────────────────────────────
+    // ── Screenshot thumbnail ──────────────────────────────────────────────────
     // Watch the folder GNOME's capture overlay writes to; when a new shot lands,
     // drop a framed thumbnail in the corner that fades on its own, or — clicked —
-    // opens the Goblins markup editor on that file. The macOS capture-thumbnail
-    // idiom, riding GNOME's own Wayland-correct capture stack. The whole path is
+    // opens the Goblins markup editor on that file, riding GNOME's own
+    // Wayland-correct capture stack. The whole path is
     // contained so a watch failure can never take the rest of the shell down.
     _setupScreenshotWatch() {
         try {
@@ -280,44 +280,44 @@ export default class GoblinsWindowManagement extends Extension {
     }
 
     // Stable hooks used by render-desktop.sh for real-pixel proof captures.
-    showMissionControlDemo() {
-        this._showMissionControl();
+    showWorkspaceOverviewDemo() {
+        this._showWorkspaceOverview();
     }
 
-    showAppExposeDemo() {
+    showFocusedAppWindowsDemo() {
         const entry = this._focusedEntry() || this._windowEntries()[0];
         if (!entry?.appId || entry.appId === 'unknown') {
-            this._showAppExpose();
+            this._showFocusedAppWindows();
             return;
         }
-        this._showMissionControl({appExpose: entry.appId, title: entry.appName || 'App Exposé'});
+        this._showWorkspaceOverview({focusedAppId: entry.appId, title: entry.appName || 'Focused App Windows'});
     }
 
     showHotCornerDemo() {
         this._triggerCornerAction('app-expose');
     }
 
-    showSpacesDemo() {
-        this._showMissionControl({spacesFocus: true});
+    showWorkspacesDemo() {
+        this._showWorkspaceOverview({workspacesFocus: true});
     }
 
-    // App Exposé — spread only the focused app's windows (macOS App Exposé). Falls
-    // back to full Mission Control when nothing is focused / the app is unknown.
-    _showAppExpose() {
+    // Focused App Windows filters the overview to one app and falls back to the
+    // full workspace overview when nothing is focused or the app is unknown.
+    _showFocusedAppWindows() {
         const focus = global.display.focus_window;
         const app = focus ? this._tracker.get_window_app(focus) : null;
         const appId = app?.get_id?.();
         if (!appId) {
-            this._showMissionControl();
+            this._showWorkspaceOverview();
             return;
         }
-        this._showMissionControl({appExpose: appId, title: app.get_name?.() || 'App Exposé'});
+        this._showWorkspaceOverview({focusedAppId: appId, title: app.get_name?.() || 'Focused App Windows'});
     }
 
     // ── Hot Corners ───────────────────────────────────────────────────────────
-    // macOS-style opt-in hot corners. Each corner defaults to 'none' (no actor, no
-    // behavior change); when set to an action the corner gets a tiny reactive actor
-    // that triggers it on pointer entry. Contained so a failure can't break enable().
+    // Opt-in hot corners. Each corner defaults to 'none' (no actor, no behavior
+    // change); when set to an action the corner gets a tiny reactive actor that
+    // triggers it on pointer entry. Contained so a failure can't break enable().
     _setupHotCorners() {
         this._teardownHotCorners();
         const monitor = Main.layoutManager.primaryMonitor;
@@ -371,9 +371,9 @@ export default class GoblinsWindowManagement extends Extension {
         if (this._overlay)
             return; // an overlay is already up — don't re-trigger on dwell
         if (action === 'mission-control')
-            this._showMissionControl();
+            this._showWorkspaceOverview();
         else if (action === 'app-expose')
-            this._showAppExpose();
+            this._showFocusedAppWindows();
     }
 
     showSwitcherDemo() {
@@ -417,22 +417,22 @@ export default class GoblinsWindowManagement extends Extension {
         this._touchStart = null;
     }
 
-    _showMissionControl(options = {}) {
+    _showWorkspaceOverview(options = {}) {
         this.hide();
         this._selectedIndex = 0;
-        // App Exposé reuses the Mission Control overlay, pre-filtered to one app
-        // (the existing per-app rail filter); hide() clears the filter afterwards.
-        if (options.appExpose)
-            this._groupFilter = options.appExpose;
-        this._createOverlay('goblins-wm-overlay goblins-wm-mission-control');
-        if (options.spacesFocus)
-            this._overlay.add_style_class_name('spaces-focus');
-        if (options.appExpose)
-            this._overlay.add_style_class_name('app-expose');
+        // Focused App Windows reuses the overview overlay, pre-filtered to one
+        // app through the existing per-app rail filter. hide() clears it after.
+        if (options.focusedAppId)
+            this._groupFilter = options.focusedAppId;
+        this._createOverlay('goblins-wm-overlay goblins-wm-workspace-overview');
+        if (options.workspacesFocus)
+            this._overlay.add_style_class_name('workspaces-focus');
+        if (options.focusedAppId)
+            this._overlay.add_style_class_name('focused-app-windows');
 
         const header = new St.BoxLayout({style_class: 'goblins-wm-header'});
         header.add_child(new St.Label({
-            text: options.title || 'Mission Control',
+            text: options.title || 'Workspace Overview',
             style_class: 'goblins-wm-title',
         }));
         const spacer = new St.Widget({x_expand: true});
@@ -469,7 +469,7 @@ export default class GoblinsWindowManagement extends Extension {
         this._overlay.add_child(spaces);
 
         const rebuild = () => {
-            this._rebuildMissionControl({
+            this._rebuildWorkspaceOverview({
                 query: search.get_text().trim().toLowerCase(),
                 stageRail,
                 windowArea,
@@ -503,7 +503,7 @@ export default class GoblinsWindowManagement extends Extension {
         this._overlay.grab_key_focus();
     }
 
-    _rebuildMissionControl({query, stageRail, windowArea, spaces}) {
+    _rebuildWorkspaceOverview({query, stageRail, windowArea, spaces}) {
         stageRail.destroy_all_children();
         windowArea.destroy_all_children();
         spaces.destroy_all_children();
@@ -565,7 +565,7 @@ export default class GoblinsWindowManagement extends Extension {
         });
         button.connect('clicked', () => {
             this._groupFilter = appId;
-            this._showMissionControl();
+            this._showWorkspaceOverview();
         });
         return button;
     }
@@ -677,7 +677,7 @@ export default class GoblinsWindowManagement extends Extension {
         add.connect('clicked', () => {
             try {
                 manager.append_new_workspace(false, now());
-                this._showMissionControl({spacesFocus: true});
+                this._showWorkspaceOverview({workspacesFocus: true});
             } catch (error) {
                 logError(error, 'goblins-wm: failed to add workspace');
             }
@@ -692,7 +692,7 @@ export default class GoblinsWindowManagement extends Extension {
         });
         remove.connect('clicked', () => {
             this._removeActiveWorkspaceIfEmpty();
-            this._showMissionControl({spacesFocus: true});
+            this._showWorkspaceOverview({workspacesFocus: true});
         });
         spaces.add_child(remove);
     }
@@ -919,7 +919,7 @@ export default class GoblinsWindowManagement extends Extension {
 
         if (Math.abs(dx) >= TOUCH_SWIPE_MIN && Math.abs(dx) > Math.abs(dy) * 1.25) {
             this._activateWorkspaceRelative(dx < 0 ? 1 : -1);
-            this._showMissionControl({spacesFocus: true});
+            this._showWorkspaceOverview({workspacesFocus: true});
             return Clutter.EVENT_STOP;
         }
         if (dy >= TOUCH_SWIPE_MIN * 1.15 && Math.abs(dy) > Math.abs(dx) * 1.25) {
@@ -1072,7 +1072,7 @@ export default class GoblinsWindowManagement extends Extension {
         const target = clamp(index + delta, 0, manager.n_workspaces - 1);
         if (workspace && target !== index && manager.reorder_workspace)
             manager.reorder_workspace(workspace, target);
-        this._showMissionControl({spacesFocus: true});
+        this._showWorkspaceOverview({workspacesFocus: true});
     }
 
     _removeActiveWorkspaceIfEmpty() {

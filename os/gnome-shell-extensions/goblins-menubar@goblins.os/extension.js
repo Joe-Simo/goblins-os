@@ -1,7 +1,7 @@
-// Goblins OS menu bar — the system mark at the far left of the top panel (where
-// macOS puts the Apple logo), a direct Goblins AI affordance, and a
-// control-center button at the right. The mark is a non-interactive brand
-// anchor; the AI and control-center buttons open OS-owned native surfaces.
+// Goblins OS menu bar - the system mark at the far left of the top panel, a
+// direct Goblins AI affordance, and a control-center button at the right. The
+// mark is a non-interactive brand anchor; the AI and control-center buttons open
+// OS-owned native surfaces.
 
 import St from 'gi://St';
 import Gio from 'gi://Gio';
@@ -28,7 +28,7 @@ const TODAY = '/usr/libexec/goblins-os/goblins-os-today';
 const INPUT_SOURCES_SCHEMA = 'org.gnome.desktop.input-sources';
 const FOCUS_SCHEMA = 'org.goblins.os.focus';
 // Color-only overlay applied on top of the dark gnome-shell.css base when the
-// desktop color-scheme is light, giving macOS-style adaptive (light/dark) chrome.
+// desktop color-scheme is light, giving Goblins adaptive light/dark chrome.
 const LIGHT_CHROME_CSS = '/usr/share/themes/GoblinsOS/gnome-shell/gnome-shell-light.css';
 
 export default class GoblinsMenuBar extends Extension {
@@ -140,11 +140,11 @@ export default class GoblinsMenuBar extends Extension {
             }
             return Clutter.EVENT_PROPAGATE;
         });
-        // Position 0 in the right box: nearest the screen edge, like macOS.
+        // Position 0 in the right box: nearest the screen edge.
         Main.panel.addToStatusArea('goblins-control', this._control, 0, 'right');
 
         // Adaptive chrome: in light mode the menu bar, popovers, and control
-        // center read as macOS-style light frosted glass; in dark mode they stay
+        // center read as Goblins light frosted glass; in dark mode they stay
         // dark glass. The dark gnome-shell.css is the always-loaded base (geometry
         // + dark colors); we overlay the light color sheet on top only in light
         // mode and unload it in dark. If anything here fails, the dark base remains

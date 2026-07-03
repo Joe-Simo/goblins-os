@@ -20,5 +20,5 @@ patches working in this repository.
 
 - Never add client-side secrets or live credentials.
 - Do not fake release, SBOM, hardware, screenshot, runtime, or checksum proof.
-- Keep user-facing copy product-grade. Avoid internal request wording, debug
+- Keep user-facing copy product-grade. Avoid private planning wording, debug
   labels, implementation jargon, private business language, or operator notes.

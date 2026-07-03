@@ -1,7 +1,7 @@
 /* Light-scheme chrome overlay. The goblins-menubar extension OVERLAYS this
  * color-only sheet on top of the always-loaded dark gnome-shell.css (the base
  * that supplies all geometry) whenever the desktop color-scheme is light,
- * re-coloring the chrome to macOS-style light frosted glass + dark ink. In dark
+ * re-coloring the chrome to Goblins light frosted glass + dark ink. In dark
  * mode the overlay is unloaded and the dark base shows through. Because this is
  * an overlay (not a replacement), it carries NO geometry — only colors — and if
  * the extension is absent or errors, the dark base remains in both schemes (the

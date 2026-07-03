@@ -255,9 +255,9 @@ fn run_native_login(config: LoginConfig, state: LoginState) -> LoginResult<()> {
             .default_height(820)
             .build();
 
-        // The identity gate sits over a real GSK blur-of-wallpaper material (the
-        // macOS login idiom: a centered card over blurred wallpaper), not a flat
-        // opaque canvas. The blur renders under cairo too, so it shows headlessly.
+        // The identity gate sits over a real GSK blur-of-wallpaper material: a
+        // centered card over blurred wallpaper, not a flat opaque canvas. The
+        // blur renders under cairo too, so it shows headlessly.
         window.set_child(Some(&goblins_os_ui::VibrancyBackdrop::new(
             goblins_os_ui::resolve_dark(),
             &build_login(app, &window, &config, &state),
@@ -287,12 +287,12 @@ fn build_login(
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gos-login-root");
 
-    // No top chrome bar: the macOS lock screen is edge-to-edge — just the centered
-    // identity card over the blurred wallpaper. Brand identity lives in the card
+    // No top chrome bar: just the centered identity card over the blurred
+    // wallpaper. Brand identity lives in the card
     // (the OpenAI mark + "OPENAI ACCOUNT" kicker), not a redundant titlebar.
 
-    // macOS login idiom: a single centered identity column over the canvas,
-    // not a two-column dashboard. The night-gradient identity card is the hero;
+    // A single centered identity column over the canvas, not a two-column
+    // dashboard. The night-gradient identity card is the hero;
     // readiness folds in below the primary action as quiet supporting context.
     let identity = gtk::Box::new(gtk::Orientation::Vertical, 18);
     identity.add_css_class("gos-identity-panel");
@@ -535,7 +535,7 @@ fn build_login(
     identity.append(&readiness);
 
     // Center the single identity column in the viewport so first boot reads as a
-    // calm, intentional macOS-style login rather than a top-left-packed dashboard.
+    // calm, intentional login rather than a top-left-packed dashboard.
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
     center.set_vexpand(true);
     center.set_valign(gtk::Align::Center);
@@ -579,7 +579,7 @@ fn label(text: &str, classes: &[&str]) -> gtk4::Label {
     label
 }
 
-// A centered variant of `label` for the single macOS-style identity column: the
+// A centered variant of `label` for the single Goblins identity column: the
 // text and its wrap both center instead of left-anchoring, so multi-line copy
 // stays balanced under the hero.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]

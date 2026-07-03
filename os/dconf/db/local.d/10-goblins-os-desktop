@@ -1,4 +1,4 @@
-# Goblins OS desktop defaults — the macOS-blend chrome at the GNOME level.
+# Goblins OS desktop defaults - adaptive glass chrome at the GNOME level.
 # Compiled into the system dconf db (system-db:local) and applied to the desktop
 # user via os/dconf/profile/user. These are defaults; the person can change them.
 
@@ -31,13 +31,13 @@ event-sounds=true
 input-feedback-sounds=false
 
 [org/gnome/desktop/wm/preferences]
-# macOS-style: window controls on the LEFT, none on the right.
+# Goblins window controls on the left, none on the right.
 button-layout='close,minimize,maximize:'
 titlebar-font='Inter 11'
 
 [org/gnome/mutter]
 # Keep GNOME's real compositor/window manager doing the hard work, but tune the
-# user-facing behavior toward the Goblins/macOS model: centered new windows,
+# user-facing behavior toward the Goblins desktop model: centered new windows,
 # dynamic workspaces, edge snap-assist, and no multi-monitor workspace surprise.
 center-new-windows=true
 dynamic-workspaces=true
@@ -53,8 +53,8 @@ switch-input-source-backward=@as []
 # GNOME's switch-applications defaults to <Super>Tab and would collide otherwise.
 switch-applications=@as []
 switch-applications-backward=@as []
-# Show Desktop — push all windows aside to reveal the desktop, the macOS
-# spread-thumbs / F11 reflex. Bound on the WM's stable, built-in action (no custom
+# Show Desktop - push all windows aside to reveal the desktop. Bound on the
+# WM's stable, built-in action (no custom
 # code), so it tracks GNOME with zero maintenance.
 show-desktop=['<Super>d']
 

@@ -1608,13 +1608,13 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
-        "render-wm-mission-control",
-        "52-wm-mission-control-$suffix.png",
+        "render-wm-workspace-overview",
+        "52-wm-workspace-overview-$suffix.png",
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
-        "render-wm-app-expose",
-        "52b-wm-app-expose-$suffix.png",
+        "render-wm-focused-app-windows",
+        "52b-wm-focused-app-windows-$suffix.png",
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
@@ -1623,8 +1623,8 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
-        "render-wm-spaces",
-        "53-wm-spaces-$suffix.png",
+        "render-wm-workspaces",
+        "53-wm-workspaces-$suffix.png",
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
@@ -4834,12 +4834,12 @@ fn native_design_system_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
-            "native-mission-control-body-reserves-footer-space",
+            "native-workspace-overview-body-reserves-footer-space",
             "style_class: 'goblins-wm-body', y_expand: true",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
-            "native-mission-control-spaces-strip-footer-aligned",
+            "native-workspace-overview-workspaces-strip-footer-aligned",
             "y_align: Clutter.ActorAlign.END",
         ),
     ];
@@ -14878,13 +14878,13 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
-            "goblins-wm-app-expose-handler",
-            "_showAppExpose",
+            "goblins-wm-focused-app-windows-handler",
+            "_showFocusedAppWindows",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
-            "goblins-wm-app-expose-render-hook",
-            "showAppExposeDemo",
+            "goblins-wm-focused-app-windows-render-hook",
+            "showFocusedAppWindowsDemo",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),

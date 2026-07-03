@@ -1,7 +1,7 @@
 {
   "uuid": "goblins-wm@goblins.os",
   "name": "Goblins Window Management",
-  "description": "Mission Control, Spaces, snap assist, window HUD, and app switcher for the Goblins OS desktop.",
+  "description": "Workspace overview, workspaces, snap assist, window HUD, and app switcher for the Goblins OS desktop.",
   "shell-version": ["46", "47", "48", "49", "50"],
   "session-modes": ["user", "goblins-os"],
   "settings-schema": "org.goblins.shell.extensions.wm"

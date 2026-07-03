@@ -7,11 +7,10 @@
 //! Goblins-native language for color, type, spacing, radius, elevation, and
 //! motion shared by first boot through daily use.
 //!
-//! The macOS 27 Sketch UI kit is used here as a local reference for token axes,
-//! not as a shipped asset source: light/dark, content-area vs over-glass,
+//! The visual language is project-owned: light/dark, content-area vs over-glass,
 //! label/fill hierarchy, material thickness, control sizes, and state vocabulary
-//! are translated into Inter + GTK tokens without bundling Apple fonts, symbols,
-//! wallpapers, templates, or first-party app layouts.
+//! are expressed as Inter + GTK tokens without bundling third-party fonts,
+//! symbols, wallpapers, templates, or first-party app layouts.
 
 /// Directory where the OpenAI brand marks are installed in the OS image.
 pub const BRAND_DIR: &str = "/usr/share/goblins-os/brand";
@@ -42,12 +41,12 @@ pub const GOBLINS_WALLPAPER_DARK: &str =
 pub const GOBLINS_WALLPAPER_LIGHT: &str =
     "/usr/share/goblins-os/brand/wallpaper/goblins-os-light.svg";
 
-// ── Motion tokens (the macOS-blend half of the language) ─────────────────────
+// ── Motion tokens (the Goblins desktop language) ─────────────────────────────
 // One motion vocabulary for the whole OS. Durations are expressed in ms and the
 // easing curves are GTK4 `cubic-bezier()` strings, so a Rust animation (the
-// launcher fade-scale) and a CSS transition reach for the SAME numbers. macOS
-// motion is short, decisive, and slightly springy on arrival — never bouncy on a
-// productivity surface. GTK disables every CSS transition automatically when the
+// launcher fade-scale) and a CSS transition reach for the SAME numbers. Goblins
+// motion is short, decisive, and slightly springy on arrival - never bouncy on a
+// desktop surface. GTK disables every CSS transition automatically when the
 // desktop's Reduce Motion is on, and the Rust animators honor it via the GTK
 // `gtk-enable-animations` setting, so the reduced-motion path is a clean cut.
 
@@ -60,7 +59,7 @@ pub const MOTION_BASE_MS: u32 = 220;
 /// Larger surfaces arriving/leaving — window open/close, overlay, panel slide.
 pub const MOTION_SLOW_MS: u32 = 320;
 
-/// The standard ease — a snappy, decisive ease-out (macOS "standard" curve).
+/// The standard ease - a snappy, decisive ease-out.
 /// Most transitions in the OS use this.
 pub const MOTION_EASE_STANDARD: &str = "cubic-bezier(0.32, 0.72, 0, 1)";
 
@@ -73,7 +72,7 @@ pub const MOTION_OVERLAY_MS: u64 = 180;
 // truth: every top-level window root (.gos-root, .gos-settings-root) uses these
 // exact values, and tests pin the CSS to them so two windows on one desktop can
 // never show different corners again.
-/// Canonical window corner radius, in px. macOS-window scale; shared by all roots.
+/// Canonical window corner radius, in px; shared by all roots.
 pub const GOS_WINDOW_RADIUS_PX: u32 = 16;
 /// Canonical window margin gutter, in px (holds the window drop shadow).
 pub const GOS_WINDOW_MARGIN_PX: u32 = 16;
@@ -89,20 +88,18 @@ pub const GOS_RADIUS_CONTROL_PX: u32 = 8;
 pub const GOS_RADIUS_CARD_PX: u32 = 12;
 /// Windows and hero overlays (launcher, control center, lock card).
 pub const GOS_RADIUS_WINDOW_PX: u32 = 16;
-/// Large chrome-overlay surfaces (Mission Control panel, HUD, dock glass).
+/// Large chrome-overlay surfaces (workspace overview, HUD, dock glass).
 pub const GOS_RADIUS_OVERLAY_PX: u32 = 22;
 /// Fully-round pills, dots, and capsules.
 pub const GOS_RADIUS_PILL_PX: u32 = 999;
 
-// ── Type ramp (one size+leading ladder, kit-aligned, rendered in Inter) ───────
+// ── Type ramp (one size+leading ladder, rendered in Inter) ───────────────────
 // GTK CSS has no length variables, so — exactly like GOS_RADIUS_* — these consts
 // are the single source of truth and the tests pin the CSS literals to them. The
-// macOS 27 kit expresses type as named steps each carrying BOTH a size and a
-// line-height; Goblins translates that *structure* into Inter (never SF Pro): the
-// content ramp matches the kit's steps, and a small display tier sits above it for
-// the OS's hero surfaces (login, first boot, the Build home). Each step is a
-// `(size_px, line_height_px)` pair; CSS expresses the leading as the unitless
-// `line-height` ratio (≈ leading / size), so the kit relationship stays legible.
+// The ramp pairs each named step with BOTH a size and a line-height in Inter.
+// A small display tier sits above it for the OS's hero surfaces (login, first
+// boot, the Build home). Each step is a `(size_px, line_height_px)` pair; CSS
+// expresses the leading as the unitless `line-height` ratio.
 //
 // Content ramp — mirrors the kit content text styles (LargeTitle … Footnote):
 pub const GOS_TYPE_LARGE_TITLE: (u32, u32) = (26, 32);
@@ -151,7 +148,7 @@ pub fn native_css(app_css: &str, dark: bool) -> String {
     format!("{tokens}\n{app_css}\n{GOBLINS_NATIVE_CSS}")
 }
 
-/// Light color scheme — white window surfaces and macOS-kit label ink.
+/// Light color scheme - white window surfaces and crisp label ink.
 /// Token names are shared with [`DARK_TOKENS`]; only the values differ, so every
 /// structural rule themes automatically. Functional status hues (ready/waiting/
 /// blocked) map to the kit's light and dark system values.
@@ -166,8 +163,7 @@ const LIGHT_TOKENS: &str = r#"
    pair below keeps the same "selected sits above the track" reading in dark. */
 @define-color gos_control_raised      #ffffff;
 
-/* macOS 27 UI-kit semantic roles, translated to Goblins OS + Inter. These
-   mirror the kit's label/fill/separator axes while staying project-owned. */
+/* Goblins semantic roles for label, fill, and separator hierarchy. */
 @define-color gos_label_primary       rgba(0, 0, 0, 0.85);
 @define-color gos_label_secondary     rgba(0, 0, 0, 0.50);
 @define-color gos_label_tertiary      rgba(0, 0, 0, 0.25);
@@ -214,7 +210,7 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_focus               rgba(0, 136, 255, 0.42);
 @define-color gos_panel_sheen         rgba(255, 255, 255, 0.70);
 
-/* macOS-blend vibrancy materials — the one translucent material language shared
+/* Goblins vibrancy materials - the one translucent material language shared
    by every crafted chrome surface (launcher, control center, menu bar, dock).
    The compositor shows the wallpaper through these alphas; the top sheen + hairline
    give the glass real depth. Five thicknesses, matching the kit's material tiers. */
@@ -272,8 +268,8 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_studio_dot_active   #1a1a1f;
 
 /* ── Elevation ink (scheme-aware shadows) ─────────────────────────────────────
-   macOS lifts layers with soft drop shadows on light, and with hairlines + a
-   top sheen on dark (a near-black drop shadow on a dark canvas only muddies it).
+   Light surfaces use soft drop shadows; dark surfaces use hairlines + a top
+   sheen because a near-black drop shadow on a dark canvas only muddies it.
    These baked-alpha inks let one box-shadow rule read correctly in both schemes:
    window = the floating settings window, panel = grouped cards, raise = hover. */
 @define-color gos_shadow_window       rgba(13, 13, 12, 0.22);
@@ -291,11 +287,10 @@ const LIGHT_TOKENS: &str = r#"
    Each Settings category carries a calm, saturated tile with a white glyph — the
    single strongest "system settings" cue, translated to project-owned hues (no
    Apple assets). Dark variants stay vivid against graphite. */
-/* The category tints that overlap a kit system hue now carry the kit's CURRENT
-   light value (blue/red/orange/yellow/green = the same swatches as gos_system_*),
-   so a Settings tile and a status dot of the same color read as one system color
-   instead of two near-misses. Teal/indigo/purple/pink/graphite have no 1:1 status
-   role and stay project-owned. */
+/* Category tints that overlap status hues share the same swatches as
+   gos_system_*, so a Settings tile and a status dot of the same color read as
+   one system color instead of two near-misses. Teal/indigo/purple/pink/graphite
+   have no 1:1 status role and stay project-owned. */
 @define-color gos_tint_blue           rgba(0, 136, 255, 1);
 @define-color gos_tint_teal           rgba(0, 178, 168, 1);
 @define-color gos_tint_indigo         rgba(74, 92, 230, 1);
@@ -309,12 +304,12 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_on_tint             #ffffff;
 "#;
 
-/// Dark color scheme — macOS-kit dark window surfaces and light ink; the same
+/// Dark color scheme - dark window surfaces and light ink; the same
 /// design language, inverted. Night surfaces (login/lock/hero) are already dark, so they
 /// hold across both schemes.
 const DARK_TOKENS: &str = r#"
-/* Break the canvas==surface collision so surface-backed panels read LIFTED, the
-   way macOS dark mode elevates a card off the desktop. The page drops to a darker
+/* Break the canvas==surface collision so surface-backed panels read LIFTED.
+   The page drops to a darker
    base while surface holds a step above it (still below the muted/sunken track so
    the recessed ladder is intact): a state panel at 0.9 alpha now lands clearly
    above the page instead of vanishing into it. */
@@ -328,8 +323,8 @@ const DARK_TOKENS: &str = r#"
    lifted on graphite instead of sinking into the canvas black. */
 @define-color gos_control_raised      #323234;
 
-/* Same semantic axes as light mode. Alpha roles match the local macOS 27 kit;
-   the exact font remains Inter, and these tokens are owned by Goblins OS. */
+/* Same semantic axes as light mode. The exact font remains Inter, and these
+   tokens are owned by Goblins OS. */
 @define-color gos_label_primary       rgba(255, 255, 255, 1.00);
 @define-color gos_label_secondary     rgba(255, 255, 255, 0.55);
 @define-color gos_label_tertiary      rgba(255, 255, 255, 0.25);
@@ -446,10 +441,10 @@ const DARK_TOKENS: &str = r#"
 @define-color gos_shadow_card_ambient rgba(0, 0, 0, 0.22);
 
 /* Same category tints, brightened so the tiles stay luminous on graphite. */
-/* Dark category tints, kit-aligned to the DARK system values for the four hues
-   with a 1:1 status role (blue/red/orange/yellow/green = gos_system_* dark), so a
-   tile and a same-color dot stay one color on graphite too. The remaining tints
-   keep their luminous, project-owned dark values. */
+/* Dark category tints align to the dark system values for the status hues
+   (blue/red/orange/yellow/green = gos_system_* dark), so a tile and a same-color
+   dot stay one color on graphite too. The remaining tints keep their luminous,
+   project-owned dark values. */
 @define-color gos_tint_blue           rgba(0, 145, 255, 1);
 @define-color gos_tint_teal           rgba(38, 200, 190, 1);
 @define-color gos_tint_indigo         rgba(98, 114, 240, 1);
@@ -491,7 +486,7 @@ window {
 
 /* The login/identity gate sits inside a VibrancyBackdrop (real GSK blur of the
    wallpaper), so its canvas is transparent and the blurred wallpaper reads behind
-   the centered identity card — the macOS login idiom. Overrides only the login
+   the centered identity card. Overrides only the login
    canvas; settings/installer keep their opaque grouped surface above. */
 .gos-login-root {
   background: transparent;
@@ -516,7 +511,7 @@ window.gos-windowed .gos-root {
 }
 
 /* ── Top bars ────────────────────────────────────────────────────────── */
-/* One window idiom across the whole family: a FUSED macOS-unified titlebar —
+/* One window idiom across the whole family: a fused Goblins titlebar -
    flush to the window's top edge, sharing the root's 16px top corners, separated
    from content by a single hairline. Not a detached floating pill (no all-sides
    border, no 14px radius, no drop shadow). Settings already used this idiom; this
@@ -577,8 +572,8 @@ window.gos-windowed .gos-root {
   border-color: rgba(26, 98, 33, 0.24);
 }
 
-/* macOS reveals all three glyphs together the instant the pointer enters the
-   cluster — not per-button — so hovering the group lights the whole set. */
+/* The whole window-control cluster reveals its glyphs together the instant the
+   pointer enters the group, so hovering the group lights the whole set. */
 .gos-window-controls:hover .gos-window-control {
   color: rgba(0, 0, 0, 0.58);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset,
@@ -589,10 +584,10 @@ window.gos-windowed .gos-root {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.48) inset;
 }
 
-/* Inactive window (focus is on another window): macOS drains the traffic lights
-   to one uniform gray with the glyphs hidden, so a backgrounded window reads
-   unmistakably unfocused. The titlebar fill softens with it. GTK sets :backdrop
-   on every widget of an unfocused toplevel. */
+/* Inactive window (focus is on another window): controls drain to one uniform
+   gray with the glyphs hidden, so a backgrounded window reads unmistakably
+   unfocused. The titlebar fill softens with it. GTK sets :backdrop on every
+   widget of an unfocused toplevel. */
 .gos-window-control:backdrop {
   background: @gos_fill_primary;
   border-color: @gos_hairline;
@@ -729,8 +724,8 @@ tooltip label {
      (the kit sets it on every text style) instead of GTK's default font leading. */
   line-height: 1.2;
   font-weight: 600;
-  /* macOS tightens tracking on display sizes; Inter needs the same negative
-     letter-spacing at large sizes to read as crafted rather than loose. */
+  /* Inter needs slightly tighter tracking at large sizes to read as crafted
+     rather than loose. */
   letter-spacing: -0.3px;
 }
 
@@ -738,8 +733,8 @@ tooltip label {
 .gos-lock-title {
   /* Hero and lock titles always sit on the dark night gradient, so the title is
      white in both schemes by design — intentionally literal, not tokenized.
-     Semibold (not bold) with negative tracking matches the macOS large-title feel
-     instead of reading over-heavy. Display leading ≈ 1.15 (GOS_TYPE_HERO/_LOCK). */
+     Semibold (not bold) with negative tracking keeps large titles from reading
+     over-heavy. Display leading ≈ 1.15 (GOS_TYPE_HERO/_LOCK). */
   color: #ffffff;
   font-weight: 600;
   line-height: 1.15;
@@ -844,8 +839,8 @@ tooltip label {
 .gos-mode,
 .gos-mode-selected,
 .gos-disabled-action {
-  /* GOS_CTRL_H_LG — the in-panel action rung. macOS desktop buttons sit far below
-     the old 46px (iOS touch) height; LG keeps a comfortable click target while
+  /* GOS_CTRL_H_LG — the in-panel action rung. Desktop buttons sit below the old
+     46px touch height; LG keeps a comfortable click target while
      reading as a desktop control. The hero Build field stays at XL (46). */
   min-height: 38px;
   padding: 0 20px;
@@ -954,11 +949,10 @@ tooltip label {
 }
 
 /* ── Toggle switches ─────────────────────────────────────────────────── */
-/* macOS uses system GREEN for an "on" switch (blue is reserved for selection) with
-   a raised white knob; GTK's stock switch is flat Adwaita blue — the loudest
-   non-native control signal. .gos-switch restyles the track + slider to the macOS
-   idiom, scheme-aware: the off-track derives from the ink so it reads on both light
-   and dark, the knob stays white in both schemes (as on macOS). */
+/* Goblins uses system green for an "on" switch (blue is reserved for selection)
+   with a raised white knob. .gos-switch restyles the track + slider with
+   scheme-aware colors: the off-track derives from the ink so it reads on both
+   light and dark, and the knob stays white in both schemes. */
 switch.gos-switch {
   min-width: 42px;
   min-height: 25px;
@@ -1007,8 +1001,7 @@ switch.gos-switch:focus:focus-visible {
   box-shadow: 0 0 0 3px @gos_focus;
 }
 
-/* Tabular figures so numeric value/measurement columns align like macOS instead
-   of drifting with proportional digits. */
+/* Tabular figures so numeric value/measurement columns align consistently. */
 .gos-install-row-value,
 .gos-row-value {
   font-feature-settings: "tnum" 1;
@@ -1080,7 +1073,7 @@ button:active {
 }
 
 /* ── Onboarding (first boot): full-bleed, centered, calm ─────────────────
-   Apple-minimal pacing — one screen, one focus, generous whitespace — in the
+   Goblins pacing: one screen, one focus, generous whitespace, and the
    Goblins-native light palette. */
 .gos-onboarding-root {
   padding: 48px;
@@ -1138,8 +1131,8 @@ button:active {
 }
 
 /* The one irreversible action in the OS — "Erase disk and install" — must NOT read
-   as a benign blue Continue. macOS marks irreversible actions in red; this overlays
-   the primary geometry with the system-red fill + a red focus ring, while the
+   as a benign blue Continue. This overlays the primary geometry with the
+   system-red fill + a red focus ring, while the
    .gos-onboarding-primary:disabled rule below (higher specificity) still recedes it
    into the honest sunken state until the exact erase phrase is typed. */
 .gos-onboarding-destructive {
@@ -2104,7 +2097,7 @@ button:active {
 }
 
 /* ── Install to this computer (the installer's destructive disk flow) ─────
-   A calm, Apple-minimal sequence built on the onboarding card (gos-net-panel):
+   A calm Goblins sequence built on the onboarding card (gos-net-panel):
    choose a disk, review, type the exact device-anchored phrase to consent, then
    an honestly-indeterminate install. Safety reads through clarity and restraint,
    never alarm chrome. Every color is token-driven, so the whole flow themes
@@ -2329,7 +2322,7 @@ button:active {
   font-size: 13px;
 }
 
-/* ── macOS-blend chrome material + motion ────────────────────────────────────
+/* ── Goblins chrome material + motion ─────────────────────────────────────────
    The shared window/overlay glass and the canonical motion curve (mirrored from
    the MOTION_* tokens above — the standard ease cubic-bezier(0.32, 0.72, 0, 1)).
    Crafted chrome (the launcher, the control center) is a transparent top-level
@@ -2664,7 +2657,7 @@ button:active {
   box-shadow: 0 0 0 3px @gos_focus;
 }
 /* Quick-action chip (the Goblins AI actions) — a real button surface, not a
-   bare text link, like macOS Control Center's chipped actions. */
+   bare text link. */
 .gos-cc-action {
   min-height: 38px;
   padding: 7px 12px;
@@ -3040,7 +3033,7 @@ mod tests {
     fn type_and_control_ramps_are_pinned() {
         // The two new structural ladders are the source of truth (like GOS_RADIUS_*);
         // pin representative rungs so a refactor can't silently drift the type sizes
-        // or control heights, and the kit-aligned content steps stay kit-aligned.
+        // or control heights, and the content steps stay aligned.
         assert_eq!(super::GOS_TYPE_LARGE_TITLE, (26, 32));
         assert_eq!(super::GOS_TYPE_BODY, (13, 16));
         assert_eq!(super::GOS_TYPE_FOOTNOTE, (10, 13));

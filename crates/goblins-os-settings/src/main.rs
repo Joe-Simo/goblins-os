@@ -1630,8 +1630,8 @@ fn sound_recognition_lock_screen_detail(enabled: bool) -> String {
 
 fn hot_corner_action_detail(value: &str) -> String {
     match value {
-        "mission-control" => "Pointing to this corner opens Mission Control.",
-        "app-expose" => "Pointing to this corner opens App Exposé for the focused app.",
+        "mission-control" => "Pointing to this corner opens Workspace Overview.",
+        "app-expose" => "Pointing to this corner shows windows from the focused app.",
         _ => "This corner is off.",
     }
     .to_string()
@@ -10609,8 +10609,8 @@ fn append_appearance_settings(panel: &gtk4::Box, state: &SettingsState) {
 
     let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
     row.add_css_class("gos-segmented-control");
-    // A macOS-style segmented control sizes to its content rather than stretching
-    // edge to edge: keep the pill compact and left-aligned with the cards above,
+    // The segmented control sizes to its content rather than stretching edge to
+    // edge: keep the pill compact and left-aligned with the cards above,
     // so each segment is its intrinsic width (min 96px) instead of one wide bar.
     row.set_halign(gtk4::Align::Start);
     for (theme, name) in [("light", "Light"), ("dark", "Dark"), ("auto", "Auto")] {
@@ -17391,11 +17391,11 @@ const HOT_CORNER_ACTION_OPTIONS: &[ChoiceOption<'static>] = &[
     },
     ChoiceOption {
         id: "mission-control",
-        label: "Mission Control",
+        label: "Workspace Overview",
     },
     ChoiceOption {
         id: "app-expose",
-        label: "App Exposé",
+        label: "Focused App Windows",
     },
 ];
 
@@ -26565,11 +26565,11 @@ mod tests {
     fn hot_corner_copy_and_outcome_keep_core_state_honest() {
         assert_eq!(
             super::hot_corner_action_detail("mission-control"),
-            "Pointing to this corner opens Mission Control."
+            "Pointing to this corner opens Workspace Overview."
         );
         assert_eq!(
             super::hot_corner_action_detail("app-expose"),
-            "Pointing to this corner opens App Exposé for the focused app."
+            "Pointing to this corner shows windows from the focused app."
         );
         assert_eq!(
             super::hot_corner_action_detail("none"),

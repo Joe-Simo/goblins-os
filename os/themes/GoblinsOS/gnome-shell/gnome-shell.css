@@ -1,11 +1,11 @@
 /* Goblins OS — GNOME Shell theme.
  *
- * The macOS-blend chrome over the Goblins-native design language: a translucent menu bar,
- * a Control Center, a glass dock, and calm rounded popups — all in the same calm
+ * Goblins-native chrome: a translucent menu bar,
+ * a control center, a glass dock, and calm rounded popups - all in the same calm
  * near-black/paper palette and Inter type as the native app surfaces (mirrors the
  * tokens in goblins-os-design, hardcoded here because St theming has no
  * @define-color). The desktop surfaces read as refined dark glass floating over
- * either wallpaper, the way the macOS menu bar and dock do.
+ * either wallpaper while staying visibly Goblins OS.
  *
  * FIRST PASS — selectors and metrics are refined against os/bootc/render-desktop.sh
  * (the headless GNOME Shell render). Do not hand-tune blind past structural sanity.

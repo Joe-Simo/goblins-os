@@ -3,13 +3,13 @@
   <schema id="org.goblins.shell.extensions.wm" path="/org/goblins/shell/extensions/wm/">
     <key name="mission-control" type="as">
       <default>['&lt;Super&gt;Up', 'F9']</default>
-      <summary>Show Mission Control</summary>
+      <summary>Show Workspace Overview</summary>
       <description>Shows all open windows grouped by workspace.</description>
     </key>
     <key name="app-expose" type="as">
       <default>['&lt;Super&gt;e', 'F10']</default>
-      <summary>Show App Exposé</summary>
-      <description>Spreads only the focused application's windows, mirroring macOS App Exposé.</description>
+      <summary>Show Focused App Windows</summary>
+      <description>Shows only the focused application's windows.</description>
     </key>
     <key name="window-switcher" type="as">
       <default>['&lt;Super&gt;Tab']</default>
@@ -79,7 +79,7 @@
       </choices>
       <default>'none'</default>
       <summary>Top-left hot corner action</summary>
-      <description>Action triggered when the pointer reaches the top-left corner (macOS-style hot corners). 'none' disables the corner.</description>
+      <description>Action triggered when the pointer reaches the top-left corner. 'none' disables the corner.</description>
     </key>
     <key name="hot-corner-top-right" type="s">
       <choices>

@@ -1,5 +1,5 @@
 //! The Goblins OS control center — a bespoke, all-Rust GTK4 glass panel the menu
-//! bar opens, in the macOS Control Center idiom and the Goblins-native language.
+//! bar opens in the Goblins-native language.
 //!
 //! It gathers the controls reached for without opening Settings: the Light/Dark
 //! scheme, AI mode, Wi-Fi, and sound/brightness.

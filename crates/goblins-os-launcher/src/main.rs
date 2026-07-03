@@ -1081,7 +1081,7 @@ mod native {
 
     /// A calm fade-in on the MOTION_OVERLAY tempo — honoring Reduce Motion (a clean
     /// cut when the desktop disables animations). GTK4 can't scale a top-level via
-    /// CSS, so the macOS-style arrival is expressed as an opacity ramp.
+    /// CSS, so the Goblins arrival is expressed as an opacity ramp.
     fn present_with_fade(window: &gtk::ApplicationWindow) {
         let animate = gtk::Settings::default()
             .map(|s| s.is_gtk_enable_animations())

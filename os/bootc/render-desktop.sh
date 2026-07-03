@@ -277,15 +277,15 @@ render_scheme() {
 
   # Goblins window-management surfaces: actual Shell actors and real window
   # clones over real native windows, not isolated app screenshots.
-  shell_eval "globalThis.goblinsWindowManager.showMissionControlDemo(); 'mission-control';" || return 1
+  shell_eval "globalThis.goblinsWindowManager.showWorkspaceOverviewDemo(); 'workspace-overview';" || return 1
   sleep 0.9
-  shoot "52-wm-mission-control-$suffix.png"
+  shoot "52-wm-workspace-overview-$suffix.png"
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
-  shell_eval "globalThis.goblinsWindowManager.showAppExposeDemo(); 'app-expose';" || return 1
+  shell_eval "globalThis.goblinsWindowManager.showFocusedAppWindowsDemo(); 'focused-app-windows';" || return 1
   sleep 0.9
-  shoot "52b-wm-app-expose-$suffix.png"
+  shoot "52b-wm-focused-app-windows-$suffix.png"
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
@@ -297,9 +297,9 @@ render_scheme() {
   gsettings set org.goblins.shell.extensions.wm hot-corner-top-left 'none' 2>/dev/null || true
   sleep 0.3
 
-  shell_eval "globalThis.goblinsWindowManager.showSpacesDemo(); 'spaces';" || return 1
+  shell_eval "globalThis.goblinsWindowManager.showWorkspacesDemo(); 'workspaces';" || return 1
   sleep 0.9
-  shoot "53-wm-spaces-$suffix.png"
+  shoot "53-wm-workspaces-$suffix.png"
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 

@@ -149,7 +149,7 @@ mod theming {
         mark
     }
 
-    /// macOS-style traffic-light controls for Goblins OS crafted windows.
+    /// Goblins window controls for crafted OS windows.
     /// The windows are client-decorated so the OS chrome stays consistent under
     /// Wayland, Xvfb renders, and the headless GNOME desktop proof.
     pub fn window_controls(window: &gtk4::ApplicationWindow) -> gtk4::Box {
@@ -247,7 +247,7 @@ mod theming {
     }
 }
 
-/// A reusable macOS-style vibrancy backdrop: a single-child container that paints
+/// A reusable Goblins glass backdrop: a single-child container that paints
 /// a real GSK Gaussian blur of the desktop wallpaper behind its child, then a thin
 /// translucent tint — the "material" the compositor cannot give an isolated app
 /// surface on Wayland. Because the blur is pure GSK over an asset the app already

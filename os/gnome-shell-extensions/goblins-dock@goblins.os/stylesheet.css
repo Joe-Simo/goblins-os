@@ -1,4 +1,4 @@
-/* Goblins OS dock — the macOS-blend glass dock, matching the shell theme. */
+/* Goblins OS dock - adaptive glass dock, matching the shell theme. */
 /* Dock glass aligned to a DEFINED material tier: rgba(26,26,31,0.76) is the same
    'regular' thickness the control center's active material uses, so the dock is no
    longer a one-off recipe (was 0.55, off every tier). A brighter rim reads as the

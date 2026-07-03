@@ -17,8 +17,8 @@ const INPUT_SOURCES_SCHEMA: &str = "org.gnome.desktop.input-sources";
 
 /// The owned shortcuts, in display order: `(gsettings key, human label)`.
 const SHORTCUTS: &[(&str, &str)] = &[
-    ("mission-control", "Mission Control"),
-    ("app-expose", "App Exposé"),
+    ("mission-control", "Workspace Overview"),
+    ("app-expose", "Focused App Windows"),
     ("window-switcher", "App switcher"),
     ("window-hud", "Window actions"),
     ("snap-left", "Snap left"),

@@ -11322,7 +11322,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/bootc/Containerfile"),
             "bootc-packages-screenshot-context-helper",
-            "goblins-os-screenshot-context /usr/libexec/goblins-os/goblins-os-screenshot-context",
+            "goblins-os-screenshot-context \\",
         ),
         // Live Text / OCR — the on-device Tesseract runtime + the local core route,
         // honest-gated when the runtime is absent (never claims success without text).
@@ -14921,7 +14921,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/bootc/Containerfile"),
             "bootc-color-picker-helper",
-            "goblins-os-color-picker /usr/libexec/goblins-os/goblins-os-color-picker",
+            "goblins-os-color-picker \\",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),

@@ -566,12 +566,15 @@ if [ "${_stable_distinct:-0}" -lt 8 ]; then
   exit 3
 fi
 
-# Write the proof manifest + run close-signoff.
-python3 - "$RUN_DIR" "$ARCH" "$ISO" "$ISO_SHA" "$DATE" <<'PY'
+# Write the proof manifest + run close-signoff. The manifest records the
+# repo-relative ISO path: close-signoff and verify-shipping-status both match
+# the exact string "os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso", and the
+# committed manifest must not leak runner-absolute paths.
+python3 - "$RUN_DIR" "${RUN_DIR#"$REPO/"}" "$ARCH" "${ISO#"$REPO/"}" "$ISO_SHA" "$DATE" <<'PY'
 import json,sys
-run_dir,arch,iso,sha,date=sys.argv[1:6]
+run_dir,rel_run_dir,arch,iso,sha,date=sys.argv[1:7]
 json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
-          "captured_at":date+"T00:00:00Z","screenshot_run_dir":run_dir,
+          "captured_at":date+"T00:00:00Z","screenshot_run_dir":rel_run_dir,
           "firewall_live_toggle_proof":"firewall-live-toggle-proof.json",
           "text_shortcuts_session_enable_proof":"text-shortcuts-session-enable-proof.json",
           "text_shortcuts_candidate_metadata_proof":"text-shortcuts-candidate-metadata-proof.json",
@@ -592,4 +595,6 @@ json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY
 echo "capture complete: $RUN_DIR"
-GOBLINS_OS_ARCH="$ARCH" SCREENSHOT_DIR="$RUN_DIR" "$REPO/os/hardware-gate/close-signoff.sh"
+# Close-signoff matches the committed repo-relative run dir and reads its own
+# relative paths (ISO, workflow) from the repo root.
+( cd "$REPO" && GOBLINS_OS_ARCH="$ARCH" SCREENSHOT_DIR="${RUN_DIR#"$REPO/"}" os/hardware-gate/close-signoff.sh )

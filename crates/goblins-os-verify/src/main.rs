@@ -2732,10 +2732,29 @@ fn workspace_member_check(root: &Path, binary: &str) -> Check {
 }
 
 fn container_copy_check(root: &Path, binary: &str) -> Check {
-    let expected = format!(
-        "COPY --from=rust-build /src/target/release/{binary} /usr/libexec/goblins-os/{binary}"
-    );
-    container_contains_check(root, &format!("container-copy-{binary}"), &expected)
+    let path = root.join("os/bootc/Containerfile");
+    let text = read_to_string(&path);
+    let list_line = format!("{binary} \\");
+    let terminal_list_line = format!("{binary}; do");
+    let staged_install_listed = text
+        .lines()
+        .map(str::trim)
+        .any(|line| line == list_line || line == terminal_list_line);
+    let stages_binaries = text.contains("/out/usr/libexec/goblins-os")
+        && text.contains("install -m 0755 \"/src/target/release/${binary}\" \"/out/usr/libexec/goblins-os/${binary}\"");
+    let copies_staged_tree = text.contains("COPY --from=rust-build /out/ /");
+
+    if staged_install_listed && stages_binaries && copies_staged_tree {
+        ready(
+            &format!("container-copy-{binary}"),
+            &format!("Containerfile stages and copies {binary} into /usr/libexec/goblins-os"),
+        )
+    } else {
+        blocked(
+            &format!("container-copy-{binary}"),
+            &format!("Containerfile does not stage and copy {binary} into /usr/libexec/goblins-os"),
+        )
+    }
 }
 
 fn container_contains_check(root: &Path, id: &str, needle: &str) -> Check {
@@ -12553,7 +12572,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         container_contains_check(
             root,
             "bootc-installs-textshortcuts-engine",
-            "COPY --from=rust-build /src/target/release/goblins-textshortcuts-engine /usr/libexec/goblins-os/goblins-textshortcuts-engine",
+            "goblins-textshortcuts-engine; do",
         ),
         container_contains_check(
             root,

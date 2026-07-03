@@ -2,6 +2,10 @@
 # build context small and reproducible by excluding local build output.
 target
 **/target
+**/node_modules
+**/.next
+**/.vercel
+**/__pycache__
 .git
 .DS_Store
 *.log

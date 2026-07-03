@@ -239,8 +239,8 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"active_engine": "goblins-textshortcuts"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"adapter_self_test": "pass"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"core_http": "200"' "$TEXT_SHORTCUTS_PROOF" \
-  || ! grep -Fq '"core_engine_available": "false"' "$TEXT_SHORTCUTS_PROOF" \
-  || ! grep -Fq '"core_runtime_loop_available": "false"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"core_engine_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"core_runtime_loop_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_PROOF"; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof at $TEXT_SHORTCUTS_PROOF"
   exit 4
@@ -363,7 +363,7 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF
   || ! grep -Fq '"rendered_bubble_ready_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"live_overlay_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"runtime_ready_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
-  || ! grep -Fq '"core_readiness_flip": "deferred"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"core_readiness_flip": "live"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || [ ! -s "$RUN_DIR/32-text-shortcuts-live-ibus-runtime-render.png" ]; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts live IBus runtime/render proof at $TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"
   exit 4

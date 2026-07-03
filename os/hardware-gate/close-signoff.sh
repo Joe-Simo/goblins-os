@@ -352,9 +352,9 @@ text_shortcuts_session_enable_proof_passes() {
     && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
     && rg -q '"adapter_self_test"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"core_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
-    && rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
-    && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
-    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof"
+    && rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof"
 }
 
 text_shortcuts_candidate_metadata_proof_passes() {
@@ -507,7 +507,7 @@ text_shortcuts_live_ibus_runtime_render_proof_passes() {
     && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"core_readiness_flip"[[:space:]]*:[[:space:]]*"deferred"' "$proof"
+    && rg -q '"core_readiness_flip"[[:space:]]*:[[:space:]]*"live"' "$proof"
 }
 
 keyboard_shortcuts_roundtrip_proof_passes() {
@@ -877,7 +877,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! text_shortcuts_session_enable_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"; then
     fail "Text Shortcuts session-enable proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF"
-    fail "Expected active Fedora GNOME IBus service, configured Goblins IBus source/preload, active goblins-textshortcuts engine, adapter self-test pass, and core runtime honesty still false."
+    fail "Expected active Fedora GNOME IBus service, configured Goblins IBus source/preload, active goblins-textshortcuts engine, adapter self-test pass, and the live core runtime readiness flip."
     exit 1
   fi
   if ! text_shortcuts_candidate_metadata_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF"; then
@@ -912,7 +912,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! text_shortcuts_live_ibus_runtime_render_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"; then
     fail "Text Shortcuts live IBus runtime/render proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"
-    fail "Expected 32-text-shortcuts-live-ibus-runtime-render.png plus QMP-keyboard-driven active goblins-textshortcuts IBus engine proof with focused-field callback, text-input-v3 commit, password refusal, rendered accept bubble, and core_readiness_flip=deferred."
+    fail "Expected 32-text-shortcuts-live-ibus-runtime-render.png plus QMP-keyboard-driven active goblins-textshortcuts IBus engine proof with focused-field callback, text-input-v3 commit, password refusal, rendered accept bubble, and core_readiness_flip=live."
     exit 1
   fi
   if ! keyboard_shortcuts_roundtrip_proof_passes "$SCREENSHOT_DIR/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"; then
@@ -971,7 +971,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   INSTALL_STORAGE_STATUS="yes (screenshots ${INSTALL_STORAGE_SCREENSHOTS[*]} present)"
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
   FIREWALL_TOGGLE_STATUS="yes ($FIREWALL_LIVE_TOGGLE_PROOF: disable=200/inactive, enable=200/active)"
-  TEXT_SHORTCUTS_SESSION_STATUS="yes ($TEXT_SHORTCUTS_SESSION_ENABLE_PROOF: service/source/engine active; runtime expansion still gated false)"
+  TEXT_SHORTCUTS_SESSION_STATUS="yes ($TEXT_SHORTCUTS_SESSION_ENABLE_PROOF: service/source/engine active; core reports live runtime readiness)"
   TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes (covered by $TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF + 32-text-shortcuts-live-ibus-runtime-render.png: normal expansion, pass-through, password refusal, focused-field callback, text-input-v3 commit, and rendered accept bubble)"
   TEXT_SHORTCUTS_CANDIDATE_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF: candidate metadata present; rendered bubble still gated false)"
   TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="yes ($TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF: adapter show/hide overlay intents present; live overlay still gated false)"

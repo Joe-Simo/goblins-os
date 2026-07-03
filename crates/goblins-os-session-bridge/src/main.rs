@@ -48,6 +48,7 @@ const DEFAULT_SINK: &str = "@DEFAULT_AUDIO_SINK@";
 const DEFAULT_SOURCE: &str = "@DEFAULT_AUDIO_SOURCE@";
 const GSETTINGS_TIMEOUT: Duration = Duration::from_millis(1_500);
 const WPCTL_TIMEOUT: Duration = Duration::from_millis(1_500);
+const IBUS_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 const KEYBOARD_KEYS: &[&str] = &[
     "repeat",
@@ -160,6 +161,7 @@ enum BridgeRequest {
         method: u32,
         logical_monitors: Vec<DisplayConfigLogicalMonitor>,
     },
+    IbusEngine,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -256,6 +258,26 @@ fn handle_request(request: BridgeRequest) -> BridgeResponse {
             method,
             logical_monitors,
         } => display_config_apply_monitors_response(serial, method, &logical_monitors),
+        BridgeRequest::IbusEngine => ibus_engine_response(),
+    }
+}
+
+/// Read-only probe of the session's active IBus engine. Takes no arguments by
+/// construction, so there is nothing to validate: the bridge only ever runs
+/// the fixed `ibus engine` read.
+fn ibus_engine_response() -> BridgeResponse {
+    match bounded_command_output("ibus", &["engine".to_string()], IBUS_TIMEOUT) {
+        Ok(output) if output.status.success() => {
+            success(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        }
+        Ok(output) => failure(command_error_detail(&output.stderr, &output.stdout)),
+        Err(BoundedCommandError::Missing) => {
+            failure("IBus is unavailable in this desktop session.")
+        }
+        Err(BoundedCommandError::TimedOut) => {
+            failure("IBus did not answer before the session bridge input timeout.")
+        }
+        Err(BoundedCommandError::Failed) => failure("IBus is not ready in this desktop session."),
     }
 }
 

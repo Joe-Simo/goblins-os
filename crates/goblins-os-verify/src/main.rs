@@ -5934,7 +5934,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-core-readiness-deferred",
-            "core_readiness_flip=deferred",
+            "core_readiness_flip=live",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -7154,7 +7154,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-live-ibus-core-readiness-deferred",
-            "\"core_readiness_flip\": \"deferred\"",
+            "\"core_readiness_flip\": \"live\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -13690,7 +13690,22 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
             "core-text-shortcuts-runtime-pending-honesty",
-            "runtime loop is still pending CI/qemu proof",
+            "not the active IBus engine in this session",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-runtime-probes-live-ibus-engine",
+            "session_bridge::ibus_engine()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-accepts-ibus-engine-op",
+            "IbusEngine",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-ibus-probe-timeout-copy-is-truthful",
+            "IBus did not answer before the session bridge input timeout.",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/text_shortcuts.rs"),

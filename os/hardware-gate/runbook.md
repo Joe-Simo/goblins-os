@@ -258,10 +258,13 @@ host QMP keyboard input, then reject the run unless the proof records a
 focused-field callback, a Wayland `text-input-v3` commit, normal expansion to
 `onmyway.`, pass-through of `hello.`, password-purpose refusal, the rendered
 Goblins accept bubble, `gos-text-shortcuts-candidate`, Inter, and
-`core_readiness_flip=deferred`. This is the only gate allowed to set
+`core_readiness_flip=live`. This is the only gate allowed to set
 `rendered_bubble_ready_claim=true`, `live_overlay_claim=true`, and
-`runtime_ready_claim=true`; the core readiness flip still stays deferred until
-the qemu artifact is reviewed deliberately.
+`runtime_ready_claim=true`. The deferred-flip review completed with the green
+2026-07-03 signoff run: core now derives `runtime_loop_available` live from
+the session bridge's read-only `ibus engine` probe (`IbusEngine` op), so the
+proof asserts the flip is real — core must report `engine_available=true`
+while the Goblins engine is genuinely the active IBus engine.
 
 The keyboard-shortcuts gate is `keyboard-shortcuts-roundtrip-proof.json`. It
 posts to `/v1/keyboard/shortcuts/binding` to set the owned `window-hud` shortcut

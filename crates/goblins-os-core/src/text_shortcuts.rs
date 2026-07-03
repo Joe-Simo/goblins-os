@@ -19,6 +19,7 @@ use goblins_os_textshortcuts_engine::{sanitize_shortcuts, TextShortcut};
 use serde::{Deserialize, Serialize};
 
 use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::session_bridge::{self, SessionBridgeResult};
 
 const ENGINE_BINARY_PATH: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine";
 const ENGINE_COMPONENT_PATH: &str = "/usr/share/ibus/component/goblins-textshortcuts.xml";
@@ -131,7 +132,19 @@ fn probe_engine_status() -> TextShortcutsEngineStatus {
         PathBuf::from(ENGINE_COMPONENT_PATH).is_file(),
         PathBuf::from(ENGINE_BINARY_PATH).is_file(),
         text_shortcuts_input_source_configured(),
-        false,
+        text_shortcuts_runtime_loop_live(),
+    )
+}
+
+/// Live readiness comes only from the real session: the allowlisted session
+/// bridge reads the active IBus engine, and the runtime loop counts as
+/// available only while the Goblins Text Shortcuts engine is actually the
+/// one receiving keystrokes. Bridge unavailable or another engine active
+/// degrades honestly to "not active".
+fn text_shortcuts_runtime_loop_live() -> bool {
+    matches!(
+        session_bridge::ibus_engine(),
+        SessionBridgeResult::Success(engine) if engine.trim() == TEXTSHORTCUTS_INPUT_ID
     )
 }
 
@@ -164,7 +177,9 @@ fn text_shortcuts_engine_status(
             missing.push("the Goblins Text Shortcuts IBus input source is not enabled");
         }
         if !runtime_loop_available {
-            missing.push("the live IBus runtime loop is still pending CI/qemu proof");
+            missing.push(
+                "the Goblins Text Shortcuts engine is not the active IBus engine in this session",
+            );
         }
         format!(
             "Text Shortcuts are saved, but the replacement engine is not active on this session yet: {}.",
@@ -195,7 +210,7 @@ fn text_shortcuts_autocorrect_status(
 ) -> TextShortcutsAutocorrectStatus {
     let available = model_available || dictionary_available;
     let detail = if available {
-        "Autocorrect resources are present, but live autocorrect remains off until the IBus engine is proven in CI/qemu."
+        "Autocorrect resources are present, but live autocorrect remains off until it is deliberately enabled and proven."
             .to_string()
     } else {
         "Autocorrect is off because no local model or Hunspell dictionary is installed.".to_string()
@@ -378,7 +393,7 @@ mod tests {
             .detail
             .contains("engine binary is not installed"));
         assert!(missing_all.detail.contains("input source is not enabled"));
-        assert!(missing_all.detail.contains("runtime loop is still pending"));
+        assert!(missing_all.detail.contains("not the active IBus engine"));
 
         let ibus_only = text_shortcuts_engine_status(true, false, false, false, false);
         assert!(!ibus_only.ready);

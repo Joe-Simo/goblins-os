@@ -45,6 +45,7 @@ enum BridgeRequest<'a> {
         method: u32,
         logical_monitors: Vec<DisplayConfigLogicalMonitor<'a>>,
     },
+    IbusEngine,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -99,6 +100,11 @@ pub(crate) fn permission_store_delete_permission(
 
 pub(crate) fn display_config_get_current_state() -> SessionBridgeResult {
     call_bridge(&BridgeRequest::DisplayConfigGetCurrentState)
+}
+
+/// Read-only probe of the session's active IBus engine name.
+pub(crate) fn ibus_engine() -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::IbusEngine)
 }
 
 pub(crate) fn display_config_get_apply_allowed() -> SessionBridgeResult {

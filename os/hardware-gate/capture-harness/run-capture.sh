@@ -241,7 +241,7 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"core_http": "200"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"core_engine_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"core_runtime_loop_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
-  || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_PROOF"; then
+  || ! grep -Fq '"runtime_ready_claim": "true"' "$TEXT_SHORTCUTS_PROOF"; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof at $TEXT_SHORTCUTS_PROOF"
   exit 4
 fi

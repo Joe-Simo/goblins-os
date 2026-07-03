@@ -1,42 +1,80 @@
 # Goblins OS
 
-**The OS you build yourself** — an image-based Linux desktop at macOS-grade polish,
-in an OpenAI-style design language. You describe the app you want; the on-device
-model builds it. No app store, no bundled productivity apps — just the OS, your
-brand of computing, made by you.
+Goblins OS is an image-based Linux desktop for building and running your own
+local apps. It is built on Fedora bootc, ships as architecture-specific release
+media, and keeps credentials out of the desktop image.
 
-Goblins OS is built on **fedora-bootc** (an immutable, image-based OS), so updates
-ship as whole signed images that installed systems pull and apply **atomically, with
-rollback** — distribution that's safer than package-by-package updates.
+The project is open source. The code is licensed under AGPL-3.0-or-later. The
+Goblins OS name, marks, release identity, installer identity, desktop identity,
+icons, wallpapers, and associated trade dress are reserved.
 
-- **Design & product north star:** [`GOAL.md`](GOAL.md)
-- **Build / verify / ship gates:** [`SHIP.md`](SHIP.md)
-- **Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+## Download
+
+The current public release is available on the GitHub releases page:
+
+- [Goblins OS releases](https://github.com/Joe-Simo/goblins-os/releases)
+- [Website](https://goblinsos.com)
+
+Install media is built separately for each CPU family. Use the ISO that matches
+the target system:
+
+- `x86_64` for 64-bit Intel and AMD systems
+- `aarch64` for Arm systems and Arm virtual machines
+
+Always verify the published SHA256 checksums before writing an installer image
+to USB or attaching it to a VM.
+
+## What it is
+
+- A Fedora bootc desktop OS with image-based updates and rollback.
+- A native desktop environment with Goblins OS branding and installer flows.
+- A local app-building surface where users describe the software they want and
+  keep the generated output on the machine.
+- A project with explicit packaging, release, SBOM, and signoff checks.
+
+## What it is not
+
+- It is not a mobile OS.
+- It is not an app store.
+- It does not ship with bundled productivity apps.
+- It does not include credentials or client-side secrets in the OS image.
+
+## Containers
+
+The bootc container images are intended for inspection, verification, and
+derived-image workflows. Use the ISO when you want the full graphical desktop
+installer.
+
+Container package visibility is tracked separately from the public source repo.
+If a `docker pull` command asks for authentication, the GHCR package has not yet
+been made public.
+
+## Development
+
+- [Contributing](CONTRIBUTING.md)
+- [Roadmap](ROADMAP.md)
+- [Release engineering](SHIP.md)
+
+## Forks and attribution
+
+You can study, modify, and redistribute the source under the AGPL. Modified
+distributions must keep the required license and attribution notices, state what
+changed, provide the required source, and use their own product name and branding
+unless they have written permission to use the Goblins OS marks.
+
+Automated rebranding, AI-generated patches, copied release pages, renamed ISO
+artifacts, or generated derivatives do not create permission to remove notices,
+claim official status, or use Goblins OS identity. See [NOTICE](NOTICE) and
+[TRADEMARKS.md](TRADEMARKS.md).
 
 ## Licensing
 
-Goblins OS is **open source and owned** — the code is open; the brand is reserved.
-
 | What | Terms |
-|---|---|
-| **Goblins OS's own source** (the `crates/` and `os/` work in this repo) | **AGPL-3.0-or-later** — see [`LICENSE`](LICENSE) |
-| **Bundled OS components** (Fedora base, Linux kernel, GNOME, and other packages in the image) | Each keeps its **own upstream license**; Goblins OS redistributes them under their terms (see the SBOM / third-party notices under `os/release/` and `os/signoff-proofs/sbom/`) |
-| **The "Goblins OS" name and marks** | **Reserved trademarks** — see [`TRADEMARKS.md`](TRADEMARKS.md). Not licensed under the AGPL. |
-| **Contributions** | Require the [Contributor License Agreement](CLA.md), which keeps the copyright clean and lets the owner offer commercial terms alongside the AGPL. |
+| --- | --- |
+| Goblins OS source in this repository | AGPL-3.0-or-later. See [LICENSE](LICENSE). |
+| Bundled OS components | Each component keeps its upstream license. Release SBOMs and package evidence are generated under `os/signoff-proofs/sbom/`. |
+| Goblins OS name, marks, and product identity | Reserved project marks. See [NOTICE](NOTICE) and [TRADEMARKS.md](TRADEMARKS.md). |
+| Contributions | Contributions require the [Contributor License Agreement](CLA.md). |
 
-**Commercial licensing.** The AGPL's copyleft (including its network clause) requires
-that anyone who uses or modifies the code — even as a hosted service — make their
-changes available under the AGPL. If you need different terms (e.g. to ship a closed
-product built on Goblins OS), a **commercial license is available from the project
-owner**. This dual-licensing model keeps Goblins OS genuinely open while preserving
-the owner's ability to sell.
-
-> The license setup in this repo (LICENSE, CLA, TRADEMARKS) is a sound starting point
-> but should be reviewed by IP counsel before it's relied upon commercially or before
-> the first outside contribution is accepted.
-
-## Free to use
-
-Goblins OS is freely available to download, install, run, and modify under the AGPL —
-like any open Linux distribution. Build it, install the ISO, and installed systems
-auto-update from the published image.
+For legal or trademark questions, review the relevant files with qualified
+counsel before relying on them for production or commercial use.

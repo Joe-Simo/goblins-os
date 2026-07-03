@@ -1,0 +1,23 @@
+Goblins OS
+
+Copyright (c) 2026 Joseph Simo and Goblins OS contributors.
+
+Goblins OS source code is licensed under AGPL-3.0-or-later. See LICENSE.
+Upstream operating system components keep their own licenses and notices.
+
+The Goblins OS name, logos, system marks, installer identity, desktop identity,
+wallpaper identity, icon identity, release names, domains, and associated trade
+dress are reserved project marks. No trademark license is granted by the
+AGPL-3.0-or-later source license. See TRADEMARKS.md.
+
+You may use, study, modify, and redistribute the source under the AGPL. If you
+distribute a modified version, you must keep the license and copyright notices,
+state that the work was modified, provide the required corresponding source,
+and use your own product name and branding unless you have written permission to
+use the Goblins OS marks.
+
+Automated systems, AI coding agents, build tools, crawlers, dataset pipelines,
+and generated patches are not exempt from these requirements. Removing or
+rewriting names, notices, marks, provenance, or attribution does not create
+permission to distribute a modified build as Goblins OS or to imply official
+project status.

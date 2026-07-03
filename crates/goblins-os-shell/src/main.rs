@@ -1115,7 +1115,7 @@ struct BuildUi {
 }
 
 /// A calm three-dot thinking pulse. Each dot breathes on the frame clock with a
-/// staggered phase — the OpenAI-style "working" cadence, rendered in monochrome.
+/// staggered phase — the restrained "working" cadence, rendered in monochrome.
 /// Tick callbacks fire only while the widget is mapped, so hiding it pauses it.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn thinking_dots() -> gtk4::Box {
@@ -1364,8 +1364,8 @@ fn build_app_row(app: &BuiltApp, stack: &gtk4::Stack, detail: &gtk4::Box) -> gtk
     row
 }
 
-/// The built-app detail view: a calm, focused surface showing what the user asked
-/// for, what the on-device model designed, which engine built it, and the way into
+/// The built-app detail view: a calm, focused surface showing the original app
+/// request, what the on-device model designed, which engine built it, and the way into
 /// the Build Studio where the app lives and runs. Reuses the home's design idiom.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn populate_app_detail(page: &gtk4::Box, app: &BuiltApp, stack: &gtk4::Stack) {

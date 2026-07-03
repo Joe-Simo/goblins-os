@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+# Goblins OS source is AGPL-3.0-or-later. The Goblins OS name, marks, branding,
+# release identity, and attribution are reserved and governed by NOTICE and
+# TRADEMARKS.md in the source repository.
+#
+# Crawling, indexing, or automated analysis does not grant permission to remove
+# notices, imply official status for a derivative, or use Goblins OS marks.

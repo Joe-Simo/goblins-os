@@ -1067,7 +1067,7 @@ fn source_checks(root: &Path) -> Vec<Check> {
     checks.push(bootc_install_config_check(root));
     checks.extend(goblins_ai_contract_checks(root));
     checks.extend(native_design_system_checks(root));
-    checks.extend(acquisition_readiness_checks(root));
+    checks.extend(release_readiness_checks(root));
     checks.extend(secret_hygiene_checks(root));
     checks.extend(dual_arch_release_checks(root));
     checks.extend(installer_readiness_checks(root));
@@ -2971,7 +2971,7 @@ fn source_secret_scan_check(root: &Path) -> Check {
     match source_secret_scan_hits(root) {
         Ok(hits) if hits.is_empty() => ready(
             "source-secret-scan",
-            "no live OpenAI-style keys or active secret assignments found in source package",
+            "no live provider keys or active secret assignments found in source package",
         ),
         Ok(hits) => blocked(
             "source-secret-scan",
@@ -4865,14 +4865,14 @@ fn native_design_system_checks(root: &Path) -> Vec<Check> {
     checks
 }
 
-fn acquisition_readiness_checks(root: &Path) -> Vec<Check> {
+fn release_readiness_checks(root: &Path) -> Vec<Check> {
     vec![
         file_check(root, "os/release/source-tree-manifest.toml"),
         file_check(root, "os/release/asset-provenance.toml"),
         file_check(root, "os/release/third-party-notices.toml"),
         file_check(root, "os/release/trademark-posture.toml"),
         file_check(root, "os/release/architectures.toml"),
-        file_check(root, "os/release/acquisition-readiness-delta.toml"),
+        file_check(root, "os/release/release-readiness-delta.toml"),
         contains_check(
             root.join("Cargo.toml"),
             "workspace-agpl-license",
@@ -5280,78 +5280,78 @@ fn acquisition_readiness_checks(root: &Path) -> Vec<Check> {
             "`trademark_posture`",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-records-rust-source-gates",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-records-rust-source-gates",
             "rust_source_gates_available",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-records-source-package-materialized",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-records-source-package-materialized",
             "source_package_materialized",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-source-root-is-portable",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-source-root-is-portable",
             "root = \".\"",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-links-source-tree-manifest",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-links-source-tree-manifest",
             "source_tree_manifest = \"os/release/source-tree-manifest.toml\"",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-records-dual-arch-rpm-sbom-proof",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-records-dual-arch-rpm-sbom-proof",
             "dual_arch_rpm_sbom_present",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-blocks-on-native-linux-runner",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-blocks-on-native-linux-runner",
             "native_linux_release_runner_required",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-blocks-on-shippable-release-isos",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-blocks-on-shippable-release-isos",
             "shippable_release_iso_artifacts_incomplete",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-blocks-on-display-proofs",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-blocks-on-display-proofs",
             "display_backed_architecture_proofs_missing",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-records-x86-rpm-sbom-proof",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-records-x86-rpm-sbom-proof",
             "x86_64_rpm_sbom_present",
         ),
         contains_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-blocks-on-complete-signoff",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-blocks-on-complete-signoff",
             "complete_signoff_rows_missing",
         ),
         absent_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-no-stale-rust-missing-blocker",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-no-stale-rust-missing-blocker",
             "rust_toolchain_missing",
         ),
         absent_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-no-stale-dataless-blocker",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-no-stale-dataless-blocker",
             "source_files_dataless",
         ),
         absent_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-no-stale-disk-space-blocker",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-no-stale-disk-space-blocker",
             "disk_space_low",
         ),
         absent_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-no-stale-x86-rpm-sbom-blocker",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-no-stale-x86-rpm-sbom-blocker",
             "x86_64_rpm_sbom_missing",
         ),
         absent_check(
-            root.join("os/release/acquisition-readiness-delta.toml"),
-            "acquisition-delta-no-local-user-path",
+            root.join("os/release/release-readiness-delta.toml"),
+            "release-readiness-delta-no-local-user-path",
             "/Users/",
         ),
         contains_check(

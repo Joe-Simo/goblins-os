@@ -1,9 +1,9 @@
-# Additive acquisition manifest for the current source tree state.
+# Additive release-readiness manifest for the current source tree state.
 # This does not replace the existing release manifests; it records current,
 # repo-verifiable packaging intent while those files are not locally materialized.
 
 [manifest]
-name = "goblins-os-acquisition-readiness-delta"
+name = "goblins-os-release-readiness-delta"
 version = 1
 status = "partial"
 reason = "The source package is materialized and locally verifiable, but native per-architecture release artifacts and display-backed signoff evidence are not complete in this workspace."

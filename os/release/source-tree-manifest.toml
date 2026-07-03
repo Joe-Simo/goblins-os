@@ -1,5 +1,5 @@
-# Acquisition source-package manifest. This classifies what belongs in the source
-# handoff versus generated proofs and local build output.
+# Source-package manifest. This classifies what belongs in the source package
+# versus generated proofs and local build output.
 
 [source]
 description = "Authoritative Goblins OS source package"

@@ -641,7 +641,7 @@ tooltip label {
   /* Match the 12px window radius so inset panels never out-round the window. */
   border-radius: 12px;
   background: alpha(@gos_surface, 0.9);
-  /* Layered macOS-grade elevation: a hairline top sheen, a tight contact shadow,
+  /* Layered desktop elevation: a hairline top sheen, a tight contact shadow,
      and a soft ambient cast — depth without heaviness. The card-specific shadow
      tokens go near-zero in dark so grouped cards lean on the hairline + sheen
      there instead of stacking two heavy black drops. */
@@ -1224,7 +1224,7 @@ button:active {
 
 /* ── Command-Space home (the shell desktop) ──────────────────────────────
    The entire home is one centered command field: describe an app and the
-   on-device GPT-OSS model builds it. Calm, macOS-grade, radically minimal. */
+   on-device GPT-OSS model builds it. Calm, focused, and minimal. */
 .gos-home-root {
   padding: 24px 28px;
   background:
@@ -1456,7 +1456,7 @@ button:active {
 
 /* Three-dot "thinking" pulse shown while the on-device model is working. The
    breathing is animated per-dot on the frame clock (opacity); these rules only
-   set the resting shape and the calm OpenAI-style spacing. */
+   set the resting shape and the calm product spacing. */
 .gos-thinking {
   margin-top: 16px;
   margin-bottom: 2px;

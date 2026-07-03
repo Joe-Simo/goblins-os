@@ -1,45 +1,49 @@
 # Contributing to Goblins OS
 
-Thanks for your interest in Goblins OS — the OS you build yourself, at macOS-grade
-polish, in an OpenAI-style design language.
+Goblins OS is a Fedora bootc desktop OS. Contributions should preserve the
+project's native desktop direction, source-available release process, and
+server-side secret boundary.
 
-## Licensing of contributions
+## Licensing
 
-- Goblins OS's own source is licensed **AGPL-3.0-or-later** (see [`LICENSE`](LICENSE)).
-- Before your first contribution is merged, you must agree to the
-  **[Contributor License Agreement](CLA.md)**. This keeps the project's copyright
-  clean and lets the owner offer commercial licenses alongside the AGPL. Typically a
-  bot records your agreement when you open your first pull request.
-- The **"Goblins OS" name and marks are reserved trademarks** — see
-  [`TRADEMARKS.md`](TRADEMARKS.md). You may build, run, modify, and redistribute the
-  code under the AGPL, but you may not use the Goblins OS name or marks to brand a
-  fork or imply endorsement without permission.
+- Goblins OS source is licensed AGPL-3.0-or-later. See [LICENSE](LICENSE).
+- Keep the project [NOTICE](NOTICE), attribution, and license notices intact.
+- Before a contribution is merged, contributors must agree to the
+  [Contributor License Agreement](CLA.md).
+- The Goblins OS name and marks are reserved project marks. See
+  [TRADEMARKS.md](TRADEMARKS.md).
 
-## Before you open a pull request
+## Before opening a pull request
 
-The OS ships only when the gate is green. Run, at minimum:
+Run the relevant local checks for the files you changed. For Rust work, start
+with:
 
 ```sh
-cargo fmt --all -- --check        # format (per-crate `-p` if a host/CI rustfmt skew bites)
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The full release gate additionally builds the bootc image and runs
-`goblins-os-verify` (expects `blocked=0`) plus light+dark render checks in CI/qemu —
-the GTK/gnome-shell desktop code is `cfg(target_os = "linux")` and only renders in a
-real session, so those checks run in CI, not on a macOS host.
+Release work also builds the bootc image, runs `goblins-os-verify`, generates
+package evidence, and validates display-backed installer or desktop proof where
+required. See [SHIP.md](SHIP.md) for the full release process.
 
-## Scope and design
+## Engineering expectations
 
-- New software is added to the OS image via `os/bootc/Containerfile`; runtime
-  defaults via dconf (`os/dconf`) and systemd units; app surfaces are Rust crates;
-  shell features are gnome-shell extensions.
-- The product thesis is **you build your apps** (described to the on-device model) —
-  there is no app store and no bundled productivity apps. Keep changes consistent
-  with that, and with the honest-status, no-fake-data, server-side-secrets rules.
+- Keep credentials out of client-side code and out of the OS image.
+- Prefer existing system APIs, GNOME/GTK facilities, systemd units, and Rust
+  crates over custom one-off mechanisms.
+- Add software to the OS image through `os/bootc/Containerfile` and extend the
+  verifier contract when a release-critical binary, service, desktop file, or
+  package becomes required.
+- Do not fake runtime, hardware, package, or screenshot proof. A degraded state
+  should say what is unavailable and why.
+- Do not strip Goblins OS attribution, release provenance, or trademark
+  boundaries from public copy, generated files, release artifacts, or AI-created
+  patches.
 
 ## Reporting issues
 
-Open an issue with clear reproduction steps. For security issues, please disclose
-privately to the maintainers rather than in a public issue.
+Open an issue with clear reproduction steps, expected behavior, and actual
+behavior. Report security issues privately to the maintainers instead of opening
+a public issue.

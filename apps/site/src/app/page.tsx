@@ -59,12 +59,12 @@ const features = [
   },
   {
     title: "Build apps locally",
-    description: "Describe an app, review the build thread, and keep the output on the machine.",
+    description: "Describe an app, review the generated project, and keep the output on the machine.",
     icon: TerminalSquareIcon,
   },
   {
     title: "Server-side secrets only",
-    description: "The image ships without credentials; sensitive provider material stays outside the desktop session.",
+    description: "The image ships without credentials; provider keys stay outside the desktop session.",
     icon: LockKeyholeIcon,
   },
   {
@@ -74,12 +74,12 @@ const features = [
   },
   {
     title: "Architecture-specific media",
-    description: "Arm and x86_64 are separate native release tracks with their own proof.",
+    description: "Arm and x86_64 use separate native release media.",
     icon: CpuIcon,
   },
   {
     title: "Gaming substrate without Steam",
-    description: "Mesa, Vulkan tooling, GameMode, gamescope, MangoHud, and PipeWire proof paths.",
+    description: "Mesa, Vulkan tooling, GameMode, gamescope, MangoHud, and PipeWire diagnostics.",
     icon: Gamepad2Icon,
   },
 ];
@@ -113,15 +113,15 @@ export default function Home() {
           <div className="flex max-w-2xl flex-col gap-6" data-gsap="reveal">
             <div className="flex flex-col gap-4">
               <Badge variant="secondary" className="w-fit">
-                Fedora bootc · local builds · free OS
+                Fedora bootc · native desktop · local builds
               </Badge>
               <h1 className="text-5xl font-semibold leading-[0.95] tracking-normal text-balance sm:text-6xl lg:text-7xl">
                 Goblins OS
               </h1>
               <p className="max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
-                The OS you build yourself. Describe an app in a sentence,
-                review the native build, and keep the system local, minimal,
-                and under your control.
+                A Fedora bootc desktop for building local apps. Choose the
+                right architecture, verify the release media, and keep your
+                system under your control.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
@@ -168,7 +168,7 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
           <SectionHeading
             title="Built for creativity and control"
-            description="The product story follows the current repo policy: Fedora bootc, Inter, native Linux surfaces, and no baked-in credentials."
+            description="A native Linux desktop with verified release artifacts, per-architecture media, and a clean credential boundary."
           />
           <div className="grid gap-x-8 gap-y-0 md:grid-cols-2 lg:grid-cols-3">
             {features.map((feature) => (
@@ -195,7 +195,7 @@ export default function Home() {
           <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
             <SectionHeading
               title="See Goblins OS in action"
-              description={`This page ships ${totalMedia} of screenshot media and lazy-loads everything below the hero.`}
+              description={`Screenshot media totals ${totalMedia}; media below the hero is lazy-loaded.`}
             />
             <Button asChild variant="ghost">
               <a href="#install">
@@ -229,7 +229,7 @@ export default function Home() {
             <CardHeader>
               <CardTitle>Demo reel</CardTitle>
               <CardDescription>
-                Built from the real screenshots above. The MP4 is {demoMedia}, uses controls, and does not autoplay.
+                Built from the screenshots above. The MP4 is {demoMedia}, uses controls, and does not autoplay.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -251,7 +251,7 @@ export default function Home() {
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
             <SectionHeading
               title="Downloads"
-              description="Installer media is architecture-specific and hosted on GitHub release assets so Vercel only serves the lightweight website."
+              description="Installer media is architecture-specific. Large files are hosted on GitHub release assets."
             />
             <Button asChild variant="ghost">
               <a href={releaseEvidence.releaseUrl} rel="noreferrer" target="_blank">
@@ -272,9 +272,9 @@ export default function Home() {
               <DownloadArtifactCard key={artifact.arch} artifact={artifact} />
             ))}
             <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
-              <p>No OS media is prefetched or routed through Vercel.</p>
+              <p>Large OS media is served from GitHub release assets.</p>
               <p>
-                Evidence source:{" "}
+                Release:{" "}
                 <a
                   className="font-medium text-foreground underline-offset-4 hover:underline"
                   href={releaseEvidence.releaseUrl}
@@ -318,8 +318,8 @@ export default function Home() {
                             Download ready
                           </Badge>
                           <ul className="flex flex-col gap-1 text-xs leading-5 text-muted-foreground">
-                            {artifact.caveats.map((caveat) => (
-                              <li key={caveat}>{caveat}</li>
+                            {artifact.notes.map((note) => (
+                              <li key={note}>{note}</li>
                             ))}
                           </ul>
                         </div>
@@ -368,14 +368,14 @@ export default function Home() {
               </Table>
             </CardContent>
             <CardFooter className="flex flex-col items-start gap-3 border-t text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <span>No OS media is prefetched or routed through Vercel.</span>
+              <span>Large OS media is served from GitHub release assets.</span>
               <a
                 className="font-medium text-foreground underline-offset-4 hover:underline"
                 href={releaseEvidence.releaseRunUrl}
                 rel="noreferrer"
                 target="_blank"
               >
-                Release workflow evidence
+                Build details
               </a>
             </CardFooter>
           </Card>
@@ -391,7 +391,7 @@ export default function Home() {
             />
             <Button asChild variant="ghost">
               <a href={releaseEvidence.releaseRunUrl} rel="noreferrer" target="_blank">
-                Image build evidence
+                Build details
                 <ExternalLinkIcon data-icon="inline-end" />
               </a>
             </Button>
@@ -407,9 +407,8 @@ export default function Home() {
             <BoxIcon aria-hidden="true" />
             <AlertTitle>Containers are not a desktop VM</AlertTitle>
             <AlertDescription>
-              Docker and Podman can pull the same bootc OS payload used by the
-              ISO builder, run the verifier, and support derived-image workflows.
-              Use the ISO when you need the full graphical desktop installer.
+              Container images are for inspection, automation, and derived
+              builds. Use the ISO when you need the graphical desktop installer.
             </AlertDescription>
           </Alert>
         </div>
@@ -531,7 +530,7 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
           <div className="flex min-w-0 flex-col gap-5" data-gsap="reveal">
             <SectionHeading
               title="Source and provenance"
-              description="Goblins OS source is AGPL-3.0-or-later, with reserved project marks and separate upstream licenses for bundled OS components."
+              description="Goblins OS source is AGPL-3.0-or-later. Forks must keep required notices and use their own branding unless they have permission to use the Goblins OS marks."
             />
             <div className="flex flex-wrap gap-3">
               <Button asChild>
@@ -546,27 +545,33 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
                   <ArrowUpRightIcon data-icon="inline-end" />
                 </a>
               </Button>
+              <Button asChild variant="outline">
+                <a href={`${sourceUrl}/blob/main/NOTICE`} rel="noreferrer" target="_blank">
+                  Notice
+                  <ArrowUpRightIcon data-icon="inline-end" />
+                </a>
+              </Button>
             </div>
           </div>
 
           <div className="grid min-w-0 gap-4 md:grid-cols-3" data-gsap="reveal">
             <EvidenceCard
               icon={FileCheck2Icon}
-              title="Release policy"
+              title="Release process"
               href={`${sourceUrl}/blob/main/SHIP.md`}
-              body="Build, verify, artifact, and hardware-gate rules."
+              body="Build, verification, artifact, and signoff rules."
             />
             <EvidenceCard
               icon={HardDriveIcon}
-              title="Architecture contract"
+              title="Architecture matrix"
               href={`${sourceUrl}/blob/main/os/release/architectures.toml`}
-              body="Expected ISO, checksum, manifest, and proof paths."
+              body="Expected ISO, checksum, and manifest paths."
             />
             <EvidenceCard
-              icon={CheckCircle2Icon}
-              title="SBOM evidence"
-              href={`${sourceUrl}/tree/main/os/signoff-proofs/sbom`}
-              body="Cargo and RPM evidence are tracked per architecture."
+              icon={ShieldCheckIcon}
+              title="Marks policy"
+              href={`${sourceUrl}/blob/main/TRADEMARKS.md`}
+              body="Forks can use the source, but not the Goblins OS identity."
             />
           </div>
         </div>
@@ -616,8 +621,8 @@ function DownloadArtifactCard({ artifact }: { artifact: (typeof releaseArtifacts
         <div className="rounded-lg border bg-muted/55 p-3">
           <p className="mb-2 text-sm font-medium">Release notes</p>
           <ul className="flex flex-col gap-1 text-xs leading-5 text-muted-foreground">
-            {artifact.caveats.map((caveat) => (
-              <li key={caveat}>{caveat}</li>
+            {artifact.notes.map((note) => (
+              <li key={note}>{note}</li>
             ))}
           </ul>
         </div>
@@ -660,7 +665,7 @@ function ContainerImageCard({ image }: { image: ContainerImage }) {
             <CardDescription>{image.platform}</CardDescription>
           </div>
           <Badge variant="secondary" className="shrink-0">
-            {image.status === "public" ? "Public pull" : "Access pending"}
+            {image.status === "public" ? "Public pull" : "Registry pending"}
           </Badge>
         </div>
       </CardHeader>

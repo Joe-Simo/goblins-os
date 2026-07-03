@@ -447,7 +447,7 @@ built image to create `rpm-packages.tsv`. The final shipping gate still fails if
 `release-evidence-manifest.json`, `cargo-lock-packages.tsv`, or
 `rpm-packages.tsv` is missing for either architecture. The release evidence
 manifest must also record `asset_provenance`, `third_party_notices`,
-`trademark_posture`, and `source_tree_manifest` paths so acquisition reviewers can
+`trademark_posture`, and `source_tree_manifest` paths so release reviewers can
 trace each architecture artifact back to the source-package diligence files.
 The helper and final shipping gate also run the artifact/evidence secret scan
 over generated release evidence, signoff notes, ISO manifests, SHA files,

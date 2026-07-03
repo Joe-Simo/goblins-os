@@ -1,4 +1,4 @@
-# Trademark posture for acquisition diligence.
+# Trademark posture for release diligence.
 # This is an engineering release control, not legal clearance.
 
 [official_sources]
@@ -13,12 +13,14 @@ apple_third_party_guidelines = "https://www.apple.com/legal/intellectual-propert
 primary_name = "Goblins OS"
 primary_owner = "Goblins OS"
 rule = "Goblins OS remains the leading product identity across boot, installer, desktop, settings, documentation, release artifacts, and screenshots."
+modified_distribution_rule = "Modified distributions must use their own name and branding unless written permission to use Goblins OS marks exists."
+automated_rebranding_rule = "AI-generated, scripted, or automated name and asset rewrites do not grant permission to distribute a confusingly similar derivative as Goblins OS."
 
 [openai]
-scope = "Provider/integration reference only unless a written acquisition or partnership agreement changes scope."
+scope = "Provider/integration reference only unless a written agreement changes scope."
 allowed = "OpenAI marks may identify OpenAI account, Codex, GPT-OSS/OpenAI-compatible provider, or OpenAI service integration."
 blocked = "Do not use OpenAI marks as the product name, app icon, boot identity, wallpaper, primary branding, or implied endorsement."
-review = "Review OpenAI assets and copy before public distribution or acquisition close."
+review = "Review OpenAI assets and copy before public distribution."
 
 [fedora_red_hat]
 scope = "Base-platform reference only."

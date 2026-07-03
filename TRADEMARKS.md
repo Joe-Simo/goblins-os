@@ -1,39 +1,52 @@
 # Goblins OS Trademark Policy
 
-> **Template — review with counsel.** Trademark rights are strongest when registered
-> and consistently enforced. Consider registering the "Goblins OS" word mark and the
-> logo marks in your jurisdiction(s). This policy is modeled on the approach used by
-> Fedora, Mozilla, and other open projects: the *code* is open; the *brand* is owned.
+> Template notice: this policy should be reviewed by qualified counsel before it
+> is relied on for formal trademark enforcement.
 
-## The marks
+## Marks
 
-"**Goblins OS**", the Goblins OS name, the Goblins system mark, and associated logos
-(the "Marks") are trademarks of the Goblins OS project owner. The Marks are **not**
-licensed under the AGPL-3.0-or-later license that covers the source code. Copyright
-and trademark are separate: open-sourcing the code does **not** grant rights to the
-Marks.
+"Goblins OS", the Goblins OS name, the Goblins system mark, and associated logos
+are project marks. The installer identity, desktop identity, release identity,
+wallpapers, icon identity, domain names, and associated trade dress are also
+reserved project identity. They are not licensed under the AGPL-3.0-or-later
+license that covers the source code.
 
-## What you may do
+## Permitted use
 
-- Use the Marks nominatively to refer to Goblins OS (e.g. "compatible with Goblins
-  OS", "based on Goblins OS"), truthfully and without implying endorsement.
+You may:
+
+- Refer to Goblins OS truthfully and nominatively, such as "compatible with
+  Goblins OS" or "based on Goblins OS".
 - Build, run, modify, and redistribute the source code under the AGPL.
+- Preserve the marks where needed to identify an unmodified copy of the official
+  release, provided the use does not imply new sponsorship or endorsement.
 
-## What requires permission
+## Uses that require permission
 
-- Distributing a modified version, fork, or derivative **under the Goblins OS name or
-  Marks**. Rebuild it under your **own** name and branding instead (the AGPL permits
-  the code; the Marks do not travel with it) — this is the same rule that lets distros
-  remix Fedora only after rebranding.
-- Using the Marks in a way that suggests the project owner produces, sponsors, or
-  endorses your product or service.
-- Using the Marks in your company name, product name, domain, or logo.
+You need written permission to:
 
-## Why this matters
+- Distribute a modified version, fork, or derivative under the Goblins OS name
+  or marks.
+- Distribute renamed or AI-generated release media that keeps confusingly
+  similar Goblins OS marks, icons, wallpapers, installer screens, domains, or
+  release identity.
+- Use the marks in a way that suggests sponsorship, endorsement, or official
+  project status.
+- Use the marks in a company name, product name, domain, or logo.
+- Remove attribution or provenance while keeping a build, release page, package,
+  container image, screenshot, or website confusingly similar to Goblins OS.
 
-The Marks are a core asset of Goblins OS — owned, defensible, and transferable to an
-acquirer independent of the code license. Keeping the code open while reserving the
-brand is what lets Goblins OS be both a genuine open-source project and an ownable,
-sellable one.
+If you distribute a modified build, use your own name and branding unless you
+have permission to use the Goblins OS marks.
 
-For trademark permission requests, contact the project owner.
+## Automated and AI-generated use
+
+Automated tools, AI coding agents, generated patches, crawlers, and dataset
+pipelines do not receive extra trademark rights. Changing names with automation,
+rewriting notices, or generating a near-copy of the website, installer, desktop,
+release assets, or screenshots does not make the result official and does not
+grant permission to use the Goblins OS marks.
+
+Generated or automated outputs that redistribute Goblins OS code must still
+preserve required AGPL notices, copyright notices, modification notices,
+corresponding source obligations, and the boundaries in this trademark policy.

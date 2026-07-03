@@ -33,6 +33,6 @@ obligation = "Document firmware/package obligations from the Fedora image SBOM f
 
 [trademarks]
 goblins = "Primary product identity."
-openai = "Provider/integration references only unless an acquisition agreement changes scope."
+openai = "Provider/integration references only unless a written agreement changes scope."
 fedora = "Base platform reference; Goblins OS remains primary identity."
 apple = "Quality reference only; no Apple assets or trade dress copied."

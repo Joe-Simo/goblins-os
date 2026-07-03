@@ -25,7 +25,7 @@ export type ReleaseArtifact = {
   downloadParts: ReleaseDownloadPart[];
   builtOn: string;
   status: "available" | "blocked";
-  caveats: string[];
+  notes: string[];
 };
 
 export type ContainerImage = {
@@ -81,9 +81,9 @@ export const releaseArtifacts = [
     ],
     builtOn: "2026-07-03T18:19:13Z",
     status: "available",
-    caveats: [
-      "Alpha prerelease media; back up before installing.",
-      "Display-backed hardware signoff is tracked separately from the downloadable ISO artifacts.",
+    notes: [
+      "Alpha release. Use a spare device or VM and back up first.",
+      "Full release signoff is still in progress.",
     ],
   },
   {
@@ -120,9 +120,9 @@ export const releaseArtifacts = [
     ],
     builtOn: "2026-07-03T18:21:10Z",
     status: "available",
-    caveats: [
-      "Alpha prerelease media; back up before installing.",
-      "Display-backed hardware signoff is tracked separately from the downloadable ISO artifacts.",
+    notes: [
+      "Alpha release. Use a spare device or VM and back up first.",
+      "Full release signoff is still in progress.",
     ],
   },
 ] satisfies ReleaseArtifact[];
@@ -138,7 +138,7 @@ export const containerImages = [
     verifyCommand:
       "docker run --rm ghcr.io/joe-simo/goblins-os:aarch64 /usr/libexec/goblins-os/goblins-os-verify",
     status: "visibility_pending",
-    note: "Published by the release workflow; anonymous GHCR pull is pending package visibility.",
+    note: "The image has been published; public pulls are waiting on GitHub Container Registry package visibility.",
   },
   {
     arch: "x86_64",
@@ -150,7 +150,7 @@ export const containerImages = [
     verifyCommand:
       "docker run --rm ghcr.io/joe-simo/goblins-os:x86_64 /usr/libexec/goblins-os/goblins-os-verify",
     status: "visibility_pending",
-    note: "Published by the release workflow; anonymous GHCR pull is pending package visibility.",
+    note: "The image has been published; public pulls are waiting on GitHub Container Registry package visibility.",
   },
 ] satisfies ContainerImage[];
 

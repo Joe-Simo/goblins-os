@@ -1,9 +1,8 @@
-# Shipping Goblins OS — build, verify, and the real-hardware gate
+# Goblins OS Release Engineering
 
 Goblins OS is an all-Rust, native Linux (Fedora bootc immutable) desktop OS. The
-dev sandbox can only render the GUIs headlessly; the steps below produce and
-verify the real, installable artifacts on Linux, and define the one gate that
-needs physical (or virtual) hardware with a display.
+steps below produce and verify the installable artifacts on Linux, and define
+the display-backed gate required for final signoff.
 
 ## Shipping decisions (final)
 
@@ -30,10 +29,9 @@ families. CI runs the same native matrix — see `.github/workflows/build.yml`.
 - **installer-iso** job: builds architecture-named installable ISOs with
   `bootc-image-builder`: `goblins-os-x86_64.iso` and `goblins-os-aarch64.iso`.
 
-> The macOS dev sandbox lints the non-GUI workspace natively (with
-> `CARGO_TARGET_DIR` pointed off iCloud-synced paths) and compiles the full
-> native-desktop build via the render container; the native-desktop **clippy**
-> style pass is authoritative on the x86_64 CI runner.
+> Non-Linux development hosts can run a useful subset of source checks, but the
+> native-desktop build, installer, and display-backed proof paths are
+> authoritative on native Linux runners.
 
 ## Secrets & provisioning (server-side only)
 
@@ -81,7 +79,7 @@ Produces the genuine first-boot/desktop screens (installer, login, shell home,
 Build Studio, settings, the disk-install flow, the built-app detail view) in light
 and dark — the actual installed pixels, not mockups.
 
-## 4. Generate acquisition and SBOM evidence
+## 4. Generate release and SBOM evidence
 
 ```sh
 ARCH=x86_64 # or aarch64
@@ -201,7 +199,7 @@ Generated release evidence and ISO metadata are scanned for live keys before sig
 This step cannot run in the headless build sandbox — it is the **only remaining
 external gate** for full sign-off, and it requires a machine or display-backed VM.
 
-## External gates (named, not faked)
+## External verification gates
 
 - **Real-hardware/VM boot + interaction feel** — step 5 above. Everything up to it
   is automated and verified; the perceived smoothness of motion can only be judged

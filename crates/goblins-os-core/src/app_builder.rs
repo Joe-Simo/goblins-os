@@ -126,9 +126,17 @@ pub async fn list_apps() -> Json<AppList> {
     })
 }
 
+/// Designing the app plan is a model turn (`codex exec` under its 600s bound,
+/// the resident relay with its 120s+ read timeout, or the Agents SDK relay),
+/// so the body runs on the blocking pool instead of pinning an async runtime
+/// worker.
 pub async fn create_app_build(
     Json(payload): Json<AppBuildRequest>,
 ) -> (StatusCode, Json<BuildOutcome>) {
+    crate::bounded::run_blocking(move || create_app_build_blocking(payload)).await
+}
+
+fn create_app_build_blocking(payload: AppBuildRequest) -> (StatusCode, Json<BuildOutcome>) {
     let intent = payload.intent.trim();
     if intent.is_empty() || intent.chars().count() > MAX_INTENT_CHARS {
         return outcome(

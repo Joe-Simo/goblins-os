@@ -15,3 +15,7 @@ EnvironmentFile=-/etc/goblins-os/environment
 ExecStart=/usr/libexec/goblins-os/goblins-os-session-bridge
 Restart=always
 RestartSec=1
+# Back off toward a calm retry cadence when the failure persists; the unit
+# keeps retrying (never latches failed) without flooding the journal.
+RestartSteps=8
+RestartMaxDelaySec=60

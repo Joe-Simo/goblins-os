@@ -151,7 +151,14 @@ pub async fn studio_file(Query(query): Query<FileQuery>) -> (StatusCode, Json<Fi
     }
 }
 
+/// A Studio turn is a real agent run — `codex exec` under its 600s bound or a
+/// model turn through the resident relay (120s+ read timeout) — so the body
+/// runs on the blocking pool instead of pinning an async runtime worker.
 pub async fn studio_turn(Json(request): Json<TurnRequest>) -> (StatusCode, Json<TurnOutcome>) {
+    crate::bounded::run_blocking(move || studio_turn_blocking(request)).await
+}
+
+fn studio_turn_blocking(request: TurnRequest) -> (StatusCode, Json<TurnOutcome>) {
     let message = request.message.trim();
     if message.is_empty() || message.chars().count() > MAX_MESSAGE_CHARS {
         return turn_error(

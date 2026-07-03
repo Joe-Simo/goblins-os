@@ -305,8 +305,17 @@ pub async fn ai_action_history() -> Json<AiActionHistory> {
     Json(build_ai_action_history())
 }
 
+/// Runs a model turn (`codex exec` under its 600s bound or the resident relay
+/// with its 120s+ read timeout), so the body runs on the blocking pool instead
+/// of pinning an async runtime worker.
 pub async fn ask_file_context(
     Json(request): Json<FileContextRequest>,
+) -> (StatusCode, Json<FileContextResponse>) {
+    crate::bounded::run_blocking(move || ask_file_context_blocking(request)).await
+}
+
+fn ask_file_context_blocking(
+    request: FileContextRequest,
 ) -> (StatusCode, Json<FileContextResponse>) {
     let selected = request.path.trim();
     if selected.is_empty() || selected.chars().count() > 4096 {
@@ -374,8 +383,17 @@ pub async fn ask_file_context(
     }
 }
 
+/// Runs a model turn (`codex exec` under its 600s bound or the resident relay
+/// with its 120s+ read timeout), so the body runs on the blocking pool instead
+/// of pinning an async runtime worker.
 pub async fn ask_settings_context(
     Json(request): Json<SettingsContextRequest>,
+) -> (StatusCode, Json<SettingsContextResponse>) {
+    crate::bounded::run_blocking(move || ask_settings_context_blocking(request)).await
+}
+
+fn ask_settings_context_blocking(
+    request: SettingsContextRequest,
 ) -> (StatusCode, Json<SettingsContextResponse>) {
     let context = summarize_settings_context(&request);
     if context.panel.is_empty() {
@@ -490,8 +508,17 @@ fn audit_open_settings_panel(outcome: AiActionOutcome) {
     audit_ai_action(OPEN_SETTINGS_PANEL_ACTION_ID, Some("settings"), outcome);
 }
 
+/// Runs a model turn (`codex exec` under its 600s bound or the resident relay
+/// with its 120s+ read timeout), so the body runs on the blocking pool instead
+/// of pinning an async runtime worker.
 pub async fn ask_system_status(
     Json(request): Json<SystemStatusContextRequest>,
+) -> (StatusCode, Json<SystemStatusContextResponse>) {
+    crate::bounded::run_blocking(move || ask_system_status_blocking(request)).await
+}
+
+fn ask_system_status_blocking(
+    request: SystemStatusContextRequest,
 ) -> (StatusCode, Json<SystemStatusContextResponse>) {
     let focus = request
         .focus
@@ -614,8 +641,17 @@ pub async fn change_safe_setting(
     safe_setting_change_outcome(status, status.is_success(), text, Some(change))
 }
 
+/// Runs a model turn (`codex exec` under its 600s bound or the resident relay
+/// with its 120s+ read timeout), so the body runs on the blocking pool instead
+/// of pinning an async runtime worker.
 pub async fn ask_selected_text_context(
     Json(request): Json<SelectedTextContextRequest>,
+) -> (StatusCode, Json<SelectedTextContextResponse>) {
+    crate::bounded::run_blocking(move || ask_selected_text_context_blocking(request)).await
+}
+
+fn ask_selected_text_context_blocking(
+    request: SelectedTextContextRequest,
 ) -> (StatusCode, Json<SelectedTextContextResponse>) {
     let selected = sanitized_context_value(&request.text, 6000);
     if selected.is_empty() {
@@ -678,8 +714,17 @@ pub async fn ask_selected_text_context(
     }
 }
 
+/// Runs a model turn (`codex exec` under its 600s bound or the resident relay
+/// with its 120s+ read timeout), so the body runs on the blocking pool instead
+/// of pinning an async runtime worker.
 pub async fn write_selected_text_context(
     Json(request): Json<SelectedTextContextRequest>,
+) -> (StatusCode, Json<SelectedTextContextResponse>) {
+    crate::bounded::run_blocking(move || write_selected_text_context_blocking(request)).await
+}
+
+fn write_selected_text_context_blocking(
+    request: SelectedTextContextRequest,
 ) -> (StatusCode, Json<SelectedTextContextResponse>) {
     let selected = sanitized_context_value(&request.text, 6000);
     if selected.is_empty() {
@@ -742,8 +787,17 @@ pub async fn write_selected_text_context(
     }
 }
 
+/// Runs a model turn (`codex exec` under its 600s bound or the resident relay
+/// with its 120s+ read timeout), so the body runs on the blocking pool instead
+/// of pinning an async runtime worker.
 pub async fn ask_notification_context(
     Json(request): Json<NotificationContextRequest>,
+) -> (StatusCode, Json<NotificationContextResponse>) {
+    crate::bounded::run_blocking(move || ask_notification_context_blocking(request)).await
+}
+
+fn ask_notification_context_blocking(
+    request: NotificationContextRequest,
 ) -> (StatusCode, Json<NotificationContextResponse>) {
     let title = request
         .title
@@ -819,8 +873,17 @@ pub async fn ask_notification_context(
     }
 }
 
+/// Runs a model turn (`codex exec` under its 600s bound or the resident relay
+/// with its 120s+ read timeout), so the body runs on the blocking pool instead
+/// of pinning an async runtime worker.
 pub async fn ask_screen_context(
     Json(request): Json<ScreenContextRequest>,
+) -> (StatusCode, Json<ScreenContextResponse>) {
+    crate::bounded::run_blocking(move || ask_screen_context_blocking(request)).await
+}
+
+fn ask_screen_context_blocking(
+    request: ScreenContextRequest,
 ) -> (StatusCode, Json<ScreenContextResponse>) {
     let visible_text = request
         .visible_text

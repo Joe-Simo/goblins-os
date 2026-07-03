@@ -15,6 +15,7 @@ use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
+use crate::network::NETWORK_TIMEOUT_DETAIL;
 use crate::policy::{policy_state_for_control, PolicyControlState};
 
 const HOTSPOT_CONNECTION_NAME: &str = "Goblins Hotspot";
@@ -74,7 +75,13 @@ struct ActiveConnection {
 }
 
 enum NmcliError {
+    /// NetworkManager's CLI is not present, or the command never reached it.
     Missing,
+    /// The CLI is present but was killed at its timeout bound before answering.
+    /// This must never be reported with "not ready / not installed" copy, and a
+    /// timed-out write must never be reported as having taken effect.
+    TimedOut,
+    /// The CLI ran but reported an error; the (credential-free) message is kept.
     Failed(String),
 }
 
@@ -223,22 +230,7 @@ fn start_hotspot(request: SetHotspotRequest) -> (StatusCode, Json<HotspotOutcome
 
     let devices = match nmcli_output(&["-t", "-f", "DEVICE,TYPE,STATE", "device", "status"]) {
         Ok(output) => parse_device_status(&output),
-        Err(NmcliError::Missing) => {
-            return hotspot_outcome(
-                StatusCode::SERVICE_UNAVAILABLE,
-                false,
-                Some(ssid),
-                "Networking is not ready in this session, so Personal Hotspot cannot be changed here.",
-            );
-        }
-        Err(NmcliError::Failed(detail)) => {
-            return hotspot_outcome(
-                StatusCode::BAD_GATEWAY,
-                false,
-                Some(ssid),
-                &sanitize_hotspot_error(&detail, &password),
-            );
-        }
+        Err(error) => return hotspot_nmcli_failure(error, &ssid, &password),
     };
     let active = nmcli_output(&[
         "-t",
@@ -331,11 +323,21 @@ fn start_hotspot(request: SetHotspotRequest) -> (StatusCode, Json<HotspotOutcome
 fn stop_hotspot() -> (StatusCode, Json<HotspotOutcome>) {
     let _ = nmcli_control(&["connection", "down", "id", HOTSPOT_CONNECTION_NAME]);
     match nmcli_control(&["connection", "delete", "id", HOTSPOT_CONNECTION_NAME]) {
+        // Deleting an already-absent profile fails with a plain error, so a
+        // `Failed` here still honestly means the hotspot profile is gone.
         Ok(_) | Err(NmcliError::Failed(_)) => hotspot_outcome(
             StatusCode::OK,
             false,
             None,
             "Personal Hotspot is off. The temporary NetworkManager hotspot profile has been removed.",
+        ),
+        // A timed-out delete may have left the profile (and the access point)
+        // in place; claiming the hotspot is off would be a fake success.
+        Err(NmcliError::TimedOut) => hotspot_outcome(
+            StatusCode::BAD_GATEWAY,
+            false,
+            None,
+            &sanitize_hotspot_error(NETWORK_TIMEOUT_DETAIL, ""),
         ),
         Err(NmcliError::Missing) => hotspot_outcome(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -357,6 +359,12 @@ fn hotspot_nmcli_failure(
             false,
             Some(ssid.to_string()),
             "Networking is not ready in this session, so Personal Hotspot cannot be changed here.",
+        ),
+        NmcliError::TimedOut => hotspot_outcome(
+            StatusCode::BAD_GATEWAY,
+            false,
+            Some(ssid.to_string()),
+            &sanitize_hotspot_error(NETWORK_TIMEOUT_DETAIL, password),
         ),
         NmcliError::Failed(detail) => hotspot_outcome(
             StatusCode::BAD_GATEWAY,
@@ -408,9 +416,10 @@ fn nmcli_output(args: &[&str]) -> Result<String, NmcliError> {
 }
 
 // Connection writes (add/modify/up/down/delete) wait for NetworkManager to
-// settle the change, which legitimately outlives the short probe bound while
-// an access point activates.
-const NETWORK_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+// settle the change. nmcli's own connection-activation wait is 90 seconds and
+// access-point bring-up on slow drivers can exceed half a minute, so control
+// calls get the full activation window rather than the short probe bound.
+const NETWORK_CONTROL_TIMEOUT: Duration = Duration::from_secs(90);
 
 fn nmcli_control(args: &[&str]) -> Result<String, NmcliError> {
     let output = bounded_command_output("nmcli", args, NETWORK_CONTROL_TIMEOUT);
@@ -433,7 +442,13 @@ fn nmcli_result(
         Ok(output) => Err(NmcliError::Failed(
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         )),
-        Err(_) => Err(NmcliError::Missing),
+        Err(BoundedCommandError::Missing) => Err(NmcliError::Missing),
+        // nmcli IS installed but was killed at the bound: honesty requires a
+        // distinct error, not the "not ready" copy of a missing tool.
+        Err(BoundedCommandError::TimedOut) => Err(NmcliError::TimedOut),
+        // A spawn failure means the command never reached NetworkManager, so
+        // the degraded "not ready in this session" copy remains the honest one.
+        Err(BoundedCommandError::Failed) => Err(NmcliError::Missing),
     }
 }
 
@@ -711,10 +726,26 @@ fn split_terse(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        active_wifi_devices, choose_hotspot_device, mode_is_ap, parse_active_connections,
-        parse_ap_capability, parse_device_status, parse_dnsmasq_leases, sanitize_hotspot_error,
-        split_terse, validate_hotspot_password, validate_hotspot_ssid,
+        active_wifi_devices, choose_hotspot_device, mode_is_ap, nmcli_result,
+        parse_active_connections, parse_ap_capability, parse_device_status, parse_dnsmasq_leases,
+        sanitize_hotspot_error, split_terse, validate_hotspot_password, validate_hotspot_ssid,
+        NmcliError,
     };
+    use crate::bounded::BoundedCommandError;
+
+    #[test]
+    fn nmcli_timeout_reports_timeout_not_missing() {
+        assert!(matches!(
+            nmcli_result(Err(BoundedCommandError::Missing)),
+            Err(NmcliError::Missing)
+        ));
+        // A timeout means nmcli IS installed but did not answer; collapsing it
+        // into `Missing` would report an installed NetworkManager as absent.
+        assert!(matches!(
+            nmcli_result(Err(BoundedCommandError::TimedOut)),
+            Err(NmcliError::TimedOut)
+        ));
+    }
 
     #[test]
     fn active_wifi_devices_keeps_only_wifi_with_a_uuid() {

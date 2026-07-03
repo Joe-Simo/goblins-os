@@ -12,13 +12,14 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 use axum::{http::StatusCode, Json};
 use serde::Serialize;
 
-use crate::bounded::bounded_output_of;
+use crate::bounded::{bounded_output_of, BoundedCommandError};
 
 const DEFAULT_VOICE_DIR: &str = "/var/lib/goblins-os/voice";
 const CAPTURE_SECONDS: &str = "6";
@@ -69,7 +70,14 @@ pub async fn voice_status() -> Json<VoiceStatus> {
     Json(build_status())
 }
 
+/// A converse turn is minutes of blocking work (mic capture, Whisper, a model
+/// turn, Piper, playback), so the body runs on the blocking pool instead of
+/// pinning an async runtime worker.
 pub async fn voice_converse() -> (StatusCode, Json<ConverseOutcome>) {
+    crate::bounded::run_blocking(voice_converse_blocking).await
+}
+
+fn voice_converse_blocking() -> (StatusCode, Json<ConverseOutcome>) {
     match run_converse() {
         Ok((transcript, reply)) => (
             StatusCode::OK,
@@ -96,7 +104,13 @@ pub async fn voice_converse() -> (StatusCode, Json<ConverseOutcome>) {
 /// for "speak into any text field." It needs only Whisper + capture (no model
 /// answer, no speech-out), and the desktop helper types the returned transcript
 /// into the focused field via the Wayland synthetic-input path (wtype).
+/// Dictation blocks on the fixed capture window plus a Whisper pass, so the
+/// body runs on the blocking pool instead of pinning an async runtime worker.
 pub async fn voice_dictate() -> (StatusCode, Json<DictateOutcome>) {
+    crate::bounded::run_blocking(voice_dictate_blocking).await
+}
+
+fn voice_dictate_blocking() -> (StatusCode, Json<DictateOutcome>) {
     match run_dictate() {
         Ok(transcript) => (
             StatusCode::OK,
@@ -299,7 +313,12 @@ fn record_audio(path: &Path) -> Result<(), String> {
         .arg(path);
     let status = bounded_output_of(&mut command, Duration::from_secs(30))
         .map(|output| output.status)
-        .map_err(|_| "Microphone capture could not start.".to_string())?;
+        .map_err(|error| match error {
+            BoundedCommandError::TimedOut => {
+                "Microphone capture did not finish in time.".to_string()
+            }
+            _ => "Microphone capture could not start.".to_string(),
+        })?;
     if status.success() {
         Ok(())
     } else {
@@ -311,8 +330,9 @@ fn transcribe(input: &Path) -> Result<String, String> {
     let model = first_model(&stt_dir(), &["bin", "gguf", "ggml"])
         .ok_or_else(|| "No Whisper model is installed.".to_string())?;
     let prefix = input.with_extension("");
-    // Recognition is genuinely heavy compute, so it gets a wider bound than the
-    // status probes.
+    // Recognition is genuinely heavy compute — the bound has to cover model
+    // load plus inference for whatever model the user installed — so it gets a
+    // much wider bound than the status probes.
     let mut command = Command::new(whisper_bin());
     command
         .args(["-m"])
@@ -321,8 +341,11 @@ fn transcribe(input: &Path) -> Result<String, String> {
         .arg(input)
         .args(["-otxt", "-nt", "-of"])
         .arg(&prefix);
-    let output = bounded_output_of(&mut command, Duration::from_secs(60))
-        .map_err(|_| "The Whisper runtime could not start.".to_string())?;
+    let output =
+        bounded_output_of(&mut command, Duration::from_secs(120)).map_err(|error| match error {
+            BoundedCommandError::TimedOut => "Speech-to-text did not finish in time.".to_string(),
+            _ => "The Whisper runtime could not start.".to_string(),
+        })?;
     if !output.status.success() {
         return Err("Speech-to-text failed.".to_string());
     }
@@ -351,9 +374,32 @@ fn synthesize(text: &str, output: &Path) -> Result<(), String> {
             .write_all(text.as_bytes())
             .map_err(|_| "Text-to-speech input failed.".to_string())?;
     }
-    let status = child
-        .wait()
-        .map_err(|_| "Text-to-speech failed.".to_string())?;
+    // Close stdin so Piper sees end-of-input: unlike `wait`, `try_wait` does
+    // not drop the pipe for us, and Piper reads text until EOF.
+    drop(child.stdin.take());
+    // Piper writes the audio straight to the output file (stdout/stderr are
+    // null), so no pipe draining is needed — a bounded poll mirroring
+    // `bounded_output_of` keeps a hung synthesis from wedging a runtime
+    // worker forever.
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() >= Duration::from_secs(60) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("Speech synthesis did not finish in time.".to_string());
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Text-to-speech failed.".to_string());
+            }
+        }
+    };
     if status.success() {
         Ok(())
     } else {

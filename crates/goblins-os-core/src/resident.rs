@@ -152,9 +152,16 @@ pub async fn ai_runtime_status() -> Json<ResidentStatus> {
     Json(build_resident_status())
 }
 
+/// One conversation turn blocks for up to the resident read timeout (120s by
+/// default) or a `codex exec` run under its 600s bound, so the body runs on
+/// the blocking pool instead of pinning an async runtime worker.
 pub async fn ai_runtime(
     Json(payload): Json<ResidentRequest>,
 ) -> (StatusCode, Json<ResidentResponse>) {
+    crate::bounded::run_blocking(move || ai_runtime_blocking(payload)).await
+}
+
+fn ai_runtime_blocking(payload: ResidentRequest) -> (StatusCode, Json<ResidentResponse>) {
     let message = payload.message.trim();
 
     if message.is_empty() || message.chars().count() > 1000 {

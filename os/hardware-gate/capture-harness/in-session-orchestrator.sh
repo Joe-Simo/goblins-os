@@ -699,7 +699,7 @@ text_shortcuts_session_enable_proof(){
   # The live readiness flip propagates through the session bridge's ibus
   # probe; poll briefly instead of failing on the first read.
   for _ in $(seq 1 8); do
-    core_code=$(curl -s -o "$core_file" -w '%{http_code}' "$LIVE_URL/v1/text-shortcuts" || true)
+    core_code=$(curl --connect-timeout 1 --max-time 4 -s -o "$core_file" -w '%{http_code}' "$LIVE_URL/v1/text-shortcuts" || true)
     core_engine_available=$(json_field "$core_file" engine_available)
     core_runtime_loop=$(json_field "$core_file" engine.runtime_loop_available)
     if [ "$core_code" = "200" ] && [ "$core_engine_available" = "true" ] && [ "$core_runtime_loop" = "true" ]; then

@@ -5,7 +5,7 @@
 //! serial checks so Settings never writes arbitrary display state or reports a
 //! successful apply when the compositor gate is absent.
 
-use std::{env, fs};
+use std::{env, fs, time::Duration};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,10 @@ const MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE: &str =
     "org.gnome.Mutter.DisplayConfig.GetCurrentState";
 const MUTTER_DISPLAY_CONFIG_APPLY_MONITORS: &str =
     "org.gnome.Mutter.DisplayConfig.ApplyMonitorsConfig";
+/// Bound for the ApplyMonitorsConfig write. A real modeset across several
+/// monitors can take far longer than a status read, so the apply call gets its
+/// own wider bound while reads stay on `probe_timeout()`.
+const APPLY_MONITORS_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Serialize)]
 pub struct DisplaysStatus {
@@ -161,18 +165,21 @@ fn mutter_current_state() -> Result<String, DisplayConfigError> {
         SessionBridgeResult::Failed(detail) => return Err(DisplayConfigError::Failed(detail)),
         SessionBridgeResult::Unavailable => {}
     }
-    gdbus_call(&[MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE])
+    gdbus_call(&[MUTTER_DISPLAY_CONFIG_GET_CURRENT_STATE], probe_timeout())
 }
 
 fn mutter_display_config_apply_allowed() -> Result<bool, DisplayConfigError> {
     let reply = match crate::session_bridge::display_config_get_apply_allowed() {
         SessionBridgeResult::Success(stdout) => stdout,
         SessionBridgeResult::Failed(detail) => return Err(DisplayConfigError::Failed(detail)),
-        SessionBridgeResult::Unavailable => gdbus_call(&[
-            "org.freedesktop.DBus.Properties.Get",
-            MUTTER_DISPLAY_CONFIG_DEST,
-            "ApplyMonitorsConfigAllowed",
-        ])?,
+        SessionBridgeResult::Unavailable => gdbus_call(
+            &[
+                "org.freedesktop.DBus.Properties.Get",
+                MUTTER_DISPLAY_CONFIG_DEST,
+                "ApplyMonitorsConfigAllowed",
+            ],
+            probe_timeout(),
+        )?,
     };
     Ok(parse_gdbus_bool(&reply).unwrap_or(false))
 }
@@ -343,13 +350,16 @@ fn mutter_apply_monitors_config(
         SessionBridgeResult::Failed(detail) => return Err(DisplayConfigError::Failed(detail)),
         SessionBridgeResult::Unavailable => {}
     }
-    gdbus_call(&[
-        MUTTER_DISPLAY_CONFIG_APPLY_MONITORS,
-        serial_text,
-        method_text,
-        logical_monitors_text,
-        "{}",
-    ])
+    gdbus_call(
+        &[
+            MUTTER_DISPLAY_CONFIG_APPLY_MONITORS,
+            serial_text,
+            method_text,
+            logical_monitors_text,
+            "{}",
+        ],
+        APPLY_MONITORS_TIMEOUT,
+    )
 }
 
 fn bridge_logical_monitors(
@@ -384,7 +394,7 @@ fn xrandr_outputs() -> Option<Vec<DisplayOutputStatus>> {
     Some(parse_xrandr_outputs(&stdout))
 }
 
-fn gdbus_call(args: &[&str]) -> Result<String, DisplayConfigError> {
+fn gdbus_call(args: &[&str], timeout: Duration) -> Result<String, DisplayConfigError> {
     let mut full_args = vec![
         "call",
         "--session",
@@ -395,7 +405,7 @@ fn gdbus_call(args: &[&str]) -> Result<String, DisplayConfigError> {
         "--method",
     ];
     full_args.extend_from_slice(args);
-    let output = match bounded_command_output("gdbus", &full_args, probe_timeout()) {
+    let output = match bounded_command_output("gdbus", &full_args, timeout) {
         Ok(output) => output,
         Err(BoundedCommandError::Missing) => return Err(DisplayConfigError::Missing),
         Err(BoundedCommandError::TimedOut | BoundedCommandError::Failed) => {

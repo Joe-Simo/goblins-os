@@ -4,16 +4,20 @@
 //! Snapper `home` config exists. Existing xfs installs therefore report an
 //! honest off-state instead of inventing a timeline.
 
-use std::{env, fs, path::Path};
+use std::{env, fs, path::Path, time::Duration};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 
 const DEFAULT_MOUNTINFO: &str = "/proc/self/mountinfo";
 const DEFAULT_SNAPPER_CONFIG: &str = "/etc/snapper/configs/home";
 const SNAPPER_CONFIG_NAME: &str = "home";
+/// Bound for `snapper list`. The snapper CLI D-Bus-activates `snapperd` on
+/// first use and that activation alone can take several seconds, so the list
+/// call needs a wider bound than the default read probe.
+const SNAPPER_LIST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Serialize)]
 pub struct SnapshotsStatus {
@@ -65,6 +69,7 @@ pub struct RestoreSnapshotOutcome {
 #[derive(Debug)]
 enum SnapperListError {
     Missing,
+    TimedOut,
     Failed(String),
     Unreadable,
 }
@@ -212,6 +217,14 @@ fn build_snapshots_status() -> SnapshotsStatus {
             home_mount,
             "snapper is not installed.",
         ),
+        Err(SnapperListError::TimedOut) => degraded_snapshots_status(
+            snapper_available,
+            btrfs_tools_available,
+            config_available,
+            config_path,
+            home_mount,
+            "Snapper did not answer before the snapshot timeout.",
+        ),
         Err(SnapperListError::Failed(detail)) => degraded_snapshots_status(
             snapper_available,
             btrfs_tools_available,
@@ -258,9 +271,12 @@ fn run_snapper_list() -> Result<String, SnapperListError> {
     let output = match bounded_command_output(
         "snapper",
         &["-c", SNAPPER_CONFIG_NAME, "list", "--machine-readable"],
-        probe_timeout(),
+        SNAPPER_LIST_TIMEOUT,
     ) {
         Ok(output) => output,
+        // A timed-out list means snapper IS present but did not answer in
+        // time; reporting it as "not installed" would be dishonest.
+        Err(BoundedCommandError::TimedOut) => return Err(SnapperListError::TimedOut),
         Err(_) => return Err(SnapperListError::Missing),
     };
 

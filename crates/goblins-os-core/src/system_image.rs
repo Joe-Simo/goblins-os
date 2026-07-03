@@ -15,11 +15,18 @@
 //! `available: false` with a truthful `detail` — it never fabricates a
 //! deployment.
 
+use std::time::Duration;
+
 use axum::Json;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
+use crate::bounded::{bounded_command_output, BoundedCommandError};
+
+/// Bound for `bootc status --format json`. Reading deployment state walks the
+/// ostree repository, which can take well past the default probe bound on
+/// spinning disks, so the status call gets its own wider bound.
+const BOOTC_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The shape returned to clients for `GET /v1/system/image`.
 ///
@@ -123,16 +130,24 @@ fn build_system_image_status() -> SystemImageStatus {
 ///
 /// Mirrors the command-running idiom used elsewhere in core (see
 /// `network::nmcli`): a `NotFound` error means the tool is simply absent, a
-/// non-zero exit is `Failed` with the captured stderr, and non-JSON stdout is
-/// `Unparsable`. The arguments carry no secrets, so this never needs to
-/// scrub output.
+/// run killed at the bound is `Failed` with honest timeout copy (the tool IS
+/// present, it just did not answer), a non-zero exit is `Failed` with the
+/// captured stderr, and non-JSON stdout is `Unparsable`. The arguments carry
+/// no secrets, so this never needs to scrub output.
 fn run_bootc_status_json() -> Result<Value, BootcStatusError> {
-    let output =
-        match bounded_command_output("bootc", &["status", "--format", "json"], probe_timeout()) {
-            Ok(output) => output,
-            Err(BoundedCommandError::Missing) => return Err(BootcStatusError::Missing),
-            Err(_) => return Err(BootcStatusError::Missing),
-        };
+    let output = match bounded_command_output(
+        "bootc",
+        &["status", "--format", "json"],
+        BOOTC_STATUS_TIMEOUT,
+    ) {
+        Ok(output) => output,
+        Err(BoundedCommandError::TimedOut) => {
+            return Err(BootcStatusError::Failed(
+                "bootc did not answer before the status timeout.".to_string(),
+            ))
+        }
+        Err(_) => return Err(BootcStatusError::Missing),
+    };
 
     if !output.status.success() {
         return Err(BootcStatusError::Failed(

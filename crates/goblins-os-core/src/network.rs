@@ -9,10 +9,12 @@
 //! nor returned to any client. When NetworkManager is unavailable the surface
 //! degrades calmly rather than failing.
 
+use std::time::Duration;
+
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 use crate::policy::{policy_state_for_control, PolicyControlState};
 
 const PROXY_SCHEMA: &str = "org.gnome.system.proxy";
@@ -114,17 +116,57 @@ enum GSettingsError {
     Failed(String),
 }
 
-/// Run `nmcli` with the given arguments, capturing stdout on success. A Wi-Fi
-/// password may be among the args; this function never logs the arguments.
+/// NetworkManager's own connection-activation wait is 90 seconds, so connection
+/// writes (joining a Wi-Fi network) get that full window instead of the short
+/// status-probe bound, which would kill a legitimately slow activation.
+const NETWORK_CONTROL_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// A Wi-Fi list read can block behind the just-requested rescan on slow radios,
+/// so it gets a wider bound than an ordinary status probe.
+const WIFI_LIST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Honest detail for an `nmcli` that is installed but was killed at its bound:
+/// this must never be reported as the service being missing. Shared with the
+/// hotspot module so the copy stays identical everywhere nmcli is bounded.
+pub(crate) const NETWORK_TIMEOUT_DETAIL: &str =
+    "NetworkManager did not answer before the network timeout.";
+
+/// Run `nmcli` for a read-only status probe, capturing stdout on success.
 fn nmcli(args: &[&str]) -> Result<String, NmcliError> {
-    match bounded_command_output("nmcli", args, probe_timeout()) {
+    nmcli_bounded(args, probe_timeout())
+}
+
+/// Run `nmcli` for a connection write, which may legitimately take as long as
+/// NetworkManager's own activation wait. A Wi-Fi password may be among the
+/// args; this function never logs the arguments.
+fn nmcli_control(args: &[&str]) -> Result<String, NmcliError> {
+    nmcli_bounded(args, NETWORK_CONTROL_TIMEOUT)
+}
+
+fn nmcli_bounded(args: &[&str], timeout: Duration) -> Result<String, NmcliError> {
+    nmcli_result(bounded_command_output("nmcli", args, timeout))
+}
+
+/// Map a bounded `nmcli` run onto the module error. Only a missing binary is
+/// `Missing`; a timeout means NetworkManager IS present but did not answer, so
+/// it is reported as a failure with honest copy, never as an absent service.
+fn nmcli_result(
+    output: Result<std::process::Output, BoundedCommandError>,
+) -> Result<String, NmcliError> {
+    match output {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
         Ok(output) => Err(NmcliError::Failed(
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         )),
-        Err(_) => Err(NmcliError::Missing),
+        Err(BoundedCommandError::Missing) => Err(NmcliError::Missing),
+        Err(BoundedCommandError::TimedOut) => {
+            Err(NmcliError::Failed(NETWORK_TIMEOUT_DETAIL.to_string()))
+        }
+        Err(BoundedCommandError::Failed) => Err(NmcliError::Failed(
+            "NetworkManager could not be run in this session.".to_string(),
+        )),
     }
 }
 
@@ -136,14 +178,19 @@ pub async fn wifi_scan() -> Json<WifiScan> {
     // A rescan is best-effort; the cached list is returned regardless so a slow
     // or rate-limited radio still yields whatever NetworkManager already knows.
     let _ = nmcli(&["device", "wifi", "rescan"]);
-    match nmcli(&[
-        "-t",
-        "-f",
-        "IN-USE,SSID,SIGNAL,SECURITY",
-        "device",
-        "wifi",
-        "list",
-    ]) {
+    // The list read can wait on the rescan just issued above, so it gets the
+    // wider `WIFI_LIST_TIMEOUT` rather than the ordinary probe bound.
+    match nmcli_bounded(
+        &[
+            "-t",
+            "-f",
+            "IN-USE,SSID,SIGNAL,SECURITY",
+            "device",
+            "wifi",
+            "list",
+        ],
+        WIFI_LIST_TIMEOUT,
+    ) {
         Ok(stdout) => Json(WifiScan {
             source: "goblins-os-core",
             manager_available: true,
@@ -220,7 +267,7 @@ pub async fn wifi_connect(
         args.push(password);
     }
 
-    match nmcli(&args) {
+    match nmcli_control(&args) {
         Ok(_) => outcome(
             StatusCode::OK,
             ssid,
@@ -704,10 +751,30 @@ fn split_terse(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_proxy_mode, parse_active_connection, parse_general_status, parse_gsettings_i32,
-        parse_gsettings_string, parse_gsettings_strv, parse_wifi_list, sanitize_connect_error,
-        split_terse, ssid_looks_like_option, ActiveConnection,
+        nmcli_result, normalize_proxy_mode, parse_active_connection, parse_general_status,
+        parse_gsettings_i32, parse_gsettings_string, parse_gsettings_strv, parse_wifi_list,
+        sanitize_connect_error, split_terse, ssid_looks_like_option, ActiveConnection, NmcliError,
+        NETWORK_TIMEOUT_DETAIL,
     };
+    use crate::bounded::BoundedCommandError;
+
+    #[test]
+    fn nmcli_timeout_reports_failure_not_missing() {
+        // A missing binary is the only honest "Missing"; a timeout means the
+        // tool IS present but did not answer, so it must surface as a failure.
+        assert!(matches!(
+            nmcli_result(Err(BoundedCommandError::Missing)),
+            Err(NmcliError::Missing)
+        ));
+        match nmcli_result(Err(BoundedCommandError::TimedOut)) {
+            Err(NmcliError::Failed(detail)) => assert_eq!(detail, NETWORK_TIMEOUT_DETAIL),
+            _ => panic!("a timed-out nmcli must be reported as a failure, not a missing tool"),
+        }
+        match nmcli_result(Err(BoundedCommandError::Failed)) {
+            Err(NmcliError::Failed(detail)) => assert!(!detail.is_empty()),
+            _ => panic!("an unrunnable nmcli must be reported as a failure, not a missing tool"),
+        }
+    }
 
     #[test]
     fn terse_lines_honor_backslash_escapes() {

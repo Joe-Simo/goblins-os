@@ -6648,6 +6648,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-session-enable-claims-live-readiness",
+            "core_engine_available=true&core_runtime_loop_available=true&runtime_ready_claim=true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-drives-textshortcuts-with-qmp-keyboard",
             "host_type_text runtime-render-omw \"omw\"",
         ),

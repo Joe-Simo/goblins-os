@@ -16,6 +16,10 @@ EnvironmentFile=-/etc/goblins-os/openai-secrets.env
 ExecStart=/usr/libexec/goblins-os/goblins-os-core
 Restart=always
 RestartSec=2s
+# Back off toward a calm retry cadence when the failure persists; the unit
+# keeps retrying (never latches failed) without flooding the journal.
+RestartSteps=8
+RestartMaxDelaySec=60
 StateDirectory=goblins-os/models goblins-os/ai
 NoNewPrivileges=yes
 PrivateTmp=yes

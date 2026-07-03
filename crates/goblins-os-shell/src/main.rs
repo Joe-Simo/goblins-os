@@ -2605,7 +2605,7 @@ fn write_text_shortcuts_live_render_proof(
                 "rendered_bubble_ready_claim={rendered}\n",
                 "live_overlay_claim={live_overlay}\n",
                 "runtime_ready_claim={runtime_ready}\n",
-                "core_readiness_flip=deferred\n",
+                "core_readiness_flip=live\n",
             ),
             entry_text = entry_text,
             focused = bool_word(state.focused_field_callback),

@@ -218,14 +218,25 @@ fn run_server() -> Result<(), String> {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                let response = handle_stream(&mut stream);
-                let _ = write_response(&mut stream, &response);
+                // One thread per connection: requests are independent bounded
+                // command runs, and serializing them behind a single slow
+                // probe would queue every other caller past its own client
+                // timeout. Socket I/O is bounded so a stalled client can
+                // never pin a handler thread.
+                thread::spawn(move || {
+                    let _ = stream.set_read_timeout(Some(STREAM_IO_TIMEOUT));
+                    let _ = stream.set_write_timeout(Some(STREAM_IO_TIMEOUT));
+                    let response = handle_stream(&mut stream);
+                    let _ = write_response(&mut stream, &response);
+                });
             }
             Err(error) => eprintln!("goblins-os-session-bridge: connection failed: {error}"),
         }
     }
     Ok(())
 }
+
+const STREAM_IO_TIMEOUT: Duration = Duration::from_millis(2_000);
 
 fn handle_stream(stream: &mut UnixStream) -> BridgeResponse {
     let mut body = String::new();
@@ -889,30 +900,66 @@ fn bounded_output_of(
                 BoundedCommandError::Failed
             }
         })?;
+    // Drain both pipes on background threads while the child runs: a kernel
+    // pipe buffer holds ~64KB, so polling `try_wait` without reading would
+    // block any chattier child on its own write and falsely kill it at the
+    // bound. Captured output is capped so a runaway child cannot exhaust
+    // memory inside its window; the overflow is drained and discarded.
+    let stdout_reader = spawn_capped_drain(child.stdout.take());
+    let stderr_reader = spawn_capped_drain(child.stderr.take());
     let started = Instant::now();
 
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|_| BoundedCommandError::Failed)
-            }
+            Ok(Some(status)) => break status,
             Ok(None) => {
                 if started.elapsed() >= timeout {
                     let _ = child.kill();
-                    let _ = child.wait_with_output();
+                    let _ = child.wait();
+                    // Do NOT join the drain threads here: a killed child may
+                    // leave a grandchild holding the pipe write end open, and
+                    // joining would block this thread until that grandchild
+                    // exits. The detached drains cost at most the output cap
+                    // each and end when the pipes finally close.
+                    drop(stdout_reader);
+                    drop(stderr_reader);
                     return Err(BoundedCommandError::TimedOut);
                 }
                 thread::sleep(Duration::from_millis(25));
             }
             Err(_) => {
                 let _ = child.kill();
-                let _ = child.wait_with_output();
+                let _ = child.wait();
+                drop(stdout_reader);
+                drop(stderr_reader);
                 return Err(BoundedCommandError::Failed);
             }
         }
-    }
+    };
+
+    Ok(Output {
+        status,
+        stdout: stdout_reader.join().unwrap_or_default(),
+        stderr: stderr_reader.join().unwrap_or_default(),
+    })
+}
+
+const CAPTURED_OUTPUT_CAP_BYTES: u64 = 8 * 1024 * 1024;
+
+fn spawn_capped_drain<R>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let Some(pipe) = pipe else {
+            return Vec::new();
+        };
+        let mut limited = pipe.take(CAPTURED_OUTPUT_CAP_BYTES);
+        let mut captured = Vec::new();
+        let _ = limited.read_to_end(&mut captured);
+        let _ = std::io::copy(&mut limited.into_inner(), &mut std::io::sink());
+        captured
+    })
 }
 
 fn write_response(stream: &mut UnixStream, response: &BridgeResponse) -> Result<(), String> {

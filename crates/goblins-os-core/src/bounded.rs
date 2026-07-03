@@ -8,6 +8,7 @@
 //! observed before every raw `Command` call was routed through here.
 
 use std::{
+    io::Read,
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
@@ -39,6 +40,23 @@ pub(crate) fn clamp_probe_timeout_ms(parsed: Option<u64>) -> u64 {
         .clamp(PROBE_TIMEOUT_MS_MIN, PROBE_TIMEOUT_MS_MAX)
 }
 
+/// Run a genuinely long blocking body (a `codex exec` turn, OCR, a voice
+/// pipeline, a model turn through the resident relay) on tokio's dedicated
+/// blocking pool so it cannot pin one of the few async runtime workers for
+/// minutes on small machines. A panic inside the body is resumed on the
+/// calling task, so axum's panic-to-500 behavior is unchanged. Fast status
+/// probes stay inline — this is only for the minutes-long operations.
+pub(crate) async fn run_blocking<T, F>(task: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    match tokio::task::spawn_blocking(task).await {
+        Ok(value) => value,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
 pub(crate) fn bounded_command_output(
     binary: &str,
     args: &[&str],
@@ -50,6 +68,12 @@ pub(crate) fn bounded_command_output(
 }
 
 /// Same bound for a pre-configured `Command` (environment, working directory).
+///
+/// Both pipes are drained on background threads while the child runs: a
+/// kernel pipe buffer holds ~64KB, so polling `try_wait` without reading
+/// would block any chattier child on its own write and falsely kill it at
+/// the bound. Captured output is capped so a runaway child cannot exhaust
+/// memory inside its window; the overflow is drained and discarded.
 pub(crate) fn bounded_output_of(
     command: &mut Command,
     timeout: Duration,
@@ -66,30 +90,61 @@ pub(crate) fn bounded_output_of(
                 BoundedCommandError::Failed
             }
         })?;
+    let stdout_reader = spawn_capped_drain(child.stdout.take());
+    let stderr_reader = spawn_capped_drain(child.stderr.take());
     let started = Instant::now();
 
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|_| BoundedCommandError::Failed)
-            }
+            Ok(Some(status)) => break status,
             Ok(None) => {
                 if started.elapsed() >= timeout {
                     let _ = child.kill();
-                    let _ = child.wait_with_output();
+                    let _ = child.wait();
+                    // Do NOT join the drain threads here: a killed child may
+                    // leave a grandchild holding the pipe write end open, and
+                    // joining would block this thread until that grandchild
+                    // exits. The detached drains cost at most the output cap
+                    // each and end when the pipes finally close.
+                    drop(stdout_reader);
+                    drop(stderr_reader);
                     return Err(BoundedCommandError::TimedOut);
                 }
                 thread::sleep(Duration::from_millis(25));
             }
             Err(_) => {
                 let _ = child.kill();
-                let _ = child.wait_with_output();
+                let _ = child.wait();
+                drop(stdout_reader);
+                drop(stderr_reader);
                 return Err(BoundedCommandError::Failed);
             }
         }
-    }
+    };
+
+    Ok(Output {
+        status,
+        stdout: stdout_reader.join().unwrap_or_default(),
+        stderr: stderr_reader.join().unwrap_or_default(),
+    })
+}
+
+const CAPTURED_OUTPUT_CAP_BYTES: u64 = 8 * 1024 * 1024;
+
+fn spawn_capped_drain<R>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8>>
+where
+    R: std::io::Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let Some(pipe) = pipe else {
+            return Vec::new();
+        };
+        let mut limited = pipe.take(CAPTURED_OUTPUT_CAP_BYTES);
+        let mut captured = Vec::new();
+        let _ = limited.read_to_end(&mut captured);
+        let _ = std::io::copy(&mut limited.into_inner(), &mut std::io::sink());
+        captured
+    })
 }
 
 #[cfg(test)]
@@ -121,10 +176,35 @@ mod tests {
     }
 
     #[test]
+    fn chatty_child_is_drained_not_killed() {
+        let output = bounded_command_output(
+            "sh",
+            &["-c", "yes goblins | head -c 200000"],
+            Duration::from_secs(10),
+        )
+        .unwrap_or_else(|_| panic!("chatty child must not be killed at the bound"));
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 200_000);
+    }
+
+    #[test]
     fn hung_child_is_killed_at_the_bound() {
         let started = Instant::now();
         let result = bounded_command_output("sleep", &["30"], Duration::from_millis(300));
         assert!(matches!(result, Err(BoundedCommandError::TimedOut)));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn run_blocking_returns_the_body_value() {
+        assert_eq!(super::run_blocking(|| 21 * 2).await, 42);
+    }
+
+    #[tokio::test]
+    async fn run_blocking_resumes_a_body_panic_on_the_caller() {
+        // The panic must resurface on the awaiting task (axum turns it into a
+        // 500), not vanish inside a JoinError.
+        let result = tokio::spawn(super::run_blocking::<(), _>(|| panic!("boom"))).await;
+        assert!(result.is_err_and(|error| error.is_panic()));
     }
 }

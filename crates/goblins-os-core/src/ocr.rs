@@ -12,7 +12,7 @@ use std::{collections::BTreeMap, env, path::Path, time::Duration};
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 
 /// Recognition is genuinely heavy compute (large images, slow hardware), so it
 /// gets a wider bound than the read-only status probes.
@@ -64,7 +64,13 @@ pub async fn ocr_status() -> Json<OcrStatus> {
     Json(build_status(DEFAULT_LANG))
 }
 
+/// Recognition shells out for up to two 60s Tesseract passes, so the body runs
+/// on the blocking pool instead of pinning an async runtime worker.
 pub async fn ocr_recognize(Json(request): Json<OcrRequest>) -> (StatusCode, Json<OcrOutcome>) {
+    crate::bounded::run_blocking(move || ocr_recognize_blocking(request)).await
+}
+
+fn ocr_recognize_blocking(request: OcrRequest) -> (StatusCode, Json<OcrOutcome>) {
     let lang = request
         .language
         .as_deref()
@@ -163,7 +169,7 @@ fn run_recognize(image_path: &str, lang: &str) -> Result<(String, Vec<OcrLine>),
         &[image_path, "stdout", "-l", lang, "--psm", "3"],
         RECOGNIZE_TIMEOUT,
     )
-    .map_err(|_| "The text-recognition runtime could not start.".to_string())?;
+    .map_err(recognize_error_detail)?;
     if !text_out.status.success() {
         return Err("Text recognition failed on this image.".to_string());
     }
@@ -175,7 +181,7 @@ fn run_recognize(image_path: &str, lang: &str) -> Result<(String, Vec<OcrLine>),
         &[image_path, "stdout", "-l", lang, "tsv"],
         RECOGNIZE_TIMEOUT,
     )
-    .map_err(|_| "The text-recognition runtime could not start.".to_string())?;
+    .map_err(recognize_error_detail)?;
     let lines = if tsv_out.status.success() {
         parse_tsv_lines(&String::from_utf8_lossy(&tsv_out.stdout))
     } else {
@@ -183,6 +189,18 @@ fn run_recognize(image_path: &str, lang: &str) -> Result<(String, Vec<OcrLine>),
     };
 
     Ok((text, lines))
+}
+
+/// Honest detail copy for a recognition pass that never produced output: a
+/// timeout means the runtime IS present but was killed at the bound, so it
+/// must not read as if the runtime were absent.
+fn recognize_error_detail(error: BoundedCommandError) -> String {
+    match error {
+        BoundedCommandError::TimedOut => {
+            "Text recognition did not finish in time on this device.".to_string()
+        }
+        _ => "The text-recognition runtime could not start.".to_string(),
+    }
 }
 
 /// (block, paragraph, line) — the key that groups TSV words into a line.

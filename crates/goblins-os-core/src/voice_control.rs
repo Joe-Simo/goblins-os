@@ -219,9 +219,16 @@ pub async fn resolve_voice_command(Json(request): Json<ResolveRequest>) -> Json<
     }
 }
 
+/// Without a caller-supplied transcript this captures the mic and runs a
+/// Whisper pass (the voice transcribe path), so the body runs on the blocking
+/// pool instead of pinning an async runtime worker.
 pub async fn voice_control(
     Json(request): Json<VoiceControlRequest>,
 ) -> (StatusCode, Json<VoiceControlOutcome>) {
+    crate::bounded::run_blocking(move || voice_control_blocking(request)).await
+}
+
+fn voice_control_blocking(request: VoiceControlRequest) -> (StatusCode, Json<VoiceControlOutcome>) {
     let transcript = match request
         .transcript
         .as_deref()

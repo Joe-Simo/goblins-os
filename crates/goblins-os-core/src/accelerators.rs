@@ -11,14 +11,19 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use serde::Serialize;
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::bounded_command_output;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 const DRM_CLASS_DIR: &str = "/sys/class/drm";
+/// Bound for the `nvidia-smi` VRAM probe. A cold `nvidia-smi` without
+/// nvidia-persistenced running can take 5-10 seconds to initialize the GPU,
+/// so the default probe bound would false-negative real NVIDIA systems.
+const NVIDIA_SMI_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Serialize, Clone)]
 pub struct DetectedGpu {
@@ -118,7 +123,7 @@ fn detect_nvidia_vram_gb() -> Option<u64> {
     let output = bounded_command_output(
         "nvidia-smi",
         &["--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-        probe_timeout(),
+        NVIDIA_SMI_TIMEOUT,
     )
     .ok()?;
 

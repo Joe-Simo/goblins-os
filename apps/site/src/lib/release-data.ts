@@ -36,6 +36,8 @@ export type ContainerImage = {
   sourceManifestUrl: string;
   pullCommand: string;
   verifyCommand: string;
+  podmanPullCommand: string;
+  podmanVerifyCommand: string;
   status: "public" | "visibility_pending";
   note: string;
 };
@@ -137,8 +139,11 @@ export const containerImages = [
     pullCommand: "docker pull ghcr.io/joe-simo/goblins-os:aarch64",
     verifyCommand:
       "docker run --rm ghcr.io/joe-simo/goblins-os:aarch64 /usr/libexec/goblins-os/goblins-os-verify",
+    podmanPullCommand: "podman pull ghcr.io/joe-simo/goblins-os:aarch64",
+    podmanVerifyCommand:
+      "podman run --rm ghcr.io/joe-simo/goblins-os:aarch64 /usr/libexec/goblins-os/goblins-os-verify",
     status: "visibility_pending",
-    note: "The image has been published; public pulls are waiting on GitHub Container Registry package visibility.",
+    note: "The image has been published; public Docker and Podman pulls are waiting on GitHub Container Registry package visibility.",
   },
   {
     arch: "x86_64",
@@ -149,8 +154,11 @@ export const containerImages = [
     pullCommand: "docker pull ghcr.io/joe-simo/goblins-os:x86_64",
     verifyCommand:
       "docker run --rm ghcr.io/joe-simo/goblins-os:x86_64 /usr/libexec/goblins-os/goblins-os-verify",
+    podmanPullCommand: "podman pull ghcr.io/joe-simo/goblins-os:x86_64",
+    podmanVerifyCommand:
+      "podman run --rm ghcr.io/joe-simo/goblins-os:x86_64 /usr/libexec/goblins-os/goblins-os-verify",
     status: "visibility_pending",
-    note: "The image has been published; public pulls are waiting on GitHub Container Registry package visibility.",
+    note: "The image has been published; public Docker and Podman pulls are waiting on GitHub Container Registry package visibility.",
   },
 ] satisfies ContainerImage[];
 

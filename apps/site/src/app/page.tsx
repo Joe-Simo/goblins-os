@@ -674,8 +674,10 @@ function ContainerImageCard({ image }: { image: ContainerImage }) {
           <code className="break-all text-xs">{image.image}</code>
         </MetadataRow>
         <div className="grid gap-3">
-          <CommandBlock label="Pull" command={image.pullCommand} />
-          <CommandBlock label="Verify" command={image.verifyCommand} />
+          <CommandBlock label="Docker pull" command={image.pullCommand} />
+          <CommandBlock label="Docker verify" command={image.verifyCommand} />
+          <CommandBlock label="Podman pull" command={image.podmanPullCommand} />
+          <CommandBlock label="Podman verify" command={image.podmanVerifyCommand} />
         </div>
         <p className="text-sm leading-6 text-muted-foreground">{image.note}</p>
       </CardContent>
@@ -686,7 +688,8 @@ function ContainerImageCard({ image }: { image: ContainerImage }) {
             <ExternalLinkIcon data-icon="inline-end" />
           </a>
         </Button>
-        <CopyButton value={image.pullCommand} label="Copy pull command" />
+        <CopyButton value={image.pullCommand} label="Copy Docker pull command" />
+        <CopyButton value={image.podmanPullCommand} label="Copy Podman pull command" />
       </CardFooter>
     </Card>
   );

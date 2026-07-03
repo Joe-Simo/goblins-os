@@ -41,13 +41,13 @@ to USB or attaching it to a VM.
 
 ## Containers
 
-The bootc container images are intended for inspection, verification, and
-derived-image workflows. Use the ISO when you want the full graphical desktop
-installer.
+The bootc container images are intended for Docker/Podman inspection,
+verification, automation, and derived-image workflows. Use the ISO when you want
+the full graphical desktop installer.
 
 Container package visibility is tracked separately from the public source repo.
-If a `docker pull` command asks for authentication, the GHCR package has not yet
-been made public.
+If a `docker pull` or `podman pull` command asks for authentication, the GHCR
+package has not yet been made public.
 
 ## Development
 

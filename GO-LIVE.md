@@ -13,7 +13,11 @@ to a stable public release.
 - [x] SHA256 files are published for the split download parts, compressed ISO,
   and final ISO.
 - [x] Website includes install and checksum verification guidance.
-- [ ] GHCR package visibility allows anonymous container pulls.
+- [ ] GHCR package visibility allows anonymous Docker and Podman pulls.
+  Current check: anonymous `docker buildx imagetools inspect
+  ghcr.io/joe-simo/goblins-os:x86_64` and `:aarch64` return `401 Unauthorized`;
+  the connected GitHub CLI token also needs `read:packages`/`write:packages`
+  before package visibility can be changed from this machine.
 
 ## Release Verification
 
@@ -34,6 +38,8 @@ to a stable public release.
 ```sh
 docker buildx imagetools inspect ghcr.io/joe-simo/goblins-os:x86_64
 docker buildx imagetools inspect ghcr.io/joe-simo/goblins-os:aarch64
+podman manifest inspect ghcr.io/joe-simo/goblins-os:x86_64
+podman manifest inspect ghcr.io/joe-simo/goblins-os:aarch64
 ```
 
 - [ ] Complete per-architecture display-backed signoff.

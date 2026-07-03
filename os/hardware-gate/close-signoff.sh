@@ -753,7 +753,7 @@ require_fixed "clippy check missing in workflow" .github/workflows/build.yml "cl
 require_fixed "native desktop test check missing in workflow" .github/workflows/build.yml 'cargo test --workspace --features "$NATIVE_FEATURES"'
 require_fixed "release check missing in workflow" .github/workflows/build.yml "cargo build --release --workspace"
 require_fixed "per-architecture image build target missing in workflow" .github/workflows/build.yml 'goblins-os:${{ matrix.arch }}'
-require_fixed "self-test target missing in workflow" .github/workflows/build.yml "goblins-os:selftest"
+require_fixed "self-test target missing in workflow" .github/workflows/build.yml "target: selftest"
 require_fixed "installer-iso job missing" .github/workflows/build.yml "installer-iso"
 require_fixed "verify blocked=0 gate missing" .github/workflows/build.yml "blocked=0"
 log "workflow gates appear present"

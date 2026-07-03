@@ -259,6 +259,32 @@ except Exception:
     print("")
 PY
 }
+grant_policy_permission(){
+  local base_url="$1"
+  local control_id="$2"
+  local grant_file="$3"
+  local status_file="$4"
+  local profile acknowledgement payload grant_http grant_ok
+
+  curl -s -o "$status_file" "$base_url/v1/policy/status" || true
+  profile="$(json_field "$status_file" profile)"
+  if [ -z "$profile" ]; then
+    printf '{"ok":false,"text":"Could not read active policy profile from /v1/policy/status."}\n' > "$grant_file"
+    return 1
+  fi
+
+  acknowledgement="GRANT GOBLINS OS PERMISSION $control_id FOR $profile"
+  payload="$(python3 - "$control_id" "$acknowledgement" <<'PY'
+import json
+import sys
+
+print(json.dumps({"control_id": sys.argv[1], "acknowledgement": sys.argv[2]}))
+PY
+)"
+  grant_http="$(curl -s -o "$grant_file" -w '%{http_code}' -X POST "$base_url/v1/policy/permissions/grant" -H 'content-type: application/json' -d "$payload" || true)"
+  grant_ok="$(json_field "$grant_file" ok)"
+  [ "$grant_http" = "200" ] && [ "$grant_ok" = "true" ]
+}
 gsettings_string_value(){
   python3 - "$1" <<'PY'
 import ast
@@ -2015,18 +2041,23 @@ shot 22-mangohud-overlay mangohud vkcube
 shot 21-gamescope-session gamescope -W 960 -H 600 -b -- vkcube
 
 # ---- studio-live (needs the host model; best-effort) ----
-curl -s -X POST "$FIX_URL/v1/policy/permissions/grant" -H 'content-type: application/json' \
-  -d '{"control_id":"app-builder","acknowledgement":"GRANT GOBLINS OS PERMISSION app-builder FOR consumer"}' >/dev/null 2>&1
-rm -f /tmp/build.json /tmp/build.err /tmp/build.rc
-(
-  set +e
-  curl -s -X POST "$FIX_URL/v1/apps/builds" -H 'content-type: application/json' \
-    -d '{"intent":"A focus timer that counts down 25 minutes and rings."}' >/tmp/build.json 2>/tmp/build.err
-  build_rc="$?"
-  set -e
-  echo "$build_rc" >/tmp/build.rc
-) &
-build_pid=$!
+rm -f /tmp/build.json /tmp/build.err /tmp/build.rc /tmp/app-builder-grant.json /tmp/policy-status.json
+if grant_policy_permission "$FIX_URL" app-builder /tmp/app-builder-grant.json /tmp/policy-status.json; then
+  (
+    set +e
+    curl -s -X POST "$FIX_URL/v1/apps/builds" -H 'content-type: application/json' \
+      -d '{"intent":"A focus timer that counts down 25 minutes and rings."}' >/tmp/build.json 2>/tmp/build.err
+    build_rc="$?"
+    set -e
+    echo "$build_rc" >/tmp/build.rc
+  ) &
+  build_pid=$!
+else
+  printf '{"ok":false,"text":"App builder permission grant failed.","app":null}\n' >/tmp/build.json
+  : >/tmp/build.err
+  echo 1 >/tmp/build.rc
+  build_pid=""
+fi
 GOBLINS_OS_CORE_URL=$FIX_URL shot 14-studio-running "$B/goblins-os-shell" --studio
 for _ in $(seq 1 60); do
   if [ -s /tmp/build.rc ]; then
@@ -2035,17 +2066,19 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 if [ ! -s /tmp/build.rc ]; then
-  kill "$build_pid" 2>/dev/null || true
-  wait "$build_pid" 2>/dev/null || true
+  [ -n "$build_pid" ] && kill "$build_pid" 2>/dev/null || true
+  [ -n "$build_pid" ] && wait "$build_pid" 2>/dev/null || true
   proof_runtime_build "status=fail&stage=timeout&route=/v1/apps/builds&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&error_tail=$(file_tail_query_value /tmp/build.err)"
 else
-  wait "$build_pid" || true
+  [ -n "$build_pid" ] && wait "$build_pid" || true
   build_id="$(json_field /tmp/build.json app.id)"
   build_name="$(json_field /tmp/build.json app.name)"
   build_source="$(json_field /tmp/build.json app.source)"
   build_intent="$(json_field /tmp/build.json app.intent)"
   if [ -n "$build_id" ] && [ -n "$build_name" ] && [ -n "$build_source" ]; then
     proof_runtime_build "status=pass&route=/v1/apps/builds&intent=$(proof_query_value "${build_intent:-A focus timer that counts down 25 minutes and rings.}")&engine_mode=local-model&engine_source=$(proof_query_value "$build_source")&built_artifact_id=$(proof_query_value "$build_id")&built_artifact_name=$(proof_query_value "$build_name")&response_bytes=$(file_size_value /tmp/build.json)"
+  elif [ -s /tmp/app-builder-grant.json ] && [ "$(json_field /tmp/app-builder-grant.json ok)" != "true" ]; then
+    proof_runtime_build "status=fail&stage=permission-grant&route=/v1/apps/builds&grant_route=/v1/policy/permissions/grant&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&grant_response_tail=$(file_tail_query_value /tmp/app-builder-grant.json)"
   else
     proof_runtime_build "status=fail&stage=response&route=/v1/apps/builds&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=$(proof_query_value "${build_source:-missing}")&built_artifact_id=$(proof_query_value "${build_id:-missing}")&built_artifact_name=$(proof_query_value "${build_name:-missing}")&response_bytes=$(file_size_value /tmp/build.json)&response_tail=$(file_tail_query_value /tmp/build.json)&error_tail=$(file_tail_query_value /tmp/build.err)"
   fi

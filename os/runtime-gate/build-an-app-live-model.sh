@@ -105,15 +105,58 @@ if passed and os.path.basename(proof_path) == "runtime-build-proof.json" and os.
 PY
 }
 
+grant_app_builder_permission() {
+  local status_path="${1:-/tmp/goblins-os-policy-status.json}"
+  local grant_path="${2:-/tmp/goblins-os-app-builder-grant.json}"
+  local profile acknowledgement payload grant_http grant_ok
+
+  curl -s -o "$status_path" "$B/v1/policy/status" || true
+  profile="$(python3 - "$status_path" <<'PY'
+import json
+import sys
+
+try:
+    print(json.load(open(sys.argv[1], encoding="utf-8")).get("profile", ""))
+except Exception:
+    print("")
+PY
+)"
+  if [ -z "$profile" ]; then
+    printf '{"ok":false,"text":"Could not read active policy profile from /v1/policy/status."}\n' > "$grant_path"
+    echo "==> app-builder grant: missing policy profile"
+    return 1
+  fi
+
+  acknowledgement="GRANT GOBLINS OS PERMISSION app-builder FOR $profile"
+  payload="$(python3 - "$acknowledgement" <<'PY'
+import json
+import sys
+
+print(json.dumps({"control_id": "app-builder", "acknowledgement": sys.argv[1]}))
+PY
+)"
+  grant_http="$(curl -s -o "$grant_path" -w '%{http_code}' -X POST "$B/v1/policy/permissions/grant" -H 'content-type: application/json' -d "$payload" || true)"
+  grant_ok="$(python3 - "$grant_path" <<'PY'
+import json
+import sys
+
+try:
+    print("true" if json.load(open(sys.argv[1], encoding="utf-8")).get("ok") is True else "false")
+except Exception:
+    print("false")
+PY
+)"
+  echo "==> app-builder grant: http=$grant_http ok=$grant_ok profile=$profile"
+  [ "$grant_http" = "200" ] && [ "$grant_ok" = "true" ]
+}
+
 echo "==> engine: $GOBLINS_OS_LOCAL_MODEL @ $GOBLINS_OS_LOCAL_RUNTIME_URL"
 "$CORE" >/work/core.log 2>&1 & CORE_PID=$!
 n=0; until curl -sf "$B/health" >/dev/null 2>&1 || [ $n -ge 30 ]; do n=$((n+1)); sleep 1; done
 echo "==> core /health: $(curl -s "$B/health")"
 echo "==> codex installed (expect false): $(curl -s "$B/v1/codex/status" | grep -o '"installed":[a-z]*')"
 echo "==> app-builder before grant: $(curl -s "$B/v1/apps/build-catalog" | grep -o '"builder":"[a-z-]*"')"
-curl -s -X POST "$B/v1/policy/permissions/grant" -H 'content-type: application/json' \
-  -d '{"control_id":"app-builder","acknowledgement":"GRANT GOBLINS OS PERMISSION app-builder FOR consumer"}' \
-  | grep -o '"ok":[a-z]*' | sed 's/^/==> grant /'
+grant_app_builder_permission /tmp/goblins-os-policy-status.json /tmp/goblins-os-app-builder-grant.json || true
 echo "==> building app from intent (live inference): $INTENT"
 build_payload="$(INTENT="$INTENT" python3 - <<'PY'
 import json

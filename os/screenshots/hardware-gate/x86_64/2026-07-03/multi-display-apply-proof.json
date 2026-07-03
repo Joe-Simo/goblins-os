@@ -1,7 +1,7 @@
 {
   "apply_route": "/v1/displays/apply",
   "captured_via": "display-backed VM HTTP proof signal",
-  "connector": "Virtual-2",
+  "connector": "Virtual-1",
   "display_config": "org.gnome.Mutter.DisplayConfig",
   "mode_id": "2560x1080@50.000",
   "name": "multi-display-apply",

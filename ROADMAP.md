@@ -32,53 +32,88 @@
 
 ---
 
-## ⏩ Session status — RESUME HERE (updated 2026-07-02)
+## ⏩ Session status — RESUME HERE (updated 2026-07-03)
 
-Latest pushed head `8330fee` is CI-green for the build/render workflow:
-GitHub Actions build run `28622170987` passed Rust and image/render jobs on
-x86_64 and aarch64. Previous build run `28614271218` at `dcf3625` also passed
-and its downloaded artifacts contained 300 PNGs total (56 desktop/shell render
-PNGs across both arches). Spot-reviewed renders from that earlier green run
-show Live Captions waiting, Switch Control point scan, Today light/dark honest
-empty states, menu-bar input source/Focus/Today indicators, Text Shortcuts
-candidate bubble, Security Fingerprint/Disk encryption rows, Storage first
-viewport, and Recovery local snapshot restore rows. Security/Storage
-lower-scroll rows that are not visible in the captured viewport are still not
-treated as reviewed.
+Hardware-gate run `28644853356` at head `5f4c412` is the **first fully green
+display-backed signoff**: bootc image publish, verification installer ISO,
+model serve, install/first boot, the in-session orchestrator, **all 16
+required runtime proof JSONs `status=pass`** — including the first-ever
+passing `audio-output-proof.json` (`/v1/audio/status` 200 with WirePlumber
+ready, output volume 40 read back unmuted, bounded `pw-play` tone, Sound
+panel presentation proven by the new frame-clock present ledger,
+`core_restarts=0`) — all 31 required distinct screenshot PNGs (only the
+`_debug-*` shots repeat), `proof-manifest.json` tied to the run ISO
+(repo-relative paths), close-signoff's workflow/self-test/evidence checks,
+and the screenshot run + signoff row committed back to `main` as `48447b9`.
+Build run `28644847490` at the same head passed Rust + image/render on both
+arches. Signoff notes end honestly: `Current project completion status:
+incomplete` (release evidence links and the aarch64 display-backed track are
+still open).
 
-Hardware-gate run `28622174181` at `8330fee` built and published the bootc image,
-built the verification installer ISO, ran the display-backed VM capture, and
-uploaded a failure artifact. Runtime proof JSONs passed for Firewall live
-toggle, Text Shortcuts session enable/candidate/overlay/frame/layout/render/live
-IBus runtime render, keyboard rebind, input-source roundtrip, multi-display
-apply, Focus arm, app-keyed App Privacy revoke, and Preview open/render. The
-only failing proof remains `audio-output-proof.json`: `stage=audio-status`,
-`status_http=000`, `wav_generated=true`, `player_started=true`,
-`rendered_sound_panel=false`, and missing WirePlumber/output fields. The Sound
-panel screenshot exists but shows the audio rows stuck in Waiting because
-`/v1/audio/status` did not answer within the proof curl window. Close-signoff
-failed before committing a signoff row, so no features are newly shipped from
-that run.
+The fix chain that unblocked this (each step verified by its own run):
+- `75b44d2` hardened `goblins-os-core.service` (`Restart=always`,
+  `StartLimitIntervalSec=0`) and instrumented the audio proof with bounded
+  core-service diagnostics. Run `28629098024` then proved core was
+  alive-but-unresponsive (unit active/running, zero restarts, memory and
+  disk healthy, a second route also 000): async-runtime starvation, not a
+  crash — raw unbounded `Command` waits inside handlers can pin both tokio
+  workers on a 2-vCPU machine.
+- `f0c4f86` routed **every** external command in core through a shared
+  kill-at-bound runner (`crates/goblins-os-core/src/bounded.rs`, default 4s,
+  env `GOBLINS_OS_COMMAND_TIMEOUT_MS`, explicit wider bounds for heavy ops:
+  whisper/tesseract/aplay 60s, mic capture 30s) and bounded the OAuth ureq
+  calls (10s connect / 30s overall). Run `28631962623`: `/v1/audio/status`
+  answered 200 live for the first time.
+- `2fcb175` replaced the window-title wait (GNOME ships `Shell.Eval`
+  disabled, so it could never succeed) with a Settings-owned
+  `GOBLINS_OS_CAPTURE_PRESENT_LEDGER` frame-clock present ledger, and
+  widened two control-write bounds the 4s default was too tight for:
+  `systemctl start goblins-os-firewall@*` and nmcli hotspot connection
+  writes (both 30s).
+- `87c4829` + `503b9b4` + `8d66a12` fixed signoff plumbing exposed once the
+  proofs were green: the stale `goblins-os:selftest` workflow pin (now
+  `target: selftest`), runner-absolute manifest paths (now repo-relative,
+  close-signoff invoked from the repo root), and the signoff self-test now
+  builds as a cacheonly buildx stage because the image exceeds the docker
+  daemon's exportable layer depth ("max depth exceeded").
+- `5f4c412` hardened `org.goblins.OS.SessionBridge.service` the same way as
+  core (a mid-run bridge death had turned five bridge-backed proofs into
+  permanent 502s under `Restart=on-failure`), added bridge unit state +
+  present-ledger contents + shot log tail to the audio diagnostics,
+  dismissed the GNOME overview before every shot (stray QMP keystrokes had
+  left the search overlay covering a capture), and gave the live IBus
+  typing proof one bounded re-focus retry (it can only recover a lost-focus
+  race — the real render ledger is still required).
 
-Current local audio follow-up is source-gated only and does **not** mark more
-features shipped. It keeps the strict audio proof contract from
-`05f0e0a`/`8bbbd02`, the bounded Sound-panel title wait, the reused one-second
-tone buffer, bounded harness curl/status/waveform preflight, the QEMU HDA output
-device, and the bounded session-bridge socket read/write timeout. The follow-up
-makes `/v1/audio/status` prove endpoint readiness from bounded
-`wpctl get-volume @DEFAULT_AUDIO_{SINK,SOURCE}@` reads instead of blocking on
-`wpctl status` device enumeration, and it defers desktop sound-preference reads
-from the status route. Default-device writes still require the allowlisted
-session-bridge `wpctl status` device snapshot, and sound preference writes still
-check the live `org.gnome.desktop.sound` schema through the session bridge before
-writing. Local gates pass: `cargo fmt --all -- --check`, hardware-gate shell
-syntax, `git diff --check`, focused core audio tests,
-`cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and
-`goblins-os-verify` -> **blocked=0 (2870)**. A fresh display-backed VM proof is
-still pending.
-Final shipping status still fails closed until a fresh display-backed VM produces
-a passing audio proof, distinct screenshots, `proof-manifest.json`, all required
-pass status proof JSONs, and a close-signoff row committed back to `main`.
+ROADMAP flips from this signoff: **Firewall toggle** and **PDF/image
+Preview** are `shipped` (their only remaining gates were the live toggle
+and open/render proofs). Multi-display, Focus modes, keyboard rebinding,
+per-app privacy, input sources/IME, and Text Shortcuts stay `in-progress`:
+their live proof hooks are green, but each section records deferred scope
+(writable Displays panel, Focus editor + per-app breakthroughs, recordable
+shortcut UI, resource-keyed device grants, CJK candidate windows, and the
+deliberate Text Shortcuts core readiness flip + re-proof).
+
+Next work, in order:
+1. **Text Shortcuts readiness flip:** the live IBus runtime/render proof is
+   green and reviewed; deliberately flip core's `engine_available` /
+   runtime-loop gates, update the proof contract that pins
+   `core_readiness_flip=deferred`, and re-run the hardware gate.
+2. Continue the deferred `in-progress` scopes above one feature at a time
+   (each with its own local gates + CI/qemu proof).
+3. **Batch 5 LAST, under the hardware gate:** FileVault-at-install and
+   btrfs `/home` + snapshots (never blind-edit PAM/root-fs; use
+   `authselect`).
+4. Longer-horizon shipping items: release-evidence manifest diligence links,
+   and the aarch64 display-backed track (local Apple-Silicon route per the
+   runbook).
+
+Gate-watch notes: the live IBus typing proof can lose focus to the shell
+(one retry added in `5f4c412`; watch
+`text-shortcuts-live-ibus-runtime-render`), and close-signoff's
+release-evidence check remains an intentional warn until the manifest links
+land. The worktree's untracked `os/focus/__pycache__/` is unrelated — leave
+it alone.
 
 Previous head `ce412cd` is source-verified and CI-green for the fast Rust build:
 GitHub Actions build run `28605702444` passed on x86_64 and aarch64 after
@@ -2182,11 +2217,11 @@ Low risk, high brand-impact. Real RPM binaries + the existing bridges; mostly ho
 - **Verifiable:** host — sRGB→hex rounding/clamp, `rgb()`/`hsl()` formatting, round-trip + boundaries (0.0→00, 1.0→ff), format-cycle strings. CI/qemu — portal handshake, `wl-copy`, swatch render.
 - **Effort:** M · **Risk:** LOW (boot untouched; hotkey-launched libexec).
 
-### `in-progress` PDF / image Preview viewer
+### `shipped` PDF / image Preview viewer
 - [x] **Package/default-app substrate source-gated (CI/qemu-pending):** Fedora 44 repo metadata confirms `papers` (`/usr/bin/papers`, `org.gnome.Papers.desktop`) and `loupe` (`/usr/bin/loupe`, `org.gnome.Loupe.desktop`). The bootc image installs and `rpm -q`/`command -v` asserts both packages, and `os/applications/mimeapps.list` makes PDFs open in Papers and common image formats open in Loupe. This is not shipped until CI/qemu proves the installed desktop entries, MIME open behavior, and themed render.
 - [x] **Open/status substrate source-gated (CI/qemu-pending):** core exposes `/v1/preview/status` and `/v1/preview/open`, validates only absolute local PDF/PostScript/common image files, requires `xdg-open` plus Papers/Loupe before launch, and hands files to the desktop default viewer without reading file contents or claiming rendered proof. Host tests cover the extension allowlist and honest missing-viewer states; the installed-image self-test now checks status readiness, opens temporary PDF/image files through the route, and rejects an unsupported file honestly. `goblins-os-verify` and the hardware gate check the route + xdg-open + selftest contract. This is not shipped until CI/qemu proves installed-image MIME open behavior and themed render.
-- [x] **Display-backed open/render proof hook source-gated (CI/qemu-pending):** the hardware-gate capture harness now requires `preview-open-render-proof.json`, opens installed `/usr/share/goblins-os/proof/preview-open-render.{pdf,png}` fixtures through `/v1/preview/open`, verifies Papers/Loupe MIME defaults and viewer processes, captures `29-preview-pdf-open.png` and `30-preview-image-open.png`, rejects an unsupported `.txt` fixture, links the proof in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. No live qemu run has produced reviewed artifacts yet.
-- [ ] Open any PDF/image as the default viewer (macOS Preview altitude — view, page, basic annotate; not a deep editor). The Goblins markup editor already covers screenshot annotation; this fills the "double-click a PDF" gap.
+- [x] **Display-backed open/render proof hook source-gated (CI/qemu-pending):** the hardware-gate capture harness now requires `preview-open-render-proof.json`, opens installed `/usr/share/goblins-os/proof/preview-open-render.{pdf,png}` fixtures through `/v1/preview/open`, verifies Papers/Loupe MIME defaults and viewer processes, captures `29-preview-pdf-open.png` and `30-preview-image-open.png`, rejects an unsupported `.txt` fixture, links the proof in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. Hardware-gate run `28644853356` (2026-07-03, head `5f4c412`) produced the passing proof, committed with the signoff row in `48447b9`.
+- [x] Open any PDF/image as the default viewer (macOS Preview altitude): proven live by `preview-open-render-proof.json` — Papers/Loupe MIME defaults verified, both viewers opened + rendered (`29-preview-pdf-open.png`, `30-preview-image-open.png`), unsupported file rejected honestly.
 - **Approach:** themed_gnome_fallback (deep long tail — a stock GNOME viewer branded via `os/gtk-4.0/gtk.css`, not a custom build) for v1; a Goblins-native viewer is a later option.
 - **Packages:** `papers` (GNOME Documents, verified in Fedora 44 repo metadata; `evince` is not used here) + `loupe` (GNOME Image Viewer, verified in Fedora 44 repo metadata).
 - **Files:** `os/bootc/Containerfile` (package + `rpm -q`), default-application dconf / mimeapps so PDFs/images open in it, `os/gtk-4.0/gtk.css` (already brands stock GTK apps — confirm coverage).
@@ -2225,10 +2260,10 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - **Verifiable:** host — target arms, specs, normalizers, type-check (extend `bounds_are_stable`). CI/qemu — row layout + real gsettings writes.
 - **Effort:** L · **Risk:** LOW (runtime reads, no rpm install). No boot/login surface.
 
-### `in-progress` Firewall toggle + status (firewalld) in Settings ▸ Security
+### `shipped` Firewall toggle + status (firewalld) in Settings ▸ Security
 - [x] **Status read** (`crates/goblins-os-core/src/firewall.rs` + `/v1/firewall/status`): honest read-only posture via `firewall-cmd --state` (running requires success AND "running" text — pure, unit-tested), honest-gated to "unavailable" when firewalld isn't installed.
 - [x] **Settings row (GTK) shipped**: Settings ▸ Security ▸ Protection now shows a live **Firewall** row (on / off / unavailable) fed by the status endpoint, alongside the boot-image + keyring rows. Compile- + `clippy -D warnings`-clean in the native container; verify gate added.
-- [x] **Gated On/Off toggle substrate + Settings binding (CI/qemu interaction proof pending):** core writes only by starting `goblins-os-firewall@enable/disable.service`, with a root helper that touches only `firewalld.service`, a scoped polkit rule for the `goblins-os` service user, image-time helper/unit/rule assertions, an installed-image self-test that exercises status + honest toggle outcomes, and a GTK switch that disables/reverts honestly when the bridge or live write fails. Feature remains `in-progress` until qemu render + live toggle proof are green.
+- [x] **Gated On/Off toggle substrate + Settings binding (CI/qemu interaction proof pending):** core writes only by starting `goblins-os-firewall@enable/disable.service`, with a root helper that touches only `firewalld.service`, a scoped polkit rule for the `goblins-os` service user, image-time helper/unit/rule assertions, an installed-image self-test that exercises status + honest toggle outcomes, and a GTK switch that disables/reverts honestly when the bridge or live write fails. Feature proven by hardware-gate run `28644853356` (2026-07-03): `firewall-live-toggle-proof.json` green (disable=200/inactive, enable=200/active through the live systemd/polkit oneshot path) with render + signoff row committed in `48447b9`.
 - **Packages:** `firewalld` (verified canonical name; minimal/bootc images can omit it).
 - **Files:** `crates/goblins-os-core/src/firewall.rs` (status + toggle, mirror `bluetooth.rs`), `crates/goblins-os-core/src/main.rs` (`GET /v1/firewall/status`, `POST /v1/firewall/enabled`), `crates/goblins-os-settings/src/main.rs` (`FirewallStatus` + `build_security` row + `set_firewall_enabled` mirroring `set_bluetooth_power`), `os/bootc/Containerfile` (`firewalld` + `systemctl enable firewalld.service`), `os/bootc/goblins-os-firewall` + `os/systemd-system/goblins-os-firewall@.service` + `os/bootc/60-goblins-os-firewall.rules` (privileged helper/oneshot plus **scoped** polkit rule).
 - **APIs:** read path `firewall-cmd --state`/`--get-default-zone` + `systemctl is-active/is-enabled` (all unprivileged for the active session); write path via the oneshot helper.
@@ -2290,7 +2325,7 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 
 ### `in-progress` Multi-display arrangement / resolution / scale / refresh / mirror
 - [x] **Apply substrate source-gated (CI/qemu-pending):** `/v1/displays/apply` exposes a serial-gated Mutter `ApplyMonitorsConfig` bridge. It checks `ApplyMonitorsConfigAllowed`, re-reads `GetCurrentState` before apply, rejects stale serials, validates connector/mode IDs and logical-monitor payloads, requires explicit confirmation for persistent `method=2`, and encodes the `a(iiduba(ssa{sv}))` request tuple. Settings reports the protected apply gate but keeps the editor disabled until live proof exists.
-- [x] **Apply hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `multi-display-apply-proof.json`, generated from the installed session's live Mutter DisplayConfig state, and rejects signoff unless `/v1/displays/apply` verifies the current same-layout payload, temporarily applies it, refuses persistent apply without explicit confirmation, and rejects a stale serial. This still does not ship the writable Displays panel, drag canvas, persistent Keep/Revert UI, or multi-output layout editing.
+- [x] **Apply hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `multi-display-apply-proof.json`, generated from the installed session's live Mutter DisplayConfig state, and rejects signoff unless `/v1/displays/apply` verifies the current same-layout payload, temporarily applies it, refuses persistent apply without explicit confirmation, and rejects a stale serial. Hardware-gate run `28644853356` (2026-07-03, head `5f4c412`) produced the passing proof, committed with the signoff row in `48447b9`. This still does not ship the writable Displays panel, drag canvas, persistent Keep/Revert UI, or multi-output layout editing.
 - [ ] A **writable** Goblins Displays panel driving `org.gnome.Mutter.DisplayConfig` through the allowlisted bridge, replacing today's read-only placeholders. Drag-to-arrange canvas, named scaled modes, scale, refresh, rotation, mirror — with a live-preview + Keep/Revert timer so a bad mode can't lock the user out.
 - **Packages:** `mutter` (already present via gnome-shell — only confirm via `rpm -q`).
 - **gsettings/dconf:** seed `org.gnome.mutter experimental-features = ['scale-monitor-framebuffer']` (additive) so fractional 125/150/175% steps exist at first boot. Mode/scale/rotation/position/primary/mirror are **not** gsettings — applied via `ApplyMonitorsConfig`; Mutter persists `method=2` to `~/.config/monitors.xml`.
@@ -2326,7 +2361,7 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 - [x] **Menu-bar active Focus indicator source-gated (CI/qemu-pending):** `goblins-menubar` reads the system `org.goblins.os.focus` schema, hides when Focus is off or the active id is not in configured modes, shows only the configured active mode name, and opens Settings ▸ Notifications on click. The desktop render harness now captures `59b-menubar-focus-$suffix.png` after seeding a deterministic `work` mode and active state, then restores Focus to off. It performs no writes and makes no live timer/write claim. **Not shipped** until GNOME Shell render and live Focus state proof land.
 - [x] **Control Center Focus tile source-gated (CI/qemu-pending):** Control Center fetches `/v1/focus/status`, renders a read-only Focus tile from core-reported configured modes, opens Settings ▸ Notifications for changes, and does not call Focus write routes. The render harness now seeds a deterministic `work` / `Deep Work` mode, captures `37b-control-center-focus.png` and `39b-control-center-focus-dark.png`, then restores Focus to off. It creates no sample/default modes in the product path and makes no schedule/timer/live-write claim. **Not shipped** until reviewed Control Center GTK pixels and live Focus proof land.
 - [x] **Mode/schedule CRUD substrate source-gated (CI/qemu-pending):** core exposes `/v1/focus/mode` and `/v1/focus/schedule`, validates Focus ids/names/weekdays/time windows, upserts/deletes only through the Goblins Focus schema, refuses deletion of the active mode, and refuses deletion of a mode that schedules still reference. No default/sample modes are created, no per-app breakthrough policy is applied, and no Settings editor/render proof is claimed.
-- [x] **Live arm/disarm hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `focus-arm-roundtrip-proof.json`, posts `/v1/focus/activate` and `/v1/focus/deactivate` against a deterministic `gate-work` mode, verifies `active-mode` read-back, notification banner snapshot/silence/restore behavior, original state restoration, and explicit `mode_crud_claim=false`, `schedule_claim=false`, and `per_app_breakthroughs_claim=false`. The proof is linked from `proof-manifest.json`, and `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. No live qemu run has produced the proof yet.
+- [x] **Live arm/disarm hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `focus-arm-roundtrip-proof.json`, posts `/v1/focus/activate` and `/v1/focus/deactivate` against a deterministic `gate-work` mode, verifies `active-mode` read-back, notification banner snapshot/silence/restore behavior, original state restoration, and explicit `mode_crud_claim=false`, `schedule_claim=false`, and `per_app_breakthroughs_claim=false`. The proof is linked from `proof-manifest.json`, and `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. Hardware-gate run `28644853356` (2026-07-03, head `5f4c412`) produced the passing proof, committed with the signoff row in `48447b9`.
 - [ ] **Surfaces + per-app breakthroughs (deferred):** per-app breakthrough via the `notifications.rs` helper and the `SettingsPanel::Focus` editor for mode/schedule CRUD. (Drops iCloud/location/Smart Activation — absent, never stubbed.)
 - **Packages:** none.
 - **gsettings/dconf:** DRIVES `org.gnome.desktop.notifications show-banners` (already allowlisted as `ShowBanners`) + per-app `…notifications.application` enable/show-banners. OWN a new `org.goblins.os.focus` schema (active-mode, modes JSON, schedules JSON, armed-by-schedule, restore-banners, restore-apps), compiled like the wm schema; dconf-seed default modes so first boot is non-empty (active-mode='', schedules='[]').
@@ -2340,7 +2375,7 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 ### `in-progress` Keyboard shortcut editor + modifier remap (Caps Lock → Control)
 - [x] **Shortcuts reference shipped** (`crates/goblins-os-core/src/shortcuts.rs` + `/v1/shortcuts/status`, Settings ▸ Keyboard "Shortcuts" list): reads the 14 Goblins window-management bindings from `org.goblins.shell.extensions.wm` and shows each action with its humanized accelerator (`<Super><Shift>Left` → "Super + Shift + Left"; pure `humanize_accelerator`/`parse_gsettings_strv` unit-tested, 176 core tests), honest-gated to "unavailable" when the wm schema isn't installed. Container-verified (clippy `-D warnings`), 2 verify gates.
 - [x] **Rebinding + Caps Lock remap substrate source-gated (CI/qemu-pending):** `/v1/keyboard/shortcuts/binding` writes only the allowlisted Goblins WM schema keys, supports reset, validates accelerator grammar, and refuses conflicts with other Goblins bindings. `/v1/keyboard/modifier-remap` edits only the `ctrl:*`/`caps:*` token in `xkb-options` so Caps Lock can become Control or return to default while preserving unrelated layout/compose options. Settings reports the source-gated bridge but keeps record/dropdown controls disabled until qemu proof is green.
-- [x] **Live roundtrip hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `keyboard-shortcuts-roundtrip-proof.json`, posts the live shortcut and modifier routes, verifies gsettings read-back for `<Super><Shift>H` and `ctrl:nocaps`, resets the shortcut to `<Super>w`, restores Caps Lock to default, links the proof in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. No live qemu run has produced the proof yet.
+- [x] **Live roundtrip hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `keyboard-shortcuts-roundtrip-proof.json`, posts the live shortcut and modifier routes, verifies gsettings read-back for `<Super><Shift>H` and `ctrl:nocaps`, resets the shortcut to `<Super>w`, restores Caps Lock to default, links the proof in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. Hardware-gate run `28644853356` (2026-07-03, head `5f4c412`) produced the passing proof, committed with the signoff row in `48447b9`.
 - [ ] **Recordable UI + reviewed live round trip (deferred):** make rows recordable, add a Caps Lock dropdown, inline conflict notice, per-row/global reset, and review the qemu gsettings round-trip proof before marking the UI shipped.
 - **Packages:** none (all three schemas ship in gsettings-desktop-schemas).
 - **gsettings:** `org.gnome.desktop.input-sources xkb-options` (Caps→Ctrl via `ctrl:nocaps`, editing **only** the `ctrl:*`/`caps:*` token, preserving `grp:`/`compose:`/`lv3:`); `org.gnome.desktop.wm.keybindings` (close/toggle-maximized/minimize/switch-applications(+backward)/switch-windows/show-desktop/toggle-fullscreen/begin-move/begin-resize); `org.gnome.settings-daemon.plugins.media-keys` (screenshot/screenshot-clip/area-screenshot/www/terminal/home/search). Reset = `gsettings reset SCHEMA KEY`. Custom-command keybindings → **read-only** v1 (handoff).
@@ -2368,7 +2403,7 @@ Goblins-branded rows/cards on existing stable seams. Logic host-testable; render
 ### `in-progress` Per-app privacy permissions UI (camera / mic / location / files)
 - [x] **Read substrate + surface shipped** (`crates/goblins-os-core/src/app_permissions.rs` + `/v1/app-privacy/status`, Settings ▸ Privacy "App permissions" group): reads the xdg `PermissionStore` over `gdbus` (`List(in s table, out as ids)`, **web-verified** against the spec — no new package, the portal already ships) for the `location`/`background`/`notifications`/`devices` tables and lists the entries per category, honest-gated when the store isn't running. Pure `parse_list_reply` unit-tested (183 core tests); container clippy `-D warnings` clean; route + surface verify gates.
 - [x] **Per-app revoke substrate source-gated (CI/qemu-pending):** `/v1/app-privacy/revoke` validates the known PermissionStore tables and safe desktop IDs, then calls `DeletePermission(table, id, app)` only for app-keyed grants. Settings ▸ Privacy now renders per-app revoke rows with exact core feedback. Resource-keyed device grants and live portal reload proof remain deferred.
-- [x] **Live app-keyed revoke hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `app-privacy-revoke-proof.json`, seeds a deterministic app-keyed location grant through `PermissionStore.SetPermission`, posts `/v1/app-privacy/revoke`, verifies `PermissionStore.GetPermission` read-back is empty, restores the prior grant state, links the JSON in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. No live qemu run has produced the proof yet.
+- [x] **Live app-keyed revoke hardware proof hook source-gated (CI/qemu-pending):** the display-backed capture harness now requires `app-privacy-revoke-proof.json`, seeds a deterministic app-keyed location grant through `PermissionStore.SetPermission`, posts `/v1/app-privacy/revoke`, verifies `PermissionStore.GetPermission` read-back is empty, restores the prior grant state, links the JSON in `proof-manifest.json`, and makes `close-signoff.sh`, `verify-shipping-status.sh`, and `goblins-os-verify` reject missing/failing proof. Hardware-gate run `28644853356` (2026-07-03, head `5f4c412`) produced the passing proof, committed with the signoff row in `48447b9`.
 - [ ] **Resource mappings (deferred):** `Lookup`/metadata mapping for camera/microphone resource-keyed grants before any device revoke UI.
 - **Approach:** custom_surface (own Goblins panel reading/writing the xdg-desktop-portal permission store).
 - **Packages:** none (xdg-desktop-portal already shipped).

@@ -793,6 +793,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "StartLimitIntervalSec=0",
     ));
     checks.push(contains_check(
+        root.join("os/systemd/goblins-os-core.service"),
+        "core-service-owns-policy-state-directory",
+        "StateDirectory=goblins-os/models goblins-os/ai goblins-os/policy",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd/goblins-os-core.service"),
+        "core-service-state-directory-mode-private",
+        "StateDirectoryMode=0750",
+    ));
+    checks.push(contains_check(
         root.join("os/systemd-user/org.goblins.OS.SessionBridge.service"),
         "session-bridge-service-restart-policy-always",
         "Restart=always",

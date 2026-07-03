@@ -20,7 +20,8 @@ RestartSec=2s
 # keeps retrying (never latches failed) without flooding the journal.
 RestartSteps=8
 RestartMaxDelaySec=60
-StateDirectory=goblins-os/models goblins-os/ai
+StateDirectory=goblins-os/models goblins-os/ai goblins-os/policy
+StateDirectoryMode=0750
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

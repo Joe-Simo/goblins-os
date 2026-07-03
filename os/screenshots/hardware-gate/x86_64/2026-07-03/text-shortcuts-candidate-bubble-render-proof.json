@@ -1,0 +1,22 @@
+{
+  "accept_on": "word-boundary",
+  "captured_via": "display-backed VM HTTP proof signal",
+  "dismiss_key": "Escape",
+  "font_family": "Inter",
+  "frame_surface": "goblins-textshortcuts-accept-bubble-frame",
+  "hint_style_class": "gos-text-shortcuts-candidate-hint",
+  "layout_surface": "goblins-textshortcuts-accept-bubble-layout",
+  "live_overlay_claim": "false",
+  "name": "text-shortcuts-candidate-bubble-render",
+  "render_intent_surface": "goblins-textshortcuts-accept-bubble-render-intent",
+  "rendered_bubble_ready_claim": "false",
+  "rendered_candidate_surface": "true",
+  "replacement": "on my way",
+  "route": "/v1/text-shortcuts",
+  "runtime_ready_claim": "false",
+  "screenshot": "31-text-shortcuts-candidate-bubble-render.png",
+  "status": "pass",
+  "style_class": "gos-text-shortcuts-candidate",
+  "surface": "goblins-os-shell-text-shortcuts-candidate-bubble-render",
+  "text_style_class": "gos-text-shortcuts-candidate-text"
+}

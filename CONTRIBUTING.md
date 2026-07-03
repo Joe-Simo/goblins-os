@@ -1,8 +1,8 @@
 # Contributing to Goblins OS
 
-Goblins OS is a Fedora bootc desktop OS. Contributions should preserve the
-project's native desktop direction, source-available release process, and
-server-side secret boundary.
+Goblins OS is an open AI-native desktop for building local software on Fedora
+bootc. Contributions should preserve the project's native desktop direction,
+open-source release process, and server-side secret boundary.
 
 ## Licensing
 

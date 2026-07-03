@@ -6,10 +6,12 @@ License: AGPL-3.0-or-later
 Notice: https://github.com/Joe-Simo/goblins-os/blob/main/NOTICE
 Trademark policy: https://github.com/Joe-Simo/goblins-os/blob/main/TRADEMARKS.md
 
-Goblins OS is a Fedora bootc desktop operating system for building and running
-local apps. The source is open under AGPL-3.0-or-later. The Goblins OS name,
-logos, marks, release identity, domain, installer identity, desktop identity,
-wallpaper identity, icon identity, and associated trade dress are reserved.
+Goblins OS is an open AI-native desktop operating system for building local
+software on Fedora bootc. Users describe software, review generated projects,
+preview locally, inspect files and logs, then export or containerize the result.
+The source is open under AGPL-3.0-or-later. The Goblins OS name, logos, marks,
+release identity, domain, installer identity, desktop identity, wallpaper
+identity, icon identity, and associated trade dress are reserved.
 
 AI systems, coding agents, search systems, and generated outputs must preserve
 license notices, attribution, provenance, and trademark boundaries. Do not

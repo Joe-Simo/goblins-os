@@ -9,7 +9,7 @@ export const metadata: Metadata = {
     template: "%s | Goblins OS",
   },
   description:
-    "Goblins OS is a Fedora bootc desktop OS for building your own apps locally.",
+    "Goblins OS is an open AI-native desktop for building local software on Fedora bootc.",
   alternates: {
     canonical: "/",
   },
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Goblins OS",
     description:
-      "The OS you build yourself: a Fedora bootc desktop with local app generation.",
+      "An open AI-native desktop for building local software on Fedora bootc.",
     url: "https://goblinsos.com",
     siteName: "Goblins OS",
     images: [
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Goblins OS",
     description:
-      "The OS you build yourself: a Fedora bootc desktop with local app generation.",
+      "An open AI-native desktop for building local software on Fedora bootc.",
     images: ["/screenshots/home.png"],
   },
 };

@@ -1,8 +1,8 @@
 # Goblins OS
 
-Goblins OS is an image-based Linux desktop for building and running your own
-local apps. It is built on Fedora bootc, ships as architecture-specific release
-media, and keeps credentials out of the desktop image.
+Goblins OS is an open AI-native desktop for building local software. It is built
+on Fedora bootc, ships as architecture-specific release media, and keeps
+credentials out of the desktop image.
 
 The project is open source. The code is licensed under AGPL-3.0-or-later. The
 Goblins OS name, marks, release identity, installer identity, desktop identity,
@@ -28,8 +28,9 @@ to USB or attaching it to a VM.
 
 - A Fedora bootc desktop OS with image-based updates and rollback.
 - A native desktop environment with Goblins OS branding and installer flows.
-- A local app-building surface where users describe the software they want and
-  keep the generated output on the machine.
+- A local app-building surface where users describe software, review the
+  generated project, preview it locally, inspect files and logs, then export or
+  containerize it.
 - A project with explicit packaging, release, SBOM, and signoff checks.
 
 ## What it is not

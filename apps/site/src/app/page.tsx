@@ -27,7 +27,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -58,8 +57,9 @@ const features = [
     icon: BoxIcon,
   },
   {
-    title: "Build apps locally",
-    description: "Describe an app, review the generated project, and keep the output on the machine.",
+    title: "AI-native local builder",
+    description:
+      "Describe an app, review the project, preview it locally, inspect files and logs, then export or containerize it.",
     icon: TerminalSquareIcon,
   },
   {
@@ -119,9 +119,9 @@ export default function Home() {
                 Goblins OS
               </h1>
               <p className="max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
-                A Fedora bootc desktop for building local apps. Choose the
-                right architecture, verify the release media, and keep your
-                system under your control.
+                An open AI-native desktop for building local software on a
+                Fedora bootc base. Choose the right architecture, verify the
+                release media, and keep your system under your control.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
@@ -140,8 +140,8 @@ export default function Home() {
             </div>
             <div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
               <ProofPoint>Fedora bootc base</ProofPoint>
-              <ProofPoint>No bundled secrets</ProofPoint>
-              <ProofPoint>Per-arch ISOs</ProofPoint>
+              <ProofPoint>Local app builds</ProofPoint>
+              <ProofPoint>Server-side secrets</ProofPoint>
             </div>
           </div>
 
@@ -168,7 +168,7 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
           <SectionHeading
             title="Built for creativity and control"
-            description="A native Linux desktop with verified release artifacts, per-architecture media, and a clean credential boundary."
+            description="A native Linux desktop for local software creation, with verified release artifacts, per-architecture media, and a clean credential boundary."
           />
           <div className="grid gap-x-8 gap-y-0 md:grid-cols-2 lg:grid-cols-3">
             {features.map((feature) => (
@@ -525,7 +525,7 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
         </div>
       </section>
 
-      <section id="source" className="scroll-mt-20 bg-background">
+      <section id="source" className="scroll-mt-20 border-b bg-background">
         <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.8fr_1.2fr] lg:px-8">
           <div className="flex min-w-0 flex-col gap-5" data-gsap="reveal">
             <SectionHeading
@@ -575,7 +575,48 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
             />
           </div>
         </div>
-        <Separator />
+      </section>
+
+      <section id="notice" className="scroll-mt-20 bg-muted/35">
+        <div className="mx-auto grid w-full max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.78fr_1.22fr] lg:px-8">
+          <SectionHeading
+            title="Notice and marks policy"
+            description="The source is open under AGPL-3.0-or-later. The Goblins OS identity is reserved so forks can exist without impersonating official releases."
+          />
+          <div className="grid gap-4 md:grid-cols-2" data-gsap="reveal">
+            <div className="flex flex-col gap-3 border-t pt-5">
+              <ShieldCheckIcon className="text-primary" aria-hidden="true" />
+              <h3 className="text-base font-semibold">Notice</h3>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Modified distributions must preserve license, attribution,
+                provenance, and source obligations. Automated or AI-generated
+                patches do not remove those duties.
+              </p>
+              <Button asChild variant="ghost" size="sm" className="w-fit px-0">
+                <a href={`${sourceUrl}/blob/main/NOTICE`} rel="noreferrer" target="_blank">
+                  Open NOTICE
+                  <ArrowUpRightIcon data-icon="inline-end" />
+                </a>
+              </Button>
+            </div>
+            <div className="flex flex-col gap-3 border-t pt-5">
+              <FileCheck2Icon className="text-primary" aria-hidden="true" />
+              <h3 className="text-base font-semibold">Marks policy</h3>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Forks may use the source under the license, but modified builds
+                need their own product name, release identity, icons,
+                wallpapers, domains, and installer branding unless permission is
+                granted.
+              </p>
+              <Button asChild variant="ghost" size="sm" className="w-fit px-0">
+                <a href={`${sourceUrl}/blob/main/TRADEMARKS.md`} rel="noreferrer" target="_blank">
+                  Open marks policy
+                  <ArrowUpRightIcon data-icon="inline-end" />
+                </a>
+              </Button>
+            </div>
+          </div>
+        </div>
         <footer className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-6 text-sm text-muted-foreground sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
           <span>Goblins OS</span>
           <span>AGPL-3.0-or-later source. Goblins OS marks reserved.</span>
@@ -749,6 +790,9 @@ function SiteHeader() {
           </a>
           <a className="transition-colors hover:text-foreground" href="#source">
             Source
+          </a>
+          <a className="transition-colors hover:text-foreground" href="#notice">
+            Notice
           </a>
         </nav>
         <Button asChild variant="outline" size="sm">

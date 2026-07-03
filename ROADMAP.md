@@ -19,6 +19,8 @@ files, not in this overview.
 ## Shipped Foundation
 
 - Fedora bootc image-based base.
+- Open AI-native desktop direction for building local software under user
+  control.
 - Native desktop surfaces built primarily in Rust.
 - Goblins OS branding for installer, desktop, settings, and release media.
 - Per-architecture release workflow for `x86_64` and `aarch64`.
@@ -26,8 +28,8 @@ files, not in this overview.
 - Secret boundary that keeps credentials out of the image and desktop session.
 - Installer guardrails for architecture choice, checksum verification, storage
   review, and dual-boot preservation.
-- Website with downloads, checksum guidance, source links, and container image
-  commands.
+- Website with downloads, container image commands, install guidance, checksum
+  verification, source links, notice, and marks policy.
 
 ## Active Release Work
 
@@ -41,8 +43,8 @@ files, not in this overview.
 
 - Continue hardening Settings panels for display, sound, privacy, accessibility,
   developer, storage, recovery, and update workflows.
-- Improve the app-building flow with clearer project review, generated-app
-  details, and local runtime diagnostics.
+- Improve the app-building flow across describe, project review, local preview,
+  file/log inspection, export, and containerization.
 - Strengthen update and rollback UX for bootc deployments.
 - Expand hardware and device proof for audio, controller, display, input source,
   Bluetooth, printer, and accessibility paths.

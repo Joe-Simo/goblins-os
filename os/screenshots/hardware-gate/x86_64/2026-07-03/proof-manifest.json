@@ -1,7 +1,7 @@
 {
   "architecture": "x86_64",
   "iso": "os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso",
-  "iso_sha256": "42ebb546069aae53731f3e02d601c2d9a70e701836edb4691e0ae43baf00d442",
+  "iso_sha256": "85d34b5c864ee643768e5ca6db7bc149f67319f3be76acda6f4901714a0f99fb",
   "captured_at": "2026-07-03T00:00:00Z",
   "screenshot_run_dir": "os/screenshots/hardware-gate/x86_64/2026-07-03",
   "firewall_live_toggle_proof": "firewall-live-toggle-proof.json",

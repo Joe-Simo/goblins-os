@@ -1,7 +1,7 @@
 {
   "active_engine": "goblins-textshortcuts",
   "captured_via": "display-backed VM HTTP proof signal",
-  "core_readiness_flip": "deferred",
+  "core_readiness_flip": "live",
   "focused_field_callback": "true",
   "font_family": "Inter",
   "input_driver": "qmp-keyboard",

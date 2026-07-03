@@ -566,5 +566,6 @@ Next manual closure steps (once screenshots are collected):
   - light/dark motion/interactions
   - Open advanced storage or Install Goblins OS Beside Another OS, then Installation Destination, Custom/manual storage or Reclaim Space, preserved Windows/macOS/APFS/Linux/other OS/recovery/EFI partitions, and bootloader/EFI summary
   - Runtime engine mode/source/config and built artifact path or URL, passed to close-signoff through RUNTIME_ENGINE_MODE, RUNTIME_ENGINE_SOURCE, RUNTIME_ENGINE_CONFIG, and BUILT_ARTIFACT_PATH_URL or edited into the signoff row after proof
+  - If runtime-build-proof.json is missing, run os/runtime-gate/build-an-app-live-model.sh from inside the Goblins OS image/container with PROOF_PATH set to the screenshot run dir; do not hand-write the proof
   - Current project completion status: complete only after ISO, verifier, self-test, SBOM, gaming screenshots, install-storage screenshots, runtime engine, and built artifact proof are all present
 EOF2

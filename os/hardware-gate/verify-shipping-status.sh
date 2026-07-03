@@ -972,6 +972,11 @@ Artifact/SBOM build for native $arch without display proof:
 Docker-emulated artifact/SBOM build for non-native local testing:
   GOBLINS_OS_ARCH=$arch RUN_QEMU=0 GOBLINS_OS_ALLOW_EMULATED_DOCKER=1 REPO_ROOT="$ROOT" os/hardware-gate/run-external-gate.sh
 
+Runtime app-build proof for $arch, from inside a Goblins OS image/container joined to a real local model runtime:
+  PROOF_PATH=os/screenshots/hardware-gate/$arch/<date>/$RUNTIME_BUILD_PROOF \\
+  BUILD_RESPONSE_PATH=os/screenshots/hardware-gate/$arch/<date>/build-response.json \\
+  os/runtime-gate/build-an-app-live-model.sh
+
 Final signoff row after the display-backed screenshots and runtime-built app proof exist:
   GOBLINS_OS_ARCH=$arch \\
   SCREENSHOT_RUN_DIR=os/screenshots/hardware-gate/$arch/<date> \\
@@ -1396,6 +1401,7 @@ check "hardware gate requires Text Shortcuts live IBus runtime/render proof in s
 check "hardware gate requires Preview open/render proof in signoff" "rg -q 'preview_open_render_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Preview open/render checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'preview-open-render-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Audio output proof in signoff" "rg -q 'audio_output_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Audio output checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'audio-output-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires runtime app-build proof in signoff" "rg -q 'runtime_build_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'runtime-build-proof.json' os/hardware-gate/runbook.md && rg -q '/proof/runtime-build' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_build_proof' os/hardware-gate/capture-harness/run-capture.sh"
+check "runtime model gate writes verifier runtime proof" "rg -q 'PROOF_PATH' os/runtime-gate/build-an-app-live-model.sh && rg -q 'runtime-build-proof.json' os/runtime-gate/build-an-app-live-model.sh && rg -q '\"route\": \"/v1/apps/builds\"' os/runtime-gate/build-an-app-live-model.sh && rg -q '\"engine_mode\": \"local-model\"' os/runtime-gate/build-an-app-live-model.sh"
 check "hardware gate requires Focus arm roundtrip proof in signoff" "rg -q 'focus_arm_roundtrip_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Focus arm roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Multi-display apply proof in signoff" "rg -q 'multi_display_apply_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Multi-display apply checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'multi-display-apply-proof.json' os/hardware-gate/runbook.md && rg -q 'multi_display_apply_proof' os/hardware-gate/runbook.md"
 check "hardware gate requires App privacy revoke proof in signoff" "rg -q 'app_privacy_revoke_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'App privacy revoke checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'app-privacy-revoke-proof.json' os/hardware-gate/runbook.md"

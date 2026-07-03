@@ -342,6 +342,14 @@ response, and records the returned build id, name, and engine source. A run
 without this proof cannot complete signoff because Build Studio screenshots
 alone do not prove a real app-build turn.
 
+If the display-backed screenshot run already exists but the runtime proof is
+missing, run `os/runtime-gate/build-an-app-live-model.sh` from inside a Goblins
+OS image/container that is joined to a real local model runtime. Set
+`PROOF_PATH=os/screenshots/hardware-gate/<arch>/<date>/runtime-build-proof.json`
+and `BUILD_RESPONSE_PATH=os/screenshots/hardware-gate/<arch>/<date>/build-response.json`.
+Do not hand-write this file; the proof must be produced from the live
+`/v1/apps/builds` response.
+
 Capture exactly at minimum these names:
 1. `01-installer.png` — ISO boot + installer launch
 2. `02-install-network.png` — installer network/progress

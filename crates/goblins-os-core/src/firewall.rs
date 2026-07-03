@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 
+// Starting the templated firewalld unit blocks until the systemd job settles,
+// which legitimately outlives the short probe bound under load.
+const SERVICE_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const FIREWALL_HELPER: &str = "/usr/libexec/goblins-os/goblins-os-firewall";
 const FIREWALL_UNIT_TEMPLATE: &str = "/usr/lib/systemd/system/goblins-os-firewall@.service";
 const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
@@ -170,7 +173,11 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
     }
 
     let unit = firewall_template_instance(enabled);
-    match bounded_command_output(systemctl_command(), &["start", unit], probe_timeout()) {
+    match bounded_command_output(
+        systemctl_command(),
+        &["start", unit],
+        SERVICE_CONTROL_TIMEOUT,
+    ) {
         Ok(output) if output.status.success() => {
             let status = wait_for_firewall_state(enabled);
             if status.available && status.active == enabled {

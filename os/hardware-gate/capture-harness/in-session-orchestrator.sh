@@ -78,6 +78,32 @@ import sys
 print(json.dumps(sys.argv[1]))
 PY
 }
+# GNOME ships org.gnome.Shell.Eval disabled, so window titles cannot be read
+# from the shell. Surfaces that support GOBLINS_OS_CAPTURE_PRESENT_LEDGER write
+# their real mapped title from their own frame clock; this waits on that file.
+wait_for_present_ledger(){
+  local title="$1"
+  local attempts="${2:-40}"
+  local ledger="${GOBLINS_OS_CAPTURE_PRESENT_LEDGER:-}"
+  [ -n "$ledger" ] || return 1
+  for _ in $(seq 1 "$attempts"); do
+    if [ -s "$ledger" ] && python3 - "$ledger" "$title" <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if data.get("title") == sys.argv[2] else 1)
+PY
+    then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
 wait_for_window_title(){
   local title="$1"
   local attempts="${2:-40}"
@@ -507,7 +533,9 @@ audio_output_shot(){
     failure_stage=audio-player-missing
   fi
 
+  rm -f /tmp/gate-audio-sound-present.json
   if GOBLINS_OS_CAPTURE_EXPECT_TITLE="Goblins OS Settings - Sound" \
+    GOBLINS_OS_CAPTURE_PRESENT_LEDGER=/tmp/gate-audio-sound-present.json \
     GOS_SHOT_WINDOW_WAIT_ATTEMPTS="${GOS_AUDIO_SHOT_WINDOW_WAIT_ATTEMPTS:-8}" \
     GOS_SHOT_HELPER_TIMEOUT_SECONDS="${GOS_AUDIO_SHOT_HELPER_TIMEOUT_SECONDS:-1}" \
     GOBLINS_OS_SETTINGS_CORE_WAIT_SECS="${GOS_SETTINGS_CAPTURE_CORE_WAIT_SECS:-8}" \
@@ -1805,7 +1833,7 @@ shot(){
     "GOBLINS_OS_CAPTURE_NON_UNIQUE=1"
     "GOBLINS_OS_RENDER_FULLSCREEN=1"
   )
-  for key in GOBLINS_OS_THEME GOBLINS_OS_INSTALLER_PAGE GOBLINS_OS_INSTALLER_CORE_WAIT_SECS GOBLINS_OS_SETTINGS_CORE_WAIT_SECS GOBLINS_OS_CORE_URL; do
+  for key in GOBLINS_OS_THEME GOBLINS_OS_INSTALLER_PAGE GOBLINS_OS_INSTALLER_CORE_WAIT_SECS GOBLINS_OS_SETTINGS_CORE_WAIT_SECS GOBLINS_OS_CORE_URL GOBLINS_OS_CAPTURE_PRESENT_LEDGER; do
     if [ "${!key+x}" ]; then
       env_args+=("$key=${!key}")
     fi
@@ -1824,10 +1852,14 @@ shot(){
   fi
   switch_control_off
   if [ -n "${GOBLINS_OS_CAPTURE_EXPECT_TITLE:-}" ]; then
-    if wait_for_window_title "$GOBLINS_OS_CAPTURE_EXPECT_TITLE" "${GOS_SHOT_WINDOW_WAIT_ATTEMPTS:-40}"; then
-      echo "GOBLINS_HWGATE_SHOT_WINDOW_READY name=$n title=$GOBLINS_OS_CAPTURE_EXPECT_TITLE"
+    local title_probe=wait_for_window_title
+    if [ -n "${GOBLINS_OS_CAPTURE_PRESENT_LEDGER:-}" ]; then
+      title_probe=wait_for_present_ledger
+    fi
+    if "$title_probe" "$GOBLINS_OS_CAPTURE_EXPECT_TITLE" "${GOS_SHOT_WINDOW_WAIT_ATTEMPTS:-40}"; then
+      echo "GOBLINS_HWGATE_SHOT_WINDOW_READY name=$n title=$GOBLINS_OS_CAPTURE_EXPECT_TITLE probe=$title_probe"
     else
-      echo "GOBLINS_HWGATE_SHOT_WINDOW_MISSING name=$n title=$GOBLINS_OS_CAPTURE_EXPECT_TITLE"
+      echo "GOBLINS_HWGATE_SHOT_WINDOW_MISSING name=$n title=$GOBLINS_OS_CAPTURE_EXPECT_TITLE probe=$title_probe"
       title_ready=false
     fi
   fi

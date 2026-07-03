@@ -6253,6 +6253,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-audio-waits-on-present-ledger",
+            "GOBLINS_OS_CAPTURE_PRESENT_LEDGER",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-writes-capture-present-ledger",
+            "GOBLINS_OS_CAPTURE_PRESENT_LEDGER",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-harness-audio-proof-records-core-restarts",
             "core_restarts=",
         ),

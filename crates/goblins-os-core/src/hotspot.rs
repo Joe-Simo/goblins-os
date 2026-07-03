@@ -8,7 +8,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{http::StatusCode, Json};
@@ -258,8 +258,8 @@ fn start_hotspot(request: SetHotspotRequest) -> (StatusCode, Json<HotspotOutcome
         }
     };
 
-    let _ = nmcli_output(&["connection", "down", "id", HOTSPOT_CONNECTION_NAME]);
-    let _ = nmcli_output(&["connection", "delete", "id", HOTSPOT_CONNECTION_NAME]);
+    let _ = nmcli_control(&["connection", "down", "id", HOTSPOT_CONNECTION_NAME]);
+    let _ = nmcli_control(&["connection", "delete", "id", HOTSPOT_CONNECTION_NAME]);
 
     let add_args = vec![
         "connection".to_string(),
@@ -277,7 +277,7 @@ fn start_hotspot(request: SetHotspotRequest) -> (StatusCode, Json<HotspotOutcome
         "ssid".to_string(),
         ssid.clone(),
     ];
-    if let Err(error) = nmcli_output_owned(&add_args) {
+    if let Err(error) = nmcli_control_owned(&add_args) {
         return hotspot_nmcli_failure(error, &ssid, &password);
     }
 
@@ -299,8 +299,8 @@ fn start_hotspot(request: SetHotspotRequest) -> (StatusCode, Json<HotspotOutcome
         "wifi-sec.psk".to_string(),
         password.clone(),
     ];
-    if let Err(error) = nmcli_output_owned(&modify_args) {
-        let _ = nmcli_output(&["connection", "delete", "id", HOTSPOT_CONNECTION_NAME]);
+    if let Err(error) = nmcli_control_owned(&modify_args) {
+        let _ = nmcli_control(&["connection", "delete", "id", HOTSPOT_CONNECTION_NAME]);
         return hotspot_nmcli_failure(error, &ssid, &password);
     }
 
@@ -312,7 +312,7 @@ fn start_hotspot(request: SetHotspotRequest) -> (StatusCode, Json<HotspotOutcome
         "ifname".to_string(),
         device,
     ];
-    match nmcli_output_owned(&up_args) {
+    match nmcli_control_owned(&up_args) {
         Ok(_) => hotspot_outcome(
             StatusCode::OK,
             true,
@@ -322,15 +322,15 @@ fn start_hotspot(request: SetHotspotRequest) -> (StatusCode, Json<HotspotOutcome
             ),
         ),
         Err(error) => {
-            let _ = nmcli_output(&["connection", "delete", "id", HOTSPOT_CONNECTION_NAME]);
+            let _ = nmcli_control(&["connection", "delete", "id", HOTSPOT_CONNECTION_NAME]);
             hotspot_nmcli_failure(error, &ssid, &password)
         }
     }
 }
 
 fn stop_hotspot() -> (StatusCode, Json<HotspotOutcome>) {
-    let _ = nmcli_output(&["connection", "down", "id", HOTSPOT_CONNECTION_NAME]);
-    match nmcli_output(&["connection", "delete", "id", HOTSPOT_CONNECTION_NAME]) {
+    let _ = nmcli_control(&["connection", "down", "id", HOTSPOT_CONNECTION_NAME]);
+    match nmcli_control(&["connection", "delete", "id", HOTSPOT_CONNECTION_NAME]) {
         Ok(_) | Err(NmcliError::Failed(_)) => hotspot_outcome(
             StatusCode::OK,
             false,
@@ -407,9 +407,19 @@ fn nmcli_output(args: &[&str]) -> Result<String, NmcliError> {
     nmcli_result(output)
 }
 
-fn nmcli_output_owned(args: &[String]) -> Result<String, NmcliError> {
+// Connection writes (add/modify/up/down/delete) wait for NetworkManager to
+// settle the change, which legitimately outlives the short probe bound while
+// an access point activates.
+const NETWORK_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn nmcli_control(args: &[&str]) -> Result<String, NmcliError> {
+    let output = bounded_command_output("nmcli", args, NETWORK_CONTROL_TIMEOUT);
+    nmcli_result(output)
+}
+
+fn nmcli_control_owned(args: &[String]) -> Result<String, NmcliError> {
     let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = bounded_command_output("nmcli", &args, probe_timeout());
+    let output = bounded_command_output("nmcli", &args, NETWORK_CONTROL_TIMEOUT);
     nmcli_result(output)
 }
 

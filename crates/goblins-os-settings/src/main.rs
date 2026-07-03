@@ -4091,6 +4091,26 @@ fn run_native_settings(config: SettingsConfig, state: SettingsState) -> Settings
         if std::env::var_os("GOBLINS_OS_RENDER_FULLSCREEN").is_some() {
             window.maximize();
         }
+        // Capture-only present ledger (off by default, like the render envs):
+        // GNOME disables `org.gnome.Shell.Eval`, so the display-backed proof
+        // cannot ask the shell for window titles. Instead the live window
+        // reports its own presentation from its frame clock — the ledger is
+        // written only after the first real frame ticks, never speculatively.
+        if let Some(ledger_path) = std::env::var_os("GOBLINS_OS_CAPTURE_PRESENT_LEDGER") {
+            let ledger_path = std::path::PathBuf::from(ledger_path);
+            let panel = config.panel;
+            window.add_tick_callback(move |window, _clock| {
+                let payload = serde_json::json!({
+                    "title": window
+                        .title()
+                        .map(|title| title.to_string())
+                        .unwrap_or_default(),
+                    "panel": panel.display_name(),
+                });
+                let _ = std::fs::write(&ledger_path, payload.to_string());
+                gtk::glib::ControlFlow::Break
+            });
+        }
         window.present();
     });
 

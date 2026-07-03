@@ -41,7 +41,13 @@ import { CopyButton } from "@/components/copy-button";
 import { DevicePreview } from "@/components/device-preview";
 import { MotionReveal } from "@/components/motion-reveal";
 import { assetBudget, screenshots } from "@/lib/site-assets";
-import { formatBytes, releaseArtifacts, releaseEvidence } from "@/lib/release-data";
+import {
+  containerImages,
+  formatBytes,
+  releaseArtifacts,
+  releaseEvidence,
+} from "@/lib/release-data";
+import type { ContainerImage } from "@/lib/release-data";
 
 const sourceUrl = "https://github.com/Joe-Simo/goblins-os";
 
@@ -245,8 +251,14 @@ export default function Home() {
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
             <SectionHeading
               title="Downloads"
-              description="Installer media is architecture-specific and must be hosted outside Vercel static assets before public download links appear."
+              description="Installer media is architecture-specific and hosted on GitHub release assets so Vercel only serves the lightweight website."
             />
+            <Button asChild variant="ghost">
+              <a href={releaseEvidence.releaseUrl} rel="noreferrer" target="_blank">
+                Open release
+                <ExternalLinkIcon data-icon="inline-end" />
+              </a>
+            </Button>
             <Button asChild variant="ghost">
               <a href="#verify">
                 Verify checksums
@@ -260,22 +272,32 @@ export default function Home() {
               <DownloadArtifactCard key={artifact.arch} artifact={artifact} />
             ))}
             <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
-              <p>No ISO link is prefetched or routed through Vercel.</p>
-              <p>Evidence source: {releaseEvidence.source}</p>
+              <p>No OS media is prefetched or routed through Vercel.</p>
+              <p>
+                Evidence source:{" "}
+                <a
+                  className="font-medium text-foreground underline-offset-4 hover:underline"
+                  href={releaseEvidence.releaseUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  {releaseEvidence.releaseTag}
+                </a>
+              </p>
             </div>
           </div>
 
           <Card className="hidden md:block" data-gsap="reveal">
             <CardContent className="px-0">
-              <Table>
+              <Table className="min-w-[1120px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Architecture</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>ISO</TableHead>
+                    <TableHead>Media</TableHead>
                     <TableHead>SHA256</TableHead>
                     <TableHead>Size</TableHead>
-                    <TableHead>Updated</TableHead>
+                    <TableHead>Built</TableHead>
                     <TableHead className="text-right">Download</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -293,31 +315,52 @@ export default function Home() {
                       <TableCell className="min-w-[260px] whitespace-normal">
                         <div className="flex flex-col gap-2">
                           <Badge variant="secondary" className="w-fit">
-                            Proof blocked
+                            Download ready
                           </Badge>
                           <ul className="flex flex-col gap-1 text-xs leading-5 text-muted-foreground">
-                            {artifact.blockers.map((blocker) => (
-                              <li key={blocker}>{blocker}</li>
+                            {artifact.caveats.map((caveat) => (
+                              <li key={caveat}>{caveat}</li>
                             ))}
                           </ul>
                         </div>
                       </TableCell>
                       <TableCell className="whitespace-normal">
-                        <code className="text-xs">{artifact.isoName}</code>
+                        <div className="flex flex-col gap-1">
+                          <code className="text-xs">{artifact.isoName}</code>
+                          <code className="text-xs text-muted-foreground">
+                            {artifact.compressedName}
+                          </code>
+                        </div>
                       </TableCell>
                       <TableCell className="max-w-[240px] whitespace-normal">
-                        {artifact.sha256 ? (
-                          <code className="break-all text-xs">{artifact.sha256}</code>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">Not available</span>
-                        )}
+                        <code className="break-all text-xs">{artifact.sha256}</code>
                       </TableCell>
-                      <TableCell>{formatBytes(artifact.sizeBytes)}</TableCell>
-                      <TableCell>{artifact.lastUpdated ?? "Not available"}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1 text-sm">
+                          <span>{formatBytes(artifact.rawSizeBytes)} ISO</span>
+                          <span className="text-xs text-muted-foreground">
+                            {formatBytes(artifact.compressedSizeBytes)} download
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>{new Date(artifact.builtOn).toISOString().slice(0, 10)}</TableCell>
                       <TableCell className="text-right">
-                        <Button disabled variant="outline" size="sm">
-                          Awaiting release host
-                        </Button>
+                        <div className="flex flex-col items-end gap-2">
+                          {artifact.downloadParts.map((part, index) => (
+                            <Button key={part.filename} asChild variant="outline" size="sm">
+                              <a href={part.url} rel="noreferrer" target="_blank">
+                                Part {String(index).padStart(2, "0")}
+                                <ArrowDownToLineIcon data-icon="inline-end" />
+                              </a>
+                            </Button>
+                          ))}
+                          <Button asChild variant="ghost" size="sm">
+                            <a href={artifact.partsSha256Url} rel="noreferrer" target="_blank">
+                              Checksums
+                              <ExternalLinkIcon data-icon="inline-end" />
+                            </a>
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -325,10 +368,50 @@ export default function Home() {
               </Table>
             </CardContent>
             <CardFooter className="flex flex-col items-start gap-3 border-t text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <span>No ISO link is prefetched or routed through Vercel.</span>
-              <span>Evidence source: {releaseEvidence.source}</span>
+              <span>No OS media is prefetched or routed through Vercel.</span>
+              <a
+                className="font-medium text-foreground underline-offset-4 hover:underline"
+                href={releaseEvidence.releaseRunUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Release workflow evidence
+              </a>
             </CardFooter>
           </Card>
+        </div>
+      </section>
+
+      <section id="containers" className="scroll-mt-20 border-b bg-background">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
+          <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
+            <SectionHeading
+              title="Container images"
+              description="Use the bootc container image to inspect, verify, or build from Goblins OS without writing installer media to hardware."
+            />
+            <Button asChild variant="ghost">
+              <a href={releaseEvidence.releaseRunUrl} rel="noreferrer" target="_blank">
+                Image build evidence
+                <ExternalLinkIcon data-icon="inline-end" />
+              </a>
+            </Button>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            {containerImages.map((image) => (
+              <ContainerImageCard key={image.arch} image={image} />
+            ))}
+          </div>
+
+          <Alert data-gsap="reveal">
+            <BoxIcon aria-hidden="true" />
+            <AlertTitle>Containers are not a desktop VM</AlertTitle>
+            <AlertDescription>
+              Docker and Podman can pull the same bootc OS payload used by the
+              ISO builder, run the verifier, and support derived-image workflows.
+              Use the ISO when you need the full graphical desktop installer.
+            </AlertDescription>
+          </Alert>
         </div>
       </section>
 
@@ -373,7 +456,7 @@ export default function Home() {
           <div className="flex flex-col gap-6">
             <SectionHeading
               title="Verify your download"
-              description="Checksum files must live beside the ISO on the public release host before a release is presented as downloadable."
+              description="Download both parts for your architecture, verify the split files, reassemble the compressed ISO, decompress it, and verify the final ISO."
             />
             <Tabs defaultValue="macos-linux" className="w-full">
               <TabsList>
@@ -383,26 +466,40 @@ export default function Home() {
               <TabsContent value="macos-linux">
                 <Card>
                   <CardHeader>
-                    <CardTitle>SHA256 command</CardTitle>
-                    <CardDescription>Run from the directory containing the ISO and `.sha256` file.</CardDescription>
+                    <CardTitle>Reassemble and verify</CardTitle>
+                    <CardDescription>
+                      Replace <code>&lt;arch&gt;</code> with <code>aarch64</code> or{" "}
+                      <code>x86_64</code>. Requires <code>zstd</code>.
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <code className="block rounded-md bg-muted p-4 text-sm">
-                      sha256sum -c &lt;file&gt;.sha256
-                    </code>
+                    <pre className="overflow-x-auto rounded-md bg-muted p-4 text-sm leading-6">
+                      <code>{`shasum -a 256 -c goblins-os-<arch>.iso.zst.parts.sha256
+cat goblins-os-<arch>.iso.zst.part-* > goblins-os-<arch>.iso.zst
+shasum -a 256 -c goblins-os-<arch>.iso.zst.sha256
+zstd -d --long=31 goblins-os-<arch>.iso.zst
+shasum -a 256 -c goblins-os-<arch>.iso.sha256`}</code>
+                    </pre>
                   </CardContent>
                 </Card>
               </TabsContent>
               <TabsContent value="windows">
                 <Card>
                   <CardHeader>
-                    <CardTitle>PowerShell command</CardTitle>
-                    <CardDescription>Compare the output with the published SHA256 value.</CardDescription>
+                    <CardTitle>PowerShell checks</CardTitle>
+                    <CardDescription>
+                      Compare each hash with the published <code>.sha256</code> files before flashing.
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <code className="block rounded-md bg-muted p-4 text-sm">
-                      Get-FileHash &lt;file&gt; -Algorithm SHA256
-                    </code>
+                    <pre className="overflow-x-auto rounded-md bg-muted p-4 text-sm leading-6">
+                      <code>{`Get-FileHash .\\goblins-os-<arch>.iso.zst.part-00 -Algorithm SHA256
+Get-FileHash .\\goblins-os-<arch>.iso.zst.part-01 -Algorithm SHA256
+copy /b goblins-os-<arch>.iso.zst.part-00+goblins-os-<arch>.iso.zst.part-01 goblins-os-<arch>.iso.zst
+Get-FileHash .\\goblins-os-<arch>.iso.zst -Algorithm SHA256
+zstd -d --long=31 .\\goblins-os-<arch>.iso.zst
+Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
+                    </pre>
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -411,21 +508,19 @@ export default function Home() {
 
           <Card className="h-fit" data-gsap="reveal">
             <CardHeader>
-              <CardTitle>Current proof checksum</CardTitle>
+              <CardTitle>Release checksums</CardTitle>
               <CardDescription>
-                x86_64 proof metadata contains a SHA256 value, but the ISO file is not present in this checkout.
+                Final ISO SHA256 values from the published release assets.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              <code className="break-all rounded-md bg-muted p-3 text-xs">
-                {releaseArtifacts[1].sha256}
-              </code>
-              {releaseArtifacts[1].sha256 ? (
-                <CopyButton
-                  value={releaseArtifacts[1].sha256}
-                  label="Copy x86_64 proof checksum"
-                />
-              ) : null}
+              {releaseArtifacts.map((artifact) => (
+                <div key={artifact.arch} className="flex flex-col gap-2 rounded-md bg-muted p-3">
+                  <span className="text-sm font-medium">{artifact.label}</span>
+                  <code className="break-all text-xs">{artifact.sha256}</code>
+                  <CopyButton value={artifact.sha256} label={`Copy ${artifact.arch} checksum`} />
+                </div>
+              ))}
             </CardContent>
           </Card>
         </div>
@@ -495,40 +590,111 @@ function DownloadArtifactCard({ artifact }: { artifact: (typeof releaseArtifacts
             <CardDescription>{artifact.cpu}</CardDescription>
           </div>
           <Badge variant="secondary" className="shrink-0">
-            Proof blocked
+            Download ready
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="flex flex-col gap-5">
+      <CardContent className="flex min-w-0 flex-col gap-5">
         <div className="grid gap-3 text-sm">
           <MetadataRow label="ISO">
             <code className="break-all text-xs">{artifact.isoName}</code>
           </MetadataRow>
-          <MetadataRow label="SHA256">
-            {artifact.sha256 ? (
-              <code className="break-all text-xs">{artifact.sha256}</code>
-            ) : (
-              <span className="text-muted-foreground">Not available</span>
-            )}
+          <MetadataRow label="Download">
+            <code className="break-all text-xs">{artifact.compressedName}</code>
           </MetadataRow>
-          <MetadataRow label="Size">{formatBytes(artifact.sizeBytes)}</MetadataRow>
-          <MetadataRow label="Updated">{artifact.lastUpdated ?? "Not available"}</MetadataRow>
+          <MetadataRow label="SHA256">
+            <code className="break-all text-xs">{artifact.sha256}</code>
+          </MetadataRow>
+          <MetadataRow label="Size">
+            {formatBytes(artifact.rawSizeBytes)} ISO ·{" "}
+            {formatBytes(artifact.compressedSizeBytes)} download
+          </MetadataRow>
+          <MetadataRow label="Built">
+            {new Date(artifact.builtOn).toISOString().slice(0, 10)}
+          </MetadataRow>
         </div>
         <div className="rounded-lg border bg-muted/55 p-3">
-          <p className="mb-2 text-sm font-medium">Blocked by missing release evidence</p>
+          <p className="mb-2 text-sm font-medium">Release notes</p>
           <ul className="flex flex-col gap-1 text-xs leading-5 text-muted-foreground">
-            {artifact.blockers.map((blocker) => (
-              <li key={blocker}>{blocker}</li>
+            {artifact.caveats.map((caveat) => (
+              <li key={caveat}>{caveat}</li>
             ))}
           </ul>
         </div>
+        <div className="grid gap-2">
+          {artifact.downloadParts.map((part, index) => (
+            <Button key={part.filename} asChild variant="outline" className="w-full">
+              <a href={part.url} rel="noreferrer" target="_blank">
+                Download part {String(index).padStart(2, "0")}
+                <ArrowDownToLineIcon data-icon="inline-end" />
+              </a>
+            </Button>
+          ))}
+        </div>
       </CardContent>
-      <CardFooter>
-        <Button disabled variant="outline" className="w-full">
-          Awaiting release host
+      <CardFooter className="grid gap-2 sm:grid-cols-2">
+        <Button asChild variant="ghost" className="w-full">
+          <a href={artifact.partsSha256Url} rel="noreferrer" target="_blank">
+            Part hashes
+            <ExternalLinkIcon data-icon="inline-end" />
+          </a>
+        </Button>
+        <Button asChild variant="ghost" className="w-full">
+          <a href={artifact.manifestUrl} rel="noreferrer" target="_blank">
+            Manifest
+            <ExternalLinkIcon data-icon="inline-end" />
+          </a>
         </Button>
       </CardFooter>
     </Card>
+  );
+}
+
+function ContainerImageCard({ image }: { image: ContainerImage }) {
+  return (
+    <Card data-gsap="reveal">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-2">
+            <CardTitle>{image.label}</CardTitle>
+            <CardDescription>{image.platform}</CardDescription>
+          </div>
+          <Badge variant="secondary" className="shrink-0">
+            {image.status === "public" ? "Public pull" : "Access pending"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-5">
+        <MetadataRow label="Image">
+          <code className="break-all text-xs">{image.image}</code>
+        </MetadataRow>
+        <div className="grid gap-3">
+          <CommandBlock label="Pull" command={image.pullCommand} />
+          <CommandBlock label="Verify" command={image.verifyCommand} />
+        </div>
+        <p className="text-sm leading-6 text-muted-foreground">{image.note}</p>
+      </CardContent>
+      <CardFooter className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <Button asChild variant="ghost">
+          <a href={image.sourceManifestUrl} rel="noreferrer" target="_blank">
+            Source manifest
+            <ExternalLinkIcon data-icon="inline-end" />
+          </a>
+        </Button>
+        <CopyButton value={image.pullCommand} label="Copy pull command" />
+      </CardFooter>
+    </Card>
+  );
+}
+
+function CommandBlock({ label, command }: { label: string; command: string }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-sm font-medium">{label}</span>
+      <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-3 text-xs leading-5">
+        <code>{command}</code>
+      </pre>
+    </div>
   );
 }
 
@@ -566,6 +732,9 @@ function SiteHeader() {
           </a>
           <a className="transition-colors hover:text-foreground" href="#downloads">
             Downloads
+          </a>
+          <a className="transition-colors hover:text-foreground" href="#containers">
+            Containers
           </a>
           <a className="transition-colors hover:text-foreground" href="#install">
             Install

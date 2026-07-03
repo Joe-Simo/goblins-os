@@ -1,6 +1,9 @@
 [Unit]
 Description=Goblins OS session bridge
 CollectMode=inactive-or-failed
+# Every session-scoped Settings write flows through this bridge; a one-off
+# death must never become a session-long outage through restart rate limiting.
+StartLimitIntervalSec=0
 
 PartOf=gnome-session-initialized.target
 After=gnome-session-initialized.target org.gnome.Shell@user.service
@@ -10,5 +13,5 @@ Type=simple
 Environment=GOBLINS_OS_SESSION_BRIDGE_SOCKET=/run/goblins-os-session/session-bridge.sock
 EnvironmentFile=-/etc/goblins-os/environment
 ExecStart=/usr/libexec/goblins-os/goblins-os-session-bridge
-Restart=on-failure
+Restart=always
 RestartSec=1

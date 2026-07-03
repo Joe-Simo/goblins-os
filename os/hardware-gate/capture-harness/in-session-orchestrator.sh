@@ -465,10 +465,24 @@ audio_core_service_diag(){
       | tr -cd 'A-Za-z0-9._-' | cut -c1-48)
     diag="$diag&${key##*:}=${value:-unknown}"
   done
+  state=$(timeout 3 systemctl --user show org.goblins.OS.SessionBridge.service \
+    -p ActiveState,SubState,Result,NRestarts 2>/dev/null || true)
+  for key in ActiveState:bridge_active SubState:bridge_substate \
+    Result:bridge_result NRestarts:bridge_restarts; do
+    value=$(printf '%s\n' "$state" | sed -n "s/^${key%%:*}=//p" | head -n 1 \
+      | tr -cd 'A-Za-z0-9._-' | cut -c1-48)
+    diag="$diag&${key##*:}=${value:-unknown}"
+  done
   value=$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
   diag="$diag&mem_available_mb=${value:-unknown}"
   value=$(df -Pm /var 2>/dev/null | awk 'NR==2 {print $4}')
   diag="$diag&var_avail_mb=${value:-unknown}"
+  if [ -s /tmp/gate-audio-sound-present.json ]; then
+    diag="$diag&present_ledger=$(proof_query_value "$(cat /tmp/gate-audio-sound-present.json 2>/dev/null || true)")"
+  else
+    diag="$diag&present_ledger=absent"
+  fi
+  diag="$diag&shot_log_tail=$(file_tail_query_value /tmp/gate-shot-24-audio-output.log)"
   printf '%s' "$diag"
 }
 audio_output_status_ready(){
@@ -1021,6 +1035,24 @@ text_shortcuts_live_ibus_runtime_render_proof(){
     fi
     sleep 0.25
   done
+  if ! grep -Fxq "focused_field_callback=true" "$render_file" 2>/dev/null \
+    || ! grep -Fxq "rendered_accept_bubble=true" "$render_file" 2>/dev/null; then
+    # One bounded re-focus + retype: under the software renderer the first
+    # focus click can land while the proof window is still presenting, sending
+    # the keystrokes to the shell instead of the entry. The retry still
+    # requires the real live render ledger — it can only turn a lost-focus
+    # race into an honest pass, never fabricate one.
+    dismiss_shell_overview text-shortcuts-live-runtime-render-retry
+    host_focus_text_shortcuts_field runtime-render-focus-retry
+    host_type_text runtime-render-omw-retry "omw" || true
+    for _ in $(seq 1 40); do
+      if grep -Fxq "focused_field_callback=true" "$render_file" 2>/dev/null \
+        && grep -Fxq "rendered_accept_bubble=true" "$render_file" 2>/dev/null; then
+        break
+      fi
+      sleep 0.25
+    done
+  fi
   if ! grep -Fxq "focused_field_callback=true" "$render_file" 2>/dev/null \
     || ! grep -Fxq "rendered_accept_bubble=true" "$render_file" 2>/dev/null; then
     kill "$render_pid" 2>/dev/null || true
@@ -1840,6 +1872,9 @@ shot(){
   done
   echo "GOBLINS_HWGATE_SHOT_START name=$n command=$*"
   switch_control_off
+  # Stray QMP keystrokes from earlier typing proofs can leave the shell
+  # overview/search covering the work area; clear it before every capture.
+  dismiss_shell_overview "shot-$n"
   pkill -x "$base" 2>/dev/null || true
   pkill -f -- "$bin" 2>/dev/null || true
   sleep 0.5

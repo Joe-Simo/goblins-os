@@ -793,6 +793,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "StartLimitIntervalSec=0",
     ));
     checks.push(contains_check(
+        root.join("os/systemd-user/org.goblins.OS.SessionBridge.service"),
+        "session-bridge-service-restart-policy-always",
+        "Restart=always",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-user/org.goblins.OS.SessionBridge.service"),
+        "session-bridge-service-start-limit-disabled",
+        "StartLimitIntervalSec=0",
+    ));
+    checks.push(contains_check(
         root.join("os/bootc/Containerfile"),
         "bootc-creates-session-bridge-group",
         "groupadd --system goblins-session-bridge",

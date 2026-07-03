@@ -8,13 +8,13 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 use crate::policy::{policy_state_for_control, PolicyControlState};
 
 const HOTSPOT_CONNECTION_NAME: &str = "Goblins Hotspot";
@@ -403,22 +403,19 @@ fn nmcli(args: &[&str]) -> Option<String> {
 }
 
 fn nmcli_output(args: &[&str]) -> Result<String, NmcliError> {
-    let output = Command::new("nmcli")
-        .args(args)
-        .stdin(Stdio::null())
-        .output();
+    let output = bounded_command_output("nmcli", args, probe_timeout());
     nmcli_result(output)
 }
 
 fn nmcli_output_owned(args: &[String]) -> Result<String, NmcliError> {
-    let output = Command::new("nmcli")
-        .args(args)
-        .stdin(Stdio::null())
-        .output();
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = bounded_command_output("nmcli", &args, probe_timeout());
     nmcli_result(output)
 }
 
-fn nmcli_result(output: std::io::Result<std::process::Output>) -> Result<String, NmcliError> {
+fn nmcli_result(
+    output: Result<std::process::Output, BoundedCommandError>,
+) -> Result<String, NmcliError> {
     match output {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -426,7 +423,6 @@ fn nmcli_result(output: std::io::Result<std::process::Output>) -> Result<String,
         Ok(output) => Err(NmcliError::Failed(
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(NmcliError::Missing),
         Err(_) => Err(NmcliError::Missing),
     }
 }

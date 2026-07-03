@@ -12,10 +12,13 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    time::Duration,
 };
 
 use axum::{http::StatusCode, Json};
 use serde::Serialize;
+
+use crate::bounded::bounded_output_of;
 
 const DEFAULT_VOICE_DIR: &str = "/var/lib/goblins-os/voice";
 const CAPTURE_SECONDS: &str = "6";
@@ -278,8 +281,10 @@ fn run_converse() -> Result<(String, String), String> {
 
 fn record_audio(path: &Path) -> Result<(), String> {
     // 16 kHz mono PCM is what Whisper expects; a fixed window keeps the loop
-    // simple and predictable without a voice-activity detector.
-    let status = Command::new(capture_bin())
+    // simple and predictable without a voice-activity detector. The bound leaves
+    // the fixed capture window plenty of room while still killing a hung capture.
+    let mut command = Command::new(capture_bin());
+    command
         .args([
             "-q",
             "-d",
@@ -291,9 +296,9 @@ fn record_audio(path: &Path) -> Result<(), String> {
             "-c",
             "1",
         ])
-        .arg(path)
-        .stdin(Stdio::null())
-        .status()
+        .arg(path);
+    let status = bounded_output_of(&mut command, Duration::from_secs(30))
+        .map(|output| output.status)
         .map_err(|_| "Microphone capture could not start.".to_string())?;
     if status.success() {
         Ok(())
@@ -306,15 +311,17 @@ fn transcribe(input: &Path) -> Result<String, String> {
     let model = first_model(&stt_dir(), &["bin", "gguf", "ggml"])
         .ok_or_else(|| "No Whisper model is installed.".to_string())?;
     let prefix = input.with_extension("");
-    let output = Command::new(whisper_bin())
+    // Recognition is genuinely heavy compute, so it gets a wider bound than the
+    // status probes.
+    let mut command = Command::new(whisper_bin());
+    command
         .args(["-m"])
         .arg(&model)
         .args(["-f"])
         .arg(input)
         .args(["-otxt", "-nt", "-of"])
-        .arg(&prefix)
-        .stdin(Stdio::null())
-        .output()
+        .arg(&prefix);
+    let output = bounded_output_of(&mut command, Duration::from_secs(60))
         .map_err(|_| "The Whisper runtime could not start.".to_string())?;
     if !output.status.success() {
         return Err("Speech-to-text failed.".to_string());
@@ -355,11 +362,9 @@ fn synthesize(text: &str, output: &Path) -> Result<(), String> {
 }
 
 fn play_audio(path: &Path) {
-    let _ = Command::new(playback_bin())
-        .arg("-q")
-        .arg(path)
-        .stdin(Stdio::null())
-        .status();
+    let mut command = Command::new(playback_bin());
+    command.arg("-q").arg(path);
+    let _ = bounded_output_of(&mut command, Duration::from_secs(60));
 }
 
 fn binary_present(binary: &str) -> bool {

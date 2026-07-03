@@ -4,14 +4,12 @@
 //! This module only reports live posture from stable OS interfaces. It never
 //! enrolls TPM keys, creates recovery keys, edits crypttab, or starts installs.
 
-use std::{
-    env, fs,
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{env, fs, path::Path};
 
 use axum::Json;
 use serde::Serialize;
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const DEFAULT_MOUNTINFO: &str = "/proc/self/mountinfo";
 const DEFAULT_CRYPTTAB: &str = "/etc/crypttab";
@@ -351,12 +349,7 @@ fn run_systemd_cryptenroll_list(device: &str) -> Option<String> {
 }
 
 fn command_output(command: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(command)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let output = bounded_command_output(command, args, probe_timeout()).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -364,11 +357,8 @@ fn command_output(command: &str, args: &[&str]) -> Option<String> {
 }
 
 fn executable_exists(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+    bounded_command_output(command, &["--version"], probe_timeout())
+        .map(|output| output.status)
         .is_ok_and(|status| status.success())
 }
 

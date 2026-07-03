@@ -7,10 +7,10 @@
 //! conflicts against the owned action table are rejected, and Caps Lock remapping
 //! edits only the reversible `ctrl:*`/`caps:*` token in GNOME's xkb options.
 
-use std::process::{Command, Stdio};
-
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const WM_SCHEMA: &str = "org.goblins.shell.extensions.wm";
 const INPUT_SOURCES_SCHEMA: &str = "org.gnome.desktop.input-sources";
@@ -558,10 +558,7 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
         }
         crate::session_bridge::SessionBridgeResult::Unavailable => {}
     }
-    let output = Command::new("gsettings")
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
+    let output = bounded_command_output("gsettings", args, probe_timeout())
         .map_err(|_| GSettingsError::Missing)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())

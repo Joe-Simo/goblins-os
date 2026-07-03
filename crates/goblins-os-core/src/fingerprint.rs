@@ -6,7 +6,9 @@
 
 use axum::Json;
 use serde::Serialize;
-use std::{env, path::Path, process::Command};
+use std::{env, path::Path};
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const DEFAULT_LOGIN_USER: &str = "goblin";
 const FPRINTD_DBUS_SERVICE: &str =
@@ -97,7 +99,7 @@ fn fprintd_available() -> bool {
 }
 
 fn probe_fprintd_list(target_user: &str) -> FingerprintProbe {
-    match Command::new("fprintd-list").arg(target_user).output() {
+    match bounded_command_output("fprintd-list", &[target_user], probe_timeout()) {
         Ok(output) => parse_fprintd_list_output(
             output.status.success(),
             &String::from_utf8_lossy(&output.stdout),
@@ -207,13 +209,12 @@ fn pam_module_present() -> bool {
 }
 
 fn command_output(binary: &str, args: &[&str]) -> Option<String> {
-    Command::new(binary).args(args).output().ok().map(|output| {
-        format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })
+    let output = bounded_command_output(binary, args, probe_timeout()).ok()?;
+    Some(format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
 }
 
 fn command_present(binary: &str) -> bool {

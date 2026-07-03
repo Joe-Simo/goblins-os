@@ -10,7 +10,6 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use axum::{
@@ -20,6 +19,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const DEFAULT_OFFLINE_PATH: &str = "/var/lib/goblins-os/policy/offline";
 const DESKTOP_PRIVACY_SCHEMA: &str = "org.gnome.desktop.privacy";
@@ -571,7 +572,7 @@ fn usb_protection_detail(enabled: bool) -> &'static str {
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
-    match Command::new("gsettings").args(args).output() {
+    match bounded_command_output("gsettings", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
@@ -579,7 +580,6 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
             &String::from_utf8_lossy(&output.stderr),
             &String::from_utf8_lossy(&output.stdout),
         ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(GSettingsError::Missing),
         Err(_) => Err(GSettingsError::Missing),
     }
 }

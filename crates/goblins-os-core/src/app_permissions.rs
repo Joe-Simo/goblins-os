@@ -13,11 +13,10 @@
 //! - `List(in s table, out as ids)`
 //! - `DeletePermission(in s table, in s id, in s app)`
 
-use std::process::{Command, Stdio};
-
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::bounded::{bounded_command_output, probe_timeout};
 use crate::session_bridge::{self, SessionBridgeResult};
 
 const PERMISSION_STORE_DEST: &str = "org.freedesktop.impl.portal.PermissionStore";
@@ -187,8 +186,9 @@ fn revoke_app_permission_outcome(
 }
 
 fn list_table(table: &str) -> Option<Vec<String>> {
-    let output = Command::new("gdbus")
-        .args([
+    let output = bounded_command_output(
+        "gdbus",
+        &[
             "call",
             "--session",
             "--dest",
@@ -198,10 +198,10 @@ fn list_table(table: &str) -> Option<Vec<String>> {
             "--method",
             PERMISSION_STORE_LIST,
             table,
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+        ],
+        probe_timeout(),
+    )
+    .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -215,8 +215,9 @@ fn delete_permission(table: &str, id: &str, app: &str) -> Result<(), String> {
         SessionBridgeResult::Unavailable => {}
     }
 
-    let output = Command::new("gdbus")
-        .args([
+    let output = bounded_command_output(
+        "gdbus",
+        &[
             "call",
             "--session",
             "--dest",
@@ -228,10 +229,10 @@ fn delete_permission(table: &str, id: &str, app: &str) -> Result<(), String> {
             table,
             id,
             app,
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| "desktop bridge is missing".to_string())?;
+        ],
+        probe_timeout(),
+    )
+    .map_err(|_| "desktop bridge is missing".to_string())?;
     if output.status.success() {
         return Ok(());
     }

@@ -14,12 +14,21 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Mutex, OnceLock},
+    time::Duration,
 };
 
 use axum::Json;
 use serde::Serialize;
 
+use crate::bounded::bounded_output_of;
+
 const DEFAULT_CODEX_HOME: &str = "/var/lib/goblins-os/codex";
+
+/// A `codex exec` turn is a genuine agent run (reads, writes, and builds in its
+/// workspace), so it gets a long explicit bound instead of the status-probe
+/// timeout. The bound still guarantees a wedged Codex child cannot hold a
+/// runtime worker hostage forever.
+const CODEX_EXEC_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Serialize)]
 pub struct CodexStatus {
@@ -119,7 +128,8 @@ pub(crate) fn run_codex(prompt: &str) -> Result<String, &'static str> {
     let last_message = workspace.join("last-message.txt");
     let _ = fs::remove_file(&last_message);
 
-    let status = Command::new(codex_bin())
+    let mut command = Command::new(codex_bin());
+    command
         .env("CODEX_HOME", codex_home())
         .arg("exec")
         .arg("--skip-git-repo-check")
@@ -127,8 +137,9 @@ pub(crate) fn run_codex(prompt: &str) -> Result<String, &'static str> {
         .arg(&last_message)
         .args(exec_flags())
         .arg(prompt)
-        .current_dir(&workspace)
-        .status()
+        .current_dir(&workspace);
+    let status = bounded_output_of(&mut command, CODEX_EXEC_TIMEOUT)
+        .map(|output| output.status)
         .map_err(|_| "Codex could not start")?;
     if !status.success() {
         return Err("Codex did not complete the request");
@@ -159,7 +170,8 @@ pub(crate) fn run_codex_in(workspace: &Path, prompt: &str) -> Result<String, Str
     let last_message = workspace.join(".goblins-codex-last-message.txt");
     let _ = fs::remove_file(&last_message);
 
-    let status = Command::new(codex_bin())
+    let mut command = Command::new(codex_bin());
+    command
         .env("CODEX_HOME", codex_home())
         .arg("exec")
         .arg("--skip-git-repo-check")
@@ -167,8 +179,9 @@ pub(crate) fn run_codex_in(workspace: &Path, prompt: &str) -> Result<String, Str
         .arg(&last_message)
         .args(exec_flags())
         .arg(prompt)
-        .current_dir(workspace)
-        .status()
+        .current_dir(workspace);
+    let status = bounded_output_of(&mut command, CODEX_EXEC_TIMEOUT)
+        .map(|output| output.status)
         .map_err(|_| "Codex could not start.".to_string())?;
     if !status.success() {
         return Err("Codex did not complete the request.".to_string());

@@ -3,11 +3,13 @@
 //! Goblins OS keeps desktop input preferences behind an allowlisted settings
 //! bridge so the Settings GUI cannot mutate arbitrary schemas or keys.
 
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 
 const KEYBOARD_SCHEMA: &str = "org.gnome.desktop.peripherals.keyboard";
 const MOUSE_SCHEMA: &str = "org.gnome.desktop.peripherals.mouse";
@@ -412,7 +414,7 @@ fn input_engine_packages_detail(installed_count: usize, total_count: usize) -> S
 }
 
 fn ibus_engine_probe() -> IbusEngineProbe {
-    match Command::new("ibus").arg("list-engine").output() {
+    match bounded_command_output("ibus", &["list-engine"], probe_timeout()) {
         Ok(output) if output.status.success() => {
             let engine_ids = parse_ibus_list_engine(&String::from_utf8_lossy(&output.stdout));
             IbusEngineProbe {
@@ -440,7 +442,7 @@ fn ibus_engine_probe() -> IbusEngineProbe {
                 }
             },
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => IbusEngineProbe {
+        Err(BoundedCommandError::Missing) => IbusEngineProbe {
             available: false,
             engine_ids: Vec::new(),
             detail: "IBus is not installed in this session, so input sources cannot be added here."
@@ -1337,7 +1339,7 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
         }
         crate::session_bridge::SessionBridgeResult::Unavailable => {}
     }
-    match Command::new("gsettings").args(args).output() {
+    match bounded_command_output("gsettings", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
@@ -1345,7 +1347,6 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
             &String::from_utf8_lossy(&output.stderr),
             &String::from_utf8_lossy(&output.stdout),
         ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(GSettingsError::Missing),
         Err(_) => Err(GSettingsError::Missing),
     }
 }

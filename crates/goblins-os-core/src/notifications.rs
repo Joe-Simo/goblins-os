@@ -4,10 +4,10 @@
 //! bridge with per-application path validation so the Settings GUI cannot
 //! mutate arbitrary schemas or paths.
 
-use std::process::Command;
-
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const NOTIFICATIONS_SCHEMA: &str = "org.gnome.desktop.notifications";
 const NOTIFICATION_APPLICATION_SCHEMA: &str = "org.gnome.desktop.notifications.application";
@@ -707,9 +707,7 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
         }
         crate::session_bridge::SessionBridgeResult::Unavailable => {}
     }
-    let output = Command::new("gsettings")
-        .args(args)
-        .output()
+    let output = bounded_command_output("gsettings", args, probe_timeout())
         .map_err(|_| GSettingsError::Missing)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())

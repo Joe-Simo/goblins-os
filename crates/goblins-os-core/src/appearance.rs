@@ -4,10 +4,10 @@
 //! by GTK apps. Settings talks to this core route instead of writing arbitrary
 //! GSettings keys from the GUI.
 
-use std::process::Command;
-
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
 const COLOR_SCHEME_KEY: &str = "color-scheme";
@@ -532,7 +532,7 @@ fn wallpaper_shading_detail(shading: &str) -> &'static str {
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
-    match Command::new("gsettings").args(args).output() {
+    match bounded_command_output("gsettings", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
@@ -540,7 +540,6 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
             &String::from_utf8_lossy(&output.stderr),
             &String::from_utf8_lossy(&output.stdout),
         ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(GSettingsError::Missing),
         Err(_) => Err(GSettingsError::Missing),
     }
 }

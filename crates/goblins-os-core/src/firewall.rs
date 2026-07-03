@@ -6,15 +6,12 @@
 //! the actual firewalld unit write, and polkit scopes that system-bus request to
 //! the `goblins-os` service user plus the two template instances.
 
-use std::{
-    path::Path,
-    process::{Command, Stdio},
-    thread,
-    time::Duration,
-};
+use std::{path::Path, thread, time::Duration};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 
 const FIREWALL_HELPER: &str = "/usr/libexec/goblins-os/goblins-os-firewall";
 const FIREWALL_UNIT_TEMPLATE: &str = "/usr/lib/systemd/system/goblins-os-firewall@.service";
@@ -72,10 +69,7 @@ fn build_firewall_status() -> FirewallStatus {
     }
     // `firewall-cmd --state` prints "running" and exits 0 when active; otherwise it
     // prints "not running" and exits non-zero. Parse both signals.
-    let output = Command::new("firewall-cmd")
-        .arg("--state")
-        .stdin(Stdio::null())
-        .output();
+    let output = bounded_command_output("firewall-cmd", &["--state"], probe_timeout());
     let firewall_cmd_active = match output {
         Ok(output) => firewall_is_running(
             output.status.success(),
@@ -118,13 +112,13 @@ fn firewall_is_running(command_succeeded: bool, stdout: &str) -> bool {
 }
 
 fn firewalld_unit_active() -> bool {
-    Command::new(systemctl_command())
-        .args(["is-active", "--quiet", "firewalld.service"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+    bounded_command_output(
+        systemctl_command(),
+        &["is-active", "--quiet", "firewalld.service"],
+        probe_timeout(),
+    )
+    .map(|output| output.status)
+    .is_ok_and(|status| status.success())
 }
 
 fn firewall_detail(active: bool, zone: Option<&str>) -> String {
@@ -148,11 +142,7 @@ fn firewall_management_detail(manageable: bool) -> &'static str {
 }
 
 fn firewall_default_zone() -> Option<String> {
-    match Command::new("firewall-cmd")
-        .arg("--get-default-zone")
-        .stdin(Stdio::null())
-        .output()
-    {
+    match bounded_command_output("firewall-cmd", &["--get-default-zone"], probe_timeout()) {
         Ok(output) if output.status.success() => {
             let zone = String::from_utf8_lossy(&output.stdout).trim().to_string();
             (!zone.is_empty()).then_some(zone)
@@ -180,11 +170,7 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
     }
 
     let unit = firewall_template_instance(enabled);
-    match Command::new(systemctl_command())
-        .args(["start", unit])
-        .stdin(Stdio::null())
-        .output()
-    {
+    match bounded_command_output(systemctl_command(), &["start", unit], probe_timeout()) {
         Ok(output) if output.status.success() => {
             let status = wait_for_firewall_state(enabled);
             if status.available && status.active == enabled {
@@ -222,7 +208,7 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
                 &firewall_command_error_detail(&stderr, &stdout),
             )
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => firewall_toggle_response(
+        Err(BoundedCommandError::Missing) => firewall_toggle_response(
             StatusCode::SERVICE_UNAVAILABLE,
             false,
             enabled,

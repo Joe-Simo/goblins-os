@@ -5,14 +5,12 @@
 //! serial checks so Settings never writes arbitrary display state or reports a
 //! successful apply when the compositor gate is absent.
 
-use std::{
-    env, fs,
-    process::{Command, Stdio},
-};
+use std::{env, fs};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 use crate::session_bridge::{
     DisplayConfigLogicalMonitor, DisplayConfigMonitor, SessionBridgeResult,
 };
@@ -378,7 +376,7 @@ fn bridge_logical_monitors(
 }
 
 fn xrandr_outputs() -> Option<Vec<DisplayOutputStatus>> {
-    let output = Command::new("xrandr").arg("--query").output().ok()?;
+    let output = bounded_command_output("xrandr", &["--query"], probe_timeout()).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -387,26 +385,25 @@ fn xrandr_outputs() -> Option<Vec<DisplayOutputStatus>> {
 }
 
 fn gdbus_call(args: &[&str]) -> Result<String, DisplayConfigError> {
-    let output = Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--dest",
-            MUTTER_DISPLAY_CONFIG_DEST,
-            "--object-path",
-            MUTTER_DISPLAY_CONFIG_PATH,
-            "--method",
-        ])
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                DisplayConfigError::Missing
-            } else {
-                DisplayConfigError::Failed("desktop bridge could not be started".to_string())
-            }
-        })?;
+    let mut full_args = vec![
+        "call",
+        "--session",
+        "--dest",
+        MUTTER_DISPLAY_CONFIG_DEST,
+        "--object-path",
+        MUTTER_DISPLAY_CONFIG_PATH,
+        "--method",
+    ];
+    full_args.extend_from_slice(args);
+    let output = match bounded_command_output("gdbus", &full_args, probe_timeout()) {
+        Ok(output) => output,
+        Err(BoundedCommandError::Missing) => return Err(DisplayConfigError::Missing),
+        Err(BoundedCommandError::TimedOut | BoundedCommandError::Failed) => {
+            return Err(DisplayConfigError::Failed(
+                "desktop bridge could not be started".to_string(),
+            ))
+        }
+    };
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).to_string());
     }

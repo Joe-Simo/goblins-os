@@ -15,11 +15,11 @@
 //! `available: false` with a truthful `detail` — it never fabricates a
 //! deployment.
 
-use std::process::Command;
-
 use axum::Json;
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 
 /// The shape returned to clients for `GET /v1/system/image`.
 ///
@@ -127,16 +127,12 @@ fn build_system_image_status() -> SystemImageStatus {
 /// `Unparsable`. The arguments carry no secrets, so this never needs to
 /// scrub output.
 fn run_bootc_status_json() -> Result<Value, BootcStatusError> {
-    let output = match Command::new("bootc")
-        .args(["status", "--format", "json"])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(BootcStatusError::Missing);
-        }
-        Err(_) => return Err(BootcStatusError::Missing),
-    };
+    let output =
+        match bounded_command_output("bootc", &["status", "--format", "json"], probe_timeout()) {
+            Ok(output) => output,
+            Err(BoundedCommandError::Missing) => return Err(BootcStatusError::Missing),
+            Err(_) => return Err(BootcStatusError::Missing),
+        };
 
     if !output.status.success() {
         return Err(BootcStatusError::Failed(

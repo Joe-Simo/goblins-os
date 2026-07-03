@@ -3,9 +3,10 @@ use serde::Serialize;
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
     time::SystemTime,
 };
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const DEFAULT_SYSTEMD_UNIT_DIR: &str = "/usr/lib/systemd/system";
 const DEFAULT_LIBEXEC_DIR: &str = "/usr/libexec/goblins-os";
@@ -242,11 +243,13 @@ fn service_definitions() -> Vec<ServiceDefinition> {
 }
 
 fn systemctl_is_active(service: &str) -> bool {
-    Command::new("systemctl")
-        .args(["is-active", "--quiet", service])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    bounded_command_output(
+        "systemctl",
+        &["is-active", "--quiet", service],
+        probe_timeout(),
+    )
+    .map(|output| output.status.success())
+    .unwrap_or(false)
 }
 
 fn regular_file_exists(path: &Path) -> bool {

@@ -11,6 +11,8 @@ use std::{
     time::SystemTime,
 };
 
+use crate::bounded::{bounded_command_output, probe_timeout};
+
 const DEFAULT_SYS_BLOCK: &str = "/sys/block";
 const DEFAULT_EFI_DIR: &str = "/sys/firmware/efi";
 const SECURE_BOOT_VAR: &str =
@@ -975,7 +977,7 @@ fn scan_boot_entries() -> BootEntryStatus {
         return boot_entry_status(entries, "firmware entries reported by test override");
     }
 
-    let output = Command::new("efibootmgr").output();
+    let output = bounded_command_output("efibootmgr", &[], probe_timeout());
     let Ok(output) = output else {
         return BootEntryStatus {
             available: false,
@@ -1306,12 +1308,8 @@ fn partition_metadata(sys_partition_path: &Path, partition: &str) -> BTreeMap<St
 }
 
 fn blkid_export(partition: &str) -> Option<BTreeMap<String, String>> {
-    let output = Command::new("blkid")
-        .arg("-o")
-        .arg("export")
-        .arg(partition)
-        .output()
-        .ok()?;
+    let output =
+        bounded_command_output("blkid", &["-o", "export", partition], probe_timeout()).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1828,9 +1826,7 @@ fn executable_exists(binary: &str) -> bool {
 }
 
 fn running_as_root() -> bool {
-    Command::new("id")
-        .arg("-u")
-        .output()
+    bounded_command_output("id", &["-u"], probe_timeout())
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .is_some_and(|uid| uid.trim() == "0")

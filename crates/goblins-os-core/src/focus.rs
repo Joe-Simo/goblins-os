@@ -8,10 +8,10 @@
 //! status route, the first arm/disarm/tick write path, and narrow mode/schedule
 //! CRUD. Per-app breakthrough application remains the deliberate follow-up.
 
-use std::process::{Command, Stdio};
-
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const FOCUS_SCHEMA: &str = "org.goblins.os.focus";
 
@@ -913,11 +913,7 @@ fn set_focus_json<T: Serialize>(
 /// Local (timezone-aware) weekday + minute-of-day via `date`, so schedule
 /// evaluation honors the system clock without pulling a time-zone crate.
 fn local_now() -> Option<(u8, u32)> {
-    let output = Command::new("date")
-        .arg("+%u:%H:%M")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+    let output = bounded_command_output("date", &["+%u:%H:%M"], probe_timeout()).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1059,11 +1055,7 @@ fn gsettings(args: &[&str]) -> Result<String, ()> {
         crate::session_bridge::SessionBridgeResult::Failed(_) => return Err(()),
         crate::session_bridge::SessionBridgeResult::Unavailable => {}
     }
-    let output = Command::new("gsettings")
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| ())?;
+    let output = bounded_command_output("gsettings", args, probe_timeout()).map_err(|_| ())?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {

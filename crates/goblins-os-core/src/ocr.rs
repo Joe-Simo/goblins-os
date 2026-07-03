@@ -7,15 +7,16 @@
 //! voice module: a capability probe + a shelled-out runtime, honest-gated when
 //! the binary or language data is absent.
 
-use std::{
-    collections::BTreeMap,
-    env,
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{collections::BTreeMap, env, path::Path, time::Duration};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::{bounded_command_output, probe_timeout};
+
+/// Recognition is genuinely heavy compute (large images, slow hardware), so it
+/// gets a wider bound than the read-only status probes.
+const RECOGNIZE_TIMEOUT: Duration = Duration::from_secs(60);
 
 const DEFAULT_LANG: &str = "eng";
 
@@ -136,11 +137,7 @@ fn ocr_runtime_ready(bin: &str, lang: &str) -> bool {
         return false;
     }
     // The runtime is ready only if every requested language is installed.
-    match Command::new(bin)
-        .args(["--list-langs"])
-        .stdin(Stdio::null())
-        .output()
-    {
+    match bounded_command_output(bin, &["--list-langs"], probe_timeout()) {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let installed: Vec<&str> = stdout.lines().map(str::trim).collect();
@@ -161,26 +158,24 @@ fn run_recognize(image_path: &str, lang: &str) -> Result<(String, Vec<OcrLine>),
     }
 
     // Plain-text pass for the clipboard payload.
-    let text_out = Command::new(&bin)
-        .arg(path)
-        .arg("stdout")
-        .args(["-l", lang, "--psm", "3"])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| "The text-recognition runtime could not start.".to_string())?;
+    let text_out = bounded_command_output(
+        &bin,
+        &[image_path, "stdout", "-l", lang, "--psm", "3"],
+        RECOGNIZE_TIMEOUT,
+    )
+    .map_err(|_| "The text-recognition runtime could not start.".to_string())?;
     if !text_out.status.success() {
         return Err("Text recognition failed on this image.".to_string());
     }
     let text = String::from_utf8_lossy(&text_out.stdout).trim().to_string();
 
     // TSV pass for per-line bounding boxes (the selectable overlay geometry).
-    let tsv_out = Command::new(&bin)
-        .arg(path)
-        .arg("stdout")
-        .args(["-l", lang, "tsv"])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| "The text-recognition runtime could not start.".to_string())?;
+    let tsv_out = bounded_command_output(
+        &bin,
+        &[image_path, "stdout", "-l", lang, "tsv"],
+        RECOGNIZE_TIMEOUT,
+    )
+    .map_err(|_| "The text-recognition runtime could not start.".to_string())?;
     let lines = if tsv_out.status.success() {
         parse_tsv_lines(&String::from_utf8_lossy(&tsv_out.stdout))
     } else {

@@ -3,11 +3,11 @@ use serde::Serialize;
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
     time::SystemTime,
 };
 use sysinfo::{Disks, System};
 
+use crate::bounded::{bounded_command_output, probe_timeout};
 use crate::{accelerators::DetectedGpu, model_manager::RuntimeReport};
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -308,10 +308,8 @@ fn systemctl_user_is_active(service: &str) -> bool {
 }
 
 fn command_success(binary: &str, args: &[&str]) -> bool {
-    Command::new(binary)
-        .args(args)
-        .status()
-        .map(|status| status.success())
+    bounded_command_output(binary, args, probe_timeout())
+        .map(|output| output.status.success())
         .unwrap_or(false)
 }
 

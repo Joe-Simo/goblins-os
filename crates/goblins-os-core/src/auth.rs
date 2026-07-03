@@ -322,6 +322,17 @@ async fn exchange_code_for_tokens(
     .map_err(|_| StatusCode::BAD_GATEWAY)?
 }
 
+// Bounded HTTP agent for every OAuth exchange: an unresponsive token endpoint
+// must not wedge a `spawn_blocking` worker forever, mirroring the bounded
+// download agent in `model_manager`. Timeouts surface as transport errors and
+// take the same branch as any other failed request.
+fn auth_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+}
+
 fn exchange_code_for_tokens_blocking(
     config: &AuthConfig,
     code: &str,
@@ -338,7 +349,8 @@ fn exchange_code_for_tokens_blocking(
         form.push(("client_secret", client_secret.as_str()));
     }
 
-    let response = ureq::post(&config.token_url)
+    let response = auth_agent()
+        .post(&config.token_url)
         .send_form(&form)
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
 
@@ -433,7 +445,8 @@ fn refresh_session_blocking(
         form.push(("client_secret", client_secret.as_str()));
     }
 
-    let response = ureq::post(&config.token_url)
+    let response = auth_agent()
+        .post(&config.token_url)
         .send_form(&form)
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
     if !(200..=299).contains(&response.status()) {
@@ -608,7 +621,8 @@ fn request_device_authorization_blocking(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    let response = ureq::post(url)
+    let response = auth_agent()
+        .post(url)
         .send_form(&[
             ("client_id", config.client_id.as_str()),
             ("scope", config.scope.as_str()),
@@ -632,7 +646,7 @@ fn poll_device_token_blocking(config: &AuthConfig, device_code: &str) -> DeviceP
     // RFC 8628 reports a still-pending authorization as an OAuth *error* response
     // (HTTP 400 with `error: authorization_pending`), which ureq surfaces as
     // `Error::Status`; both the success and error bodies must be classified.
-    match ureq::post(&config.token_url).send_form(&form) {
+    match auth_agent().post(&config.token_url).send_form(&form) {
         Ok(response) => classify_device_poll(response.status(), &into_json_value(response)),
         Err(ureq::Error::Status(status, response)) => {
             classify_device_poll(status, &into_json_value(response))

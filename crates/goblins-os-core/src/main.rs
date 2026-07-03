@@ -8,6 +8,7 @@ mod audio;
 mod auth;
 mod bluetooth;
 mod boot_lock;
+mod bounded;
 mod codex;
 mod displays;
 mod encryption;

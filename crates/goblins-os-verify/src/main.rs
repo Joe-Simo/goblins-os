@@ -6374,6 +6374,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/audio.rs"),
             "core-audio-wpctl-probe-is-bounded",
+            "bounded_command_output",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/bounded.rs"),
+            "core-bounded-command-runner-kills-at-bound",
             "try_wait()",
         ),
         contains_check(
@@ -11365,7 +11370,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/input.rs"),
             "core-input-source-add-probes-ibus",
-            "Command::new(\"ibus\").arg(\"list-engine\")",
+            "bounded_command_output(\"ibus\", &[\"list-engine\"], probe_timeout())",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/input.rs"),

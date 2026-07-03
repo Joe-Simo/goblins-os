@@ -4,16 +4,12 @@
 //! Device selection is constrained to sink/source IDs reported by WirePlumber,
 //! so Settings can choose defaults without accepting arbitrary object names.
 
-use std::{
-    collections::BTreeMap,
-    process::{Command, Output, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, time::Duration};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::bounded::{bounded_command_output, BoundedCommandError};
 use crate::session_bridge::{self, SessionBridgeResult};
 
 const DEFAULT_SINK: &str = "@DEFAULT_AUDIO_SINK@";
@@ -847,12 +843,6 @@ enum GSettingsError {
     Failed(String),
 }
 
-enum BoundedCommandError {
-    Missing,
-    TimedOut,
-    Failed,
-}
-
 fn wpctl(args: &[&str]) -> Result<String, WpctlError> {
     match session_bridge::wpctl(args) {
         SessionBridgeResult::Success(stdout) => return Ok(stdout),
@@ -895,50 +885,6 @@ fn clamp_wpctl_timeout_ms(parsed: Option<u64>) -> u64 {
     parsed
         .unwrap_or(WPCTL_TIMEOUT_MS_DEFAULT)
         .clamp(WPCTL_TIMEOUT_MS_MIN, WPCTL_TIMEOUT_MS_MAX)
-}
-
-fn bounded_command_output(
-    binary: &str,
-    args: &[&str],
-    timeout: Duration,
-) -> Result<Output, BoundedCommandError> {
-    let mut child = Command::new(binary)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                BoundedCommandError::Missing
-            } else {
-                BoundedCommandError::Failed
-            }
-        })?;
-    let started = Instant::now();
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|_| BoundedCommandError::Failed)
-            }
-            Ok(None) => {
-                if started.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait_with_output();
-                    return Err(BoundedCommandError::TimedOut);
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait_with_output();
-                return Err(BoundedCommandError::Failed);
-            }
-        }
-    }
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {

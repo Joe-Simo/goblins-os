@@ -11,10 +11,11 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use serde::Serialize;
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const GIB: u64 = 1024 * 1024 * 1024;
 const DRM_CLASS_DIR: &str = "/sys/class/drm";
@@ -114,10 +115,12 @@ fn driver_name(device: &Path) -> Option<String> {
 }
 
 fn detect_nvidia_vram_gb() -> Option<u64> {
-    let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
-        .output()
-        .ok()?;
+    let output = bounded_command_output(
+        "nvidia-smi",
+        &["--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+        probe_timeout(),
+    )
+    .ok()?;
 
     if !output.status.success() {
         return None;

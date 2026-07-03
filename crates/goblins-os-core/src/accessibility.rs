@@ -4,11 +4,11 @@
 //! bridge so the Settings GUI cannot write arbitrary schemas or silently report
 //! success for unavailable accessibility controls.
 
-use std::process::Command;
-
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
 const A11Y_APPS_SCHEMA: &str = "org.gnome.desktop.a11y.applications";
@@ -884,7 +884,7 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
         }
         crate::session_bridge::SessionBridgeResult::Unavailable => {}
     }
-    match Command::new("gsettings").args(args).output() {
+    match bounded_command_output("gsettings", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
@@ -892,7 +892,6 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
             &String::from_utf8_lossy(&output.stderr),
             &String::from_utf8_lossy(&output.stdout),
         ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(GSettingsError::Missing),
         Err(_) => Err(GSettingsError::Missing),
     }
 }

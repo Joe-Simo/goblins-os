@@ -6,10 +6,10 @@
 //! honest-gated — Goblins OS never shows or exports a secret here; it points at the
 //! real store. Creating/editing secrets stays with the dedicated app.
 
-use std::process::{Command, Stdio};
-
 use axum::Json;
 use serde::Serialize;
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const SECRET_SERVICE_DEST: &str = "org.freedesktop.secrets";
 const SECRET_SERVICE_PATH: &str = "/org/freedesktop/secrets";
@@ -153,8 +153,9 @@ fn secret_collection_status(path: &str) -> KeychainCollectionStatus {
 }
 
 fn secret_property(object_path: &str, interface: &str, property: &str) -> Result<String, String> {
-    let output = Command::new("gdbus")
-        .args([
+    let output = bounded_command_output(
+        "gdbus",
+        &[
             "call",
             "--session",
             "--dest",
@@ -165,10 +166,10 @@ fn secret_property(object_path: &str, interface: &str, property: &str) -> Result
             "org.freedesktop.DBus.Properties.Get",
             interface,
             property,
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| "desktop D-Bus bridge could not be started".to_string())?;
+        ],
+        probe_timeout(),
+    )
+    .map_err(|_| "desktop D-Bus bridge could not be started".to_string())?;
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).to_string());
     }

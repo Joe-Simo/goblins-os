@@ -4,14 +4,12 @@
 //! Snapper `home` config exists. Existing xfs installs therefore report an
 //! honest off-state instead of inventing a timeline.
 
-use std::{
-    env, fs,
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{env, fs, path::Path};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const DEFAULT_MOUNTINFO: &str = "/proc/self/mountinfo";
 const DEFAULT_SNAPPER_CONFIG: &str = "/etc/snapper/configs/home";
@@ -257,16 +255,12 @@ fn degraded_snapshots_status(
 }
 
 fn run_snapper_list() -> Result<String, SnapperListError> {
-    let output = match Command::new("snapper")
-        .args(["-c", SNAPPER_CONFIG_NAME, "list", "--machine-readable"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-    {
+    let output = match bounded_command_output(
+        "snapper",
+        &["-c", SNAPPER_CONFIG_NAME, "list", "--machine-readable"],
+        probe_timeout(),
+    ) {
         Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(SnapperListError::Missing);
-        }
         Err(_) => return Err(SnapperListError::Missing),
     };
 
@@ -399,11 +393,8 @@ fn clean_optional_field(value: Option<&String>) -> Option<String> {
 }
 
 fn executable_exists(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+    bounded_command_output(command, &["--version"], probe_timeout())
+        .map(|output| output.status)
         .is_ok()
 }
 

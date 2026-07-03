@@ -11,13 +11,14 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::Json;
 use goblins_os_textshortcuts_engine::{sanitize_shortcuts, TextShortcut};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::{bounded_command_output, probe_timeout};
 
 const ENGINE_BINARY_PATH: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine";
 const ENGINE_COMPONENT_PATH: &str = "/usr/share/ibus/component/goblins-textshortcuts.xml";
@@ -278,10 +279,8 @@ fn single_quoted_strings(fragment: &str) -> Vec<String> {
 }
 
 fn gsettings_get(schema: &str, key: &str) -> Option<String> {
-    let output = Command::new("gsettings")
-        .args(["get", schema, key])
-        .output()
-        .ok()?;
+    let output =
+        bounded_command_output("gsettings", &["get", schema, key], probe_timeout()).ok()?;
     if !output.status.success() {
         return None;
     }

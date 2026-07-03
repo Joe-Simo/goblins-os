@@ -4,10 +4,10 @@
 //! can be exposed safely. This endpoint only reports Bluetooth support and the
 //! default adapter state from server-side tools.
 
-use std::process::Command;
-
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 
 #[derive(Serialize)]
 pub struct BluetoothStatus {
@@ -116,7 +116,7 @@ struct ParsedBluetoothStatus {
 }
 
 fn bluetoothctl_show() -> Result<String, String> {
-    match Command::new("bluetoothctl").arg("show").output() {
+    match bounded_command_output("bluetoothctl", &["show"], probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
@@ -125,7 +125,7 @@ fn bluetoothctl_show() -> Result<String, String> {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             Err(bluetoothctl_error_detail(&stderr, &stdout))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(
+        Err(BoundedCommandError::Missing) => Err(
             "Bluetooth support is not ready on this device, so Settings cannot inspect adapters."
                 .to_string(),
         ),
@@ -135,7 +135,7 @@ fn bluetoothctl_show() -> Result<String, String> {
 
 fn bluetooth_power_outcome(powered: bool) -> (StatusCode, Json<BluetoothPowerOutcome>) {
     let power = if powered { "on" } else { "off" };
-    match Command::new("bluetoothctl").args(["power", power]).output() {
+    match bounded_command_output("bluetoothctl", &["power", power], probe_timeout()) {
         Ok(output) if output.status.success() => (
             StatusCode::OK,
             Json(BluetoothPowerOutcome {
@@ -156,7 +156,7 @@ fn bluetooth_power_outcome(powered: bool) -> (StatusCode, Json<BluetoothPowerOut
                 }),
             )
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+        Err(BoundedCommandError::Missing) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(BluetoothPowerOutcome {
                 ok: false,
@@ -289,10 +289,8 @@ fn parse_yes_no(value: &str) -> Option<bool> {
 }
 
 fn command_success(binary: &str, args: &[&str]) -> bool {
-    Command::new(binary)
-        .args(args)
-        .status()
-        .map(|status| status.success())
+    bounded_command_output(binary, args, probe_timeout())
+        .map(|output| output.status.success())
         .unwrap_or(false)
 }
 

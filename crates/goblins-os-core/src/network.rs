@@ -9,11 +9,10 @@
 //! nor returned to any client. When NetworkManager is unavailable the surface
 //! degrades calmly rather than failing.
 
-use std::process::Command;
-
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::bounded::{bounded_command_output, probe_timeout};
 use crate::policy::{policy_state_for_control, PolicyControlState};
 
 const PROXY_SCHEMA: &str = "org.gnome.system.proxy";
@@ -118,14 +117,13 @@ enum GSettingsError {
 /// Run `nmcli` with the given arguments, capturing stdout on success. A Wi-Fi
 /// password may be among the args; this function never logs the arguments.
 fn nmcli(args: &[&str]) -> Result<String, NmcliError> {
-    match Command::new("nmcli").args(args).output() {
+    match bounded_command_output("nmcli", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
         Ok(output) => Err(NmcliError::Failed(
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(NmcliError::Missing),
         Err(_) => Err(NmcliError::Missing),
     }
 }
@@ -555,7 +553,7 @@ fn parse_gsettings_strv(value: &str) -> Vec<String> {
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
-    match Command::new("gsettings").args(args).output() {
+    match bounded_command_output("gsettings", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
@@ -563,7 +561,6 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
             &String::from_utf8_lossy(&output.stderr),
             &String::from_utf8_lossy(&output.stdout),
         ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(GSettingsError::Missing),
         Err(_) => Err(GSettingsError::Missing),
     }
 }

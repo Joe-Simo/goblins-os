@@ -10,6 +10,8 @@
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::bounded::{bounded_command_output, probe_timeout};
+
 const SCHEMA: &str = "org.goblins.os.today";
 
 /// The available glance widgets: `(id, name, requires)`. `requires` names the
@@ -143,11 +145,7 @@ fn schema_available(schema: &str) -> bool {
 }
 
 fn gsettings(args: &[&str]) -> Result<String, ()> {
-    let output = std::process::Command::new("gsettings")
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|_| ())?;
+    let output = bounded_command_output("gsettings", args, probe_timeout()).map_err(|_| ())?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {

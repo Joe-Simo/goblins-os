@@ -498,7 +498,7 @@ grep -q "blocked=0" verify.log
 
 # Self-test pass (installed rootfs)
 cat os/bootc/Containerfile os/bootc/selftest.suffix.Dockerfile > /tmp/selftest.Dockerfile
-DOCKER_BUILDKIT=1 $RUNTIME build -f /tmp/selftest.Dockerfile --target selftest -t goblins-os:selftest .
+DOCKER_BUILDKIT=1 $RUNTIME buildx build -f /tmp/selftest.Dockerfile --target selftest --output type=cacheonly .
 ```
 
 For CI confirmation, ensure the three workflow jobs complete successfully:

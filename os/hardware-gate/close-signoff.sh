@@ -163,7 +163,11 @@ run_selftest() {
 
   case "$runtime" in
     docker)
-      DOCKER_BUILDKIT=1 docker build -f "$dockerfile" --target selftest -t goblins-os:selftest .
+      # cacheonly: the concatenated Containerfile has more layers than the
+      # docker daemon can export as an image ("max depth exceeded"); the
+      # self-test's value is that the build FAILS when the selftest stage
+      # fails, exactly as the build workflow runs it.
+      DOCKER_BUILDKIT=1 docker buildx build -f "$dockerfile" --target selftest --output type=cacheonly .
       ;;
     *)
       return 1
@@ -1090,7 +1094,7 @@ cat >> "$OUT" <<EOF2
 - Rootfs verify command: \
   ${CONTAINER_RUNTIME:-docker} run --rm ${IMAGE} /usr/libexec/goblins-os/goblins-os-verify --installed-root /
 - Verify result (blocked=0): ${VERIFY_STATUS}
-- Self-test command: DOCKER_BUILDKIT=1 ${CONTAINER_RUNTIME:-docker} build -f ${SELFTEST_DOCKERFILE} --target selftest -t goblins-os:selftest .
+- Self-test command: DOCKER_BUILDKIT=1 ${CONTAINER_RUNTIME:-docker} buildx build -f ${SELFTEST_DOCKERFILE} --target selftest --output type=cacheonly .
 - Self-test log: $SELFTEST_LOG
 - Self-test result: $SELFTEST_STATUS
 - Rootfs verify output: $VERIFY_LOG

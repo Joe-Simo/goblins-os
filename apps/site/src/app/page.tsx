@@ -109,7 +109,7 @@ export default function Home() {
       <SiteHeader />
 
       <section className="relative overflow-hidden border-b bg-background">
-        <div className="mx-auto grid w-full max-w-7xl grid-cols-1 items-center gap-8 px-4 py-8 sm:px-6 sm:py-10 lg:min-h-[680px] lg:grid-cols-[0.88fr_1.12fr] lg:gap-10 lg:px-8 lg:py-16">
+        <div className="mx-auto grid w-full max-w-7xl grid-cols-1 items-center gap-8 px-4 py-8 sm:px-6 sm:py-10 lg:min-h-[580px] lg:grid-cols-[0.88fr_1.12fr] lg:gap-10 lg:px-8 lg:py-10">
           <div className="flex max-w-2xl flex-col gap-6" data-gsap="reveal">
             <div className="flex flex-col gap-4">
               <Badge variant="secondary" className="w-fit">
@@ -599,7 +599,7 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
                 </a>
               </Button>
             </div>
-            <div className="flex flex-col gap-3 border-t pt-5">
+            <div id="marks" className="scroll-mt-20 flex flex-col gap-3 border-t pt-5">
               <FileCheck2Icon className="text-primary" aria-hidden="true" />
               <h3 className="text-base font-semibold">Marks policy</h3>
               <p className="text-sm leading-6 text-muted-foreground">
@@ -772,7 +772,7 @@ function SiteHeader() {
           </span>
           <span>Goblins OS</span>
         </a>
-        <nav className="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
+        <nav className="hidden items-center gap-5 text-sm text-muted-foreground md:flex">
           <a className="transition-colors hover:text-foreground" href="#features">
             Features
           </a>
@@ -788,11 +788,17 @@ function SiteHeader() {
           <a className="transition-colors hover:text-foreground" href="#install">
             Install
           </a>
+          <a className="transition-colors hover:text-foreground" href="#verify">
+            Verify
+          </a>
           <a className="transition-colors hover:text-foreground" href="#source">
             Source
           </a>
           <a className="transition-colors hover:text-foreground" href="#notice">
             Notice
+          </a>
+          <a className="transition-colors hover:text-foreground" href="#marks">
+            Marks
           </a>
         </nav>
         <Button asChild variant="outline" size="sm">

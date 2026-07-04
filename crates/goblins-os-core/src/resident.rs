@@ -12,6 +12,7 @@ const DEFAULT_RESIDENT_STATE_DIR: &str = "/var/lib/goblins-os/resident";
 const RESIDENT_HEARTBEAT_STALE_SECS: u64 = 90;
 const LOCAL_MODEL_RELAY_ENV: &str = "GOBLINS_OS_LOCAL_MODEL_RELAY";
 const LOCAL_MODEL_RELAY_LEGACY_ENV: &str = "OPENAI_OS_LOCAL_MODEL_RELAY";
+const LOCAL_MODEL_KEEP_ALIVE_ENV: &str = "GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE";
 const RESIDENT_RELAY_ENV: &str = "GOBLINS_OS_RESIDENT_RELAY_URL";
 const RESIDENT_RELAY_LEGACY_ENV: &str = "OPENAI_OS_RESIDENT_RELAY_URL";
 
@@ -308,10 +309,12 @@ fn forward_resident_message(relay: &ResidentRelay, message: &str) -> Result<Stri
             let endpoint = format!("{}/api/generate", url.trim_end_matches('/'));
             let response = agent
                 .post(&endpoint)
-                .send_json(
-                    serde_json::json!({ "model": model, "prompt": message, "stream": false }),
-                )
-                .map_err(|_| "local model runtime request was rejected")?;
+                .send_json(ollama_generate_payload(
+                    model,
+                    message,
+                    local_model_keep_alive().as_deref(),
+                ))
+                .map_err(local_model_runtime_rejection)?;
             let reply: OllamaReply = response
                 .into_json()
                 .map_err(|_| "local model runtime response was not understood")?;
@@ -392,6 +395,51 @@ fn resident_read_timeout_secs() -> u64 {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok()),
     )
+}
+
+fn local_model_keep_alive() -> Option<String> {
+    env::var(LOCAL_MODEL_KEEP_ALIVE_ENV).ok().and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn ollama_generate_payload(
+    model: &str,
+    message: &str,
+    keep_alive: Option<&str>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({ "model": model, "prompt": message, "stream": false });
+    if let Some(keep_alive) = keep_alive {
+        payload["keep_alive"] = serde_json::json!(keep_alive);
+    }
+    payload
+}
+
+fn local_model_runtime_rejection(error: ureq::Error) -> &'static str {
+    match error {
+        ureq::Error::Status(status, response) => {
+            let body = response.into_string().unwrap_or_default();
+            eprintln!(
+                "GOBLINS_OS_LOCAL_MODEL_RUNTIME_REJECTED status={status} body_tail={}",
+                log_tail(&body, 600)
+            );
+        }
+        other => {
+            eprintln!("GOBLINS_OS_LOCAL_MODEL_RUNTIME_REJECTED error={other}");
+        }
+    }
+    "local model runtime request was rejected"
+}
+
+fn log_tail(value: &str, max_chars: usize) -> String {
+    let mut tail: String = value.chars().rev().take(max_chars).collect();
+    tail = tail.chars().rev().collect();
+    tail.replace(['\n', '\r'], " ")
 }
 
 /// Pure timeout policy (testable without touching the process environment): keep the
@@ -657,10 +705,10 @@ fn host_after_scheme(value: &str, scheme: &str) -> Option<String> {
 mod tests {
     use super::{
         build_resident_status, clamp_resident_timeout, classify_relay,
-        extract_openai_response_text, forward_resident_message, local_http_url,
-        resident_process_detail, selected_engine, server_https_url, CapabilityState,
-        OpenAiResponseContent, OpenAiResponseOutput, OpenAiResponsesReply, ResidentProcessState,
-        ResidentRelay,
+        extract_openai_response_text, forward_resident_message, local_http_url, log_tail,
+        ollama_generate_payload, resident_process_detail, selected_engine, server_https_url,
+        CapabilityState, OpenAiResponseContent, OpenAiResponseOutput, OpenAiResponsesReply,
+        ResidentProcessState, ResidentRelay,
     };
 
     #[test]
@@ -812,6 +860,24 @@ mod tests {
         let reply = forward_resident_message(&relay, "ping")
             .expect("native local runtime conversation should round-trip");
         assert_eq!(reply, "Local gpt-oss reply from the runtime.");
+    }
+
+    #[test]
+    fn native_local_runtime_payload_can_keep_model_warm() {
+        let payload = ollama_generate_payload("gpt-oss-20b", "ping", Some("30m"));
+        assert_eq!(payload["model"], "gpt-oss-20b");
+        assert_eq!(payload["prompt"], "ping");
+        assert_eq!(payload["stream"], false);
+        assert_eq!(payload["keep_alive"], "30m");
+
+        let without_keepalive = ollama_generate_payload("gpt-oss-20b", "ping", None);
+        assert!(without_keepalive.get("keep_alive").is_none());
+    }
+
+    #[test]
+    fn runtime_error_log_tail_is_bounded_and_single_line() {
+        assert_eq!(log_tail("a\nb\rc", 10), "a b c");
+        assert_eq!(log_tail("abcdef", 3), "def");
     }
 
     #[test]

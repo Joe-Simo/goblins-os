@@ -7142,13 +7142,33 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-keeps-local-model-warm",
+            "CAPTURE_MODEL_KEEP_ALIVE=\"${GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE:-30m}\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-direct-model-uses-keepalive",
+            "\\\"keep_alive\\\":$CAPTURE_MODEL_KEEP_ALIVE_JSON",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-fixture-core-passes-loopback-runtime-url",
             "GOBLINS_OS_LOCAL_RUNTIME_URL=\"$CAPTURE_MODEL_RUNTIME_URL\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-passes-local-model-keepalive",
+            "GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE=\"$CAPTURE_MODEL_KEEP_ALIVE\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-fixture-core-records-direct-model-diagnostic",
             "/tmp/model-direct.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-records-runtime-log-diagnostics",
+            "core_log_tail=",
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
@@ -9756,6 +9776,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/resident.rs"),
             "resident-keeps-openai-local-model-relay-compat",
             "const LOCAL_MODEL_RELAY_LEGACY_ENV: &str = \"OPENAI_OS_LOCAL_MODEL_RELAY\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "resident-local-model-supports-ollama-keepalive",
+            "GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "resident-local-model-logs-runtime-rejection",
+            "GOBLINS_OS_LOCAL_MODEL_RUNTIME_REJECTED",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/service_catalog.rs"),

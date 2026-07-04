@@ -2075,6 +2075,8 @@ mkdir -p \
 CAPTURE_LOCAL_MODEL="${GOBLINS_OS_LOCAL_MODEL:-llama3.2:1b}"
 CAPTURE_LOCAL_MODEL_JSON="$(json_string_literal "$CAPTURE_LOCAL_MODEL")"
 CAPTURE_MODEL_RUNTIME_URL=http://127.0.0.1:41134
+CAPTURE_MODEL_KEEP_ALIVE="${GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE:-30m}"
+CAPTURE_MODEL_KEEP_ALIVE_JSON="$(json_string_literal "$CAPTURE_MODEL_KEEP_ALIVE")"
 MODEL_LOOPBACK_READY=false
 if start_capture_model_loopback; then
   MODEL_LOOPBACK_READY=true
@@ -2083,7 +2085,7 @@ rm -f /tmp/model-direct.json /tmp/model-direct.err
 if [ "$MODEL_LOOPBACK_READY" = "true" ]; then
   curl -s --max-time 120 -X POST "$CAPTURE_MODEL_RUNTIME_URL/api/generate" \
     -H 'content-type: application/json' \
-    -d "{\"model\":$CAPTURE_LOCAL_MODEL_JSON,\"prompt\":\"Reply with READY.\",\"stream\":false}" \
+    -d "{\"model\":$CAPTURE_LOCAL_MODEL_JSON,\"prompt\":\"Reply with READY.\",\"stream\":false,\"keep_alive\":$CAPTURE_MODEL_KEEP_ALIVE_JSON}" \
     >/tmp/model-direct.json 2>/tmp/model-direct.err || true
 fi
 GOBLINS_OS_CORE_PORT=8788 GOBLINS_OS_SYS_BLOCK_DIR=$FIX GOBLINS_OS_RAM_GB=32 \
@@ -2097,6 +2099,7 @@ GOBLINS_OS_CORE_PORT=8788 GOBLINS_OS_SYS_BLOCK_DIR=$FIX GOBLINS_OS_RAM_GB=32 \
   GOBLINS_OS_RESIDENT_STATE="$FIX_STATE/resident" \
   GOBLINS_OS_VOICE_DIR="$FIX_STATE/voice" \
   GOBLINS_OS_LOCAL_MODEL="$CAPTURE_LOCAL_MODEL" \
+  GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE="$CAPTURE_MODEL_KEEP_ALIVE" \
   GOBLINS_OS_LOCAL_MODEL_RUNTIME=os-managed-runtime GOBLINS_OS_LOCAL_RUNTIME_URL="$CAPTURE_MODEL_RUNTIME_URL" \
   "$B/goblins-os-core" >/tmp/fixcore.log 2>&1 &
 FIXCORE=$!
@@ -2105,6 +2108,7 @@ GOBLINS_OS_CORE_PORT=8788 \
   GOBLINS_OS_MODEL_DIR="$FIX_STATE/models" \
   GOBLINS_OS_MODEL_INSTALL_STATE="$FIX_STATE/models/install-state" \
   GOBLINS_OS_LOCAL_MODEL="$CAPTURE_LOCAL_MODEL" \
+  GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE="$CAPTURE_MODEL_KEEP_ALIVE" \
   GOBLINS_OS_LOCAL_RUNTIME_URL="$CAPTURE_MODEL_RUNTIME_URL" \
   "$B/goblins-os-resident" >/tmp/fixres.log 2>&1 &
 sleep 5
@@ -2193,11 +2197,11 @@ else
   if [ -n "$build_id" ] && [ -n "$build_name" ] && [ -n "$build_source" ]; then
     proof_runtime_build "status=pass&route=/v1/apps/builds&intent=$(proof_query_value "${build_intent:-A focus timer that counts down 25 minutes and rings.}")&engine_mode=local-model&engine_source=$(proof_query_value "$build_source")&built_artifact_id=$(proof_query_value "$build_id")&built_artifact_name=$(proof_query_value "$build_name")&response_bytes=$(file_size_value /tmp/build.json)"
   elif [ "$MODEL_LOOPBACK_READY" != "true" ]; then
-    proof_runtime_build "status=fail&stage=model-loopback&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&model_tags_tail=$(file_tail_query_value /tmp/model-loopback-tags.json)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&error_tail=$(file_tail_query_value /tmp/model-loopback-tags.err)"
+    proof_runtime_build "status=fail&stage=model-loopback&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&model_tags_tail=$(file_tail_query_value /tmp/model-loopback-tags.json)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /tmp/fixcore.log)&resident_log_tail=$(file_tail_query_value /tmp/fixres.log)&error_tail=$(file_tail_query_value /tmp/model-loopback-tags.err)"
   elif [ -s /tmp/app-builder-grant.json ] && [ "$(json_field /tmp/app-builder-grant.json ok)" != "true" ]; then
     proof_runtime_build "status=fail&stage=permission-grant&route=/v1/apps/builds&grant_route=/v1/policy/permissions/grant&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&grant_response_tail=$(file_tail_query_value /tmp/app-builder-grant.json)"
   else
-    proof_runtime_build "status=fail&stage=response&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=$(proof_query_value "${build_source:-missing}")&built_artifact_id=$(proof_query_value "${build_id:-missing}")&built_artifact_name=$(proof_query_value "${build_name:-missing}")&response_bytes=$(file_size_value /tmp/build.json)&response_tail=$(file_tail_query_value /tmp/build.json)&model_direct_tail=$(file_tail_query_value /tmp/model-direct.json)&model_error_tail=$(file_tail_query_value /tmp/model-direct.err)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&error_tail=$(file_tail_query_value /tmp/build.err)"
+    proof_runtime_build "status=fail&stage=response&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=$(proof_query_value "${build_source:-missing}")&built_artifact_id=$(proof_query_value "${build_id:-missing}")&built_artifact_name=$(proof_query_value "${build_name:-missing}")&response_bytes=$(file_size_value /tmp/build.json)&response_tail=$(file_tail_query_value /tmp/build.json)&model_direct_tail=$(file_tail_query_value /tmp/model-direct.json)&model_error_tail=$(file_tail_query_value /tmp/model-direct.err)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /tmp/fixcore.log)&resident_log_tail=$(file_tail_query_value /tmp/fixres.log)&error_tail=$(file_tail_query_value /tmp/build.err)"
   fi
 fi
 GOBLINS_OS_CORE_URL=$FIX_URL shot 15-studio-app-detail "$B/goblins-os-shell" --studio

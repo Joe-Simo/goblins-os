@@ -7111,6 +7111,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "GOBLINS_OS_APPS_DIR=\"$FIX_STATE/apps\"",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-has-local-model-default",
+            "CAPTURE_LOCAL_MODEL=\"${GOBLINS_OS_LOCAL_MODEL:-llama3.2:1b}\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-passes-local-model",
+            "GOBLINS_OS_LOCAL_MODEL=\"$CAPTURE_LOCAL_MODEL\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-serves-the-capture-model",
+            "ollama pull llama3.2:1b",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-replacement",
             "\"candidate_replacement\": \"on my way\"",

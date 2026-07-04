@@ -4909,6 +4909,7 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         file_check(root, "os/release/trademark-posture.toml"),
         file_check(root, "os/release/architectures.toml"),
         file_check(root, "os/release/release-readiness-delta.toml"),
+        file_check(root, "os/release/hydrate-release-artifacts.sh"),
         contains_check(
             root.join("Cargo.toml"),
             "workspace-agpl-license",
@@ -5008,6 +5009,21 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
             root.join("os/release/source-tree-manifest.toml"),
             "source-manifest-classifies-shell-fragment-background",
             "-background",
+        ),
+        contains_check(
+            root.join("os/release/hydrate-release-artifacts.sh"),
+            "release-hydration-default-skips-large-iso",
+            "GOBLINS_OS_DOWNLOAD_ISO",
+        ),
+        contains_check(
+            root.join("os/release/hydrate-release-artifacts.sh"),
+            "release-hydration-verifies-split-iso-parts",
+            "goblins-os-$arch.iso.zst.parts.sha256",
+        ),
+        contains_check(
+            root.join("GO-LIVE.md"),
+            "go-live-documents-release-artifact-hydration",
+            "Published release metadata/SBOM can be hydrated",
         ),
         source_manifest_top_level_coverage_check(root),
         contains_check(

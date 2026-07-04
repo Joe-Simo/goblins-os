@@ -24,6 +24,9 @@ to a stable public release.
 - [x] Release workflow builds architecture-specific media for `x86_64` and
   `aarch64`.
 - [x] Release artifacts include manifests and package evidence.
+- [x] Published release metadata/SBOM can be hydrated into the local gate layout
+  without downloading multi-gigabyte ISO media by default:
+  `os/release/hydrate-release-artifacts.sh`.
 - [x] Source and generated artifact scans check for live secrets.
 - [x] `x86_64` display-backed screenshot/runtime run is complete.
 - [ ] `aarch64` display-backed signoff run is complete.
@@ -50,6 +53,9 @@ podman manifest inspect ghcr.io/joe-simo/goblins-os:aarch64
 ```
 
 - [ ] Complete per-architecture display-backed signoff.
+- [ ] Hydrate release artifacts before local signoff. Use the default
+  metadata/SBOM mode for lightweight review, or set `GOBLINS_OS_DOWNLOAD_ISO=1`
+  only on a machine with enough disk and bandwidth for ISO reconstruction.
 - [ ] Create a stable release tag.
 - [ ] Update website release data from alpha to stable.
 - [ ] Run website checks:

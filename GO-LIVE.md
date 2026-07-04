@@ -32,10 +32,10 @@ to a stable public release.
   verified against the final ISO SHA256.
 - [x] Source and generated artifact scans check for live secrets.
 - [x] `x86_64` display-backed verification-ISO screenshot/runtime run is complete.
-  Current proof: GitHub Actions run `28720230809` captured
+  Current proof: GitHub Actions run `28721788279` captured
   `os/screenshots/hardware-gate/x86_64/2026-07-04` from the verification ISO
   built from `ghcr.io/joe-simo/goblins-os:x86_64`; the proof manifest records
-  ISO SHA256 `e3c8dc30187944ab9f92a4ee7ad8139fe8b3a8e1d970feeb685390acd5f0f4cc`.
+  ISO SHA256 `10d72f00b43d39411cb193154e51b8e8c98f142abcf1246fd87e7f4456046683`.
 - [ ] `x86_64` public release ISO alignment is still pending.
   Current check: the completed x86_64 verification proof SHA differs from the
   hydrated public release ISO SHA
@@ -47,18 +47,17 @@ to a stable public release.
   hydrated public release media because that ISO leaves storage interactive; the
   capture harness now fail-closes before QEMU unless the ISO contains the
   verification-only hardware-gate kickstart.
-- [ ] Latest signoff row records runner, ISO, checksums, self-test, runtime
+- [x] Latest signoff row records runner, ISO, checksums, self-test, runtime
   proof, app-build proof, gaming proof, storage proof, and SBOM evidence.
   Current check: the latest `x86_64` row from GitHub Actions run
-  `28720230809` records runner, ISO, `blocked=0`, self-test, runtime/app-build,
-  gaming, and storage proof, but still records release evidence/SBOM as not
-  checked. The hardware-gate workflow now generates, validates, scans, and
-  commits release evidence for the captured image before close-signoff runs.
+  `28721788279` records runner, ISO, `blocked=0`, self-test, runtime/app-build,
+  gaming, storage proof, release evidence/SBOM, and `Current project completion
+  status: complete`.
 - [ ] `./os/hardware-gate/verify-shipping-status.sh` passes.
   Current local check: with both release ISOs hydrated and checksum-verified,
   the gate still fails because `aarch64` has no complete display-backed
-  screenshot/signoff row, `x86_64` does not yet have public release ISO-aligned
-  proof, and the latest signoff row does not record release evidence/SBOM.
+  screenshot/signoff row and `x86_64` does not yet have public release
+  ISO-aligned proof.
 
 ## Stable Release Promotion
 

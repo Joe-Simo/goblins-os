@@ -385,6 +385,8 @@ RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && grep -Fq 'd /run/goblins-os-session 0770 goblin goblins-session-bridge -' /usr/lib/tmpfiles.d/goblins-os-session.conf \
     && grep -Fq 'Wants=org.goblins.OS.SessionBridge.service' /usr/lib/systemd/user/gnome-session@goblins-os.target.d/goblins-os.session.conf \
     && grep -Fq 'SupplementaryGroups=goblins-session-bridge' /usr/lib/systemd/system/goblins-os-core.service \
+    && grep -Fq 'StateDirectory=goblins-os/models goblins-os/ai goblins-os/policy' /usr/lib/systemd/system/goblins-os-core.service \
+    && grep -Fq 'StateDirectoryMode=0750' /usr/lib/systemd/system/goblins-os-core.service \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.VisualLookup.desktop \

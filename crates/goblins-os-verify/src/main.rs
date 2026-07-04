@@ -7096,6 +7096,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "HONESTY GUARD: missing or failing Preview open/render proof",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-uses-ephemeral-state-root",
+            "FIX_STATE=/tmp/goblins-os-fixture-state",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-uses-ephemeral-policy-state",
+            "GOBLINS_OS_POLICY_STATE=\"$FIX_STATE/policy\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-uses-ephemeral-apps-state",
+            "GOBLINS_OS_APPS_DIR=\"$FIX_STATE/apps\"",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-replacement",
             "\"candidate_replacement\": \"on my way\"",

@@ -1983,7 +1983,7 @@ app_privacy_revoke_proof || true
 preview_open_render_proof || true
 
 # ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
-FIX=/tmp/fix; rm -rf $FIX; mkdir -p $FIX/nvme0n1/queue $FIX/nvme0n1/device
+FIX=/tmp/fix; rm -rf "$FIX"; mkdir -p "$FIX/nvme0n1/queue" "$FIX/nvme0n1/device"
 printf '536870912\n' > $FIX/nvme0n1/size; printf '0\n' > $FIX/nvme0n1/removable
 printf '0\n' > $FIX/nvme0n1/queue/rotational; printf 'Goblins NVMe SSD\n' > $FIX/nvme0n1/device/model
 seedpart(){ mkdir -p $FIX/nvme0n1/nvme0n1p$1; printf '%s\n' "$1" > $FIX/nvme0n1/nvme0n1p$1/partition; printf '%s\n' "$2" > $FIX/nvme0n1/nvme0n1p$1/uevent; }
@@ -1991,11 +1991,35 @@ seedpart 1 $'DEVNAME=nvme0n1p1\nDEVTYPE=partition\nPARTNAME=EFI System Partition
 seedpart 2 $'DEVNAME=nvme0n1p2\nDEVTYPE=partition\nTYPE=ntfs\nPARTLABEL=Windows'
 seedpart 3 $'DEVNAME=nvme0n1p3\nDEVTYPE=partition\nTYPE=apfs\nPARTLABEL=Macintosh HD'
 seedpart 4 $'DEVNAME=nvme0n1p4\nDEVTYPE=partition\nTYPE=crypto_LUKS\nPARTLABEL=Linux encrypted root'
+FIX_STATE=/tmp/goblins-os-fixture-state
+rm -rf "$FIX_STATE"
+mkdir -p \
+  "$FIX_STATE/policy" \
+  "$FIX_STATE/apps" \
+  "$FIX_STATE/ai" \
+  "$FIX_STATE/installer" \
+  "$FIX_STATE/session" \
+  "$FIX_STATE/models/install-state" \
+  "$FIX_STATE/resident" \
+  "$FIX_STATE/voice"
 GOBLINS_OS_CORE_PORT=8788 GOBLINS_OS_SYS_BLOCK_DIR=$FIX GOBLINS_OS_RAM_GB=32 \
+  GOBLINS_OS_POLICY_STATE="$FIX_STATE/policy" \
+  GOBLINS_OS_APPS_DIR="$FIX_STATE/apps" \
+  GOBLINS_OS_AI_STATE="$FIX_STATE/ai" \
+  GOBLINS_OS_INSTALLER_STATE="$FIX_STATE/installer" \
+  GOBLINS_OS_SESSION_STATE="$FIX_STATE/session" \
+  GOBLINS_OS_MODEL_DIR="$FIX_STATE/models" \
+  GOBLINS_OS_MODEL_INSTALL_STATE="$FIX_STATE/models/install-state" \
+  GOBLINS_OS_RESIDENT_STATE="$FIX_STATE/resident" \
+  GOBLINS_OS_VOICE_DIR="$FIX_STATE/voice" \
   GOBLINS_OS_LOCAL_MODEL_RUNTIME=os-managed-runtime GOBLINS_OS_LOCAL_RUNTIME_URL=http://10.0.2.2:11434 \
   "$B/goblins-os-core" >/tmp/fixcore.log 2>&1 &
 FIXCORE=$!
-GOBLINS_OS_CORE_PORT=8788 GOBLINS_OS_LOCAL_RUNTIME_URL=http://10.0.2.2:11434 \
+GOBLINS_OS_CORE_PORT=8788 \
+  GOBLINS_OS_RESIDENT_STATE="$FIX_STATE/resident" \
+  GOBLINS_OS_MODEL_DIR="$FIX_STATE/models" \
+  GOBLINS_OS_MODEL_INSTALL_STATE="$FIX_STATE/models/install-state" \
+  GOBLINS_OS_LOCAL_RUNTIME_URL=http://10.0.2.2:11434 \
   "$B/goblins-os-resident" >/tmp/fixres.log 2>&1 &
 sleep 5
 FIX_URL=http://127.0.0.1:8788

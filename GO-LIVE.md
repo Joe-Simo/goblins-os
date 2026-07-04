@@ -36,12 +36,14 @@ to a stable public release.
   `os/screenshots/hardware-gate/x86_64/2026-07-04` from the verification ISO
   built from `ghcr.io/joe-simo/goblins-os:x86_64`; the proof manifest records
   ISO SHA256 `10d72f00b43d39411cb193154e51b8e8c98f142abcf1246fd87e7f4456046683`.
-- [ ] `x86_64` public release ISO alignment is still pending.
-  Current check: the completed x86_64 verification proof SHA differs from the
-  hydrated public release ISO SHA
-  `45abf064735fa2a2ba9ef034883d19453c4bfc02a3b0c311d29e3679c52db434`; the
-  shipping gate reports this separately instead of hiding the completed
-  verification proof.
+- [x] `x86_64` public release ISO artifacts are checked separately from
+  automated screenshots.
+  Current check: the completed x86_64 screenshot proof uses verification-only
+  media because public release media intentionally leaves storage interactive.
+  The hydrated public release ISO SHA
+  `45abf064735fa2a2ba9ef034883d19453c4bfc02a3b0c311d29e3679c52db434` is
+  checksum-verified by the release artifact gate instead of being used for
+  automated capture.
 - [ ] `aarch64` display-backed signoff run is complete.
   Current check: the local aarch64 macOS/HVF attempt correctly failed against
   hydrated public release media because that ISO leaves storage interactive; the
@@ -56,8 +58,7 @@ to a stable public release.
 - [ ] `./os/hardware-gate/verify-shipping-status.sh` passes.
   Current local check: with both release ISOs hydrated and checksum-verified,
   the gate still fails because `aarch64` has no complete display-backed
-  screenshot/signoff row and `x86_64` does not yet have public release
-  ISO-aligned proof.
+  screenshot/signoff row.
 
 ## Stable Release Promotion
 

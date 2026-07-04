@@ -27,8 +27,15 @@ to a stable public release.
 - [x] Published release metadata/SBOM can be hydrated into the local gate layout
   without downloading multi-gigabyte ISO media by default:
   `os/release/hydrate-release-artifacts.sh`.
+- [x] Full ISO release media can be hydrated from split GitHub release assets
+  with `GOBLINS_OS_DOWNLOAD_ISO=1`, verified part-by-part, decompressed, and
+  verified against the final ISO SHA256.
 - [x] Source and generated artifact scans check for live secrets.
-- [x] `x86_64` display-backed screenshot/runtime run is complete.
+- [ ] `x86_64` display-backed screenshot/runtime run matches the current
+  hydrated release ISO.
+  Current check: `os/screenshots/hardware-gate/x86_64/2026-07-03` contains the
+  expected screenshot and proof files, but its `proof-manifest.json` records a
+  different ISO SHA256 than the current hydrated `goblins-os-x86_64.iso`.
 - [ ] `aarch64` display-backed signoff run is complete.
 - [ ] Latest signoff row records runner, ISO, checksums, self-test, runtime
   proof, app-build proof, gaming proof, storage proof, and SBOM evidence.
@@ -37,9 +44,10 @@ to a stable public release.
   gaming, and storage proof, but still records release evidence/SBOM as not
   checked.
 - [ ] `./os/hardware-gate/verify-shipping-status.sh` passes.
-  Current local check: fails because `os/iso/output/<arch>/...` release media is
-  not present in this checkout, the `aarch64` display-backed proof is still
-  missing, and the latest signoff row does not record release evidence/SBOM.
+  Current local check: with both release ISOs hydrated and checksum-verified,
+  the gate still fails because neither architecture has a complete
+  current-ISO display-backed screenshot/signoff row, and the latest signoff row
+  does not record release evidence/SBOM.
 
 ## Stable Release Promotion
 

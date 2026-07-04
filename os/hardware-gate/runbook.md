@@ -39,8 +39,8 @@ cd "$REPO_ROOT"
 ### aarch64 macOS/HVF capture route
 
 The Linux external gate remains the artifact/SBOM build authority. For the
-display-backed aarch64 screenshot run, an Apple-Silicon host can boot an already
-materialized shippable ISO with the capture harness:
+display-backed aarch64 screenshot run, an Apple-Silicon host can boot an
+already materialized shippable ISO with the capture harness:
 
 ```sh
 RUN_DATE=<YYYY-MM-DD> \

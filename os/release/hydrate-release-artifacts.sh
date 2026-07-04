@@ -43,6 +43,19 @@ sha256_check() {
   fi
 }
 
+normalize_sha256_file_paths() {
+  local path="$1"
+  local tmp_path="$path.tmp"
+  local sum file
+
+  while read -r sum file; do
+    [ -n "${sum:-}" ] || continue
+    file="${file#\*}"
+    printf '%s  %s\n' "$sum" "$(basename "$file")"
+  done <"$path" >"$tmp_path"
+  mv "$tmp_path" "$path"
+}
+
 download_asset() {
   local asset="$1"
   local dest="$2"
@@ -67,6 +80,7 @@ hydrate_metadata() {
   local sbom_dir="os/signoff-proofs/sbom/$arch"
 
   download_asset "goblins-os-$arch.iso.sha256" "$boot_dir/goblins-os-$arch.iso.sha256"
+  normalize_sha256_file_paths "$boot_dir/goblins-os-$arch.iso.sha256"
   download_asset "manifest-goblins-os-$arch.json" "$iso_dir/manifest-goblins-os-$arch.json"
   download_asset "manifest-anaconda-iso-$arch.json" "$iso_dir/manifest-anaconda-iso.json"
 
@@ -88,6 +102,8 @@ hydrate_iso() {
   require_command zstd
   download_asset "$parts_sha" "$boot_dir/$parts_sha"
   download_asset "$zst_sha" "$boot_dir/$zst_sha"
+  normalize_sha256_file_paths "$boot_dir/$parts_sha"
+  normalize_sha256_file_paths "$boot_dir/$zst_sha"
 
   while read -r _ part_ref; do
     [ -n "${part_ref:-}" ] || continue
@@ -104,7 +120,7 @@ hydrate_iso() {
   done <"$boot_dir/$parts_sha"
 
   sha256_check "$boot_dir" "$zst_sha"
-  zstd -d -f -o "$boot_dir/$iso_name" "$boot_dir/$zst_name"
+  zstd -d --long=31 -f -o "$boot_dir/$iso_name" "$boot_dir/$zst_name"
   sha256_check "$boot_dir" "$iso_name.sha256"
 }
 

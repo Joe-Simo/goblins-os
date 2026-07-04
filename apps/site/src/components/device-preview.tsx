@@ -26,8 +26,8 @@ export function DevicePreview() {
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const mobile = window.matchMedia("(max-width: 767px)").matches;
-      setEnabled(!reduced && !mobile);
+      const narrowViewport = window.matchMedia("(max-width: 767px)").matches;
+      setEnabled(!reduced && !narrowViewport);
     });
 
     return () => window.cancelAnimationFrame(frame);

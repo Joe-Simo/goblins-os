@@ -5021,9 +5021,29 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
             "goblins-os-$arch.iso.zst.parts.sha256",
         ),
         contains_check(
+            root.join("os/release/hydrate-release-artifacts.sh"),
+            "release-hydration-normalizes-runner-checksum-paths",
+            "normalize_sha256_file_paths",
+        ),
+        contains_check(
+            root.join("os/release/hydrate-release-artifacts.sh"),
+            "release-hydration-decodes-long-window-zstd",
+            "zstd -d --long=31 -f",
+        ),
+        contains_check(
             root.join("GO-LIVE.md"),
             "go-live-documents-release-artifact-hydration",
             "Published release metadata/SBOM can be hydrated",
+        ),
+        contains_check(
+            root.join("GO-LIVE.md"),
+            "go-live-documents-full-iso-hydration",
+            "Full ISO release media can be hydrated from split GitHub release assets",
+        ),
+        contains_check(
+            root.join("GO-LIVE.md"),
+            "go-live-requires-current-iso-display-proof",
+            "`x86_64` display-backed screenshot/runtime run matches the current",
         ),
         source_manifest_top_level_coverage_check(root),
         contains_check(

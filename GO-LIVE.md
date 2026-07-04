@@ -25,11 +25,18 @@ to a stable public release.
   `aarch64`.
 - [x] Release artifacts include manifests and package evidence.
 - [x] Source and generated artifact scans check for live secrets.
-- [ ] `x86_64` display-backed signoff run is complete.
+- [x] `x86_64` display-backed screenshot/runtime run is complete.
 - [ ] `aarch64` display-backed signoff run is complete.
 - [ ] Latest signoff row records runner, ISO, checksums, self-test, runtime
   proof, app-build proof, gaming proof, storage proof, and SBOM evidence.
+  Current check: the latest `x86_64` row from GitHub Actions run
+  `28710819638` records runner, ISO, `blocked=0`, self-test, runtime/app-build,
+  gaming, and storage proof, but still records release evidence/SBOM as not
+  checked.
 - [ ] `./os/hardware-gate/verify-shipping-status.sh` passes.
+  Current local check: fails because `os/iso/output/<arch>/...` release media is
+  not present in this checkout, the `aarch64` display-backed proof is still
+  missing, and the latest signoff row does not record release evidence/SBOM.
 
 ## Stable Release Promotion
 

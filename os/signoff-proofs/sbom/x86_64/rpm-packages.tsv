@@ -1,0 +1,1321 @@
+name	version_release	arch	license
+7zip	26.02-1.fc44	x86_64	LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-Fedora-Public-Domain
+ModemManager-glib	1.24.2-3.fc44	x86_64	LGPL-2.1-or-later
+NetworkManager	1.56.1-2.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+NetworkManager-cloud-setup	1.56.1-2.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+NetworkManager-libnm	1.56.1-2.fc44	x86_64	LGPL-2.1-or-later
+NetworkManager-team	1.56.1-2.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+NetworkManager-tui	1.56.1-2.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+NetworkManager-wifi	1.56.1-2.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+PackageKit-glib	1.3.6-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later AND FSFAP
+SDL3	3.4.12-1.fc44	x86_64	Zlib AND MIT AND Apache-2.0 AND (Apache-2.0 OR MIT)
+WALinuxAgent-udev	2.15.0.1-3.fc44	noarch	Apache-2.0
+aardvark-dns	1.17.1-1.fc44	x86_64	Apache-2.0 AND MIT AND Zlib
+abattis-cantarell-vf-fonts	0.301-17.fc44	noarch	OFL-1.1
+abseil-cpp	20260107.1-1.fc44	x86_64	Apache-2.0 AND LicenseRef-Fedora-Public-Domain
+accountsservice	23.13.9-16.fc44	x86_64	GPL-3.0-or-later
+accountsservice-libs	23.13.9-16.fc44	x86_64	GPL-3.0-or-later
+acl	2.3.2-6.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+adcli	0.9.3.1-5.fc44	x86_64	LGPL-2.1-or-later
+adcli-selinux	0.9.3.1-5.fc44	noarch	LGPL-2.1-or-later
+adobe-mappings-cmap	20231115-5.fc44	noarch	BSD-3-Clause
+adobe-mappings-cmap-deprecated	20231115-5.fc44	noarch	BSD-3-Clause
+adobe-mappings-pdf	20190401-12.fc44	noarch	BSD-3-Clause
+adwaita-cursor-theme	50.0-1.fc44	noarch	LGPL-3.0-only OR CC-BY-SA-3.0
+adwaita-icon-theme	50.0-1.fc44	noarch	LGPL-3.0-only OR CC-BY-SA-3.0
+adwaita-icon-theme-legacy	46.2-7.fc44	noarch	LGPL-3.0-only OR CC-BY-SA-3.0
+adwaita-mono-fonts	50.0-1.fc44	noarch	OFL-1.1
+adwaita-sans-fonts	50.0-1.fc44	noarch	OFL-1.1
+alsa-lib	1.2.16.1-1.fc44	x86_64	LGPL-2.1-or-later
+alsa-ucm	1.2.16.1-1.fc44	noarch	BSD-3-Clause
+alsa-utils	1.2.16-1.fc44	x86_64	GPL-2.0-or-later
+alternatives	1.33-5.fc44	x86_64	GPL-2.0-only
+amd-gpu-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+amd-ucode-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+anaconda	44.30-2.fc44	x86_64	GPL-2.0-or-later
+anaconda-core	44.30-2.fc44	x86_64	GPL-2.0-or-later AND MIT
+anaconda-gui	44.30-2.fc44	x86_64	GPL-2.0-or-later
+anaconda-install-env-deps	44.30-2.fc44	x86_64	GPL-2.0-or-later
+anaconda-install-img-deps	44.30-2.fc44	x86_64	GPL-2.0-or-later
+anaconda-live	44.30-2.fc44	noarch	GPL-2.0-or-later
+anaconda-tui	44.30-2.fc44	x86_64	GPL-2.0-or-later
+anaconda-webui	68-1.fc44	noarch	LGPL-2.1-or-later AND MIT
+anaconda-widgets	44.30-2.fc44	x86_64	GPL-2.0-or-later
+anthy-unicode	1.0.0.20260213-1.fc44	x86_64	LGPL-2.0-or-later AND GPL-2.0-or-later AND LicenseRef-Fedora-Public-Domain
+appstream	1.1.0-3.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+appstream-data	44-4.fc44	noarch	CC0-1.0 AND CC-BY-1.0 AND CC-BY-SA-1.0 AND GFDL-1.1-or-later
+aribb24	1.0.3^20160216git5e9be27-5.fc44	x86_64	LGPL-3.0-only
+at-spi2-atk	2.60.5-1.fc44	x86_64	LGPL-2.1-or-later
+at-spi2-core	2.60.5-1.fc44	x86_64	LGPL-2.1-or-later
+atheros-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+atk	2.60.5-1.fc44	x86_64	LGPL-2.1-or-later
+attr	2.5.2-8.fc44	x86_64	GPL-2.0-or-later
+audit-libs	4.1.4-1.fc44	x86_64	LGPL-2.0-or-later
+augeas-libs	1.14.2-0.11.20260408gitada6219.fc44	x86_64	LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND (GPL-3.0-or-later WITH Bison-exception-2.2) AND Kazlib AND GPL-2.0-or-later AND BSD-2-Clause AND LicenseRef-Fedora-Public-Domain
+authselect	1.7.1-1.fc44	x86_64	GPL-3.0-or-later
+authselect-libs	1.7.1-1.fc44	x86_64	GPL-3.0-or-later
+avahi	0.9~rc2-8.fc44	x86_64	LGPL-2.1-or-later AND LGPL-2.0-or-later AND BSD-2-Clause-Views AND MIT
+avahi-glib	0.9~rc2-8.fc44	x86_64	LGPL-2.1-or-later AND LGPL-2.0-or-later AND BSD-2-Clause-Views AND MIT
+avahi-libs	0.9~rc2-8.fc44	x86_64	LGPL-2.1-or-later AND LGPL-2.0-or-later AND BSD-2-Clause-Views AND MIT
+baobab	50.0-1.fc44	x86_64	GPL-2.0-or-later AND CC-BY-SA-3.0 AND CC0-1.0
+bash	5.3.9-3.fc44	x86_64	GPL-3.0-or-later
+bash-completion	2.17-2.fc44	noarch	GPL-2.0-or-later
+bind-libs	9.18.50-1.fc44	x86_64	MPL-2.0 AND ISC AND MIT AND BSD-3-Clause AND BSD-2-Clause
+bind-utils	9.18.50-1.fc44	x86_64	MPL-2.0 AND ISC AND MIT AND BSD-3-Clause AND BSD-2-Clause
+binutils	2.46-3.fc44	x86_64	GPL-3.0-or-later AND (GPL-3.0-or-later WITH Bison-exception-2.2) AND (LGPL-2.0-or-later WITH GCC-exception-2.0) AND BSD-3-Clause AND GFDL-1.3-or-later AND GPL-2.0-or-later AND LGPL-2.1-or-later AND LGPL-2.0-or-later
+blivet-data	3.13.2-2.fc44	noarch	LGPL-2.1-or-later
+blivet-gui-runtime	2.6.0-12.fc44	noarch	GPL-2.0-or-later
+bluez	5.86-5.fc44	x86_64	GPL-2.0-or-later
+bluez-libs	5.86-5.fc44	x86_64	GPL-2.0-or-later
+bluez-obexd	5.86-5.fc44	x86_64	GPL-2.0-or-later
+bolt	0.9.11-1.fc44	x86_64	LGPL-2.1-or-later
+boost-atomic	1.90.0-7.fc44	x86_64	BSL-1.0 AND MIT AND Python-2.0.1
+boost-chrono	1.90.0-7.fc44	x86_64	BSL-1.0 AND (MIT OR NCSA)
+boost-container	1.90.0-7.fc44	x86_64	BSL-1.0 AND MIT AND Python-2.0.1
+boost-date-time	1.90.0-7.fc44	x86_64	BSL-1.0 AND MIT AND Python-2.0.1
+boost-regex	1.90.0-7.fc44	x86_64	BSL-1.0 AND MIT AND Python-2.0.1
+boost-thread	1.90.0-7.fc44	x86_64	BSL-1.0 AND (MIT OR NCSA)
+bootc	1.15.2-1.fc44	x86_64	Apache-2.0 AND BSD-3-Clause AND MIT AND (Apache-2.0 OR BSL-1.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (Unlicense OR MIT)
+bootupd	0.2.35-1.fc44	x86_64	Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND BSD-3-Clause AND MIT AND (Apache-2.0 OR BSL-1.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (Unlicense OR MIT)
+brcmfmac-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+brightnessctl	0.5.1-16.fc44	x86_64	MIT
+brlapi	0.8.7-8.fc44	x86_64	LGPL-2.0-or-later AND LGPL-2.1-or-later AND GPL-2.0-or-later
+brltty	6.8-8.fc44	x86_64	LGPL-2.0-or-later AND LGPL-2.1-or-later AND GPL-2.0-or-later
+btrfs-progs	7.0-1.fc44	x86_64	GPL-2.0-only
+bubblewrap	0.11.0-4.fc44	x86_64	LGPL-2.0-or-later
+bzip2	1.0.8-23.fc44	x86_64	BSD-4-Clause
+bzip2-libs	1.0.8-23.fc44	x86_64	BSD-4-Clause
+c-ares	1.34.6-3.fc44	x86_64	MIT
+ca-certificates	2025.2.80_v9.0.304-7.fc44	noarch	MIT AND GPL-2.0-or-later
+cairo	1.18.4-6.fc44	x86_64	LGPL-2.1-only OR MPL-1.1
+cairo-gobject	1.18.4-6.fc44	x86_64	LGPL-2.1-only OR MPL-1.1
+cairomm1.16	1.18.0-16.fc44	x86_64	LGPL-2.0-or-later
+catatonit	0.2.1-5.fc44	x86_64	GPL-3.0-or-later
+cdparanoia-libs	10.2-50.fc44	x86_64	LicenseRef-Callaway-LGPLv2
+checkpolicy	3.10-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+chrony	4.8-5.fc44	x86_64	GPL-2.0-only
+chunkah	0.6.0-1.fc44	x86_64	Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND LGPL-2.1-or-later AND MIT AND Zlib AND ((MIT OR Apache-2.0) AND Unicode-3.0) AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (MIT OR Apache-2.0 OR LGPL-2.1-or-later) AND (MIT OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT) AND (Zlib OR Apache-2.0 OR MIT)
+cirrus-audio-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+cjson	1.7.18-5.fc44	x86_64	MIT
+clevis	21-14.fc44	x86_64	GPL-3.0-or-later
+clevis-dracut	21-14.fc44	x86_64	GPL-3.0-or-later
+clevis-luks	21-14.fc44	x86_64	GPL-3.0-or-later
+clevis-pin-tpm2	0.5.4-1.fc44	x86_64	MIT AND Apache-2.0 AND EUPL-1.2 AND Unicode-DFS-2016 AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR BSL-1.0) AND (Apache-2.0 OR MIT) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT)
+clevis-systemd	21-14.fc44	x86_64	GPL-3.0-or-later
+cloud-utils-growpart	0.33-13.fc44	noarch	GPL-3.0-only
+cockpit-bridge	364-1.fc44	noarch	LGPL-2.1-or-later AND GPL-3.0-or-later AND MIT AND CC-BY-SA-3.0 AND BSD-3-Clause
+cockpit-networkmanager	364-1.fc44	noarch	LGPL-2.1-or-later AND GPL-3.0-or-later AND MIT AND CC-BY-SA-3.0 AND BSD-3-Clause
+cockpit-storaged	364-1.fc44	noarch	LGPL-2.1-or-later AND GPL-3.0-or-later AND MIT AND CC-BY-SA-3.0 AND BSD-3-Clause
+cockpit-system	364-1.fc44	noarch	LGPL-2.1-or-later AND GPL-3.0-or-later AND MIT AND CC-BY-SA-3.0 AND BSD-3-Clause
+cockpit-ws	364-1.fc44	x86_64	LGPL-2.1-or-later AND GPL-3.0-or-later AND MIT AND CC-BY-SA-3.0 AND BSD-3-Clause
+cockpit-ws-selinux	364-1.fc44	x86_64	LGPL-2.1-or-later AND GPL-3.0-or-later AND MIT AND CC-BY-SA-3.0 AND BSD-3-Clause
+codec2	1.2.0-9.fc44	x86_64	LGPL-2.1-only
+color-filesystem	1-38.fc44	noarch	LicenseRef-Not-Copyrightable
+colord	1.4.8-4.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+colord-gtk4	0.3.1-6.fc44	x86_64	LGPL-2.1-or-later
+colord-libs	1.4.8-4.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+composefs	1.0.8-5.fc44	x86_64	LGPL-2.0-or-later AND Apache-2.0
+composefs-libs	1.0.8-5.fc44	x86_64	LGPL-2.1-or-later AND (GPL-2.0-only OR Apache-2.0)
+conmon	2.2.1-2.fc44	x86_64	Apache-2.0
+console-login-helper-messages	0.21.3-13.fc44	noarch	BSD-3-Clause
+console-login-helper-messages-issuegen	0.21.3-13.fc44	noarch	BSD-3-Clause
+console-login-helper-messages-profile	0.21.3-13.fc44	noarch	BSD-3-Clause
+container-selinux	2.249.0-1.fc44	noarch	GPL-2.0-only
+containers-common	0.67.0-1.fc44	noarch	Apache-2.0
+containers-common-extra	0.67.0-1.fc44	noarch	Apache-2.0
+coreutils	9.10-4.fc44	x86_64	GPL-3.0-or-later AND GFDL-1.3-no-invariants-or-later AND LGPL-2.1-or-later AND LGPL-3.0-or-later
+coreutils-common	9.10-4.fc44	x86_64	GPL-3.0-or-later AND GFDL-1.3-no-invariants-or-later AND LGPL-2.1-or-later AND LGPL-3.0-or-later
+cpio	2.15-9.fc44	x86_64	GPL-3.0-or-later
+cracklib	2.10.3-1.fc44	x86_64	LGPL-2.1-or-later
+cracklib-dicts	2.10.3-1.fc44	x86_64	LGPL-2.1-or-later
+createrepo_c	1.2.1-5.fc44	x86_64	GPL-2.0-or-later
+createrepo_c-libs	1.2.1-5.fc44	x86_64	GPL-2.0-or-later
+criu	4.2-13.fc44	x86_64	GPL-2.0-only AND LGPL-2.1-only AND MIT
+criu-libs	4.2-13.fc44	x86_64	GPL-2.0-only AND LGPL-2.1-only AND MIT
+crun	1.28-1.fc44	x86_64	GPL-2.0-only
+crypto-policies	20251128-3.git19878fe.fc44	noarch	LGPL-2.1-or-later
+crypto-policies-scripts	20251128-3.git19878fe.fc44	noarch	LGPL-2.1-or-later
+cryptsetup	2.8.4-1.fc44	x86_64	GPL-2.0-or-later WITH cryptsetup-OpenSSL-exception AND LGPL-2.1-or-later WITH cryptsetup-OpenSSL-exception
+cryptsetup-libs	2.8.4-1.fc44	x86_64	GPL-2.0-or-later WITH cryptsetup-OpenSSL-exception AND LGPL-2.1-or-later WITH cryptsetup-OpenSSL-exception
+ctags	6.2.1-3.fc44	x86_64	GPL-2.0-or-later
+cups-filesystem	2.4.19-3.fc44	noarch	Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND Zlib AND BSD-2-Clause
+cups-libs	2.4.19-3.fc44	x86_64	Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND Zlib AND BSD-2-Clause
+cups-pk-helper	0.2.7-12.fc44	x86_64	GPL-2.0-or-later
+curl	8.18.0-6.fc44	x86_64	curl
+cxl-libs	84-1.fc44	x86_64	LGPL-2.1-only AND CC0-1.0 AND MIT
+cyrus-sasl-gssapi	2.1.28-35.fc44	x86_64	BSD-Attribution-HPND-disclaimer
+cyrus-sasl-lib	2.1.28-35.fc44	x86_64	BSD-Attribution-HPND-disclaimer
+daxctl-libs	84-1.fc44	x86_64	LGPL-2.1-only AND CC0-1.0 AND MIT
+dbus	1.16.2-1.fc44	x86_64	(AFL-2.1 OR GPL-2.0-or-later) AND GPL-2.0-or-later
+dbus-broker	37-8.fc44	x86_64	Apache-2.0 AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND (Apache-2.0 OR LGPL-2.1-or-later)
+dbus-common	1.16.2-1.fc44	noarch	(AFL-2.1 OR GPL-2.0-or-later) AND GPL-2.0-or-later
+dbus-daemon	1.16.2-1.fc44	x86_64	(AFL-2.1 OR GPL-2.0-or-later) AND GPL-2.0-or-later
+dbus-libs	1.16.2-1.fc44	x86_64	(AFL-2.1 OR GPL-2.0-or-later) AND GPL-2.0-or-later
+dbus-tools	1.16.2-1.fc44	x86_64	(AFL-2.1 OR GPL-2.0-or-later) AND GPL-2.0-or-later
+dconf	0.49.0-5.fc44	x86_64	LGPL-2.0-or-later AND LGPL-2.1-or-later AND GPL-2.0-or-later AND GPL-3.0-or-later
+default-fonts-core-sans	4.3-1.fc44	noarch	GPL-2.0-or-later
+deja-dup	50.1-1.fc44	x86_64	GPL-3.0-or-later
+desktop-file-utils	0.28-5.fc44	x86_64	GPL-2.0-or-later
+device-mapper	1.02.212-2.fc44	x86_64	GPL-2.0-only
+device-mapper-event	1.02.212-2.fc44	x86_64	GPL-2.0-only
+device-mapper-event-libs	1.02.212-2.fc44	x86_64	LGPL-2.1-only
+device-mapper-libs	1.02.212-2.fc44	x86_64	LGPL-2.1-only
+device-mapper-multipath	0.13.1-1.fc44	x86_64	GPL-2.0-only AND GPL-3.0-only
+device-mapper-multipath-libs	0.13.1-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later AND LGPL-2.0-or-later
+device-mapper-persistent-data	1.3.3-1.fc44	x86_64	GPL-3.0-only AND (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND BSD-3-Clause AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT) AND (Zlib OR Apache-2.0 OR MIT)
+diffutils	3.12-5.fc44	x86_64	GPL-3.0-or-later
+djvulibre-libs	3.5.30-1.fc44	x86_64	GPL-2.0-or-later
+dmidecode	3.7-1.fc44	x86_64	GPL-2.0-or-later
+dnf-data	4.24.0-3.fc44	noarch	GPL-2.0-or-later AND GPL-1.0-only
+dnf5	5.4.2.1-1.fc44	x86_64	GPL-2.0-or-later
+dnf5daemon-server	5.4.2.1-1.fc44	x86_64	GPL-2.0-or-later
+dnf5daemon-server-polkit	5.4.2.1-1.fc44	noarch	GPL-2.0-or-later
+dns-root-data	2026260100-2.fc44	noarch	BSD-2-Clause and CC0-1.0
+dnsconfd	1.7.5-4.fc44	x86_64	MIT
+dnsconfd-dracut	1.7.5-4.fc44	x86_64	MIT
+dnsconfd-micro	1.7.5-4.fc44	x86_64	MIT
+dnsconfd-selinux	1.7.5-4.fc44	noarch	MIT
+dnsconfd-unbound	1.7.5-4.fc44	noarch	MIT
+dnsmasq	2.92rel2-9.fc44	x86_64	GPL-2.0-only OR GPL-3.0-only
+dosfstools	4.2-18.fc44	x86_64	GPL-3.0-or-later
+dotconf	1.4.1-7.fc44	x86_64	LGPL-2.1-only AND Apache-1.1
+dracut	108-7.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later AND GPL-2.0-only
+dracut-network	108-7.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later AND GPL-2.0-only
+dracut-squash	108-7.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later AND GPL-2.0-only
+drpm	0.5.3-2.fc44	x86_64	LicenseRef-Callaway-LGPLv2+ AND LicenseRef-Callaway-BSD
+duktape	2.7.0-11.fc44	x86_64	MIT
+duplicity	3.0.7-2.fc44	x86_64	GPL-2.0-or-later AND MIT AND GPL-3.0-or-later
+e2fsprogs	1.47.3-4.fc44	x86_64	GPL-2.0-only
+e2fsprogs-libs	1.47.3-4.fc44	x86_64	GPL-2.0-only AND LGPL-2.0-only
+editorconfig-libs	0.12.11-1.fc44	x86_64	BSD-2-Clause AND BSD-3-Clause AND BSD-1-Clause
+efi-filesystem	6-6.fc44	noarch	GPL-3.0-or-later
+efibootmgr	18-11.fc44	x86_64	GPL-2.0-or-later
+efivar-libs	39-12.fc44	x86_64	LGPL-2.1-only
+elfutils-debuginfod-client	0.195-1.fc44	x86_64	GPL-3.0-or-later AND (GPL-2.0-or-later OR LGPL-3.0-or-later)
+elfutils-default-yama-scope	0.195-1.fc44	noarch	GPL-2.0-or-later OR LGPL-3.0-or-later
+elfutils-libelf	0.195-1.fc44	x86_64	GPL-2.0-or-later OR LGPL-3.0-or-later
+elfutils-libs	0.195-1.fc44	x86_64	GPL-2.0-or-later OR LGPL-3.0-or-later
+emacs-filesystem	30.2-2.fc44	x86_64	CC0-1.0
+enchant2	2.8.17-1.fc44	x86_64	LGPL-2.0-or-later
+epiphany-runtime	50.4-1.fc44	x86_64	GPL-3.0-or-later AND CC-BY-SA-3.0 AND CC0-1.0
+espeak-ng	1.52.0-3.fc44	x86_64	GPL-3.0-only AND GPL-3.0-or-later AND Apache-2.0 AND BSD-2-Clause AND Unicode-DFS-2016 AND CC-BY-SA-3.0
+ethtool	7.0-1.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later
+evince-libs	48.1-5.fc44	x86_64	GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND X11 AND MIT AND Afmparse
+evolution-data-server	3.60.2-1.fc44	x86_64	LGPL-2.0-or-later
+evolution-data-server-langpacks	3.60.2-1.fc44	noarch	LGPL-2.0-or-later
+evtest	1.36-2.fc44	x86_64	GPL-2.0-or-later
+exempi	2.6.4-9.fc44	x86_64	BSD-3-Clause
+exfatprogs	1.4.2-2.fc44	x86_64	GPL-2.0-only
+exiv2-libs	0.28.6-3.fc44	x86_64	GPL-2.0-or-later AND BSD-3-Clause AND LicenseRef-Fedora-Public-Domain
+expat	2.8.1-1.fc44	x86_64	MIT
+f2fs-tools	1.16.0-10.fc44	x86_64	GPL-2.0-or-later
+fcoe-utils	1.0.34-14.gitb233050.fc44	x86_64	GPL-2.0-only
+fdk-aac-free	2.0.3-2.fc44	x86_64	FDK-AAC
+fedora-gpg-keys	44-1	noarch	MIT
+fedora-logos	42.0.1-3.fc44	noarch	LicenseRef-Fedora-Logos
+fedora-release	44-18	noarch	MIT
+fedora-release-common	44-18	noarch	MIT
+fedora-release-identity-basic	44-18	noarch	MIT
+fedora-repos	44-1	noarch	MIT
+fedora-repos-archive	44-1	noarch	MIT
+ffmpeg-free	8.1.2-1.fc44	x86_64	GPL-3.0-or-later
+fftw-libs-double	3.3.10-17.fc44	x86_64	GPL-2.0-or-later AND MIT AND BSD-2-Clause
+fftw-libs-single	3.3.10-17.fc44	x86_64	GPL-2.0-or-later AND MIT AND BSD-2-Clause
+file	5.46-10.fc44	x86_64	BSD-2-Clause-Darwin AND BSD-2-Clause
+file-libs	5.46-10.fc44	x86_64	BSD-2-Clause-Darwin AND BSD-2-Clause
+filesystem	3.18-52.fc44	x86_64	LicenseRef-Fedora-Public-Domain
+findutils	4.10.0-7.fc44	x86_64	GPL-3.0-or-later
+firewalld	2.4.0-2.fc44	noarch	GPL-2.0-or-later
+firewalld-filesystem	2.4.0-2.fc44	noarch	GPL-2.0-or-later
+flac-libs	1.5.0-8.fc44	x86_64	BSD-3-Clause AND GPL-2.0-or-later AND GFDL-1.3-or-later
+flatpak	1.18.0-1.fc44	x86_64	LGPL-2.1-or-later
+flatpak-libs	1.18.0-1.fc44	x86_64	LGPL-2.1-or-later
+flatpak-selinux	1.18.0-1.fc44	noarch	LGPL-2.1-or-later
+flatpak-session-helper	1.18.0-1.fc44	x86_64	LGPL-2.1-or-later
+flite	2.2-13.fc44	x86_64	MIT
+fmt	11.2.0-4.fc44	x86_64	MIT
+fontconfig	2.17.0-4.fc44	x86_64	HPND AND LicenseRef-Fedora-Public-Domain AND Unicode-DFS-2016
+fonts-filesystem	5.0.0-2.fc44	noarch	MIT
+fprintd	1.94.5-5.fc44	x86_64	GPL-2.0-or-later AND GFDL-1.1-or-later
+fprintd-pam	1.94.5-5.fc44	x86_64	GPL-2.0-or-later
+freeglut	3.8.0-2.fc44	x86_64	MIT
+freerdp-libs	3.27.1-1.fc44	x86_64	Apache-2.0 AND HPND AND LGPL-2.1-or-later AND LicenseRef-Fedora-Public-Domain AND OFL-1.1
+freetype	2.14.3-1.fc44	x86_64	(FTL OR GPL-2.0-or-later) AND BSD-3-Clause AND MIT AND MIT-Modern-Variant AND LicenseRef-Fedora-Public-Domain AND Zlib
+fribidi	1.0.16-4.fc44	x86_64	LGPL-2.1-or-later AND Unicode-DFS-2016
+fstrm	0.6.1-14.fc44	x86_64	MIT AND NTP
+fuse	2.9.9-25.fc44	x86_64	GPL-1.0-or-later
+fuse-common	3.18.2-1.fc44	x86_64	GPL-1.0-or-later
+fuse-overlayfs	1.16-2.fc44	x86_64	GPL-3.0-or-later
+fuse3	3.18.2-1.fc44	x86_64	GPL-1.0-or-later
+fuse3-libs	3.18.2-1.fc44	x86_64	LGPL-2.1-or-later
+fwupd	2.1.6-1.fc44	x86_64	LGPL-2.1-or-later
+fwupd-efi	1.8-1.fc44	x86_64	LGPL-2.1-or-later
+fwupd-plugin-modem-manager	2.1.6-1.fc44	x86_64	LGPL-2.1-or-later
+fwupd-plugin-uefi-capsule-data	2.1.6-1.fc44	x86_64	LGPL-2.1-or-later
+game-music-emu	0.6.4-3.fc44	x86_64	LicenseRef-Callaway-LGPLv2+
+gamemode	1.8.2-4.fc44	x86_64	BSD-3-Clause
+gamescope	3.16.23-1.fc44	x86_64	LicenseRef-Callaway-BSD
+gawk	5.3.2-3.fc44	x86_64	GPL-3.0-or-later AND GPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause
+gawk-all-langpacks	5.3.2-3.fc44	x86_64	GPL-3.0-or-later AND GPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause
+gcr	4.4.0.1-7.fc44	x86_64	LGPL-2.1-or-later AND FSFULLRWD AND (LGPL-3.0-or-later OR CC-BY-SA-3.0) AND (MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later) AND GCR-docs
+gcr-libs	4.4.0.1-7.fc44	x86_64	LGPL-2.1-or-later AND FSFULLRWD AND (LGPL-3.0-or-later OR CC-BY-SA-3.0) AND (MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later) AND GCR-docs
+gcr3	3.41.1-12.fc44	x86_64	LGPL-2.1-or-later AND LicenseRef-Fedora-Public-Domain AND FSFULLRWD AND (LGPL-3.0-or-later OR CC-BY-SA-3.0) AND (MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later) AND GCR-docs
+gcr3-base	3.41.1-12.fc44	x86_64	LGPL-2.1-or-later AND LicenseRef-Fedora-Public-Domain AND FSFULLRWD AND (LGPL-3.0-or-later OR CC-BY-SA-3.0) AND (MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later) AND GCR-docs
+gdb	17.1-6.fc44	x86_64	GPL-3.0-or-later AND BSD-3-Clause AND FSFAP AND LGPL-2.1-or-later AND GPL-2.0-or-later AND LGPL-2.0-or-later AND LicenseRef-Fedora-Public-Domain AND GFDL-1.3-or-later AND LGPL-2.0-or-later WITH GCC-exception-2.0 AND GPL-3.0-or-later WITH GCC-exception-3.1 AND GPL-2.0-or-later WITH GNU-compiler-exception AND MIT
+gdb-headless	17.1-6.fc44	x86_64	GPL-3.0-or-later AND BSD-3-Clause AND FSFAP AND LGPL-2.1-or-later AND GPL-2.0-or-later AND LGPL-2.0-or-later AND LicenseRef-Fedora-Public-Domain AND GFDL-1.3-or-later AND LGPL-2.0-or-later WITH GCC-exception-2.0 AND GPL-3.0-or-later WITH GCC-exception-3.1 AND GPL-2.0-or-later WITH GNU-compiler-exception AND MIT
+gdbm	1.23-11.fc44	x86_64	GPL-3.0-or-later
+gdbm-libs	1.23-11.fc44	x86_64	GPL-3.0-or-later
+gdk-pixbuf2	2.44.4-2.fc44	x86_64	LGPL-2.1-or-later
+gdm	50.1-1.fc44	x86_64	GPL-2.0-or-later
+geoclue2	2.8.1-1.fc44	x86_64	GPL-2.0-or-later
+geoclue2-libs	2.8.1-1.fc44	x86_64	LGPL-2.0-or-later AND LGPL-2.1-or-later
+geocode-glib	3.26.4-15.fc44	x86_64	LGPL-2.0-or-later AND BSD-3-Clause
+gettext	0.26-5.fc44	x86_64	GPL-3.0-or-later and LGPL-2.0-or-later and GFDL-1.2-or-later
+gettext-envsubst	0.26-5.fc44	x86_64	GPL-3.0-or-later and LGPL-2.0-or-later and GFDL-1.2-or-later
+gettext-libs	0.26-5.fc44	x86_64	LGPL-2.0-or-later and GPL-3.0-or-later
+gettext-runtime	0.26-5.fc44	x86_64	GPL-3.0-or-later and LGPL-2.0-or-later
+giflib	6.1.3-2.fc44	x86_64	MIT
+git-core	2.55.0-1.fc44	x86_64	BSD-3-Clause AND GPL-2.0-only AND GPL-2.0-or-later AND LGPL-2.1-or-later AND MIT
+gjs	1.88.1-1.fc44	x86_64	MIT AND BSD-3-Clause AND (MIT OR LGPL-2.0-or-later) AND (MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later)
+glfw	3.4-6.fc44	x86_64	Zlib
+glib-networking	2.80.1-4.fc44	x86_64	LGPL-2.1-or-later WITH cryptsetup-OpenSSL-exception
+glib2	2.88.2-1.fc44	x86_64	LGPL-2.1-or-later
+glibc	2.43-6.fc44	x86_64	LGPL-2.1-or-later AND SunPro AND LGPL-2.1-or-later WITH GCC-exception-2.0 AND BSD-3-Clause AND GPL-2.0-or-later AND LGPL-2.1-or-later WITH GNU-compiler-exception AND GPL-2.0-only AND ISC AND LicenseRef-Fedora-Public-Domain AND HPND AND CMU-Mach AND LGPL-2.0-or-later AND Unicode-3.0 AND GFDL-1.1-or-later AND GPL-1.0-or-later AND FSFUL AND MIT AND Inner-Net-2.0 AND X11 AND GPL-2.0-or-later WITH GCC-exception-2.0 AND GFDL-1.3-only AND GFDL-1.1-only AND GPL-3.0-or-later AND GPL-3.0-or-later WITH Autoconf-exception-generic-3.0 AND GPL-3.0-or-later WITH Texinfo-exception
+glibc-all-langpacks	2.43-6.fc44	x86_64	LGPL-2.1-or-later AND SunPro AND LGPL-2.1-or-later WITH GCC-exception-2.0 AND BSD-3-Clause AND GPL-2.0-or-later AND LGPL-2.1-or-later WITH GNU-compiler-exception AND GPL-2.0-only AND ISC AND LicenseRef-Fedora-Public-Domain AND HPND AND CMU-Mach AND LGPL-2.0-or-later AND Unicode-3.0 AND GFDL-1.1-or-later AND GPL-1.0-or-later AND FSFUL AND MIT AND Inner-Net-2.0 AND X11 AND GPL-2.0-or-later WITH GCC-exception-2.0 AND GFDL-1.3-only AND GFDL-1.1-only AND GPL-3.0-or-later AND GPL-3.0-or-later WITH Autoconf-exception-generic-3.0 AND GPL-3.0-or-later WITH Texinfo-exception
+glibc-common	2.43-6.fc44	x86_64	LGPL-2.1-or-later AND SunPro AND LGPL-2.1-or-later WITH GCC-exception-2.0 AND BSD-3-Clause AND GPL-2.0-or-later AND LGPL-2.1-or-later WITH GNU-compiler-exception AND GPL-2.0-only AND ISC AND LicenseRef-Fedora-Public-Domain AND HPND AND CMU-Mach AND LGPL-2.0-or-later AND Unicode-3.0 AND GFDL-1.1-or-later AND GPL-1.0-or-later AND FSFUL AND MIT AND Inner-Net-2.0 AND X11 AND GPL-2.0-or-later WITH GCC-exception-2.0 AND GFDL-1.3-only AND GFDL-1.1-only AND GPL-3.0-or-later AND GPL-3.0-or-later WITH Autoconf-exception-generic-3.0 AND GPL-3.0-or-later WITH Texinfo-exception
+glibc-gconv-extra	2.43-6.fc44	x86_64	LGPL-2.1-or-later AND SunPro AND LGPL-2.1-or-later WITH GCC-exception-2.0 AND BSD-3-Clause AND GPL-2.0-or-later AND LGPL-2.1-or-later WITH GNU-compiler-exception AND GPL-2.0-only AND ISC AND LicenseRef-Fedora-Public-Domain AND HPND AND CMU-Mach AND LGPL-2.0-or-later AND Unicode-3.0 AND GFDL-1.1-or-later AND GPL-1.0-or-later AND FSFUL AND MIT AND Inner-Net-2.0 AND X11 AND GPL-2.0-or-later WITH GCC-exception-2.0 AND GFDL-1.3-only AND GFDL-1.1-only AND GPL-3.0-or-later AND GPL-3.0-or-later WITH Autoconf-exception-generic-3.0 AND GPL-3.0-or-later WITH Texinfo-exception
+glibc-minimal-langpack	2.43-6.fc44	x86_64	LGPL-2.1-or-later AND SunPro AND LGPL-2.1-or-later WITH GCC-exception-2.0 AND BSD-3-Clause AND GPL-2.0-or-later AND LGPL-2.1-or-later WITH GNU-compiler-exception AND GPL-2.0-only AND ISC AND LicenseRef-Fedora-Public-Domain AND HPND AND CMU-Mach AND LGPL-2.0-or-later AND Unicode-3.0 AND GFDL-1.1-or-later AND GPL-1.0-or-later AND FSFUL AND MIT AND Inner-Net-2.0 AND X11 AND GPL-2.0-or-later WITH GCC-exception-2.0 AND GFDL-1.3-only AND GFDL-1.1-only AND GPL-3.0-or-later AND GPL-3.0-or-later WITH Autoconf-exception-generic-3.0 AND GPL-3.0-or-later WITH Texinfo-exception
+glibmm2.4	2.66.9-1.fc44	x86_64	LGPL-2.1-or-later AND GPL-2.0-or-later
+glibmm2.68	2.88.1-1.fc44	x86_64	LGPL-2.1-or-later AND GPL-2.0-or-later
+glycin-gtk4-libs	2.1.5-1.fc44	x86_64	(MPL-2.0 OR LGPL-2.1-or-later) AND Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND CC0-1.0 AND GPL-3.0-or-later AND IJG AND ISC AND MIT AND Unicode-3.0 AND Unicode-DFS-2016 AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-3-Clause OR Apache-2.0) AND (MIT OR Apache-2.0 OR Zlib) AND (Unlicense OR MIT)
+glycin-libs	2.1.5-1.fc44	x86_64	(MPL-2.0 OR LGPL-2.1-or-later) AND Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND CC0-1.0 AND GPL-3.0-or-later AND IJG AND ISC AND MIT AND Unicode-3.0 AND Unicode-DFS-2016 AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-3-Clause OR Apache-2.0) AND (MIT OR Apache-2.0 OR Zlib) AND (Unlicense OR MIT)
+glycin-loaders	2.1.5-1.fc44	x86_64	(MPL-2.0 OR LGPL-2.1-or-later) AND Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND CC0-1.0 AND GPL-3.0-or-later AND IJG AND ISC AND MIT AND Unicode-3.0 AND Unicode-DFS-2016 AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-3-Clause OR Apache-2.0) AND (MIT OR Apache-2.0 OR Zlib) AND (Unlicense OR MIT)
+gmp	6.3.0-5.fc44	x86_64	(LGPL-3.0-or-later OR GPL-2.0-or-later OR (LGPL-3.0-or-later AND GPL-2.0-or-later)) AND GFDL-1.3-invariants-or-later
+gnome-app-list	3.0-4.fc44	noarch	LGPL-2.1-or-later
+gnome-autoar	0.4.5-4.fc44	x86_64	LGPL-2.1-or-later
+gnome-bluetooth	47.2-1.fc44	x86_64	GPL-2.0-or-later
+gnome-bluetooth-libs	47.2-1.fc44	x86_64	LGPL-2.1-or-later
+gnome-color-manager	3.36.2-3.fc44	x86_64	GPL-2.0-or-later
+gnome-console	50.0-1.fc44	x86_64	GPL-3.0-or-later
+gnome-control-center	50.3-1.fc44	x86_64	GPL-2.0-or-later AND CC0-1.0
+gnome-control-center-filesystem	50.3-1.fc44	noarch	GPL-2.0-or-later AND CC0-1.0
+gnome-desktop3	44.5-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.0-or-later AND GFDL-1.1-or-later
+gnome-desktop4	44.5-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.0-or-later
+gnome-disk-utility	46.1-4.fc44	x86_64	GPL-2.0-or-later AND CC0-1.0
+gnome-font-viewer	50.0-1.fc44	x86_64	GPL-2.0-or-later AND CC0-1.0
+gnome-keyring	50.0-1.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later AND LGPL-2.1-or-later AND ((GPL-2.0-or-later OR LGPL-3.0-or-later) OR BSD-3-Clause) AND (MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later)
+gnome-keyring-pam	50.0-1.fc44	x86_64	LGPL-2.1-or-later
+gnome-kiosk	50.1-1.fc44	x86_64	GPL-2.0-or-later
+gnome-logs	50.0-1.fc44	x86_64	GPL-3.0-or-later AND CC0-1.0 AND CC-BY-3.0
+gnome-menus	3.38.1-2.fc44	x86_64	LGPL-2.0-or-later
+gnome-online-accounts	3.58.1-1.fc44	x86_64	LGPL-2.0-or-later AND CC-BY-SA-4.0
+gnome-online-accounts-libs	3.58.1-1.fc44	x86_64	LGPL-2.0-or-later AND CC-BY-SA-4.0
+gnome-remote-desktop	50.1-1.fc44	x86_64	GPL-2.0-or-later
+gnome-session	50.1-1.fc44	x86_64	GPL-2.0-or-later
+gnome-session-wayland-session	50.1-1.fc44	x86_64	GPL-2.0-or-later
+gnome-settings-daemon	50.1-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+gnome-shell	50.3-1.fc44	x86_64	GPL-2.0-or-later
+gnome-shell-common	50.3-1.fc44	noarch	GPL-2.0-or-later
+gnome-shell-extension-common	50.2-1.fc44	noarch	GPL-2.0-or-later
+gnome-shell-extension-dash-to-dock	105-1.fc44	noarch	GPL-2.0-or-later
+gnome-shell-extension-gsconnect	72-1.fc44	x86_64	GPL-2.0-or-later
+gnome-shell-extension-user-theme	50.2-1.fc44	noarch	GPL-2.0-or-later
+gnome-software	50.3-1.fc44	x86_64	GPL-2.0-or-later
+gnome-software-rpm-ostree	50.3-1.fc44	x86_64	GPL-2.0-or-later
+gnome-system-monitor	50.0-1.fc44	x86_64	GPL-2.0-or-later AND CC-BY-SA-3.0 AND CC0-1.0
+gnome-text-editor	50.1-1.fc44	x86_64	GPL-3.0-or-later AND CC-BY-SA-3.0 AND CC0-1.0
+gnulib-l10n	20241231-2.fc44	noarch	LGPL-2.1-or-later
+gnupg2	2.4.9-16.fc44	x86_64	CC0-1.0 AND GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.1-or-later AND LGPL-3.0-or-later AND (BSD-3-Clause OR LGPL-3.0-or-later OR GPL-2.0-or-later) AND CC-BY-4.0 AND MIT
+gnupg2-dirmngr	2.4.9-16.fc44	x86_64	CC0-1.0 AND GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.1-or-later AND LGPL-3.0-or-later AND (BSD-3-Clause OR LGPL-3.0-or-later OR GPL-2.0-or-later) AND CC-BY-4.0 AND MIT
+gnupg2-gpg-agent	2.4.9-16.fc44	x86_64	CC0-1.0 AND GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.1-or-later AND LGPL-3.0-or-later AND (BSD-3-Clause OR LGPL-3.0-or-later OR GPL-2.0-or-later) AND CC-BY-4.0 AND MIT
+gnupg2-gpgconf	2.4.9-16.fc44	x86_64	CC0-1.0 AND GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.1-or-later AND LGPL-3.0-or-later AND (BSD-3-Clause OR LGPL-3.0-or-later OR GPL-2.0-or-later) AND CC-BY-4.0 AND MIT
+gnupg2-keyboxd	2.4.9-16.fc44	x86_64	CC0-1.0 AND GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.1-or-later AND LGPL-3.0-or-later AND (BSD-3-Clause OR LGPL-3.0-or-later OR GPL-2.0-or-later) AND CC-BY-4.0 AND MIT
+gnupg2-verify	2.4.9-16.fc44	x86_64	CC0-1.0 AND GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.1-or-later AND LGPL-3.0-or-later AND (BSD-3-Clause OR LGPL-3.0-or-later OR GPL-2.0-or-later) AND CC-BY-4.0 AND MIT
+gnutls	3.8.13-1.fc44	x86_64	GPL-3.0-or-later AND LGPL-2.1-or-later
+gobject-introspection	1.86.0-3.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-2-Clause
+google-droid-sans-fonts	20200215-24.fc44	noarch	Apache-2.0
+google-noto-fonts-common	20251201-2.fc44	noarch	OFL-1.1
+google-noto-sans-fonts	20251201-2.fc44	noarch	OFL-1.1
+google-noto-sans-vf-fonts	20251201-2.fc44	noarch	OFL-1.1
+gpg-pubkey	36f612dcf27f7d1a48a835e4dbfcf71c6d9f90a6-6786af3b	(none)	pubkey
+gpgme	2.0.1-5.fc44	x86_64	LGPL-2.1-or-later AND MIT
+gpgmepp	2.0.1-5.fc44	x86_64	LGPL-2.1-or-later AND MIT
+graphene	1.10.8-4.fc44	x86_64	MIT
+graphite2	1.3.14-20.fc44	x86_64	LGPL-2.1-or-later OR MPL-2.0 OR GPL-2.0-or-later
+grep	3.12-3.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later AND LGPL-2.1-or-later AND GPL-2.0-or-later AND LGPL-2.0-or-later AND GFDL-1.3-no-invariants-or-later
+groff-base	1.23.0-12.fc44	x86_64	GPL-3.0-or-later AND GFDL-1.3-or-later AND BSD-4-Clause-UC AND MIT AND X11 AND LicenseRef-Fedora-Public-Domain
+grub2-common	2.12-60.fc44	noarch	GPL-3.0-or-later
+grub2-efi-x64	2.12-60.fc44	x86_64	GPL-3.0-or-later
+grub2-pc	2.12-60.fc44	x86_64	GPL-3.0-or-later
+grub2-pc-modules	2.12-60.fc44	noarch	GPL-3.0-or-later
+grub2-tools	2.12-60.fc44	x86_64	GPL-3.0-or-later
+grub2-tools-minimal	2.12-60.fc44	x86_64	GPL-3.0-or-later
+gsettings-desktop-schemas	50.1-1.fc44	x86_64	LGPL-2.1-or-later
+gsm	1.0.24-2.fc44	x86_64	tu-berlin-2.0
+gsound	1.0.3-12.fc44	x86_64	LGPL-2.1-or-later
+gspell	1.14.4-1.fc44	x86_64	LGPL-2.1-or-later
+gssdp	1.6.6-1.fc44	x86_64	LicenseRef-Callaway-LGPLv2+
+gssproxy	0.9.2-10.fc44	x86_64	MIT
+gstreamer1	1.28.4-1.fc44	x86_64	LGPL-2.1-or-later
+gstreamer1-plugins-bad-free-libs	1.28.4-1.fc44	x86_64	LGPL-2.1-or-later AND LGPL-2.0-or-later AND (MIT OR LGPL-2.1-or-later) AND MPL-1.1 AND BSD-2-Clause AND BSD-3-Clause AND BSD-2-Clause-Views AND (BSD-2-Clause AND DOC) AND MIT-Festival AND (LGPL-2.0-or-later AND LicenseRef-Fedora-Public-Domain) AND (MPL-1.1 OR LGPL-2.0-or-later OR MIT) AND BSD-3-Clause WITH AdditionRef-Dart AND MIT AND GPL-2.0-only WITH Linux-syscall-note
+gstreamer1-plugins-base	1.28.4-1.fc44	x86_64	LGPL-2.1-or-later
+gstreamer1-plugins-good	1.28.4-1.fc44	x86_64	CC0-1.0 AND GPL-2.0-only AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND xlock AND MIT AND BSD-3-Clause AND CC-BY-3.0
+gtk-update-icon-cache	3.24.52-1.fc44	x86_64	LGPL-2.0-or-later
+gtk3	3.24.52-1.fc44	x86_64	LGPL-2.0-or-later
+gtk4	4.22.4-1.fc44	x86_64	LGPL-2.0-or-later AND LGPL-2.1-or-later AND Apache-2.0 AND CC0-1.0 AND MIT AND MIT-open-group AND HPND-sell-variant AND GPL-2.0-or-later AND GPL-3.0-or-later AND OFL-1.1
+gtkmm4.0	4.22.0-1.fc44	x86_64	LGPL-2.1-or-later
+gtksourceview4	4.8.4-11.fc44	x86_64	LicenseRef-Callaway-LGPLv2+
+gtksourceview5	5.20.0-1.fc44	x86_64	LGPL-2.1-or-later
+gupnp	1.6.10-1.fc44	x86_64	LGPL-2.1-or-later
+gupnp-igd	1.6.0-8.fc44	x86_64	LGPL-2.1-or-later
+gvfs	1.60.1-1.fc44	x86_64	LGPL-2.0-or-later AND GPL-3.0-only AND MPL-2.0 AND BSD-3-Clause-Sun
+gvfs-client	1.60.1-1.fc44	x86_64	LGPL-2.0-or-later AND GPL-3.0-only AND MPL-2.0 AND BSD-3-Clause-Sun
+gvfs-goa	1.60.1-1.fc44	x86_64	LGPL-2.0-or-later AND GPL-3.0-only AND MPL-2.0 AND BSD-3-Clause-Sun
+gweather-locations	2026.2-1.fc44	x86_64	GPL-2.0-or-later
+gweather-locations-common	2026.2-1.fc44	noarch	GPL-2.0-or-later
+gzip	1.14-2.fc44	x86_64	GPL-3.0-or-later AND GFDL-1.3-only
+harfbuzz	14.1.0-2.fc44	x86_64	MIT-Modern-Variant
+harfbuzz-icu	14.1.0-2.fc44	x86_64	MIT-Modern-Variant
+hdparm	9.65-10.fc44	x86_64	hdparm
+hfsplus-tools	540.1.linux3-36.fc44	x86_64	APSL-2.0
+hicolor-icon-theme	0.18-3.fc44	noarch	GPL-2.0-or-later
+hidapi	0.15.0-3.fc44	x86_64	GPL-3.0-only OR BSD-3-Clause
+highway	1.3.0-2.fc44	x86_64	Apache-2.0
+hiredis	1.2.0-8.fc44	x86_64	LicenseRef-Callaway-BSD
+hostname	3.25-4.fc44	x86_64	GPL-2.0-or-later
+hunspell	1.7.3-1.fc44	x86_64	LGPL-2.1-or-later OR GPL-2.0-or-later OR MPL-1.1
+hunspell-en-US	0.20260225-2.fc44	noarch	LGPL-2.1-or-later AND LGPL-2.1-only AND BSD-3-Clause-Modification
+hunspell-filesystem	1.7.3-1.fc44	x86_64	LGPL-2.1-or-later OR GPL-2.0-or-later OR MPL-1.1
+hwdata	0.408-1.fc44	noarch	GPL-2.0-or-later
+hyphen	2.8.8-28.fc44	x86_64	GPL-2.0-only OR LGPL-2.1-or-later OR MPL-1.1
+ibus	1.5.34-2.fc44	x86_64	LGPL-2.1-or-later
+ibus-anthy	1.5.18-2.fc44	x86_64	GPL-2.0-or-later
+ibus-anthy-python	1.5.18-2.fc44	noarch	GPL-2.0-or-later
+ibus-gtk3	1.5.34-2.fc44	x86_64	LGPL-2.1-or-later
+ibus-gtk4	1.5.34-2.fc44	x86_64	LGPL-2.1-or-later
+ibus-hangul	1.5.5-12.fc44	x86_64	GPL-2.0-or-later
+ibus-libpinyin	1.16.5-3.fc44	x86_64	GPL-3.0-or-later
+ibus-libs	1.5.34-2.fc44	x86_64	LGPL-2.1-or-later
+iio-sensor-proxy	3.8-2.fc44	x86_64	GPL-3.0-or-later
+ilbc	3.0.4-19.fc44	x86_64	BSD-3-Clause
+ima-evm-utils-libs	1.6.2-8.fc44	x86_64	LGPL-2.0-or-later
+inih	62-2.fc44	x86_64	BSD-3-Clause
+inih-cpp	62-2.fc44	x86_64	BSD-3-Clause
+iniparser	4.2.6-4.fc44	x86_64	MIT
+intel-audio-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+intel-gpu-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+iproute	6.17.0-2.fc44	x86_64	GPL-2.0-or-later AND NIST-PD
+iproute-tc	6.17.0-2.fc44	x86_64	GPL-2.0-or-later
+iptables-libs	1.8.11-13.fc44	x86_64	GPL-2.0-only AND Artistic-2.0 AND ISC
+iptables-nft	1.8.11-13.fc44	x86_64	GPL-2.0-only AND Artistic-2.0 AND ISC
+iptables-services	1.8.11-13.fc44	noarch	GPL-2.0-only AND Artistic-2.0 AND ISC
+iptables-utils	1.8.11-13.fc44	x86_64	GPL-2.0-only AND Artistic-2.0 AND ISC
+iputils	20250605-2.fc44	x86_64	BSD-4-Clause-UC AND GPL-2.0-or-later
+irqbalance	1.9.5-2.fc44	x86_64	GPL-2.0-only
+iscsi-initiator-utils	6.2.1.11-0.git4b3e853.fc44.3	x86_64	GPL-2.0-or-later
+iscsi-initiator-utils-iscsiuio	6.2.1.11-0.git4b3e853.fc44.3	x86_64	BSD-4-Clause
+isns-utils-libs	0.103-4.fc44	x86_64	LGPL-2.1-or-later
+iso-codes	4.20.1-3.fc44	noarch	LGPL-2.1-or-later
+isomd5sum	1.2.5-6.fc44	x86_64	GPL-2.0-or-later
+iw	6.17-2.fc44	x86_64	ISC AND LicenseRef-Fedora-Public-Domain
+jack-audio-connection-kit	1.9.22-11.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later AND LicenseRef-Callaway-LGPLv2+
+jansson	2.14-4.fc44	x86_64	MIT AND LicenseRef-Fedora-Public-Domain
+javascriptcoregtk4.1	2.52.4-1.fc44	x86_64	LGPL-2.1-only AND BSD-2-Clause AND BSD-3-Clause AND ISC AND bzip2-1.0.6 AND NCSA AND MIT AND GPL-2.0-only AND MPL-1.1 AND SunPro AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2 AND GPL-3.0-or-later WITH Autoconf-exception-3.0 AND MPL-2.0 AND OFL-1.1 AND (AFL-2.0 OR GPL-2.0-or-later) AND BSD-Source-Code AND BSD-2-Clause-Views AND LGPL-2.1-or-later AND (NCSA OR MIT) AND Apache-2.0 WITH LLVM-exception AND ICU AND BSL-1.0
+javascriptcoregtk6.0	2.52.4-1.fc44	x86_64	LGPL-2.1-only AND BSD-2-Clause AND BSD-3-Clause AND ISC AND bzip2-1.0.6 AND NCSA AND MIT AND GPL-2.0-only AND MPL-1.1 AND SunPro AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2 AND GPL-3.0-or-later WITH Autoconf-exception-3.0 AND MPL-2.0 AND OFL-1.1 AND (AFL-2.0 OR GPL-2.0-or-later) AND BSD-Source-Code AND BSD-2-Clause-Views AND LGPL-2.1-or-later AND (NCSA OR MIT) AND Apache-2.0 WITH LLVM-exception AND ICU AND BSL-1.0
+jbig2dec-libs	0.20-8.fc44	x86_64	AGPL-3.0-or-later
+jbigkit-libs	2.1-33.fc44	x86_64	GPL-2.0-or-later
+jose	14-6.fc44	x86_64	Apache-2.0
+joystick-support	1.0.0-37.fc44	noarch	MIT
+jq	1.8.1-3.fc44	x86_64	MIT AND ICU AND CC-BY-3.0
+json-c	0.18-8.fc44	x86_64	MIT
+json-glib	1.10.8-5.fc44	x86_64	LGPL-2.1-or-later
+jsoncpp	1.9.6-3.fc44	x86_64	LicenseRef-Fedora-Public-Domain OR MIT
+kasumi-common	2.5-50.fc44	noarch	GPL-2.0-or-later
+kasumi-unicode	2.5-50.fc44	x86_64	GPL-2.0-or-later
+kbd	2.9.0-3.fc44	x86_64	GPL-2.0-or-later
+kbd-legacy	2.9.0-3.fc44	noarch	GPL-2.0-or-later
+kbd-misc	2.9.0-3.fc44	noarch	GPL-2.0-or-later
+kdump-anaconda-addon	006-17.20250925git2a3605a.fc44	noarch	GPL-2.0-only
+kdump-utils	1.0.61-1.fc44	x86_64	GPL-2.0-only
+kernel	7.0.14-201.fc44	x86_64	((GPL-2.0-only WITH Linux-syscall-note) OR BSD-2-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR CDDL-1.0) AND ((GPL-2.0-only WITH Linux-syscall-note) OR Linux-OpenIB) AND ((GPL-2.0-only WITH Linux-syscall-note) OR MIT) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR MIT) AND 0BSD AND BSD-2-Clause AND (BSD-2-Clause OR Apache-2.0) AND BSD-3-Clause AND BSD-3-Clause-Clear AND CC0-1.0 AND GFDL-1.1-no-invariants-or-later AND GPL-1.0-or-later AND (GPL-1.0-or-later OR BSD-3-Clause) AND (GPL-1.0-or-later WITH Linux-syscall-note) AND GPL-2.0-only AND (GPL-2.0-only OR Apache-2.0) AND (GPL-2.0-only OR BSD-2-Clause) AND (GPL-2.0-only OR BSD-3-Clause) AND (GPL-2.0-only OR CDDL-1.0) AND (GPL-2.0-only OR GFDL-1.1-no-invariants-or-later) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-only) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-or-later) AND (GPL-2.0-only WITH Linux-syscall-note) AND GPL-2.0-or-later AND (GPL-2.0-or-later OR BSD-2-Clause) AND (GPL-2.0-or-later OR BSD-3-Clause) AND (GPL-2.0-or-later OR CC-BY-4.0) AND (GPL-2.0-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH Linux-syscall-note) AND ISC AND LGPL-2.0-or-later AND (LGPL-2.0-or-later OR BSD-2-Clause) AND (LGPL-2.0-or-later WITH Linux-syscall-note) AND LGPL-2.1-only AND (LGPL-2.1-only OR BSD-2-Clause) AND (LGPL-2.1-only WITH Linux-syscall-note) AND LGPL-2.1-or-later AND (LGPL-2.1-or-later WITH Linux-syscall-note) AND (Linux-OpenIB OR GPL-2.0-only) AND (Linux-OpenIB OR GPL-2.0-only OR BSD-2-Clause) AND Linux-man-pages-copyleft AND MIT AND (MIT OR Apache-2.0) AND (MIT OR GPL-2.0-only) AND (MIT OR GPL-2.0-or-later) AND (MIT OR LGPL-2.1-only) AND (MPL-1.1 OR GPL-2.0-only) AND (X11 OR GPL-2.0-only) AND (X11 OR GPL-2.0-or-later) AND Zlib AND (copyleft-next-0.3.1 OR GPL-2.0-or-later)
+kernel-core	7.0.14-201.fc44	x86_64	((GPL-2.0-only WITH Linux-syscall-note) OR BSD-2-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR CDDL-1.0) AND ((GPL-2.0-only WITH Linux-syscall-note) OR Linux-OpenIB) AND ((GPL-2.0-only WITH Linux-syscall-note) OR MIT) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR MIT) AND 0BSD AND BSD-2-Clause AND (BSD-2-Clause OR Apache-2.0) AND BSD-3-Clause AND BSD-3-Clause-Clear AND CC0-1.0 AND GFDL-1.1-no-invariants-or-later AND GPL-1.0-or-later AND (GPL-1.0-or-later OR BSD-3-Clause) AND (GPL-1.0-or-later WITH Linux-syscall-note) AND GPL-2.0-only AND (GPL-2.0-only OR Apache-2.0) AND (GPL-2.0-only OR BSD-2-Clause) AND (GPL-2.0-only OR BSD-3-Clause) AND (GPL-2.0-only OR CDDL-1.0) AND (GPL-2.0-only OR GFDL-1.1-no-invariants-or-later) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-only) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-or-later) AND (GPL-2.0-only WITH Linux-syscall-note) AND GPL-2.0-or-later AND (GPL-2.0-or-later OR BSD-2-Clause) AND (GPL-2.0-or-later OR BSD-3-Clause) AND (GPL-2.0-or-later OR CC-BY-4.0) AND (GPL-2.0-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH Linux-syscall-note) AND ISC AND LGPL-2.0-or-later AND (LGPL-2.0-or-later OR BSD-2-Clause) AND (LGPL-2.0-or-later WITH Linux-syscall-note) AND LGPL-2.1-only AND (LGPL-2.1-only OR BSD-2-Clause) AND (LGPL-2.1-only WITH Linux-syscall-note) AND LGPL-2.1-or-later AND (LGPL-2.1-or-later WITH Linux-syscall-note) AND (Linux-OpenIB OR GPL-2.0-only) AND (Linux-OpenIB OR GPL-2.0-only OR BSD-2-Clause) AND Linux-man-pages-copyleft AND MIT AND (MIT OR Apache-2.0) AND (MIT OR GPL-2.0-only) AND (MIT OR GPL-2.0-or-later) AND (MIT OR LGPL-2.1-only) AND (MPL-1.1 OR GPL-2.0-only) AND (X11 OR GPL-2.0-only) AND (X11 OR GPL-2.0-or-later) AND Zlib AND (copyleft-next-0.3.1 OR GPL-2.0-or-later)
+kernel-modules	7.0.14-201.fc44	x86_64	((GPL-2.0-only WITH Linux-syscall-note) OR BSD-2-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR CDDL-1.0) AND ((GPL-2.0-only WITH Linux-syscall-note) OR Linux-OpenIB) AND ((GPL-2.0-only WITH Linux-syscall-note) OR MIT) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR MIT) AND 0BSD AND BSD-2-Clause AND (BSD-2-Clause OR Apache-2.0) AND BSD-3-Clause AND BSD-3-Clause-Clear AND CC0-1.0 AND GFDL-1.1-no-invariants-or-later AND GPL-1.0-or-later AND (GPL-1.0-or-later OR BSD-3-Clause) AND (GPL-1.0-or-later WITH Linux-syscall-note) AND GPL-2.0-only AND (GPL-2.0-only OR Apache-2.0) AND (GPL-2.0-only OR BSD-2-Clause) AND (GPL-2.0-only OR BSD-3-Clause) AND (GPL-2.0-only OR CDDL-1.0) AND (GPL-2.0-only OR GFDL-1.1-no-invariants-or-later) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-only) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-or-later) AND (GPL-2.0-only WITH Linux-syscall-note) AND GPL-2.0-or-later AND (GPL-2.0-or-later OR BSD-2-Clause) AND (GPL-2.0-or-later OR BSD-3-Clause) AND (GPL-2.0-or-later OR CC-BY-4.0) AND (GPL-2.0-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH Linux-syscall-note) AND ISC AND LGPL-2.0-or-later AND (LGPL-2.0-or-later OR BSD-2-Clause) AND (LGPL-2.0-or-later WITH Linux-syscall-note) AND LGPL-2.1-only AND (LGPL-2.1-only OR BSD-2-Clause) AND (LGPL-2.1-only WITH Linux-syscall-note) AND LGPL-2.1-or-later AND (LGPL-2.1-or-later WITH Linux-syscall-note) AND (Linux-OpenIB OR GPL-2.0-only) AND (Linux-OpenIB OR GPL-2.0-only OR BSD-2-Clause) AND Linux-man-pages-copyleft AND MIT AND (MIT OR Apache-2.0) AND (MIT OR GPL-2.0-only) AND (MIT OR GPL-2.0-or-later) AND (MIT OR LGPL-2.1-only) AND (MPL-1.1 OR GPL-2.0-only) AND (X11 OR GPL-2.0-only) AND (X11 OR GPL-2.0-or-later) AND Zlib AND (copyleft-next-0.3.1 OR GPL-2.0-or-later)
+kernel-modules-core	7.0.14-201.fc44	x86_64	((GPL-2.0-only WITH Linux-syscall-note) OR BSD-2-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR CDDL-1.0) AND ((GPL-2.0-only WITH Linux-syscall-note) OR Linux-OpenIB) AND ((GPL-2.0-only WITH Linux-syscall-note) OR MIT) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR MIT) AND 0BSD AND BSD-2-Clause AND (BSD-2-Clause OR Apache-2.0) AND BSD-3-Clause AND BSD-3-Clause-Clear AND CC0-1.0 AND GFDL-1.1-no-invariants-or-later AND GPL-1.0-or-later AND (GPL-1.0-or-later OR BSD-3-Clause) AND (GPL-1.0-or-later WITH Linux-syscall-note) AND GPL-2.0-only AND (GPL-2.0-only OR Apache-2.0) AND (GPL-2.0-only OR BSD-2-Clause) AND (GPL-2.0-only OR BSD-3-Clause) AND (GPL-2.0-only OR CDDL-1.0) AND (GPL-2.0-only OR GFDL-1.1-no-invariants-or-later) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-only) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-or-later) AND (GPL-2.0-only WITH Linux-syscall-note) AND GPL-2.0-or-later AND (GPL-2.0-or-later OR BSD-2-Clause) AND (GPL-2.0-or-later OR BSD-3-Clause) AND (GPL-2.0-or-later OR CC-BY-4.0) AND (GPL-2.0-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH Linux-syscall-note) AND ISC AND LGPL-2.0-or-later AND (LGPL-2.0-or-later OR BSD-2-Clause) AND (LGPL-2.0-or-later WITH Linux-syscall-note) AND LGPL-2.1-only AND (LGPL-2.1-only OR BSD-2-Clause) AND (LGPL-2.1-only WITH Linux-syscall-note) AND LGPL-2.1-or-later AND (LGPL-2.1-or-later WITH Linux-syscall-note) AND (Linux-OpenIB OR GPL-2.0-only) AND (Linux-OpenIB OR GPL-2.0-only OR BSD-2-Clause) AND Linux-man-pages-copyleft AND MIT AND (MIT OR Apache-2.0) AND (MIT OR GPL-2.0-only) AND (MIT OR GPL-2.0-or-later) AND (MIT OR LGPL-2.1-only) AND (MPL-1.1 OR GPL-2.0-only) AND (X11 OR GPL-2.0-only) AND (X11 OR GPL-2.0-or-later) AND Zlib AND (copyleft-next-0.3.1 OR GPL-2.0-or-later)
+kernel-modules-extra	7.0.14-201.fc44	x86_64	((GPL-2.0-only WITH Linux-syscall-note) OR BSD-2-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-only WITH Linux-syscall-note) OR CDDL-1.0) AND ((GPL-2.0-only WITH Linux-syscall-note) OR Linux-OpenIB) AND ((GPL-2.0-only WITH Linux-syscall-note) OR MIT) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR BSD-3-Clause) AND ((GPL-2.0-or-later WITH Linux-syscall-note) OR MIT) AND 0BSD AND BSD-2-Clause AND (BSD-2-Clause OR Apache-2.0) AND BSD-3-Clause AND BSD-3-Clause-Clear AND CC0-1.0 AND GFDL-1.1-no-invariants-or-later AND GPL-1.0-or-later AND (GPL-1.0-or-later OR BSD-3-Clause) AND (GPL-1.0-or-later WITH Linux-syscall-note) AND GPL-2.0-only AND (GPL-2.0-only OR Apache-2.0) AND (GPL-2.0-only OR BSD-2-Clause) AND (GPL-2.0-only OR BSD-3-Clause) AND (GPL-2.0-only OR CDDL-1.0) AND (GPL-2.0-only OR GFDL-1.1-no-invariants-or-later) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-only) AND (GPL-2.0-only OR GFDL-1.2-no-invariants-or-later) AND (GPL-2.0-only WITH Linux-syscall-note) AND GPL-2.0-or-later AND (GPL-2.0-or-later OR BSD-2-Clause) AND (GPL-2.0-or-later OR BSD-3-Clause) AND (GPL-2.0-or-later OR CC-BY-4.0) AND (GPL-2.0-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH Linux-syscall-note) AND ISC AND LGPL-2.0-or-later AND (LGPL-2.0-or-later OR BSD-2-Clause) AND (LGPL-2.0-or-later WITH Linux-syscall-note) AND LGPL-2.1-only AND (LGPL-2.1-only OR BSD-2-Clause) AND (LGPL-2.1-only WITH Linux-syscall-note) AND LGPL-2.1-or-later AND (LGPL-2.1-or-later WITH Linux-syscall-note) AND (Linux-OpenIB OR GPL-2.0-only) AND (Linux-OpenIB OR GPL-2.0-only OR BSD-2-Clause) AND Linux-man-pages-copyleft AND MIT AND (MIT OR Apache-2.0) AND (MIT OR GPL-2.0-only) AND (MIT OR GPL-2.0-or-later) AND (MIT OR LGPL-2.1-only) AND (MPL-1.1 OR GPL-2.0-only) AND (X11 OR GPL-2.0-only) AND (X11 OR GPL-2.0-or-later) AND Zlib AND (copyleft-next-0.3.1 OR GPL-2.0-or-later)
+kexec-tools	2.0.32-3.fc44	x86_64	GPL-2.0-only
+keyutils	1.6.3-7.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+keyutils-libs	1.6.3-7.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+kmod	34.2-4.fc44	x86_64	GPL-2.0-or-later AND GPL-3.0-or-later AND FSFUL AND FSFULLRWD AND LGPL-2.1-only AND LGPL-2.1-or-later AND X11
+kmod-libs	34.2-4.fc44	x86_64	GPL-2.0-or-later AND GPL-3.0-or-later AND FSFUL AND FSFULLRWD AND LGPL-2.1-only AND LGPL-2.1-or-later AND X11
+kpartx	0.13.1-1.fc44	x86_64	GPL-2.0-only AND GPL-3.0-only
+krb5-libs	1.22.2-4.fc44	x86_64	Brian-Gladman-2-Clause AND BSD-2-Clause AND (BSD-2-Clause OR GPL-2.0-or-later) AND BSD-2-Clause-first-lines AND BSD-3-Clause AND BSD-4-Clause AND CMU-Mach-nodoc AND FSFULLRWD AND HPND AND HPND-export2-US AND HPND-export-US AND HPND-export-US-acknowledgement AND HPND-export-US-modify AND ISC AND MIT AND MIT-CMU AND OLDAP-2.8 AND OpenVision
+kyotocabinet-libs	1.2.80-9.fc44	x86_64	GPL-3.0-only
+lame-libs	3.100-21.fc44	x86_64	LGPL-2.0-or-later AND LGPL-2.1-or-later
+langtable	0.0.71-1.fc44	noarch	GPL-3.0-or-later
+lcms2	2.16-7.fc44	x86_64	MIT AND GPL-3.0-or-later
+leptonica	1.87.0-4.fc44	x86_64	Leptonica
+less	702-1.fc44	x86_64	(GPL-3.0-only OR BSD-2-Clause) AND GPL-2.0-or-later
+libICE	1.1.2-4.fc44	x86_64	MIT-open-group
+libSM	1.2.5-4.fc44	x86_64	MIT AND MIT-open-group
+libX11	1.8.13-1.fc44	x86_64	MIT AND X11
+libX11-common	1.8.13-1.fc44	noarch	MIT AND X11
+libX11-xcb	1.8.13-1.fc44	x86_64	MIT AND X11
+libXau	1.0.12-4.fc44	x86_64	MIT-open-group
+libXcomposite	0.4.6-7.fc44	x86_64	MIT AND HPND-sell-variant
+libXcursor	1.2.3-4.fc44	x86_64	HPND-sell-variant
+libXdamage	1.1.6-7.fc44	x86_64	HPND-sell-variant
+libXdmcp	1.1.5-5.fc44	x86_64	MIT-open-group
+libXext	1.3.6-5.fc44	x86_64	MIT-open-group AND X11 AND HPND AND HPND-sell-variant AND SMLNJ AND MIT AND ISC AND HPND-doc AND HPND-doc-sell
+libXfixes	6.0.1-7.fc44	x86_64	MIT AND HPND-sell-variant
+libXfont2	2.0.7-4.fc44	x86_64	BSD-2-Clause AND BSD-4-Clause-UC AND HPND-sell-variant AND MIT-open-group AND SMLNJ AND X11
+libXft	2.3.8-10.fc44	x86_64	HPND-sell-variant
+libXi	1.8.3-1.fc44	x86_64	MIT-open-group AND SMLNJ AND MIT
+libXinerama	1.1.5-10.fc44	x86_64	MIT AND MIT-open-group AND X11
+libXmu	1.2.1-5.fc44	x86_64	MIT-open-group AND SMLNJ AND X11 AND ISC
+libXrandr	1.5.4-7.fc44	x86_64	HPND-sell-variant
+libXrender	0.9.12-4.fc44	x86_64	HPND-sell-variant
+libXres	1.2.2-7.fc44	x86_64	X11
+libXt	1.3.1-4.fc44	x86_64	MIT AND HPND-sell-variant AND SMLNJ AND MIT-open-group AND X11
+libXtst	1.2.5-4.fc44	x86_64	MIT-open-group AND HPND-sell-variant AND X11 AND HPND-doc AND HPND-doc-sell
+libXv	1.0.13-4.fc44	x86_64	SMLNJ AND HPND-sell-variant
+libXxf86vm	1.1.6-4.fc44	x86_64	X11-distribute-modifications-variant
+libacl	2.3.2-6.fc44	x86_64	LGPL-2.1-or-later
+libadwaita	1.9.2-1.fc44	x86_64	LGPL-2.1-or-later AND MIT
+libaio	0.3.111-23.fc44	x86_64	LGPL-2.0-or-later
+libao	1.2.0-31.fc44	x86_64	GPL-2.0-or-later
+libaom	3.13.3-1.fc44	x86_64	BSD-3-Clause
+libarchive	3.8.7-1.fc44	x86_64	BSD-2-Clause AND FSFULLR AND GPL-2.0-or-later WITH Libtool-exception AND BSD-3-Clause AND FSFUL
+libaribcaption	1.1.1-4.fc44	x86_64	MIT
+libass	0.17.4-2.fc44	x86_64	ISC
+libassuan	2.5.7-5.fc44	x86_64	GPL-3.0-or-later AND LGPL-2.1-or-later AND LGPL-3.0-or-later
+libasyncns	0.8-34.fc44	x86_64	LGPL-2.1-or-later
+libatasmart	0.19-32.fc44	x86_64	LGPL-2.1-or-later
+libatomic	16.1.1-2.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later AND (GPL-3.0-or-later WITH GCC-exception-3.1) AND (GPL-3.0-or-later WITH Texinfo-exception) AND (LGPL-2.1-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH GNU-compiler-exception) AND BSL-1.0 AND GFDL-1.3-or-later AND Linux-man-pages-copyleft-2-para AND SunPro AND BSD-1-Clause AND BSD-2-Clause AND BSD-2-Clause-Views AND BSD-3-Clause AND BSD-4-Clause AND BSD-Source-Code AND Zlib AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-Exception) AND ZPL-2.1 AND ISC AND LicenseRef-Fedora-Public-Domain AND HP-1986 AND curl AND Martin-Birgmeier AND HPND-Markus-Kuhn AND dtoa AND SMLNJ AND AMD-newlib AND OAR AND HPND-merchantability-variant AND HPND-Intel
+libattr	2.5.2-8.fc44	x86_64	LGPL-2.1-or-later
+libavc1394	0.5.4-27.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.0-or-later
+libavcodec-free	8.1.2-1.fc44	x86_64	GPL-3.0-or-later
+libavdevice-free	8.1.2-1.fc44	x86_64	GPL-3.0-or-later
+libavfilter-free	8.1.2-1.fc44	x86_64	GPL-3.0-or-later
+libavformat-free	8.1.2-1.fc44	x86_64	GPL-3.0-or-later
+libavif	1.3.0-4.fc44	x86_64	BSD-2-Clause AND IJG AND Apache-2.0 AND BSD-3-Clause
+libavutil-free	8.1.2-1.fc44	x86_64	GPL-3.0-or-later
+libbabeltrace	1.5.11-17.fc44	x86_64	MIT AND GPL-3.0-or-later WITH Bison-exception-2.2 AND LGPL-2.1-only AND BSD-4-Clause-UC
+libbasicobjects	0.1.1-61.fc44	x86_64	GPL-3.0-or-later
+libblkid	2.41.5-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-btrfs	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-crypto	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-dm	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-fs	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-loop	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-lvm	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-lvm-dbus	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-mdraid	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-mpath	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-nvdimm	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-nvme	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-part	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-plugins-all	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-smart	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-smartmontools	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-swap	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-tools	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libblockdev-utils	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+libbluray	1.4.0-3.fc44	x86_64	LGPL-2.0-or-later
+libbpf	1.6.3-2.fc44	x86_64	LGPL-2.1-only OR BSD-2-Clause
+libbrotli	1.2.0-3.fc44	x86_64	MIT
+libbs2b	3.1.0-37.fc44	x86_64	MIT
+libbsd	0.12.2-7.fc44	x86_64	Beerware AND BSD-2-Clause AND BSD-3-Clause AND ISC AND libutil-David-Nugent AND MIT AND LicenseRef-Fedora-Public-Domain
+libbtrfs	7.0-1.fc44	x86_64	GPL-2.0-only
+libbtrfsutil	7.0-1.fc44	x86_64	LGPL-2.1-or-later
+libbytesize	2.12-2.fc44	x86_64	LGPL-2.1-or-later
+libcaca	0.99-0.82.beta20.fc44	x86_64	WTFPL
+libcanberra	0.30-39.fc44	x86_64	LGPL-2.1-or-later
+libcanberra-gtk3	0.30-39.fc44	x86_64	LGPL-2.1-or-later
+libcap	2.78-1.fc44	x86_64	BSD-3-Clause OR GPL-2.0-only
+libcap-ng	0.9.3-1.fc44	x86_64	LGPL-2.0-or-later
+libcbor	0.13.0-2.fc44	x86_64	MIT
+libcdio	2.3.0-1.fc44	x86_64	GPL-3.0-or-later AND BSD-2-Clause AND LGPL-2.1-or-later
+libcdio-paranoia	10.2+2.0.2-6.fc44	x86_64	GPL-3.0-or-later
+libchromaprint	1.6.0-4.fc44	x86_64	GPL-2.0-or-later
+libcloudproviders	0.4.0-1.fc44	x86_64	LGPL-3.0-or-later
+libcollection	0.7.0-61.fc44	x86_64	LGPL-3.0-or-later
+libcom_err	1.47.3-4.fc44	x86_64	MIT
+libcomps	0.1.24-1.fc44	x86_64	GPL-2.0-or-later
+libconfig	1.8.2-2.fc44	x86_64	LGPL-2.1-or-later AND GPL-3.0-or-later WITH Bison-exception-2.2
+libcue	2.3.0-14.fc44	x86_64	GPL-2.0-only AND BSD-2-Clause
+libcurl	8.18.0-6.fc44	x86_64	curl
+libdaemon	0.14-33.fc44	x86_64	LGPL-2.1-or-later
+libdatrie	0.2.14-2.fc44	x86_64	LGPL-2.1-or-later
+libdav1d	1.5.3-1.fc44	x86_64	BSD-2-Clause AND ISC
+libdb	5.3.28-67.fc44	x86_64	BSD-3-Clause AND LGPL-2.1-only AND Sleepycat
+libdbusmenu	16.04.0-31.fc44	x86_64	(LGPL-3.0-only OR LGPL-2.1-only) AND GPL-3.0-only
+libdbusmenu-gtk3	16.04.0-31.fc44	x86_64	(LGPL-3.0-only OR LGPL-2.1-only) AND GPL-3.0-only
+libdc1394	2.2.7-9.fc44	x86_64	LGPL-2.0-or-later
+libdecor	0.2.5-2.fc44	x86_64	MIT
+libdhash	0.5.0-61.fc44	x86_64	LGPL-3.0-or-later
+libdisplay-info	0.3.0-1.fc44	x86_64	MIT
+libdnf	0.75.0-2.fc44	x86_64	LGPL-2.1-or-later
+libdnf5	5.4.2.1-1.fc44	x86_64	LGPL-2.1-or-later
+libdnf5-cli	5.4.2.1-1.fc44	x86_64	LGPL-2.1-or-later
+libdnf5-plugin-appstream	5.4.2.1-1.fc44	x86_64	LGPL-2.1-or-later
+libdnf5-plugin-expired-pgp-keys	5.4.2.1-1.fc44	x86_64	LGPL-2.1-or-later
+libdovi	3.3.2-3.fc44	x86_64	MIT AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND (Zlib OR Apache-2.0 OR MIT)
+libdrm	2.4.134-1.fc44	x86_64	MIT
+libdvdnav	7.0.0-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+libdvdread	7.0.1-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later AND (GPL-2.0-only OR GPL-3.0-only) AND LicenseRef-Fedora-Public-Domain
+libebur128	1.2.6-15.fc44	x86_64	MIT
+libeconf	0.7.9-3.fc44	x86_64	MIT
+libedit	3.1-59.20260512cvs.fc44	x86_64	BSD-3-Clause AND BSD-2-Clause AND ISC
+libei	1.5.0-2.fc44	x86_64	MIT
+libeis	1.5.0-2.fc44	x86_64	MIT
+libepoxy	1.5.10-12.fc44	x86_64	MIT
+libev	4.33-15.fc44	x86_64	BSD-2-Clause OR GPL-2.0-or-later
+libevdev	1.13.6-2.fc44	x86_64	MIT
+libevent	2.1.12-17.fc44	x86_64	BSD-3-Clause AND ISC AND LicenseRef-Fedora-Public-Domain
+libfdisk	2.41.5-1.fc44	x86_64	LGPL-2.1-or-later
+libffado	2.4.9-10.fc44	x86_64	GPL-2.0-only OR GPL-3.0-only
+libffi	3.5.2-2.fc44	x86_64	MIT AND CC-PDDC AND (GPL-3.0-or-later WITH Texinfo-exception)
+libfido2	1.16.0-5.fc44	x86_64	BSD-2-Clause
+libfontenc	1.1.8-5.fc44	x86_64	MIT
+libfprint	1.94.10-5.fc44	x86_64	LGPL-2.1-or-later AND NIST-PD
+libfsverity	1.6-4.fc44	x86_64	LicenseRef-Callaway-BSD
+libfyaml	0.8-9.fc44	x86_64	MIT and GPL-2.0-only and BSD-2-Clause
+libgcc	16.1.1-2.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later AND (GPL-3.0-or-later WITH GCC-exception-3.1) AND (GPL-3.0-or-later WITH Texinfo-exception) AND (LGPL-2.1-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH GNU-compiler-exception) AND BSL-1.0 AND GFDL-1.3-or-later AND Linux-man-pages-copyleft-2-para AND SunPro AND BSD-1-Clause AND BSD-2-Clause AND BSD-2-Clause-Views AND BSD-3-Clause AND BSD-4-Clause AND BSD-Source-Code AND Zlib AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-Exception) AND ZPL-2.1 AND ISC AND LicenseRef-Fedora-Public-Domain AND HP-1986 AND curl AND Martin-Birgmeier AND HPND-Markus-Kuhn AND dtoa AND SMLNJ AND AMD-newlib AND OAR AND HPND-merchantability-variant AND HPND-Intel
+libgcrypt	1.12.2-1.fc44	x86_64	BSD-3-Clause AND (BSD-3-Clause OR GPL-2.0-only) AND GPL-2.0-or-later AND LGPL-2.1-or-later AND LGPL-2.0-or-later AND MIT-Modern-Variant
+libgexiv2	0.16.1-1.fc44	x86_64	GPL-2.0-or-later
+libglvnd	1.7.0-9.fc44	x86_64	MIT-feh AND MIT-Modern-Variant AND BSD-1-Clause AND BSD-3-Clause AND GPL-3.0-or-later WITH Autoconf-exception-macro
+libglvnd-egl	1.7.0-9.fc44	x86_64	MIT-feh AND MIT-Modern-Variant AND BSD-1-Clause AND BSD-3-Clause AND GPL-3.0-or-later WITH Autoconf-exception-macro
+libglvnd-gles	1.7.0-9.fc44	x86_64	MIT-feh AND MIT-Modern-Variant AND BSD-1-Clause AND BSD-3-Clause AND GPL-3.0-or-later WITH Autoconf-exception-macro
+libglvnd-glx	1.7.0-9.fc44	x86_64	MIT-feh AND MIT-Modern-Variant AND BSD-1-Clause AND BSD-3-Clause AND GPL-3.0-or-later WITH Autoconf-exception-macro
+libglvnd-opengl	1.7.0-9.fc44	x86_64	MIT-feh AND MIT-Modern-Variant AND BSD-1-Clause AND BSD-3-Clause AND GPL-3.0-or-later WITH Autoconf-exception-macro
+libgomp	16.1.1-2.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later AND (GPL-3.0-or-later WITH GCC-exception-3.1) AND (GPL-3.0-or-later WITH Texinfo-exception) AND (LGPL-2.1-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH GNU-compiler-exception) AND BSL-1.0 AND GFDL-1.3-or-later AND Linux-man-pages-copyleft-2-para AND SunPro AND BSD-1-Clause AND BSD-2-Clause AND BSD-2-Clause-Views AND BSD-3-Clause AND BSD-4-Clause AND BSD-Source-Code AND Zlib AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-Exception) AND ZPL-2.1 AND ISC AND LicenseRef-Fedora-Public-Domain AND HP-1986 AND curl AND Martin-Birgmeier AND HPND-Markus-Kuhn AND dtoa AND SMLNJ AND AMD-newlib AND OAR AND HPND-merchantability-variant AND HPND-Intel
+libgpg-error	1.58-2.fc44	x86_64	LGPL-2.1-or-later AND (BSD-3-Clause OR LGPL-2.1-or-later) AND FSFULLR AND GPL-2.0-or-later
+libgs	10.06.0-2.fc44	x86_64	AGPL-3.0-or-later
+libgsf	1.14.58-1.fc44	x86_64	LGPL-2.1-only
+libgtop2	2.41.3-5.fc44	x86_64	GPL-2.0-or-later
+libgudev	238-9.fc44	x86_64	LGPL-2.1-or-later
+libgusb	0.4.9-5.fc44	x86_64	LGPL-2.1-or-later
+libgweather	4.6.0-1.fc44	x86_64	GPL-2.0-or-later AND BSD-3-Clause
+libgxps	0.3.2-12.fc44	x86_64	LGPL-2.1-or-later
+libhandy	1.8.3-10.fc44	x86_64	LGPL-2.1-or-later
+libhangul	0.2.0-3.fc44	x86_64	LGPL-2.1-or-later
+libheif	1.21.2-1.fc44	x86_64	LGPL-3.0-or-later and MIT
+libibverbs	61.0-2.fc44	x86_64	GPL-2.0-only OR BSD-2-Clause AND BSD-3-Clause
+libical	3.0.20-7.fc44	x86_64	LGPL-2.1-only OR MPL-2.0
+libical-glib	3.0.20-7.fc44	x86_64	LGPL-2.1-only OR MPL-2.0
+libicu	77.1-3.fc44	x86_64	Unicode-DFS-2016 AND BSD-2-Clause AND BSD-3-Clause AND NAIST-2003 AND LicenseRef-Fedora-Public-Domain
+libidn2	2.3.8-3.fc44	x86_64	(GPL-2.0-or-later OR LGPL-3.0-or-later) AND GPL-3.0-or-later
+libiec61883	1.2.0-39.fc44	x86_64	LicenseRef-Callaway-LGPLv2+
+libijs	0.35-26.fc44	x86_64	AGPL-3.0-or-later
+libimobiledevice	1.4.0-3.fc44	x86_64	LGPL-2.0-or-later AND MIT AND Zlib
+libimobiledevice-glue	1.3.2-1.fc44	x86_64	LGPL-2.1-or-later
+libini_config	1.3.1-61.fc44	x86_64	LGPL-3.0-or-later
+libinput	1.31.3-1.fc44	x86_64	MIT
+libipa_hbac	2.13.1-1.fc44	x86_64	LGPL-3.0-or-later
+libipt	2.1.2-4.fc44	x86_64	BSD-3-Clause
+libjose	14-6.fc44	x86_64	Apache-2.0
+libjpeg-turbo	3.1.3-1.fc44	x86_64	Zlib AND BSD-3-Clause AND MIT AND IJG
+libjxl	0.11.2-1.fc44	x86_64	BSD-3-Clause AND Apache-2.0 AND Zlib
+libkcapi	1.5.0-7.fc44	x86_64	BSD-3-Clause OR GPL-2.0-only
+libkcapi-hasher	1.5.0-7.fc44	x86_64	BSD-3-Clause OR GPL-2.0-only
+libkcapi-hmaccalc	1.5.0-7.fc44	x86_64	BSD-3-Clause OR GPL-2.0-only
+libksba	1.6.7-5.fc44	x86_64	GPL-3.0-or-later AND LGPL-2.1-or-later AND (LGPL-3.0-or-later OR GPL-2.0-or-later)
+liblastlog2	2.41.5-1.fc44	x86_64	BSD-2-Clause
+liblc3	1.1.3-7.fc44	x86_64	Apache-2.0
+libldac	2.0.2.3-19.fc44	x86_64	Apache-2.0
+libldb	4.24.3-1.fc44	x86_64	LGPL-3.0-or-later
+liblerc	4.0.0-10.fc44	x86_64	Apache-2.0
+libliftoff	0.5.0-5.fc44	x86_64	MIT
+liblouis	3.33.0-7.fc44	x86_64	LGPL-2.1-or-later AND LGPL-2.0-or-later
+liblouis-tables	3.33.0-7.fc44	noarch	LGPL-2.1-or-later AND LGPL-3.0-or-later
+libluksmeta	10-2.fc44	x86_64	LGPL-2.1-or-later
+libmanette	0.2.13-2.fc44	x86_64	LGPL-2.1-or-later
+libmaxminddb	1.13.3-1.fc44	x86_64	Apache-2.0 AND BSD-3-Clause
+libmbim	1.32.0-3.fc44	x86_64	LGPL-2.1-or-later
+libmd	1.2.0-1.fc44	x86_64	BSD-2-Clause AND BSD-3-Clause AND ISC AND Beerware AND LicenseRef-Fedora-Public-Domain
+libmnl	1.0.5-9.fc44	x86_64	LGPL-2.1-or-later
+libmodplug	0.8.9.0-29.fc44	x86_64	LicenseRef-Fedora-Public-Domain
+libmodulemd	2.15.3-1.fc44	x86_64	MIT
+libmount	2.41.5-1.fc44	x86_64	LGPL-2.1-or-later
+libmysofa	1.3.3-4.fc44	x86_64	BSD-3-Clause
+libndp	1.9-5.fc44	x86_64	LGPL-2.1-or-later
+libnet	1.3-7.fc44	x86_64	BSD-2-Clause AND BSD-3-Clause
+libnetfilter_conntrack	1.1.1-1.fc44	x86_64	GPL-2.0-or-later
+libnfnetlink	1.0.1-32.fc44	x86_64	GPL-2.0-or-later
+libnfsidmap	2.8.7-5.fc44	x86_64	BSD-3-Clause
+libnftnl	1.3.1-2.fc44	x86_64	GPL-2.0-or-later
+libnghttp2	1.68.0-4.fc44	x86_64	MIT
+libnghttp3	1.16.0-1.fc44	x86_64	MIT
+libnice	0.1.23-2.fc44	x86_64	LGPL-2.1-or-later OR MPL-1.1
+libnl3	3.12.0-3.fc44	x86_64	LGPL-2.1-only
+libnl3-cli	3.12.0-3.fc44	x86_64	LGPL-2.1-only
+libnma	1.10.6-11.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+libnma-common	1.10.6-11.fc44	noarch	GPL-2.0-or-later AND LGPL-2.1-or-later
+libnma-gtk4	1.10.6-11.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+libnotify	0.8.8-1.fc44	x86_64	LGPL-2.1-or-later
+libnsl2	2.0.1-5.fc44	x86_64	BSD-3-Clause AND LGPL-2.1-or-later
+libnvme	1.16.1-2.fc44	x86_64	LGPL-2.1-or-later
+liboeffis	1.5.0-2.fc44	x86_64	MIT
+libogg	1.3.6-2.fc44	x86_64	BSD-3-Clause
+libopenjph	0.25.3-3.fc44	x86_64	BSD-2-Clause
+libopenmpt	0.8.7-1.fc44	x86_64	BSD-3-Clause
+libosinfo	1.12.0-5.fc44	x86_64	LGPL-2.1-or-later
+libpaper	2.1.1-10.fc44	x86_64	LGPL-2.1-or-later AND LicenseRef-Fedora-Public-Domain AND GPL-3.0-or-later AND LGPL-2.0-or-later AND FSFAP
+libpath_utils	0.2.1-61.fc44	x86_64	LGPL-3.0-or-later
+libpcap	1.10.6-2.fc44	x86_64	ISC AND BSD-2-Clause AND BSD-3-Clause AND BSD-4-Clause-UC
+libpciaccess	0.16-17.fc44	x86_64	HPND AND MIT
+libphonenumber	8.13.55-9.fc44	x86_64	Apache-2.0 AND LicenseRef-Callaway-BSD AND LicenseRef-Callaway-MIT
+libpinyin	2.11.91-2.fc44	x86_64	GPL-3.0-or-later
+libpinyin-data	2.11.91-2.fc44	x86_64	GPL-3.0-or-later
+libpipeline	1.5.8-4.fc44	x86_64	GPL-3.0-or-later
+libpkgconf	2.5.1-1.fc44	x86_64	ISC AND BSD-4-Clause AND BSD-2-Clause AND pkgconf AND MIT
+libplacebo	7.360.1-3.fc44	x86_64	LGPL-2.0-or-later
+libplist	2.7.0-1.fc44	x86_64	LGPL-2.0-or-later
+libpng	1.6.58-1.fc44	x86_64	zlib
+libportal	0.10.0-1.fc44	x86_64	LGPL-3.0-only AND LGPL-2.1-or-later
+libportal-gtk4	0.10.0-1.fc44	x86_64	LGPL-3.0-only AND LGPL-2.1-or-later
+libproxy	0.5.12-2.fc44	x86_64	LGPL-2.1-or-later
+libpsl	0.21.5-7.fc44	x86_64	MIT
+libpwquality	1.4.5-15.fc44	x86_64	BSD-3-Clause OR GPL-2.0-or-later
+libqmi	1.36.0-3.fc44	x86_64	LGPL-2.1-or-later
+libqrtr-glib	1.2.2-9.fc44	x86_64	LGPL-2.1-or-later
+librabbitmq	0.16.0-1.fc44	x86_64	MIT
+libraw1394	2.1.2-25.fc44	x86_64	LicenseRef-Callaway-LGPLv2+
+libref_array	0.1.5-61.fc44	x86_64	LGPL-3.0-or-later
+librepo	1.20.0-5.fc44	x86_64	LGPL-2.1-or-later
+libreport	2.17.15-10.fc44	x86_64	GPL-2.0-or-later
+libreport-anaconda	2.17.15-10.fc44	x86_64	GPL-2.0-or-later
+libreport-cli	2.17.15-10.fc44	x86_64	GPL-2.0-or-later
+libreport-filesystem	2.17.15-10.fc44	noarch	GPL-2.0-or-later
+libreport-gtk	2.17.15-10.fc44	x86_64	GPL-2.0-or-later
+libreport-plugin-bugzilla	2.17.15-10.fc44	x86_64	GPL-2.0-or-later
+libreport-plugin-reportuploader	2.17.15-10.fc44	x86_64	GPL-2.0-or-later
+libreport-web	2.17.15-10.fc44	x86_64	GPL-2.0-or-later
+librist	0.2.11-1.fc44	x86_64	BSD-2-Clause and ISC
+librsvg2	2.62.3-1.fc44	x86_64	LGPL-2.1-or-later AND Apache-2.0 AND BSD-3-Clause AND MIT AND MPL-2.0 AND Unicode-3.0 AND Unicode-DFS-2016 AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR MIT) AND (BSD-3-Clause OR Apache-2.0) AND (MIT OR Apache-2.0 OR Zlib) AND (Unlicense OR MIT)
+librsync	2.3.4-8.fc44	x86_64	LGPL-2.1-or-later
+libsamplerate	0.2.2-12.fc44	x86_64	BSD-2-Clause
+libsbc	2.1-2.fc44	x86_64	GPL-2.0-only AND LGPL-2.1-or-later
+libseat	0.9.3-1.fc44	x86_64	MIT
+libseccomp	2.6.0-3.fc44	x86_64	LGPL-2.1-only
+libsecret	0.21.7-10.fc44	x86_64	LGPL-2.1-or-later AND Apache-2.0 AND (GPL-2.0-or-later OR TGPPL-1.0) AND LicenseRef-Fedora-Public-Domain AND GCR-docs
+libselinux	3.10-1.fc44	x86_64	LicenseRef-Fedora-Public-Domain
+libselinux-utils	3.10-1.fc44	x86_64	LicenseRef-Fedora-Public-Domain
+libsemanage	3.10-1.fc44	x86_64	LGPL-2.1-or-later
+libsepol	3.10-1.fc44	x86_64	LGPL-2.1-or-later
+libshaderc	2026.1-1.fc44	x86_64	Apache-2.0
+libshout	2.4.6-10.fc44	x86_64	LGPL-2.0-or-later
+libsigc++20	2.12.2-1.fc44	x86_64	LGPL-2.1-or-later
+libsigc++30	3.8.1-1.fc44	x86_64	LGPL-2.1-or-later
+libsmartcols	2.41.5-1.fc44	x86_64	LGPL-2.1-or-later
+libsmbclient	4.24.3-1.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later
+libsndfile	1.2.2-11.fc44	x86_64	LGPL-2.1-or-later AND GPL-2.0-or-later AND BSD-3-Clause
+libsodium	1.0.22-1.fc44	x86_64	ISC AND BSD-2-Clause AND CC0-1.0
+libsolv	0.7.39-1.fc44	x86_64	BSD-3-Clause
+libsoup3	3.6.6-8.fc44	x86_64	LGPL-2.0-or-later AND LGPL-2.1-or-later
+libspectre	0.2.12-11.fc44	x86_64	GPL-2.0-or-later
+libspelling	0.4.10-1.fc44	x86_64	LGPL-2.1-or-later
+libss	1.47.3-4.fc44	x86_64	MIT
+libssh	0.12.0-1.fc44	x86_64	LGPL-2.1-or-later
+libssh-config	0.12.0-1.fc44	noarch	LGPL-2.1-or-later
+libsss_certmap	2.13.1-1.fc44	x86_64	LGPL-3.0-or-later
+libsss_idmap	2.13.1-1.fc44	x86_64	LGPL-3.0-or-later
+libsss_nss_idmap	2.13.1-1.fc44	x86_64	LGPL-3.0-or-later
+libsss_sudo	2.13.1-1.fc44	x86_64	LGPL-3.0-or-later
+libstdc++	16.1.1-2.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later AND (GPL-3.0-or-later WITH GCC-exception-3.1) AND (GPL-3.0-or-later WITH Texinfo-exception) AND (LGPL-2.1-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH GCC-exception-2.0) AND (GPL-2.0-or-later WITH GNU-compiler-exception) AND BSL-1.0 AND GFDL-1.3-or-later AND Linux-man-pages-copyleft-2-para AND SunPro AND BSD-1-Clause AND BSD-2-Clause AND BSD-2-Clause-Views AND BSD-3-Clause AND BSD-4-Clause AND BSD-Source-Code AND Zlib AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-Exception) AND ZPL-2.1 AND ISC AND LicenseRef-Fedora-Public-Domain AND HP-1986 AND curl AND Martin-Birgmeier AND HPND-Markus-Kuhn AND dtoa AND SMLNJ AND AMD-newlib AND OAR AND HPND-merchantability-variant AND HPND-Intel
+libstemmer	3.0.1-11.fc44	x86_64	BSD-3-Clause
+libswresample-free	8.1.2-1.fc44	x86_64	GPL-3.0-or-later
+libswscale-free	8.1.2-1.fc44	x86_64	GPL-3.0-or-later
+libtalloc	2.4.4-1.fc44	x86_64	LGPL-3.0-or-later
+libtasn1	4.21.0-1.fc44	x86_64	GPL-3.0-or-later AND LGPL-2.1-or-later
+libtdb	1.4.15-1.fc44	x86_64	LGPL-3.0-or-later
+libteam	1.32-13.fc44	x86_64	LGPL-2.0-or-later
+libtevent	0.17.1-4.fc44	x86_64	LGPL-3.0-or-later
+libtextstyle	0.26-5.fc44	x86_64	GPL-3.0-or-later
+libthai	0.1.30-2.fc44	x86_64	LGPL-2.1-or-later
+libtheora	1.1.1-41.fc44	x86_64	BSD-3-Clause
+libtiff	4.7.1-2.fc44	x86_64	libtiff
+libtinysparql	3.11.1-1.fc44	x86_64	LGPL-2.1-or-later
+libtirpc	1.3.7-2.fc44	x86_64	SISSL AND BSD-3-Clause
+libtool-ltdl	2.5.4-10.fc44	x86_64	LGPLv2+
+libudfread	1.2.0-3.fc44	x86_64	LGPL-2.0-or-later
+libudisks2	2.11.1-2.fc44	x86_64	LGPL-2.0-or-later
+libunibreak	6.1-5.fc44	x86_64	Zlib
+libunistring	1.1-11.fc44	x86_64	GPL-2.0-or-later OR LGPL-3.0-or-later
+libunwind	1.8.3-1.fc44	x86_64	MIT
+libusb1	1.0.30-1.fc44	x86_64	LGPL-2.1-or-later
+libusbmuxd	2.1.1-1.fc44	x86_64	LGPL-2.0-or-later AND GPL-2.0-or-later
+libutempter	1.2.1-20.fc44	x86_64	LGPL-2.1-or-later AND LGPL-2.1-only AND BSD-2-Clause
+libuuid	2.41.5-1.fc44	x86_64	BSD-3-Clause
+libuv	1.51.0-3.fc44	x86_64	MIT AND CC-BY-4.0 AND ISC AND BSD-2-Clause
+libv4l	1.32.0-3.fc44	x86_64	LGPL-2.1-or-later AND GPL-2.0-or-later AND IJG-short AND BSD-2-Clause
+libva	2.23.0-3.fc44	x86_64	MIT AND HPND-sell-variant AND ICU
+libva-utils	2.23.0-2.fc44	x86_64	LicenseRef-Callaway-MIT AND LicenseRef-Callaway-BSD
+libvdpau	1.5-11.fc44	x86_64	MIT
+libverto	0.3.2-12.fc44	x86_64	MIT
+libverto-libev	0.3.2-12.fc44	x86_64	MIT
+libvisual	0.4.2-4.fc44	x86_64	LGPL-2.1-or-later
+libvmaf	3.0.0-5.fc44	x86_64	BSD-2-Clause-Patent
+libvncserver	0.9.15-6.fc44	x86_64	GPL-2.0-or-later
+libvorbis	1.3.7-14.fc44	x86_64	BSD-3-Clause
+libvpl	2.16.0-2.fc44	x86_64	MIT
+libvpx	1.15.0-5.fc44	x86_64	BSD-3-Clause
+libwacom	2.19.0-1.fc44	x86_64	HPND
+libwacom-data	2.19.0-1.fc44	noarch	HPND
+libwayland-client	1.24.0-3.fc44	x86_64	MIT
+libwayland-cursor	1.24.0-3.fc44	x86_64	MIT
+libwayland-egl	1.24.0-3.fc44	x86_64	MIT
+libwayland-server	1.24.0-3.fc44	x86_64	MIT
+libwbclient	4.24.3-1.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later
+libwebp	1.6.0-3.fc44	x86_64	Apache-2.0 AND BSD-3-Clause WITH AdditionRef-WebM-patent-license AND BSD-3-Clause AND FSFULLRWD
+libwinpr	3.27.1-1.fc44	x86_64	Apache-2.0 AND HPND AND LGPL-2.1-or-later AND LicenseRef-Fedora-Public-Domain AND OFL-1.1
+libxcb	1.17.0-7.fc44	x86_64	X11
+libxcrypt	4.5.2-3.fc44	x86_64	LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause AND BSD-2-Clause-FreeBSD AND 0BSD AND CC0-1.0 AND LicenseRef-Fedora-Public-Domain
+libxcvt	0.1.2-11.fc44	x86_64	MIT AND HPND-sell-variant
+libxkbcommon	1.13.1-2.fc44	x86_64	MIT AND X11 AND MIT-CMU
+libxkbfile	1.1.3-5.fc44	x86_64	MIT-open-group AND HPND AND SMLNJ
+libxml++	2.42.3-8.fc44	x86_64	LGPL-2.1-or-later
+libxml2	2.12.10-6.fc44	x86_64	MIT AND ISC-Veillard AND W3C
+libxmlb	0.3.28-1.fc44	x86_64	LGPL-2.1-or-later
+libxshmfence	1.3.2-8.fc44	x86_64	HPND-sell-variant
+libxslt	1.1.43-6.fc44	x86_64	MIT
+libyaml	0.2.5-18.fc44	x86_64	MIT
+libyuv	0-0.61.20260213git6067afd.fc44	x86_64	BSD-3-Clause
+libzip	1.11.4-3.fc44	x86_64	BSD-3-Clause
+libzstd	1.5.7-5.fc44	x86_64	BSD-3-Clause OR GPL-2.0-only
+lilv-libs	0.26.4-1.fc44	x86_64	MIT
+linux-firmware	20260622-1.fc44	noarch	GPL-1.0-or-later AND GPL-2.0-or-later AND MIT AND LicenseRef-Callaway-Redistributable-no-modification-permitted
+linux-firmware-whence	20260622-1.fc44	noarch	GPL-1.0-or-later AND GPL-2.0-or-later AND MIT AND LicenseRef-Callaway-Redistributable-no-modification-permitted
+lldpad	1.1.0-16.git85e5583.fc44	x86_64	GPL-2.0-only
+llvm-filesystem	22.1.8-1.fc44	x86_64	Apache-2.0 WITH LLVM-exception OR NCSA
+llvm-libs	22.1.8-1.fc44	x86_64	Apache-2.0 WITH LLVM-exception OR NCSA
+lm_sensors-libs	3.6.0-24.fc44	x86_64	LGPL-2.1-or-later
+lmdb-libs	0.9.34-2.fc44	x86_64	OLDAP-2.8
+localsearch	3.11.1-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-or-later
+logrotate	3.22.0-5.fc44	x86_64	GPL-2.0-or-later
+loupe	50.0-1.fc44	x86_64	GPL-3.0-or-later AND BSD-3-Clause AND ISC AND MIT AND Unicode-3.0 AND Unicode-DFS-2016 AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (MIT OR Zlib OR Apache-2.0) AND (MPL-2.0 OR LGPL-2.1-or-later) AND (Unlicense OR MIT)
+lpcnetfreedv	0.5-10.fc44	x86_64	LicenseRef-Callaway-BSD
+lsof	4.98.0-9.fc44	x86_64	lsof
+lua-libs	5.4.8-5.fc44	x86_64	MIT
+luajit	2.1.1767980792-1.fc44	x86_64	MIT
+luksmeta	10-2.fc44	x86_64	LGPL-2.1-or-later
+lvm2	2.03.38-2.fc44	x86_64	GPL-2.0-only
+lvm2-dbusd	2.03.38-2.fc44	noarch	GPL-2.0-only
+lvm2-libs	2.03.38-2.fc44	x86_64	LGPL-2.1-only
+lz4-libs	1.10.0-4.fc44	x86_64	GPL-2.0-or-later AND BSD-2-Clause
+lzo	2.10-16.fc44	x86_64	gpl-2.0-or-later
+makedumpfile	1.7.9-1.fc44	x86_64	GPL-2.0-only
+malcontent	0.14.0-1.fc44	x86_64	LGPL-2.1-only AND CC-BY-3.0
+malcontent-libs	0.14.0-1.fc44	x86_64	LGPL-2.1-only AND CC-BY-3.0
+man-db	2.13.1-3.fc44	x86_64	GPL-2.0-or-later AND GPL-3.0-or-later
+mangohud	0.8.3~rc1-2.fc44	x86_64	MIT
+mdadm	4.3-11.fc44	x86_64	GPL-2.0-or-later
+memstrack	0.2.5-8.fc44	x86_64	GPL-3.0-only
+mesa-dri-drivers	26.1.3-1.fc44	x86_64	MIT AND BSD-3-Clause AND SGI-B-2.0
+mesa-filesystem	26.1.3-1.fc44	x86_64	MIT AND BSD-3-Clause AND SGI-B-2.0
+mesa-libEGL	26.1.3-1.fc44	x86_64	MIT AND BSD-3-Clause AND SGI-B-2.0
+mesa-libGL	26.1.3-1.fc44	x86_64	MIT AND BSD-3-Clause AND SGI-B-2.0
+mesa-libGLU	9.0.3-8.fc44	x86_64	X11
+mesa-libgbm	26.1.3-1.fc44	x86_64	MIT AND BSD-3-Clause AND SGI-B-2.0
+mesa-vulkan-drivers	26.1.3-1.fc44	x86_64	MIT AND BSD-3-Clause AND SGI-B-2.0
+microcode_ctl	2.1-74.fc44	x86_64	GPL-2.0-or-later AND LicenseRef-Fedora-Firmware
+mkpasswd	5.6.6-1.fc44	x86_64	GPL-2.0-or-later
+mobile-broadband-provider-info	20240407-5.fc44	noarch	CC-PDDC
+mokutil	0.7.2-3.fc44	x86_64	GPL-3.0-or-later
+mozjs140	140.6.0-4.fc44	x86_64	MPL-2.0 AND Apache-2.0 AND BSD-3-Clause AND BSD-2-Clause AND MIT AND GPL-3.0-or-later
+mpdecimal	4.0.1-3.fc44	x86_64	BSD-2-Clause
+mpfr	4.2.2-3.fc44	x86_64	LGPL-3.0-or-later
+mpg123-libs	1.32.10-3.fc44	x86_64	GPL-2.0-or-later
+msgraph	0.3.4-5.fc44	x86_64	LGPL-3.0-or-later
+mt7xxx-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+mtdev	1.1.6-12.fc44	x86_64	MIT
+mutter	50.1-1.fc44	x86_64	GPL-2.0-or-later
+mutter-common	50.1-1.fc44	noarch	GPL-2.0-or-later
+nano	8.7.1-2.fc44	x86_64	GPL-3.0-or-later
+nano-default-editor	8.7.1-2.fc44	noarch	GPL-3.0-or-later
+nautilus	50.2.2-2.fc44	x86_64	GPL-3.0-or-later AND CC0-1.0
+nautilus-extensions	50.2.2-2.fc44	x86_64	LGPL-2.1-or-later
+ncurses	6.6-1.fc44	x86_64	MIT-open-group
+ncurses-base	6.6-1.fc44	noarch	MIT-open-group
+ncurses-libs	6.6-1.fc44	x86_64	MIT-open-group
+ndctl	84-1.fc44	x86_64	GPL-2.0-only AND LGPL-2.1-only AND CC0-1.0 AND MIT
+ndctl-libs	84-1.fc44	x86_64	LGPL-2.1-only AND CC0-1.0 AND MIT
+net-tools	2.0-0.77.20160912git.fc44	x86_64	GPL-2.0-or-later
+netavark	1.17.2-1.fc44	x86_64	Apache-2.0 AND BSD-3-Clause AND MIT
+nettle	3.10.1-3.fc44	x86_64	LGPL-3.0-or-later OR GPL-2.0-or-later
+newt	0.52.25-6.fc44	x86_64	LGPL-2.0-only
+nfs-client-utils	2.8.7-5.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later AND BSD-3-Clause AND BSD-2-Clause AND (HPND-export-US-modify AND HPND-sell-variant) AND (GPL-2.0-only WITH Linux-syscall-note OR BSD-3-Clause)
+nfs-common-utils	2.8.7-5.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later AND BSD-3-Clause AND BSD-2-Clause AND (HPND-export-US-modify AND HPND-sell-variant) AND (GPL-2.0-only WITH Linux-syscall-note OR BSD-3-Clause)
+nfs-utils	2.8.7-5.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later AND BSD-3-Clause AND BSD-2-Clause AND (HPND-export-US-modify AND HPND-sell-variant) AND (GPL-2.0-only WITH Linux-syscall-note OR BSD-3-Clause)
+nfsv3-client-utils	2.8.7-5.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later AND BSD-3-Clause AND BSD-2-Clause AND (HPND-export-US-modify AND HPND-sell-variant) AND (GPL-2.0-only WITH Linux-syscall-note OR BSD-3-Clause)
+nfsv4-client-utils	2.8.7-5.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later AND BSD-3-Clause AND BSD-2-Clause AND (HPND-export-US-modify AND HPND-sell-variant) AND (GPL-2.0-only WITH Linux-syscall-note OR BSD-3-Clause)
+nftables	1.1.6-2.fc44	x86_64	GPL-2.0-only
+nftables-services	1.1.6-2.fc44	noarch	GPL-2.0-only
+ngtcp2	1.22.1-1.fc44	x86_64	MIT
+ngtcp2-crypto-gnutls	1.22.1-1.fc44	x86_64	MIT
+ngtcp2-crypto-ossl	1.22.1-1.fc44	x86_64	MIT
+nilfs-utils	2.2.11-8.fc44	x86_64	GPL-2.0-or-later
+nm-connection-editor	1.36.0-7.fc44	x86_64	GPL-2.0-or-later
+npth	1.8-4.fc44	x86_64	LGPL-2.1-or-later
+nspr	4.39.0-2.fc44	x86_64	MPL-2.0
+nss	3.125.0-1.fc44	x86_64	MPL-2.0
+nss-altfiles	2.23.0-9.fc44	x86_64	LGPL-2.1-or-later and MIT
+nss-softokn	3.125.0-1.fc44	x86_64	MPL-2.0
+nss-softokn-freebl	3.125.0-1.fc44	x86_64	MPL-2.0
+nss-sysinit	3.125.0-1.fc44	x86_64	MPL-2.0
+nss-util	3.125.0-1.fc44	x86_64	MPL-2.0
+ntfs-3g	2026.2.25-1.fc44	x86_64	GPL-2.0-or-later
+ntfs-3g-libs	2026.2.25-1.fc44	x86_64	GPL-2.0-or-later
+ntfs-3g-system-compression	1.1-2.fc44	x86_64	GPL-2.0-or-later
+ntfsprogs	2026.2.25-1.fc44	x86_64	GPL-2.0-or-later
+numactl-libs	2.0.19-4.fc44	x86_64	LGPL-2.1-only and GPL-2.0-only
+nvidia-gpu-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+nvme-cli	2.16-2.fc44	x86_64	GPL-2.0-only
+nxpwireless-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+oniguruma	6.9.10-4.fc44	x86_64	BSD-2-Clause
+openal-soft	1.24.2-6.fc44	x86_64	LGPL-2.0-or-later AND BSD-3-Clause AND GPL-2.0-or-later AND Apache-2.0 AND (LGPL-2.0-or-later AND BSD-3-Clause) AND (MIT WITH fmt-exception) AND NCL AND MIT AND LicenseRef-Fedora-Public-Domain
+openapv-libs	0.2.1.2-1.fc44	x86_64	BSD-3-Clause
+opencore-amr	0.1.6-10.fc44	x86_64	Apache-2.0
+openh264	2.6.0-3.fc44	x86_64	BSD-2-Clause
+openjpeg	2.5.4-3.fc44	x86_64	BSD-2-Clause AND MIT
+openldap	2.6.13-1.fc44	x86_64	OLDAP-2.8
+openpgm	5.3.128-6.fc44	x86_64	LGPL-2.1-or-later
+openssh	10.2p1-10.fc44	x86_64	BSD-3-Clause AND BSD-2-Clause AND ISC AND SSH-OpenSSH AND ssh-keyscan AND snprintf AND LicenseRef-Fedora-Public-Domain AND X11-distribute-modifications-variant
+openssh-clients	10.2p1-10.fc44	x86_64	BSD-3-Clause AND BSD-2-Clause AND ISC AND SSH-OpenSSH AND ssh-keyscan AND snprintf AND LicenseRef-Fedora-Public-Domain AND X11-distribute-modifications-variant
+openssh-server	10.2p1-10.fc44	x86_64	BSD-3-Clause AND BSD-2-Clause AND ISC AND SSH-OpenSSH AND ssh-keyscan AND snprintf AND LicenseRef-Fedora-Public-Domain AND X11-distribute-modifications-variant
+openssl	3.5.7-1.fc44	x86_64	Apache-2.0
+openssl-libs	3.5.7-1.fc44	x86_64	Apache-2.0
+openvr-api	2.12.14-2.fc44	x86_64	BSD-3-Clause
+opus	1.6-2.fc44	x86_64	BSD-3-Clause AND BSD-2-Clause
+orc	0.4.41-3.fc44	x86_64	BSD-2-Clause AND BSD-3-Clause
+orca	50.2-1.fc44	noarch	LGPL-2.1-or-later AND CC-BY-SA-3.0
+os-prober	1.81-11.fc44	x86_64	GPL-2.0-or-later AND GPL-1.0-or-later
+osinfo-db	20251212-1.fc44	noarch	GPL-2.0-or-later
+osinfo-db-tools	1.12.0-5.fc44	x86_64	GPL-2.0-or-later
+ostree	2026.2-1.fc44	x86_64	LGPL-2.0-or-later
+ostree-libs	2026.2-1.fc44	x86_64	LGPL-2.0-or-later
+p11-kit	0.26.2-1.fc44	x86_64	BSD-3-Clause
+p11-kit-server	0.26.2-1.fc44	x86_64	BSD-3-Clause
+p11-kit-trust	0.26.2-1.fc44	x86_64	BSD-3-Clause
+pam	1.7.2-1.fc44	x86_64	BSD-3-Clause AND GPL-2.0-or-later
+pam-libs	1.7.2-1.fc44	x86_64	BSD-3-Clause AND GPL-2.0-or-later
+pango	1.57.1-1.fc44	x86_64	LGPL-2.0-or-later
+pangomm2.48	2.56.2-1.fc44	x86_64	LGPL-2.1-or-later
+papers	49.7-1.fc44	x86_64	GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND MIT AND libtiff AND BSD-2-Clause AND BSD-3-Clause AND Unicode-3.0 AND Unicode-DFS-2016 AND Zlib AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-3-Clause OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT)
+papers-libs	49.7-1.fc44	x86_64	GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND MIT AND libtiff AND BSD-2-Clause AND BSD-3-Clause AND Unicode-3.0 AND Unicode-DFS-2016 AND Zlib AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-3-Clause OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT)
+papers-previewer	49.7-1.fc44	x86_64	GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND MIT AND libtiff AND BSD-2-Clause AND BSD-3-Clause AND Unicode-3.0 AND Unicode-DFS-2016 AND Zlib AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-3-Clause OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT)
+papers-thumbnailer	49.7-1.fc44	x86_64	GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND MIT AND libtiff AND BSD-2-Clause AND BSD-3-Clause AND Unicode-3.0 AND Unicode-DFS-2016 AND Zlib AND (0BSD OR MIT OR Apache-2.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-3-Clause OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT)
+parted	3.6-14.fc44	x86_64	GPL-3.0-or-later
+passim	0.1.11-1.fc44	x86_64	LGPL-2.1-or-later
+passim-libs	0.1.11-1.fc44	x86_64	LGPL-2.1-or-later
+passt	0^20260611.ga9c61ff-1.fc44	x86_64	GPL-2.0-or-later AND BSD-3-Clause
+passt-selinux	0^20260611.ga9c61ff-1.fc44	noarch	GPL-2.0-or-later AND BSD-3-Clause
+pcaudiolib	1.1-19.fc44	x86_64	GPL-3.0-or-later
+pcre2	10.47-1.fc44.1	x86_64	BSD-3-Clause AND FSFULLR AND X11 AND GPL-2.0-or-later AND FSFAP AND FSFUL AND GPL-3.0-or-later
+pcre2-syntax	10.47-1.fc44.1	noarch	BSD-3-Clause AND FSFULLR AND X11 AND GPL-2.0-or-later AND FSFAP AND FSFUL AND GPL-3.0-or-later
+pcre2-utf32	10.47-1.fc44.1	x86_64	BSD-3-Clause AND FSFULLR AND X11 AND GPL-2.0-or-later AND FSFAP AND FSFUL AND GPL-3.0-or-later
+pinentry	1.3.2-3.fc44	x86_64	GPL-2.0-or-later
+pinentry-gnome3	1.3.2-3.fc44	x86_64	GPL-2.0-or-later
+pipewire	1.6.7-1.fc44	x86_64	MIT
+pipewire-alsa	1.6.7-1.fc44	x86_64	MIT
+pipewire-gstreamer	1.6.7-1.fc44	x86_64	MIT
+pipewire-libs	1.6.7-1.fc44	x86_64	MIT AND GPL-2.0-or-later AND BSD-2-Clause AND LGPL-2.0-or-later
+pipewire-pulseaudio	1.6.7-1.fc44	x86_64	MIT
+pipewire-utils	1.6.7-1.fc44	x86_64	MIT
+pixman	0.46.2-3.fc44	x86_64	MIT
+pkcs11-provider	1.1-3.fc44	x86_64	Apache-2.0
+pkgconf	2.5.1-1.fc44	x86_64	ISC AND BSD-4-Clause AND BSD-2-Clause AND pkgconf AND MIT
+pkgconf-m4	2.5.1-1.fc44	noarch	GPL-2.0-or-later WITH Autoconf-exception-generic
+pkgconf-pkg-config	2.5.1-1.fc44	x86_64	ISC AND BSD-4-Clause AND BSD-2-Clause AND pkgconf AND MIT
+plymouth	24.004.60-24.fc44	x86_64	GPL-2.0-or-later
+plymouth-core-libs	24.004.60-24.fc44	x86_64	GPL-2.0-or-later
+plymouth-graphics-libs	24.004.60-24.fc44	x86_64	GPL-2.0-or-later
+plymouth-plugin-script	24.004.60-24.fc44	x86_64	GPL-2.0-or-later
+plymouth-scripts	24.004.60-24.fc44	x86_64	GPL-2.0-or-later
+podman	5.8.3-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND ISC AND MIT AND MPL-2.0
+podman-sequoia	0.3.2-2.fc44	x86_64	((MIT OR Apache-2.0) AND Unicode-DFS-2016) AND (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND BSD-3-Clause AND BSL-1.0 AND LGPL-2.0-or-later AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND MPL-2.0 AND Unicode-3.0 AND (Unlicense OR MIT) AND Zlib
+policycoreutils	3.10-4.fc44	x86_64	GPL-2.0-or-later
+policycoreutils-python-utils	3.10-4.fc44	noarch	GPL-2.0-or-later
+polkit	127-2.fc44.2	x86_64	LGPL-2.0-or-later
+polkit-libs	127-2.fc44.2	x86_64	LGPL-2.0-or-later
+polkit-pkla-compat	0.1-32.fc44	x86_64	LGPL-2.0-or-later
+poppler	26.01.0-3.fc44	x86_64	(GPL-2.0-only OR GPL-3.0-only) AND GPL-2.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND MIT
+poppler-data	0.4.11-11.fc44	noarch	(GPL-2.0-only OR GPL-3.0-only) AND BSD-3-Clause
+poppler-glib	26.01.0-3.fc44	x86_64	(GPL-2.0-only OR GPL-3.0-only) AND GPL-2.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND MIT
+popt	1.19-10.fc44	x86_64	MIT AND LicenseRef-Fedora-Public-Domain
+procps-ng	4.0.6-1.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later
+protobuf	3.19.6-20.fc44	x86_64	BSD-3-Clause
+protobuf-c	1.5.2-2.fc44	x86_64	BSD-2-Clause
+psmisc	23.7-7.fc44	x86_64	GPL-2.0-or-later
+publicsuffix-list-dafsa	20260116-1.fc44	noarch	MPL-2.0
+pulseaudio-libs	17.0-9.fc44	x86_64	LGPL-2.1-or-later
+pulseaudio-libs-glib2	17.0-9.fc44	x86_64	LGPL-2.1-or-later
+python-oslo-i18n-lang	6.7.1-2.fc44	noarch	Apache-2.0
+python-oslo-utils-lang	7.3.0-7.fc44	noarch	Apache-2.0
+python-pip-wheel	26.0.1-2.fc44	noarch	MIT AND Python-2.0.1 AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND ISC AND MPL-2.0 AND (Apache-2.0 OR BSD-2-Clause)
+python-unversioned-command	3.14.6-1.fc44	noarch	Python-2.0.1
+python3	3.14.6-1.fc44	x86_64	Python-2.0.1
+python3-argcomplete	3.6.3-4.fc44	noarch	Apache-2.0
+python3-audit	4.1.4-1.fc44	x86_64	LGPL-2.0-or-later
+python3-azure-core	1.38.0-1.fc44	noarch	MIT
+python3-azure-storage-blob	12.28.0-1.fc44	noarch	MIT
+python3-b2sdk	1.21.0-13.fc44	noarch	MIT
+python3-bcrypt	4.3.0-7.fc44	x86_64	Apache-2.0 AND LicenseRef-Fedora-Public-Domain AND BSD-3-Clause AND MIT AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT)
+python3-blivet	3.13.2-2.fc44	noarch	LGPL-2.1-or-later
+python3-blockdev	3.5.0-1.fc44	x86_64	LGPL-2.1-or-later
+python3-boto3	1.43.31-1.fc44	noarch	Apache-2.0
+python3-botocore	1.43.31-1.fc44	noarch	Apache-2.0
+python3-brlapi	0.8.7-8.fc44	x86_64	LGPL-2.0-or-later AND LGPL-2.1-or-later AND GPL-2.0-or-later
+python3-bugzilla	3.3.0-7.fc44	noarch	GPL-2.0-or-later
+python3-bytesize	2.12-2.fc44	x86_64	LGPL-2.1-or-later
+python3-cairo	1.28.0-5.fc44	x86_64	LGPL-2.1-only OR MPL-1.1
+python3-cffi	2.0.0-3.fc44	x86_64	MIT AND PSF-2.0
+python3-charset-normalizer	3.4.4-2.fc44	noarch	MIT
+python3-crypt-r	3.13.1-9.fc44	x86_64	Python-2.0.1
+python3-cryptography	48.0.0-1.fc44	x86_64	(Apache-2.0 OR BSD-3-Clause) AND PSF-2.0 AND Apache-2.0 AND BSD-3-Clause AND MIT AND (MIT OR Apache-2.0)
+python3-dasbus	1.7-14.fc44	noarch	LGPL-2.1-or-later
+python3-dateutil	2.9.0.post0-7.fc44	noarch	(Apache-2.0 AND BSD-3-Clause) OR BSD-3-Clause
+python3-dbus	1.4.0-9.fc44	x86_64	MIT
+python3-dbus-next	0.2.3-18.fc44	noarch	MIT
+python3-debtcollector	3.0.0-10.fc44	noarch	Apache-2.0
+python3-distro	1.9.0-11.fc44	noarch	Apache-2.0
+python3-dnf	4.24.0-3.fc44	noarch	GPL-2.0-or-later AND GPL-1.0-only
+python3-dropbox	12.0.2-12.fc44	noarch	MIT
+python3-fasteners	0.20-4.fc44	noarch	Apache-2.0
+python3-file-magic	5.46-10.fc44	noarch	BSD-2-Clause-Darwin AND BSD-2-Clause
+python3-firewall	2.4.0-2.fc44	noarch	GPL-2.0-or-later
+python3-gobject	3.56.3-1.fc44	x86_64	LGPL-2.1-or-later
+python3-gobject-base	3.56.3-1.fc44	x86_64	LGPL-2.1-or-later
+python3-google-api-client	2.189.0-1.fc44	noarch	Apache-2.0
+python3-google-api-core	2.27.0-2.fc44	noarch	Apache-2.0
+python3-google-auth	2.47.0-1.fc44	noarch	Apache-2.0
+python3-google-auth-httplib2	0.3.1-1.fc44	noarch	Apache-2.0
+python3-google-auth-oauthlib	1.2.4-2.fc44	noarch	Apache-2.0
+python3-googleapis-common-protos	1.63.0-14.fc44	noarch	Apache-2.0
+python3-hawkey	0.75.0-2.fc44	x86_64	LGPL-2.1-or-later
+python3-html2text	2025.4.15-6.fc44	noarch	GPL-3.0-or-later
+python3-httplib2	0.22.0-8.fc44	noarch	MIT
+python3-ibus	1.5.34-2.fc44	x86_64	LGPL-2.1-or-later
+python3-idna	3.11-2.fc44	noarch	BSD-3-Clause
+python3-inotify	0.9.6-43.fc44	noarch	MIT
+python3-iso639	0.1.4-33.fc44	noarch	MIT
+python3-iso8601	2.1.0-7.fc44	noarch	MIT
+python3-isodate	0.7.2-7.fc44	noarch	BSD-3-Clause
+python3-jaraco-classes	3.4.0-11.fc44	noarch	MIT
+python3-jaraco-context	6.1.0-2.fc44	noarch	MIT
+python3-jaraco-functools	4.3.0-2.fc44	noarch	MIT
+python3-jeepney	0.9.0-8.fc44	noarch	MIT
+python3-jmespath	1.0.1-14.fc44	noarch	MIT
+python3-keyring	25.7.0-3.fc44	noarch	MIT
+python3-keystoneauth1	5.8.0-7.fc44	noarch	Apache-2.0
+python3-keystoneclient	5.5.0-6.fc44	noarch	Apache-2.0
+python3-kickstart	3.69-1.fc44	noarch	GPL-2.0-only
+python3-langtable	0.0.71-1.fc44	noarch	GPL-3.0-or-later
+python3-libcomps	0.1.24-1.fc44	x86_64	GPL-2.0-or-later
+python3-libdnf	0.75.0-2.fc44	x86_64	LGPL-2.1-or-later
+python3-libdnf5	5.4.2.1-1.fc44	x86_64	LGPL-2.1-or-later
+python3-libmount	2.41.5-1.fc44	x86_64	LGPL-2.1-or-later
+python3-libreport	2.17.15-10.fc44	x86_64	GPL-2.0-or-later
+python3-libs	3.14.6-1.fc44	x86_64	Python-2.0.1 AND MIT AND BSD-3-Clause AND MIT-CMU AND HPND-SMC AND BSD-2-Clause AND dtoa
+python3-libselinux	3.10-1.fc44	x86_64	LicenseRef-Fedora-Public-Domain
+python3-libsemanage	3.10-1.fc44	x86_64	LGPL-2.1-or-later
+python3-linux-procfs	0.7.4-3.fc44	noarch	GPL-2.0-only
+python3-logfury	1.0.1-20.fc44	noarch	BSD-3-Clause
+python3-louis	3.33.0-7.fc44	noarch	LGPL-2.1-or-later
+python3-lxml	6.1.1-1.fc44	x86_64	BSD-3-Clause AND MIT-CMU AND MIT
+python3-meh	0.52-9.fc44	noarch	GPL-2.0-or-later
+python3-meh-gui	0.52-9.fc44	noarch	GPL-2.0-or-later
+python3-more-itertools	10.8.0-1.fc44	noarch	MIT
+python3-msgpack	1.1.2-2.fc44	x86_64	Apache-2.0
+python3-netaddr	1.3.0-11.fc44	noarch	BSD-3-Clause
+python3-netifaces	0.11.0-16.fc44	x86_64	MIT
+python3-nftables	1.1.6-2.fc44	noarch	GPL-2.0-only
+python3-oauthlib	3.3.1-1.fc44	noarch	BSD-3-Clause
+python3-os-service-types	1.7.0-25.fc44	noarch	Apache-2.0
+python3-oslo-config	9.6.0-8.fc44	noarch	Apache-2.0
+python3-oslo-i18n	6.7.1-2.fc44	noarch	Apache-2.0
+python3-oslo-serialization	5.5.0-7.fc44	noarch	Apache-2.0
+python3-oslo-utils	7.3.0-7.fc44	noarch	Apache-2.0
+python3-packaging	25.0-8.fc44	noarch	BSD-2-Clause OR Apache-2.0
+python3-pam	2.0.2-18.fc44	noarch	MIT
+python3-paramiko	3.5.1-7.fc44	noarch	LGPL-2.1-or-later
+python3-pbr	7.0.3-2.fc44	noarch	Apache-2.0
+python3-pexpect	4.9.0-15.fc44	noarch	ISC AND BSD-3-Clause
+python3-pid	3.0.4-5.fc44	noarch	Apache-2.0
+python3-ply	3.11-33.fc44	noarch	BSD-3-Clause
+python3-policycoreutils	3.10-4.fc44	noarch	GPL-2.0-or-later
+python3-productmd	1.50-2.fc44	noarch	LGPL-2.1-only
+python3-proto-plus	1.22.3-12.fc44	noarch	Apache-2.0
+python3-protobuf	3.19.6-20.fc44	noarch	BSD-3-Clause
+python3-psutil	7.2.2-1.fc44	x86_64	BSD-3-Clause
+python3-ptyprocess	0.7.0-15.fc44	noarch	ISC
+python3-pwquality	1.4.5-15.fc44	x86_64	BSD-3-Clause OR GPL-2.0-or-later
+python3-pyasn1	0.6.2-1.fc44	noarch	BSD-2-Clause
+python3-pyasn1-modules	0.6.2-1.fc44	noarch	BSD-2-Clause
+python3-pyatspi	2.58.2-1.fc44	noarch	LGPL-2.0-or-later AND GPL-2.0-or-later
+python3-pycparser	2.22-8.fc44	noarch	BSD-3-Clause
+python3-pynacl	1.6.2-1.fc44	x86_64	Apache-2.0
+python3-pyparsing	3.1.2-15.fc44	noarch	MIT
+python3-pyparted	3.13.0-14.fc44	x86_64	GPL-2.0-or-later
+python3-pysocks	1.7.1-32.fc44	noarch	BSD-3-Clause
+python3-pytz	2026.1-1.fc44	noarch	MIT
+python3-pyudev	0.24.4-3.fc44	noarch	LGPL-2.1-or-later
+python3-pyyaml	6.0.3-3.fc44	x86_64	MIT
+python3-requests	2.33.1-1.fc44	noarch	Apache-2.0
+python3-requests-file	3.0.0-2.fc44	noarch	Apache-2.0
+python3-requests-ftp	0.3.1-43.fc44	noarch	Apache-2.0
+python3-requests-oauthlib	2.0.0-1.fc44	noarch	ISC
+python3-rfc3986	2.0.0-6.fc44	noarch	Apache-2.0
+python3-rpm	6.0.1-2.fc44	x86_64	GPL-2.0-or-later
+python3-rsa	4.9-13.fc44	noarch	Apache-2.0
+python3-s3transfer	0.19.0-1.fc44	noarch	Apache-2.0
+python3-satyr	0.43-10.fc44	x86_64	GPL-2.0-or-later
+python3-secretstorage	3.5.0-2.fc44	noarch	BSD-3-Clause
+python3-setools	4.6.0-5.fc44	x86_64	LGPL-2.1-only
+python3-setuptools	80.10.2-3.fc44	noarch	MIT AND Apache-2.0 AND (BSD-2-Clause OR Apache-2.0) AND LGPL-3.0-only
+python3-simpleline	1.9.0-18.fc44	noarch	LGPL-3.0-or-later
+python3-six	1.17.0-8.fc44	noarch	MIT
+python3-speechd	0.12.1-6.fc44	x86_64	GPL-2.0-or-later
+python3-stevedore	5.3.0-7.fc44	noarch	Apache-2.0
+python3-stone	3.2.1-22.fc44	noarch	MIT
+python3-swiftclient	4.6.0-6.fc44	noarch	Apache-2.0
+python3-swiftclient+keystone	4.6.0-6.fc44	noarch	Apache-2.0
+python3-systemd	235-18.fc44	x86_64	LGPL-2.1-or-later
+python3-tqdm	4.68.3-1.fc44	noarch	MPL-2.0 AND LicenseRef-Callaway-MIT
+python3-typing-extensions	4.15.0-3.fc44	noarch	PSF-2.0
+python3-uritemplate	4.1.1-18.fc44	noarch	BSD-3-Clause OR Apache-2.0
+python3-urllib3	2.7.0-1.fc44	noarch	MIT
+python3-urllib3+socks	2.7.0-1.fc44	noarch	MIT
+python3-wrapt	2.2.1-1.fc44	x86_64	BSD-2-Clause
+python3-xkbregistry	0.3-9.fc44	x86_64	MIT
+qcom-wwan-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+qemu-user-static	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-aarch64	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-alpha	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-arm	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-hexagon	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-hppa	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-loongarch64	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-m68k	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-microblaze	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-mips	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-or1k	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-ppc	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-riscv	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-s390x	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-sh4	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-sparc	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-x86	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qemu-user-static-xtensa	10.2.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND FSFAP AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-2.0-or-later WITH GCC-exception-2.0 AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND LicenseRef-Fedora-Public-Domain AND CC-BY-3.0
+qrencode-libs	4.1.1-12.fc44	x86_64	LicenseRef-Callaway-LGPLv2+
+quota	4.11-2.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later
+quota-nls	4.11-2.fc44	noarch	LGPL-2.1-or-later AND GPL-2.0-only AND GPL-2.0-or-later
+rav1e-libs	0.8.1-3.fc44	x86_64	BSD-2-Clause AND ISC AND MIT AND LicenseRef-BSD-2-Clause-WITH-AdditionRef-AOMPL-1.0 AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (Unlicense OR MIT)
+rclone	1.74.3-1.fc44	x86_64	0BSD AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND CC0-1.0 AND ISC AND LGPL-3.0-only AND MIT AND MPL-2.0 AND (Apache-2.0 OR MIT)
+rdma-core-common	61.0-2.fc44	noarch	GPL-2.0-only OR BSD-2-Clause AND BSD-3-Clause
+readline	8.3-4.fc44	x86_64	GPL-3.0-or-later AND GPL-2.0-or-later AND GFDL-1.3-no-invariants-or-later
+realmd	0.17.1-19.fc44	x86_64	LGPL-2.1-or-later
+realtek-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+redhat-menus	12.0.2-39.fc44	noarch	GPL-1.0-or-later
+rest	0.10.2-5.fc44	x86_64	LGPL-2.1-only
+rpcbind	1.2.9-2.fc44	x86_64	BSD-3-Clause
+rpm	6.0.1-2.fc44	x86_64	GPL-2.0-or-later
+rpm-build-libs	6.0.1-2.fc44	x86_64	GPL-2.0-or-later
+rpm-libs	6.0.1-2.fc44	x86_64	GPL-2.0-or-later OR LGPL-2.1-or-later
+rpm-ostree	2026.2-1.fc44	x86_64	LGPL-2.0-or-later
+rpm-ostree-libs	2026.2-1.fc44	x86_64	LGPL-2.0-or-later
+rpm-plugin-audit	6.0.1-2.fc44	x86_64	GPL-2.0-or-later
+rpm-plugin-dbus-announce	6.0.1-2.fc44	x86_64	GPL-2.0-or-later
+rpm-plugin-selinux	6.0.1-2.fc44	x86_64	GPL-2.0-or-later
+rpm-sequoia	1.10.2-2.fc44	x86_64	LGPL-2.0-or-later AND Apache-2.0 AND BSD-3-Clause AND BSL-1.0 AND MIT AND Unicode-3.0 AND Unicode-DFS-2016 AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT)
+rpm-sign-libs	6.0.1-2.fc44	x86_64	GPL-2.0-or-later
+rsms-inter-fonts	4.1-3.fc44	noarch	OFL-1.1
+rsync	3.4.1-7.fc44	x86_64	GPL-3.0-or-later
+rtkit	0.11-70.fc44	x86_64	GPL-3.0-or-later AND MIT
+rubberband-libs	4.0.0-5.fc44	x86_64	GPL-2.0-or-later
+samba-client-libs	4.24.3-1.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later
+samba-common	4.24.3-1.fc44	noarch	GPL-3.0-or-later AND LGPL-3.0-or-later
+samba-core-libs	4.24.3-1.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later
+samba-ndr-libs	4.24.3-1.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later
+satyr	0.43-10.fc44	x86_64	GPL-2.0-or-later
+sdbus-cpp	2.2.1-2.fc44	x86_64	LGPL-2.1-only
+sdl2-compat	2.32.70-1.fc44	x86_64	Zlib
+seahorse	47.0.1-6.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.0-or-later AND CC-BY-SA-3.0
+sed	4.9-7.fc44	x86_64	GPL-3.0-or-later
+selinux-policy	44.3-1.fc44	noarch	GPL-2.0-or-later
+selinux-policy-targeted	44.3-1.fc44	noarch	GPL-2.0-or-later
+serd	0.32.8-1.fc44	x86_64	ISC
+setup	2.15.0-28.fc44	noarch	LicenseRef-Fedora-Public-Domain
+setxkbmap	1.3.4-7.fc44	x86_64	HPND
+sg3_utils	1.48-9.fc44	x86_64	GPL-2.0-or-later AND BSD-2-Clause
+sg3_utils-libs	1.48-9.fc44	x86_64	GPL-2.0-or-later AND BSD-2-Clause
+shadow-utils	4.19.0-7.fc44	x86_64	BSD-3-Clause AND GPL-2.0-or-later
+shadow-utils-subid	4.19.0-7.fc44	x86_64	BSD-3-Clause AND GPL-2.0-or-later
+shared-mime-info	2.4-3.fc44	x86_64	GPL-2.0-or-later
+shim-x64	16.1-5	x86_64	BSD-3-Clause
+simdutf	7.2.1-3.fc44	x86_64	Apache-2.0 AND BSD-3-Clause
+skopeo	1.22.2-1.fc44	x86_64	Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND ISC AND MIT AND MPL-2.0
+slang	2.3.3-9.fc44	x86_64	GPL-2.0-or-later
+smartmontools	7.5-6.fc44	x86_64	GPL-2.0-or-later
+smartmontools-selinux	7.5-6.fc44	noarch	GPL-2.0-or-later
+snapper	0.13.0-3.fc44	x86_64	GPL-2.0-only
+snapper-libs	0.13.0-3.fc44	x86_64	GPL-2.0-only
+snappy	1.2.2-4.fc44	x86_64	BSD-3-Clause
+socat	1.8.1.1-1.fc44	x86_64	GPL-2.0-only
+sord	0.16.22-1.fc44	x86_64	ISC
+sos	4.11.2-1.fc44	noarch	GPL-2.0-only
+sound-theme-freedesktop	0.8-31.fc44	noarch	GPL-2.0-only AND GPL-2.0-or-later AND LGPL-2.0-or-later AND CC-BY-SA-3.0 AND CC-BY-3.0 AND CC-BY-4.0
+source-highlight	3.1.9-27.fc44	x86_64	GPL-3.0-or-later AND GFDL-1.1-or-later AND LicenseRef-Fedora-Public-Domain AND GPL-2.0-only AND GPL-3.0-only AND GPL-3.0-or-later WITH Bison-exception-2.2
+soxr	0.1.3-21.fc44	x86_64	LGPL-2.1-or-later
+spandsp	0.0.6-22.fc44	x86_64	LGPL-2.1-only AND GPL-2.0-only
+spdlog	1.15.3-4.fc44	x86_64	MIT
+speech-dispatcher	0.12.1-6.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-only OR LGPL-2.0-only
+speech-dispatcher-espeak-ng	0.12.1-6.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.1-only OR LGPL-2.0-only
+speech-dispatcher-libs	0.12.1-6.fc44	x86_64	GPL-2.0-or-later
+speex	1.2.0-21.fc44	x86_64	BSD-3-clause AND TU-Berlin-1.0
+spirv-tools-libs	2026.1-1.fc44	x86_64	Apache-2.0
+sqlite-libs	3.51.2-1.fc44	x86_64	blessing
+squashfs-tools	4.6.1-8.fc44	x86_64	GPL-2.0-or-later
+sratom	0.6.22-1.fc44	x86_64	MIT
+srt-libs	1.5.5-1.fc44	x86_64	MPL-2.0
+sso-mib-libs	0.8.0-1.fc44	x86_64	LGPL-2.1-only
+sssd-ad	2.13.1-1.fc44	x86_64	GPL-3.0-or-later
+sssd-client	2.13.1-1.fc44	x86_64	LGPL-3.0-or-later
+sssd-common	2.13.1-1.fc44	x86_64	GPL-3.0-or-later
+sssd-common-pac	2.13.1-1.fc44	x86_64	GPL-3.0-or-later
+sssd-ipa	2.13.1-1.fc44	x86_64	GPL-3.0-or-later
+sssd-krb5	2.13.1-1.fc44	x86_64	GPL-3.0-or-later
+sssd-krb5-common	2.13.1-1.fc44	x86_64	GPL-3.0-or-later
+sssd-ldap	2.13.1-1.fc44	x86_64	GPL-3.0-or-later
+sssd-nfs-idmap	2.13.1-1.fc44	x86_64	GPL-3.0-or-later
+stalld	1.28.1-1.fc44	x86_64	GPL-2.0-or-later AND GPL-2.0-only
+startup-notification	0.12-33.fc44	x86_64	LGPL-2.0-or-later AND MIT
+sudo	1.9.17-8.p2.fc44	x86_64	ISC
+sudo-python-plugin	1.9.17-8.p2.fc44	x86_64	ISC
+sushi	50.0-1.fc44	x86_64	GPL-2.0-or-later WITH GStreamer-exception-2008 AND CC0-1.0 AND (LGPL-2.0-or-later AND LGPL-2.1-or-later WITH GStreamer-exception-2005)
+svt-av1-libs	3.1.2-2.fc44	x86_64	LicenseRef-BSD-3-Clause-Clear-WITH-AdditionRef-AOMPL-1.0 AND MIT AND ISC AND LicenseRef-Fedora-Public-Domain AND BSD-2-Clause
+switcheroo-control	3.0-5.fc44	x86_64	GPL-3.0-only
+systemd	259.7-1.fc44	x86_64	LGPL-2.1-or-later AND MIT AND GPL-2.0-or-later
+systemd-libs	259.7-1.fc44	x86_64	LGPL-2.1-or-later AND MIT
+systemd-pam	259.7-1.fc44	x86_64	LGPL-2.1-or-later AND MIT AND GPL-2.0-or-later
+systemd-resolved	259.7-1.fc44	x86_64	LGPL-2.1-or-later AND MIT AND GPL-2.0-or-later
+systemd-shared	259.7-1.fc44	x86_64	LGPL-2.1-or-later AND MIT
+systemd-sysusers	259.7-1.fc44	x86_64	LGPL-2.1-or-later AND MIT AND GPL-2.0-or-later
+systemd-udev	259.7-1.fc44	x86_64	LGPL-2.1-or-later
+taglib	2.3-2.fc44	x86_64	(LGPL-2.1-only OR MPL-1.1) AND BSD-2-Clause AND LGPL-2.1-only
+tar	1.35-8.fc44	x86_64	GPL-3.0-or-later
+teamd	1.32-13.fc44	x86_64	LGPL-2.0-or-later
+tecla	50.0-1.fc44	x86_64	GPL-2.0-or-later
+tesseract	5.5.2-1.fc44	x86_64	Apache-2.0
+tesseract-common	5.5.2-1.fc44	noarch	Apache-2.0
+tesseract-langpack-eng	4.1.0-12.fc44	noarch	Apache-2.0
+tesseract-libs	5.5.2-1.fc44	x86_64	Apache-2.0
+tesseract-tessdata-doc	4.1.0-12.fc44	noarch	Apache-2.0
+texlive-lib	20260301-111.fc44	x86_64	Apache-2.0 AND Artistic-2.0 AND BSD-3-Clause AND GFDL-1.1-or-later AND GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-3.0-only AND GPL-3.0-or-later AND Knuth-CTAN AND LGPL-2.1-or-later AND LGPL-3.0-or-later AND LPPL-1.3a AND LPPL-1.3c AND MIT AND OFL-1.1 AND LicenseRef-Fedora-Public-Domain
+tiwilink-firmware	20260622-1.fc44	noarch	LicenseRef-Callaway-Redistributable-no-modification-permitted
+tmux	3.6b-1.fc44	x86_64	ISC AND BSD-2-Clause AND BSD-3-Clause AND SSH-short AND LicenseRef-Fedora-Public-Domain
+toolbox	0.3-4.fc44	x86_64	Apache-2.0
+totem-pl-parser	3.26.7-1.fc44	x86_64	LicenseRef-Callaway-LGPLv2+
+tpm2-tools	5.7-5.fc44	x86_64	BSD-3-Clause
+tpm2-tss	4.1.3-9.fc44	x86_64	BSD-2-Clause
+tpm2-tss-fapi	4.1.3-9.fc44	x86_64	BSD-2-Clause
+tuned	2.27.0-1.fc44	noarch	GPL-2.0-or-later AND CC-BY-SA-3.0
+tuned-ppd	2.27.0-1.fc44	noarch	GPL-2.0-or-later AND CC-BY-SA-3.0
+twolame-libs	0.4.0-9.fc44	x86_64	LGPL-2.1-or-later
+tzdata	2026b-1.fc44	noarch	LicenseRef-Fedora-Public-Domain AND (GPL-2.0-only WITH ClassPath-exception-2.0)
+uchardet	0.0.8-10.fc44	x86_64	MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.0-or-later
+udftools	2.3-13.fc44	x86_64	GPL-2.0-or-later
+udisks2	2.11.1-2.fc44	x86_64	GPL-2.0-or-later
+udisks2-iscsi	2.11.1-2.fc44	x86_64	LGPL-2.0-or-later
+unbound	1.25.1-1.fc44	x86_64	BSD-3-Clause
+unbound-anchor	1.25.1-1.fc44	x86_64	BSD-3-Clause
+unbound-dracut	1.25.1-1.fc44	x86_64	BSD-3-Clause
+unbound-libs	1.25.1-1.fc44	x86_64	BSD-3-Clause
+unzip	6.0-69.fc44	x86_64	Info-ZIP
+upower	1.91.2-1.fc44	x86_64	GPL-2.0-or-later
+upower-libs	1.91.2-1.fc44	x86_64	GPL-2.0-or-later
+uriparser	1.0.2-1.fc44	x86_64	BSD-3-Clause
+urw-base35-bookman-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-c059-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-d050000l-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-fonts-common	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-gothic-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-nimbus-mono-ps-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-nimbus-roman-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-nimbus-sans-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-p052-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-standard-symbols-ps-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+urw-base35-z003-fonts	20200910-27.fc44	noarch	AGPL-3.0-only AND GPL-2.0-or-later
+usbutils	019-2.fc44	x86_64	GPL-2.0-or-later
+userspace-rcu	0.15.6-1.fc44	x86_64	LGPL-2.1-or-later
+util-linux	2.41.5-1.fc44	x86_64	GPL-1.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.1-or-later AND BSD-2-Clause AND BSD-3-Clause AND BSD-4-Clause-UC AND LicenseRef-Fedora-Public-Domain
+util-linux-core	2.41.5-1.fc44	x86_64	GPL-2.0-only AND GPL-2.0-or-later AND BSD-2-Clause AND BSD-3-Clause AND BSD-4-Clause-UC AND LicenseRef-Fedora-Public-Domain
+vdpauinfo	1.5-8.fc44	x86_64	MIT
+vid.stab	1.1.1-8.fc44	x86_64	GPL-2.0-or-later
+vim-data	9.2.725-1.fc44	noarch	Vim AND LGPL-2.1-or-later AND MIT AND GPL-1.0-only AND (GPL-2.0-only OR Vim) AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND GPL-2.0-or-later AND GPL-3.0-or-later AND OPUBL-1.0 AND Apache-2.0 WITH Swift-exception
+vim-minimal	9.2.725-1.fc44	x86_64	Vim AND LGPL-2.1-or-later AND MIT AND GPL-1.0-only AND (GPL-2.0-only OR Vim) AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND GPL-2.0-or-later AND GPL-3.0-or-later AND OPUBL-1.0 AND Apache-2.0 WITH Swift-exception
+virt-what	1.27-5.fc44	x86_64	GPL-2.0-or-later
+vo-amrwbenc	0.1.3-24.fc44	x86_64	Apache-2.0
+volume_key-libs	0.3.12-29.fc44	x86_64	GPL-2.0-only AND (MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later)
+vte-profile	0.84.0-1.fc44	x86_64	GPL-3.0-or-later
+vte291	0.84.0-1.fc44	x86_64	GPL-3.0-or-later AND LGPL-3.0-or-later AND MIT AND X11 AND CC-BY-4.0
+vte291-gtk4	0.84.0-1.fc44	x86_64	LGPL-3.0-or-later AND MIT AND X11
+vulkan-loader	1.4.341.0-1.fc44	x86_64	Apache-2.0
+vulkan-tools	1.4.341.0-1.fc44	x86_64	Apache-2.0
+wavpack	5.9.0-2.fc44	x86_64	BSD-3-Clause AND BSD-2-Clause AND LicenseRef-Fedora-Public-Domain
+wcurl	2026.01.05-2.fc44	noarch	curl
+webkit2gtk4.1	2.52.4-1.fc44	x86_64	LGPL-2.1-only AND BSD-2-Clause AND BSD-3-Clause AND ISC AND bzip2-1.0.6 AND NCSA AND MIT AND GPL-2.0-only AND MPL-1.1 AND SunPro AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2 AND GPL-3.0-or-later WITH Autoconf-exception-3.0 AND MPL-2.0 AND OFL-1.1 AND (AFL-2.0 OR GPL-2.0-or-later) AND BSD-Source-Code AND BSD-2-Clause-Views AND LGPL-2.1-or-later AND (NCSA OR MIT) AND Apache-2.0 WITH LLVM-exception AND ICU AND BSL-1.0
+webkitgtk6.0	2.52.4-1.fc44	x86_64	LGPL-2.1-only AND BSD-2-Clause AND BSD-3-Clause AND ISC AND bzip2-1.0.6 AND NCSA AND MIT AND GPL-2.0-only AND MPL-1.1 AND SunPro AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2 AND GPL-3.0-or-later WITH Autoconf-exception-3.0 AND MPL-2.0 AND OFL-1.1 AND (AFL-2.0 OR GPL-2.0-or-later) AND BSD-Source-Code AND BSD-2-Clause-Views AND LGPL-2.1-or-later AND (NCSA OR MIT) AND Apache-2.0 WITH LLVM-exception AND ICU AND BSL-1.0
+webrtc-audio-processing	2.1-5.fc44	x86_64	BSD-3-Clause
+which	2.25-1.fc44	x86_64	GPL-3.0-only
+whois-nls	5.6.6-1.fc44	noarch	GPL-2.0-or-later
+wireless-regdb	2026.05.30-1.fc44	noarch	ISC
+wireplumber	0.5.14-1.fc44	x86_64	MIT
+wireplumber-libs	0.5.14-1.fc44	x86_64	MIT
+wl-clipboard	2.2.1^git20251124.e808203-2.fc44	x86_64	GPL-3.0-or-later
+wlroots0.18	0.18.3-5.fc44	x86_64	MIT
+wpa_supplicant	2.11-9.fc44	x86_64	BSD-3-Clause
+wsdd	0.8-6.fc44	noarch	MIT
+wtype	0.4-11.fc44	x86_64	MIT
+xcb-util	0.4.1-9.fc44	x86_64	X11-distribute-modifications-variant
+xcb-util-errors	1.0.1-7.fc44	x86_64	X11
+xcb-util-renderutil	0.3.10-9.fc44	x86_64	X11-distribute-modifications-variant AND HPND-sell-variant
+xcb-util-wm	0.4.2-9.fc44	x86_64	X11-distribute-modifications-variant
+xdg-dbus-proxy	0.1.7-1.fc44	x86_64	LGPL-2.1-or-later
+xdg-desktop-portal	1.22.1-1.fc44	x86_64	LGPL-2.1-or-later
+xdg-desktop-portal-gnome	50.0-1.fc44	x86_64	LGPL-2.1-or-later
+xdg-desktop-portal-gtk	1.15.3-3.fc44	x86_64	LGPL-2.0-or-later
+xdg-user-dirs	0.18-11.fc43	x86_64	GPL-2.0-or-later AND MIT
+xdg-user-dirs-gtk	0.16-2.fc44	x86_64	GPL-2.0-or-later
+xdg-utils	1.2.1-5.fc44	noarch	MIT
+xevd-libs	0.5.0-6.fc44	x86_64	BSD-3-Clause
+xeve-libs	0.5.1-6.fc44	x86_64	BSD-3-Clause
+xfsprogs	7.0.1-2.fc44	x86_64	GPL-1.0-or-later AND LGPL-2.1-or-later
+xhost	1.0.9-11.fc44	x86_64	MIT AND ICU
+xkbcomp	1.5.0-2.fc44	x86_64	MIT-open-group AND HPND-DEC
+xkeyboard-config	2.47-1.fc44	noarch	HPND AND HPND-sell-variant AND X11 AND X11-distribute-modifications-variant AND MIT AND MIT-open-group AND xkeyboard-config-Zinoviev
+xml-common	0.6.3-68.fc44	noarch	GPL-1.0-or-later
+xmlrpc-c	1.60.04-5.fc44	x86_64	LicenseRef-Callaway-BSD AND LicenseRef-Callaway-MIT
+xmlrpc-c-client	1.60.04-5.fc44	x86_64	LicenseRef-Callaway-BSD AND LicenseRef-Callaway-MIT
+xmodmap	1.0.11-10.fc44	x86_64	MIT AND MIT-open-group
+xorg-x11-server-Xwayland	24.1.12-1.fc44	x86_64	MIT
+xorg-x11-xauth	1.1.5-1.fc44	x86_64	MIT-open-group
+xorg-x11-xinit	1.4.3-4.fc44	x86_64	X11-distribute-modifications-variant AND MIT-open-group
+xprop	1.2.8-5.fc44	x86_64	MIT
+xrdb	1.2.2-7.fc44	x86_64	HPND-DEC AND MIT-open-group
+xvidcore	1.3.7-19.fc44	x86_64	GPL-2.0-or-later
+xxhash-libs	0.8.3-4.fc44	x86_64	BSD-2-Clause
+xz	5.8.2-2.fc44	x86_64	0BSD AND GPL-2.0-or-later AND LicenseRef-Fedora-Public-Domain
+xz-libs	5.8.2-2.fc44	x86_64	0BSD
+zchunk-libs	1.5.1-4.fc44	x86_64	BSD-2-Clause AND MIT
+zenity	4.2.2-1.fc44	x86_64	LGPL-2.1-or-later
+zeromq	4.3.5-22.fc43	x86_64	MPL-2.0 AND BSD-3-Clause AND MIT
+zimg	3.0.6-3.fc44	x86_64	WTFPL
+zix	0.8.0-2.fc44	x86_64	ISC
+zlib-ng-compat	2.3.3-3.fc44	x86_64	Zlib
+zram-generator	1.2.1-5.fc44	x86_64	MIT AND (MIT OR Apache-2.0)
+zram-generator-defaults	1.2.1-5.fc44	noarch	MIT AND (MIT OR Apache-2.0)
+zstd	1.5.7-5.fc44	x86_64	BSD-3-Clause OR GPL-2.0-only
+zvbi	0.2.44-3.fc44	x86_64	GPL-2.0-or-later AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-2-Clause AND MIT

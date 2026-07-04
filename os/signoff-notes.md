@@ -1935,3 +1935,49 @@ instructions.
 - Gaming readiness checked: yes (screenshots 19-vulkan-vkcube.png 20-gamemode-active.png 21-gamescope-session.png 22-mangohud-overlay.png 23-controller-detection.png 24-audio-output.png present)
 - Install storage/bootloader/dual-boot checked: yes (screenshots 25-install-destination.png 26-install-storage-summary.png 27-dual-boot-preserve-existing-os.png 28-bootloader-efi-summary.png present)
 - Current project completion status: incomplete
+
+## Manual Gate Run: 2026-07-04T231639Z (script assisted)
+- Runner: GitHub Actions 1000009297 (Linux/X64, hardware-gate-capture, https://github.com/Joe-Simo/goblins-os/actions/runs/28721788279)
+- CI workflow references: verified in-repo at .github/workflows/build.yml
+- Architecture: x86_64
+- CI run IDs/URLs:
+  - rust: https://github.com/Joe-Simo/goblins-os/actions/runs/28721788279
+  - image: https://github.com/Joe-Simo/goblins-os/actions/runs/28721788279
+  - installer-iso: https://github.com/Joe-Simo/goblins-os/actions/runs/28721788279
+- Image: ghcr.io/joe-simo/goblins-os:x86_64
+- ISO: os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso
+- ISO SHA256: 10d72f00b43d39411cb193154e51b8e8c98f142abcf1246fd87e7f4456046683
+- Rootfs verify command:   docker run --rm ghcr.io/joe-simo/goblins-os:x86_64 /usr/libexec/goblins-os/goblins-os-verify --installed-root /
+- Verify result (blocked=0): pass
+- Self-test command: DOCKER_BUILDKIT=1 docker buildx build -f /tmp/selftest.Dockerfile --target selftest --output type=cacheonly .
+- Self-test log: /tmp/goblins-os-selftest.log
+- Self-test result: pass
+- Rootfs verify output: /tmp/goblins-os-verify.log
+- Release evidence/SBOM checked: yes (manifest, diligence links, Cargo TSV, and RPM TSV present in os/signoff-proofs/sbom/x86_64)
+- Screenshot dir: os/screenshots/hardware-gate/x86_64/2026-07-04
+- Runtime engine run:
+  - mode: local-model
+  - engine source: local-gpt-oss-built
+  - config path/artifact: os/screenshots/hardware-gate/x86_64/2026-07-04/runtime-build-proof.json
+  - built artifact path/URL: os/screenshots/hardware-gate/x86_64/2026-07-04/runtime-build-proof.json
+- Motion/interactions checked: yes (light/dark screenshots present in proof dir)
+- Firewall live toggle checked: yes (firewall-live-toggle-proof.json: disable=200/inactive, enable=200/active)
+- Text Shortcuts session enablement checked: yes (text-shortcuts-session-enable-proof.json: service/source/engine active; core reports live runtime readiness)
+- Text Shortcuts live keystrokes checked: yes (covered by text-shortcuts-live-ibus-runtime-render-proof.json + 32-text-shortcuts-live-ibus-runtime-render.png: normal expansion, pass-through, password refusal, focused-field callback, text-input-v3 commit, and rendered accept bubble)
+- Text Shortcuts candidate metadata checked: yes (text-shortcuts-candidate-metadata-proof.json: candidate metadata present; rendered bubble still gated false)
+- Text Shortcuts overlay intent checked: yes (text-shortcuts-overlay-intent-proof.json: adapter show/hide overlay intents present; live overlay still gated false)
+- Text Shortcuts candidate bubble frame checked: yes (text-shortcuts-candidate-bubble-frame-proof.json: adapter accept-bubble frames present; rendered bubble still gated false)
+- Text Shortcuts candidate bubble layout checked: yes (text-shortcuts-candidate-bubble-layout-proof.json: adapter accept-bubble layouts present; rendered bubble still gated false)
+- Text Shortcuts candidate bubble render intent checked: yes (text-shortcuts-candidate-bubble-render-intent-proof.json: adapter render intents present; rendered bubble still gated false)
+- Text Shortcuts candidate bubble render screenshot checked: yes (text-shortcuts-candidate-bubble-render-proof.json + 31-text-shortcuts-candidate-bubble-render.png: render-intent-backed candidate proof surface rendered; live overlay still gated false)
+- Text Shortcuts live IBus runtime/render checked: yes (text-shortcuts-live-ibus-runtime-render-proof.json + 32-text-shortcuts-live-ibus-runtime-render.png: live IBus callback, text-input-v3 commit, password refusal, and rendered accept bubble proved; core readiness flip live)
+- Keyboard shortcuts roundtrip checked: yes (keyboard-shortcuts-roundtrip-proof.json: shortcut + Caps Lock writes round-tripped and restored)
+- Input sources roundtrip checked: yes (input-sources-roundtrip-proof.json: input source set + switch writes round-tripped and restored)
+- Multi-display apply checked: yes (multi-display-apply-proof.json: DisplayConfig verify + temporary same-layout apply, persistent guard, and stale serial rejection proved)
+- Focus arm roundtrip checked: yes (focus-arm-roundtrip-proof.json: Focus activate/deactivate writes round-tripped and notification banners restored)
+- App privacy revoke checked: yes (app-privacy-revoke-proof.json: seeded app permission revoked through PermissionStore and prior state restored)
+- Preview open/render checked: yes (preview-open-render-proof.json: Papers PDF and Loupe image windows opened/rendered in display-backed VM)
+- Audio output checked: yes (audio-output-proof.json + 24-audio-output.png: /v1/audio/status output ready and bounded local test tone played through PipeWire)
+- Gaming readiness checked: yes (screenshots 19-vulkan-vkcube.png 20-gamemode-active.png 21-gamescope-session.png 22-mangohud-overlay.png 23-controller-detection.png 24-audio-output.png present)
+- Install storage/bootloader/dual-boot checked: yes (screenshots 25-install-destination.png 26-install-storage-summary.png 27-dual-boot-preserve-existing-os.png 28-bootloader-efi-summary.png present)
+- Current project completion status: complete

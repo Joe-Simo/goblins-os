@@ -1,12 +1,12 @@
 {
   "built_artifact_id": "a-focus-timer-that-counts-down-25-minutes-and-ri-9c56849b",
-  "built_artifact_name": "Timer Focus",
+  "built_artifact_name": "Timer",
   "captured_via": "display-backed VM HTTP proof signal",
   "engine_mode": "local-model",
   "engine_source": "local-gpt-oss-built",
   "intent": "A focus timer that counts down 25 minutes and rings.",
   "name": "runtime-build",
-  "response_bytes": "2333",
+  "response_bytes": "3070",
   "route": "/v1/apps/builds",
   "status": "pass"
 }

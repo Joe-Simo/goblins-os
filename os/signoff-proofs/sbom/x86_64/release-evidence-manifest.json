@@ -1,0 +1,14 @@
+{
+  "schema": "goblins-os-release-evidence-v1",
+  "architecture": "x86_64",
+  "cargo_lock": "Cargo.lock",
+  "cargo_package_count": 256,
+  "cargo_packages_tsv": "cargo-lock-packages.tsv",
+  "rpm_packages_tsv": "rpm-packages.tsv",
+  "rpm_command_file": "rpm-packages.command",
+  "rpm_status": "generated from rpm database",
+  "asset_provenance": "os/release/asset-provenance.toml",
+  "third_party_notices": "os/release/third-party-notices.toml",
+  "trademark_posture": "os/release/trademark-posture.toml",
+  "source_tree_manifest": "os/release/source-tree-manifest.toml"
+}

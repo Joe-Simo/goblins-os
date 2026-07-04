@@ -1,7 +1,6 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { PerspectiveCamera } from "@react-three/drei";
 
 function InstallerMedia() {
   return (
@@ -31,6 +30,7 @@ export function ThreeDeviceScene() {
     <Canvas
       dpr={[1, 1.5]}
       frameloop="demand"
+      camera={{ position: [0, 1.3, 4.4], fov: 38 }}
       gl={{
         antialias: true,
         powerPreference: "low-power",
@@ -39,7 +39,6 @@ export function ThreeDeviceScene() {
       }}
       aria-hidden="true"
     >
-      <PerspectiveCamera makeDefault position={[0, 1.3, 4.4]} fov={38} />
       <ambientLight intensity={1.7} />
       <directionalLight position={[2, 3, 4]} intensity={1.4} />
       <InstallerMedia />

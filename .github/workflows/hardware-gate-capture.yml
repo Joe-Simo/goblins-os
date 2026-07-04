@@ -1,4 +1,4 @@
-# Hardware-gate display-backed-VM capture, on NATIVE dual-arch runners.
+# Hardware-gate display-backed-VM capture for the x86_64 CI route.
 # Manual-dispatch only (never auto-runs) — it boots the shippable ISO in a
 # KVM-accelerated qemu VM, drives the install + the in-session capture harness,
 # writes the 32-shot screenshot run + proof-manifest, and runs close-signoff.
@@ -20,9 +20,10 @@ concurrency:
 jobs:
   capture:
     # x86_64 only: GitHub's ubuntu-24.04-arm runners have no /dev/kvm (no nested
-    # virt), so the aarch64 display-backed-VM run is captured locally on an
-    # Apple-Silicon/hvf host instead. This job covers the x86_64 track, which
-    # has no local route on an Apple-Silicon dev host.
+    # virt), so the aarch64 display-backed-VM run uses the local native
+    # aarch64/HVF capture harness documented in os/hardware-gate/runbook.md.
+    # This job covers the x86_64 track, which has no local route on an
+    # Apple-Silicon dev host.
     strategy:
       fail-fast: false
       matrix:

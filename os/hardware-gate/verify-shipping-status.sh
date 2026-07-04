@@ -1017,6 +1017,14 @@ Expected $arch proof files:
   os/screenshots/hardware-gate/$arch/<date>/$AUDIO_OUTPUT_PROOF
   os/screenshots/hardware-gate/$arch/<date>/$RUNTIME_BUILD_PROOF
 EOF
+
+  if [ "$arch" = "aarch64" ]; then
+    cat <<EOF
+
+Native aarch64 macOS/HVF capture after the shippable ISO is present:
+  RUN_DATE=<date> GOBLINS_OS_ARCH=aarch64 REPO_ROOT="$ROOT" os/hardware-gate/capture-harness/run-capture.sh
+EOF
+  fi
 }
 
 signoff_block_contains() {
@@ -1189,6 +1197,7 @@ check "external gate fails low disk before build" "rg -q 'MIN_HOST_FREE_GB' os/h
 check "external gate checks container runtime health before build" "rg -q 'CONTAINER_RUNTIME_HEALTH_TIMEOUT_SECS' os/hardware-gate/run-external-gate.sh && rg -q 'Checking [$]CONTAINER_RUNTIME health' os/hardware-gate/run-external-gate.sh && rg -q 'did not answer within' os/hardware-gate/run-external-gate.sh"
 check "external gate has fail-closed preflight-only mode" "rg -q 'PREFLIGHT_ONLY=1' os/hardware-gate/run-external-gate.sh && rg -q 'Preflight passed for native [$]ARCH release runner' os/hardware-gate/run-external-gate.sh && rg -q 'Docker artifact-only preflight passed for [$]ARCH on [$]HOST_ARCH; not release proof' os/hardware-gate/run-external-gate.sh && rg -q 'No image, ISO, SBOM, screenshot, or signoff artifact was generated' os/hardware-gate/run-external-gate.sh"
 check "runbook documents external preflight command" "rg -q 'PREFLIGHT_ONLY=1 GOBLINS_OS_ARCH' os/hardware-gate/runbook.md && rg -q 'does not create shipping artifacts or satisfy proof by itself' os/hardware-gate/runbook.md"
+check "runbook documents aarch64 macOS HVF capture route" "rg -q 'aarch64 macOS/HVF capture route' os/hardware-gate/runbook.md && rg -q 'capture-harness/run-capture.sh' os/hardware-gate/runbook.md && rg -q 'already materialized shippable ISO' os/hardware-gate/runbook.md"
 check "external gate allows artifact-only mode without pretending proof is complete" "rg -q 'RUN_QEMU=0: built and verified artifacts only' os/hardware-gate/run-external-gate.sh"
 check "external gate verifies ISO SHA256" "rg -q 'sha256sum -c' os/hardware-gate/run-external-gate.sh"
 check "external gate generates release evidence" "rg -q -- '--release-evidence /out' os/hardware-gate/run-external-gate.sh"

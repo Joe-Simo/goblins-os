@@ -1,6 +1,9 @@
 # Goblins OS External Sign-off Runbook
 
-Run this on a Linux host with a display-backed VM path available.
+Run the release build and the `run-external-gate.sh` path on a native Linux host
+with Docker, QEMU, and a display-backed VM path available. The capture harness
+also supports the native aarch64 macOS/HVF path after the shippable aarch64 ISO
+already exists under `os/iso/output/aarch64/`.
 
 Set:
 
@@ -32,6 +35,24 @@ cd "$REPO_ROOT"
   ```
 - Prepare a writable scratch VM disk if preflight passed and you are not letting
   the helper create it: `qemu-img create -f qcow2 /tmp/goblins-os-$ARCH.qcow2 80G`.
+
+### aarch64 macOS/HVF capture route
+
+The Linux external gate remains the artifact/SBOM build authority. For the
+display-backed aarch64 screenshot run, an Apple-Silicon host can boot an already
+materialized shippable ISO with the capture harness:
+
+```sh
+RUN_DATE=<YYYY-MM-DD> \
+GOBLINS_OS_ARCH=aarch64 \
+REPO_ROOT="$REPO_ROOT" \
+os/hardware-gate/capture-harness/run-capture.sh
+```
+
+This route still requires `os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso`
+and the matching `.sha256`, a native `qemu-system-aarch64`, UEFI firmware, and
+enough free space for the VM scratch disk and proof output. It does not replace
+the GHCR/package visibility check or the release artifact/SBOM build.
 
 ### Docker artifact testing on a non-native machine
 

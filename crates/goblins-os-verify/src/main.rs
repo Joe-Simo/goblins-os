@@ -7762,6 +7762,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "capture-run-does-not-pretend-oemdrv-overrides-embedded-osbuild-ks",
             "make-oemdrv.sh",
         ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-allows-explicit-verification-iso-path",
+            "GOBLINS_OS_CAPTURE_ISO",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-requires-verification-iso-marker",
+            "GOBLINS_VERIFY_INSTALL_DONE",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-requires-hardware-gate-session-orchestrator",
+            "goblins-hwgate-session-orchestrator",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-refuses-human-safe-release-iso",
+            "public release ISO is intentionally human-safe",
+        ),
         absent_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-does-not-fake-anaconda-disk-selection-by-click",

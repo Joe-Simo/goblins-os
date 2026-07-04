@@ -32,11 +32,15 @@ to a stable public release.
   verified against the final ISO SHA256.
 - [x] Source and generated artifact scans check for live secrets.
 - [ ] `x86_64` display-backed screenshot/runtime run matches the current
-  hydrated release ISO.
+  verification ISO built from the release bootc image.
   Current check: `os/screenshots/hardware-gate/x86_64/2026-07-03` contains the
   expected screenshot and proof files, but its `proof-manifest.json` records a
-  different ISO SHA256 than the current hydrated `goblins-os-x86_64.iso`.
+  different ISO SHA256 than the current hydrated release `goblins-os-x86_64.iso`.
 - [ ] `aarch64` display-backed signoff run is complete.
+  Current check: the local aarch64 macOS/HVF attempt correctly failed against
+  hydrated public release media because that ISO leaves storage interactive; the
+  capture harness now fail-closes before QEMU unless the ISO contains the
+  verification-only hardware-gate kickstart.
 - [ ] Latest signoff row records runner, ISO, checksums, self-test, runtime
   proof, app-build proof, gaming proof, storage proof, and SBOM evidence.
   Current check: the latest `x86_64` row from GitHub Actions run
@@ -64,6 +68,8 @@ podman manifest inspect ghcr.io/joe-simo/goblins-os:aarch64
 - [ ] Hydrate release artifacts before local signoff. Use the default
   metadata/SBOM mode for lightweight review, or set `GOBLINS_OS_DOWNLOAD_ISO=1`
   only on a machine with enough disk and bandwidth for ISO reconstruction.
+- [ ] Build or fetch the verification-only hardware-gate ISO for screenshot
+  capture; do not use hydrated public release media for automated capture.
 - [ ] Create a stable release tag.
 - [ ] Update website release data from alpha to stable.
 - [ ] Run website checks:

@@ -2,8 +2,10 @@
 
 Run the release build and the `run-external-gate.sh` path on a native Linux host
 with Docker, QEMU, and a display-backed VM path available. The capture harness
-also supports the native aarch64 macOS/HVF path after the shippable aarch64 ISO
-already exists under `os/iso/output/aarch64/`.
+boots a verification-only ISO built with `os/iso/verify-config.toml` from the
+same real pullable bootc image ref used by release media. Do not point the
+automated capture harness at hydrated public release media: release ISOs are
+human-safe and intentionally leave storage interactive.
 
 Set:
 
@@ -40,7 +42,11 @@ cd "$REPO_ROOT"
 
 The Linux external gate remains the artifact/SBOM build authority. For the
 display-backed aarch64 screenshot run, an Apple-Silicon host can boot an
-already materialized shippable ISO with the capture harness:
+already materialized verification-only hardware-gate ISO with the capture
+harness. That ISO must be built from the real pullable release bootc image ref
+with `GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml`; hydrated public release
+ISOs do not include the noninteractive hardware-gate kickstart and cannot
+satisfy this proof.
 
 ```sh
 RUN_DATE=<YYYY-MM-DD> \
@@ -49,10 +55,13 @@ REPO_ROOT="$REPO_ROOT" \
 os/hardware-gate/capture-harness/run-capture.sh
 ```
 
-This route still requires `os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso`
-and the matching `.sha256`, a native `qemu-system-aarch64`, UEFI firmware, and
-enough free space for the VM scratch disk and proof output. It does not replace
-the GHCR/package visibility check or the release artifact/SBOM build.
+This route still requires the verification ISO at
+`os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso` and the matching
+`.sha256`, a native `qemu-system-aarch64`, UEFI firmware, and enough free space
+for the VM scratch disk and proof output. Use `GOBLINS_OS_CAPTURE_ISO` and
+`GOBLINS_OS_CAPTURE_ISO_SHA256` only when the verification ISO is stored outside
+the default output path. It does not replace the GHCR/package visibility check
+or the release artifact/SBOM build.
 
 ### Docker artifact testing on a non-native machine
 

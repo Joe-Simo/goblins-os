@@ -18,8 +18,8 @@ set -euo pipefail
 ARCH="${GOBLINS_OS_ARCH:-$(uname -m)}"
 case "$ARCH" in arm64|aarch64) ARCH=aarch64; QEMU=qemu-system-aarch64;; x86_64|amd64) ARCH=x86_64; QEMU=qemu-system-x86_64;; *) echo "unsupported arch $ARCH"; exit 2;; esac
 REPO="${REPO_ROOT:-$(pwd)}"
-ISO="$REPO/os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso"
-SHA_FILE="$ISO.sha256"
+ISO="${GOBLINS_OS_CAPTURE_ISO:-$REPO/os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso}"
+SHA_FILE="${GOBLINS_OS_CAPTURE_ISO_SHA256:-$ISO.sha256}"
 BASE_WORK="${WORK_DIR:-/tmp/gos-hwgate-$ARCH}"
 WORK="$BASE_WORK"
 PORT="${HTTP_PORT:-8099}"
@@ -28,6 +28,7 @@ RUN_DIR="$REPO/os/screenshots/hardware-gate/$ARCH/$DATE"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 HTTPD=""
 QEMU_PID=""
+CAPTURE_STARTED=0
 
 dump_file_tail() {
   local label="$1"
@@ -69,7 +70,7 @@ dump_capture_logs() {
 
 cleanup() {
   local rc=$?
-  if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -ne 0 ] && [ "${CAPTURE_STARTED:-0}" = "1" ]; then
     dump_capture_logs
   fi
   [ -n "${QEMU_PID:-}" ] && kill "$QEMU_PID" 2>/dev/null || true
@@ -78,6 +79,35 @@ cleanup() {
 trap cleanup EXIT
 
 [ -f "$ISO" ] || { echo "missing ISO $ISO"; exit 1; }
+[ -f "$SHA_FILE" ] || { echo "missing ISO SHA256 file $SHA_FILE"; exit 1; }
+
+require_verification_iso() {
+  local missing=0
+  local needle
+  for needle in \
+    "GOBLINS_VERIFY_INSTALL_DONE" \
+    "ignoredisk --only-use=vda" \
+    "goblins-hwgate-session-orchestrator"; do
+    if ! LC_ALL=C grep -aFq "$needle" "$ISO"; then
+      echo "verification ISO guard: missing $needle in $ISO" >&2
+      missing=1
+    fi
+  done
+  if [ "$missing" -ne 0 ]; then
+    cat >&2 <<EOF
+capture harness requires the verification-only hardware-gate ISO built with:
+  GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml
+
+The public release ISO is intentionally human-safe and leaves storage
+interactive, so it cannot satisfy automated display-backed proof. Build or
+point GOBLINS_OS_CAPTURE_ISO at the verification ISO generated from the real
+pullable release bootc image.
+EOF
+    exit 2
+  fi
+}
+
+require_verification_iso
 ISO_SHA="$(awk '{print $1; exit}' "$SHA_FILE")"
 
 # Accel: KVM on Linux, HVF on macOS.
@@ -163,6 +193,7 @@ start_qemu() {
     "${QEMU_AUDIO[@]}" \
     -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &
   QEMU_PID=$!
+  CAPTURE_STARTED=1
   export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT" GOS_QMP_DISPLAY_DEVICE=video0
   export GOS_ORCHESTRATOR_SOURCE="$HERE/in-session-orchestrator.sh" GOS_ORCHESTRATOR_DEST="$WORK/orchestrator.sh"
 }

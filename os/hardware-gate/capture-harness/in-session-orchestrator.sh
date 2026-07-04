@@ -10,7 +10,14 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   echo "GOBLINS_HWGATE_ORCHESTRATOR_ALREADY_RUNNING"
   exit 0
 fi
-trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+MODEL_LOOPBACK_PID=""
+cleanup(){
+  if [ -n "${MODEL_LOOPBACK_PID:-}" ]; then
+    kill "$MODEL_LOOPBACK_PID" 2>/dev/null || true
+  fi
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
 H=10.0.2.2:8099
 B=/usr/libexec/goblins-os
 LIVE_URL=http://127.0.0.1:8787
@@ -70,6 +77,69 @@ file_size_value(){
 }
 file_tail_query_value(){
   proof_query_value "$(tail -n 30 "$1" 2>/dev/null || true)"
+}
+start_capture_model_loopback(){
+  rm -f /tmp/model-loopback.log /tmp/model-loopback-tags.json /tmp/model-loopback-tags.err
+  python3 - <<'PY' >/tmp/model-loopback.log 2>&1 &
+import socket
+import threading
+
+LISTEN = ("127.0.0.1", 11434)
+TARGET = ("10.0.2.2", 11434)
+
+def close(sock):
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+def pump(src, dst):
+    try:
+        while True:
+            data = src.recv(65536)
+            if not data:
+                break
+            dst.sendall(data)
+    except OSError:
+        pass
+    finally:
+        close(src)
+        close(dst)
+
+def handle(client):
+    try:
+        upstream = socket.create_connection(TARGET, timeout=10)
+    except OSError as exc:
+        print(f"connect failed: {exc}", flush=True)
+        close(client)
+        return
+    threading.Thread(target=pump, args=(client, upstream), daemon=True).start()
+    threading.Thread(target=pump, args=(upstream, client), daemon=True).start()
+
+listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(LISTEN)
+listener.listen(32)
+print(f"forwarding {LISTEN[0]}:{LISTEN[1]} to {TARGET[0]}:{TARGET[1]}", flush=True)
+while True:
+    client, _ = listener.accept()
+    threading.Thread(target=handle, args=(client,), daemon=True).start()
+PY
+  MODEL_LOOPBACK_PID=$!
+  for _ in $(seq 1 20); do
+    if curl -sf http://127.0.0.1:11434/api/tags >/tmp/model-loopback-tags.json 2>/tmp/model-loopback-tags.err; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "GOBLINS_HWGATE_MODEL_LOOPBACK_NOT_READY"
+  tail -n 20 /tmp/model-loopback.log 2>/dev/null || true
+  tail -n 20 /tmp/model-loopback-tags.err 2>/dev/null || true
+  return 1
 }
 json_string_literal(){
   python3 - "$1" <<'PY'
@@ -2003,6 +2073,7 @@ mkdir -p \
   "$FIX_STATE/resident" \
   "$FIX_STATE/voice"
 CAPTURE_LOCAL_MODEL="${GOBLINS_OS_LOCAL_MODEL:-llama3.2:1b}"
+start_capture_model_loopback || true
 GOBLINS_OS_CORE_PORT=8788 GOBLINS_OS_SYS_BLOCK_DIR=$FIX GOBLINS_OS_RAM_GB=32 \
   GOBLINS_OS_POLICY_STATE="$FIX_STATE/policy" \
   GOBLINS_OS_APPS_DIR="$FIX_STATE/apps" \
@@ -2014,7 +2085,7 @@ GOBLINS_OS_CORE_PORT=8788 GOBLINS_OS_SYS_BLOCK_DIR=$FIX GOBLINS_OS_RAM_GB=32 \
   GOBLINS_OS_RESIDENT_STATE="$FIX_STATE/resident" \
   GOBLINS_OS_VOICE_DIR="$FIX_STATE/voice" \
   GOBLINS_OS_LOCAL_MODEL="$CAPTURE_LOCAL_MODEL" \
-  GOBLINS_OS_LOCAL_MODEL_RUNTIME=os-managed-runtime GOBLINS_OS_LOCAL_RUNTIME_URL=http://10.0.2.2:11434 \
+  GOBLINS_OS_LOCAL_MODEL_RUNTIME=os-managed-runtime GOBLINS_OS_LOCAL_RUNTIME_URL=http://127.0.0.1:11434 \
   "$B/goblins-os-core" >/tmp/fixcore.log 2>&1 &
 FIXCORE=$!
 GOBLINS_OS_CORE_PORT=8788 \
@@ -2022,7 +2093,7 @@ GOBLINS_OS_CORE_PORT=8788 \
   GOBLINS_OS_MODEL_DIR="$FIX_STATE/models" \
   GOBLINS_OS_MODEL_INSTALL_STATE="$FIX_STATE/models/install-state" \
   GOBLINS_OS_LOCAL_MODEL="$CAPTURE_LOCAL_MODEL" \
-  GOBLINS_OS_LOCAL_RUNTIME_URL=http://10.0.2.2:11434 \
+  GOBLINS_OS_LOCAL_RUNTIME_URL=http://127.0.0.1:11434 \
   "$B/goblins-os-resident" >/tmp/fixres.log 2>&1 &
 sleep 5
 FIX_URL=http://127.0.0.1:8788

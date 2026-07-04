@@ -7121,6 +7121,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "GOBLINS_OS_LOCAL_MODEL=\"$CAPTURE_LOCAL_MODEL\"",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-starts-loopback-model-forwarder",
+            "start_capture_model_loopback",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-forwards-qemu-host-model",
+            "TARGET = (\"10.0.2.2\", 11434)",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-uses-loopback-runtime-url",
+            "GOBLINS_OS_LOCAL_RUNTIME_URL=http://127.0.0.1:11434",
+        ),
+        contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
             "hardware-gate-serves-the-capture-model",
             "ollama pull llama3.2:1b",

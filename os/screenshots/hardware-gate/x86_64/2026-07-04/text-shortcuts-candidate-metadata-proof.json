@@ -1,0 +1,13 @@
+{
+  "candidate_accept_on": "word-boundary",
+  "candidate_dismiss_key": "Escape",
+  "candidate_replacement": "on my way",
+  "captured_via": "display-backed VM HTTP proof signal",
+  "live_overlay_claim": "false",
+  "name": "text-shortcuts-candidate-metadata",
+  "rendered_bubble_ready_claim": "false",
+  "route": "/v1/text-shortcuts",
+  "runtime_ready_claim": "false",
+  "status": "pass",
+  "surface": "goblins-os-shell-text-shortcuts-candidate-proof"
+}

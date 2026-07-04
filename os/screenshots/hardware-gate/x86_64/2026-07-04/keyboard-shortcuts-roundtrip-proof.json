@@ -1,0 +1,20 @@
+{
+  "captured_via": "display-backed VM HTTP proof signal",
+  "modifier_gsettings_readback": "ctrl:nocaps",
+  "modifier_http": "200",
+  "modifier_reset_http": "200",
+  "modifier_restore": "default",
+  "modifier_route": "/v1/keyboard/modifier-remap",
+  "modifier_target": "caps-lock",
+  "modifier_value": "control",
+  "name": "keyboard-shortcuts-roundtrip",
+  "roundtrip_restored": "true",
+  "shortcut_action": "window-hud",
+  "shortcut_binding": "<Super><Shift>H",
+  "shortcut_gsettings_readback": "true",
+  "shortcut_http": "200",
+  "shortcut_reset_binding": "<Super>w",
+  "shortcut_reset_http": "200",
+  "shortcut_route": "/v1/keyboard/shortcuts/binding",
+  "status": "pass"
+}

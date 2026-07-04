@@ -1,0 +1,15 @@
+{
+  "adapter_self_test": "pass",
+  "captured_via": "display-backed VM HTTP proof signal",
+  "committed_reason": "true",
+  "dismissed_reason": "true",
+  "hide_count": "2",
+  "live_overlay_claim": "false",
+  "name": "text-shortcuts-overlay-intent",
+  "rendered_bubble_ready_claim": "false",
+  "route": "/v1/text-shortcuts",
+  "runtime_ready_claim": "false",
+  "show_count": "2",
+  "status": "pass",
+  "surface": "goblins-textshortcuts-ibus-adapter-overlay-intent"
+}

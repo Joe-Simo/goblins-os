@@ -1,0 +1,16 @@
+{
+  "captured_via": "display-backed VM HTTP proof signal",
+  "core_restarts": "0",
+  "name": "audio-output",
+  "output_available": "true",
+  "output_muted": "false",
+  "output_volume": "40",
+  "player": "pw-play",
+  "rendered_sound_panel": "true",
+  "screenshot": "24-audio-output.png",
+  "status": "pass",
+  "status_http": "200",
+  "status_route": "/v1/audio/status",
+  "test_tone_seconds": "45",
+  "wireplumber_available": "true"
+}

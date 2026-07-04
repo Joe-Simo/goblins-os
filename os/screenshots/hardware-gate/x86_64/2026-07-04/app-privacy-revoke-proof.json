@@ -1,0 +1,22 @@
+{
+  "app": "org.goblins.GatePrivacyProof",
+  "captured_via": "display-backed VM HTTP proof signal",
+  "device_revoke_claim": "false",
+  "id": "org.goblins.GatePrivacyProof",
+  "name": "app-privacy-revoke",
+  "post_revoke_absent": "true",
+  "readback_method": "PermissionStore.GetPermission",
+  "resource_keyed_claim": "false",
+  "restore_prior_state": "true",
+  "revoke_http": "200",
+  "revoke_method": "PermissionStore.DeletePermission",
+  "revoke_ok": "true",
+  "roundtrip_restored": "true",
+  "route": "/v1/app-privacy/revoke",
+  "seed_attempt": "typed",
+  "seed_grant": "yes",
+  "seed_method": "PermissionStore.SetPermission",
+  "seed_readback": "true",
+  "status": "pass",
+  "table": "location"
+}

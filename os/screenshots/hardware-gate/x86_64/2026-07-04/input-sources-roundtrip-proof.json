@@ -1,0 +1,19 @@
+{
+  "captured_via": "display-backed VM HTTP proof signal",
+  "current_after_switch": "1",
+  "current_before_switch": "0",
+  "name": "input-sources-roundtrip",
+  "restore_current": "true",
+  "restore_sources": "true",
+  "roundtrip_restored": "true",
+  "set_http": "200",
+  "set_ok": "true",
+  "source_route": "/v1/input/sources",
+  "sources_gsettings_readback": "true",
+  "status": "pass",
+  "switch_http": "200",
+  "switch_ok": "true",
+  "switch_route": "/v1/input/switch-next",
+  "switch_switched": "true",
+  "test_sources": "xkb-us,xkb-gb"
+}

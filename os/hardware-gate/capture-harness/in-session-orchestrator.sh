@@ -141,6 +141,112 @@ PY
   tail -n 20 /tmp/model-loopback-tags.err 2>/dev/null || true
   return 1
 }
+start_capture_model_contract_relay(){
+  rm -f /tmp/model-contract.log /tmp/model-contract-direct.json /tmp/model-contract-direct.err
+  CAPTURE_LOCAL_MODEL="$CAPTURE_LOCAL_MODEL" \
+  CAPTURE_MODEL_KEEP_ALIVE="$CAPTURE_MODEL_KEEP_ALIVE" \
+  python3 - <<'PY' >/tmp/model-contract.log 2>&1 &
+import http.client
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+LISTEN = ("127.0.0.1", 41135)
+TARGET = ("10.0.2.2", 11434)
+MODEL = os.environ["CAPTURE_LOCAL_MODEL"]
+KEEP_ALIVE = os.environ["CAPTURE_MODEL_KEEP_ALIVE"]
+MAX_BODY = 1024 * 1024
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        print(fmt % args, flush=True)
+
+    def send_json(self, status, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        if self.path != "/v1/resident":
+            self.send_json(404, {"text": ""})
+            return
+        try:
+            length = int(self.headers.get("content-length", "0"))
+        except ValueError:
+            self.send_json(400, {"text": ""})
+            return
+        if length <= 0 or length > MAX_BODY:
+            self.send_json(413, {"text": ""})
+            return
+        try:
+            request = json.loads(self.rfile.read(length))
+            message = str(request.get("message", "")).strip()
+        except Exception as exc:
+            print(f"request parse failed: {exc}", flush=True)
+            self.send_json(400, {"text": ""})
+            return
+        if not message:
+            self.send_json(400, {"text": ""})
+            return
+        payload = json.dumps({
+            "model": MODEL,
+            "prompt": message,
+            "stream": False,
+            "keep_alive": KEEP_ALIVE,
+        }).encode("utf-8")
+        conn = None
+        try:
+            conn = http.client.HTTPConnection(TARGET[0], TARGET[1], timeout=180)
+            conn.request(
+                "POST",
+                "/api/generate",
+                body=payload,
+                headers={"content-type": "application/json"},
+            )
+            response = conn.getresponse()
+            response_body = response.read()
+            if response.status < 200 or response.status >= 300:
+                print(
+                    f"ollama status={response.status} body_tail={response_body[-400:].decode('utf-8', 'replace')}",
+                    flush=True,
+                )
+                self.send_json(502, {"text": ""})
+                return
+            reply = json.loads(response_body)
+            text = str(reply.get("response", "")).strip()
+            if not text:
+                print("ollama response was empty", flush=True)
+                self.send_json(502, {"text": ""})
+                return
+            self.send_json(200, {"text": text})
+        except Exception as exc:
+            print(f"ollama request failed: {exc}", flush=True)
+            self.send_json(502, {"text": ""})
+        finally:
+            if conn is not None:
+                conn.close()
+
+server = ThreadingHTTPServer(LISTEN, Handler)
+print(f"contract relay {LISTEN[0]}:{LISTEN[1]} to {TARGET[0]}:{TARGET[1]} model={MODEL}", flush=True)
+server.serve_forever()
+PY
+  MODEL_CONTRACT_PID=$!
+  for _ in $(seq 1 20); do
+    if curl -sf -X POST http://127.0.0.1:41135/v1/resident \
+      -H 'content-type: application/json' \
+      -d '{"message":"Reply with READY."}' >/tmp/model-contract-direct.json 2>/tmp/model-contract-direct.err; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "GOBLINS_HWGATE_MODEL_CONTRACT_NOT_READY"
+  tail -n 20 /tmp/model-contract.log 2>/dev/null || true
+  tail -n 20 /tmp/model-contract-direct.err 2>/dev/null || true
+  return 1
+}
 json_string_literal(){
   python3 - "$1" <<'PY'
 import json
@@ -2075,6 +2181,7 @@ mkdir -p \
 CAPTURE_LOCAL_MODEL="${GOBLINS_OS_LOCAL_MODEL:-llama3.2:1b}"
 CAPTURE_LOCAL_MODEL_JSON="$(json_string_literal "$CAPTURE_LOCAL_MODEL")"
 CAPTURE_MODEL_RUNTIME_URL=http://127.0.0.1:41134
+CAPTURE_MODEL_RELAY_URL=http://127.0.0.1:41135/v1/resident
 CAPTURE_MODEL_KEEP_ALIVE="${GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE:-30m}"
 CAPTURE_MODEL_KEEP_ALIVE_JSON="$(json_string_literal "$CAPTURE_MODEL_KEEP_ALIVE")"
 MODEL_LOOPBACK_READY=false
@@ -2088,6 +2195,10 @@ if [ "$MODEL_LOOPBACK_READY" = "true" ]; then
     -d "{\"model\":$CAPTURE_LOCAL_MODEL_JSON,\"prompt\":\"Reply with READY.\",\"stream\":false,\"keep_alive\":$CAPTURE_MODEL_KEEP_ALIVE_JSON}" \
     >/tmp/model-direct.json 2>/tmp/model-direct.err || true
 fi
+MODEL_CONTRACT_READY=false
+if start_capture_model_contract_relay; then
+  MODEL_CONTRACT_READY=true
+fi
 GOBLINS_OS_CORE_PORT=8788 GOBLINS_OS_SYS_BLOCK_DIR=$FIX GOBLINS_OS_RAM_GB=32 \
   GOBLINS_OS_POLICY_STATE="$FIX_STATE/policy" \
   GOBLINS_OS_APPS_DIR="$FIX_STATE/apps" \
@@ -2099,6 +2210,7 @@ GOBLINS_OS_CORE_PORT=8788 GOBLINS_OS_SYS_BLOCK_DIR=$FIX GOBLINS_OS_RAM_GB=32 \
   GOBLINS_OS_RESIDENT_STATE="$FIX_STATE/resident" \
   GOBLINS_OS_VOICE_DIR="$FIX_STATE/voice" \
   GOBLINS_OS_LOCAL_MODEL="$CAPTURE_LOCAL_MODEL" \
+  GOBLINS_OS_LOCAL_MODEL_RELAY="$CAPTURE_MODEL_RELAY_URL" \
   GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE="$CAPTURE_MODEL_KEEP_ALIVE" \
   GOBLINS_OS_LOCAL_MODEL_RUNTIME=os-managed-runtime GOBLINS_OS_LOCAL_RUNTIME_URL="$CAPTURE_MODEL_RUNTIME_URL" \
   "$B/goblins-os-core" >/tmp/fixcore.log 2>&1 &
@@ -2108,6 +2220,7 @@ GOBLINS_OS_CORE_PORT=8788 \
   GOBLINS_OS_MODEL_DIR="$FIX_STATE/models" \
   GOBLINS_OS_MODEL_INSTALL_STATE="$FIX_STATE/models/install-state" \
   GOBLINS_OS_LOCAL_MODEL="$CAPTURE_LOCAL_MODEL" \
+  GOBLINS_OS_LOCAL_MODEL_RELAY="$CAPTURE_MODEL_RELAY_URL" \
   GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE="$CAPTURE_MODEL_KEEP_ALIVE" \
   GOBLINS_OS_LOCAL_RUNTIME_URL="$CAPTURE_MODEL_RUNTIME_URL" \
   "$B/goblins-os-resident" >/tmp/fixres.log 2>&1 &
@@ -2156,8 +2269,8 @@ shot 21-gamescope-session gamescope -W 960 -H 600 -b -- vkcube
 
 # ---- studio-live (needs the host model; best-effort) ----
 rm -f /tmp/build.json /tmp/build.err /tmp/build.rc /tmp/app-builder-grant.json /tmp/policy-status.json
-if [ "$MODEL_LOOPBACK_READY" != "true" ]; then
-  printf '{"ok":false,"text":"Capture model loopback was not ready.","app":null}\n' >/tmp/build.json
+if [ "$MODEL_CONTRACT_READY" != "true" ]; then
+  printf '{"ok":false,"text":"Capture model contract relay was not ready.","app":null}\n' >/tmp/build.json
   : >/tmp/build.err
   echo 1 >/tmp/build.rc
   build_pid=""
@@ -2196,12 +2309,12 @@ else
   build_intent="$(json_field /tmp/build.json app.intent)"
   if [ -n "$build_id" ] && [ -n "$build_name" ] && [ -n "$build_source" ]; then
     proof_runtime_build "status=pass&route=/v1/apps/builds&intent=$(proof_query_value "${build_intent:-A focus timer that counts down 25 minutes and rings.}")&engine_mode=local-model&engine_source=$(proof_query_value "$build_source")&built_artifact_id=$(proof_query_value "$build_id")&built_artifact_name=$(proof_query_value "$build_name")&response_bytes=$(file_size_value /tmp/build.json)"
-  elif [ "$MODEL_LOOPBACK_READY" != "true" ]; then
-    proof_runtime_build "status=fail&stage=model-loopback&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&model_tags_tail=$(file_tail_query_value /tmp/model-loopback-tags.json)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /tmp/fixcore.log)&resident_log_tail=$(file_tail_query_value /tmp/fixres.log)&error_tail=$(file_tail_query_value /tmp/model-loopback-tags.err)"
+  elif [ "$MODEL_CONTRACT_READY" != "true" ]; then
+    proof_runtime_build "status=fail&stage=model-contract&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&relay_url=$(proof_query_value "$CAPTURE_MODEL_RELAY_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&contract_direct_tail=$(file_tail_query_value /tmp/model-contract-direct.json)&contract_log_tail=$(file_tail_query_value /tmp/model-contract.log)&model_tags_tail=$(file_tail_query_value /tmp/model-loopback-tags.json)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /tmp/fixcore.log)&resident_log_tail=$(file_tail_query_value /tmp/fixres.log)&error_tail=$(file_tail_query_value /tmp/model-contract-direct.err)"
   elif [ -s /tmp/app-builder-grant.json ] && [ "$(json_field /tmp/app-builder-grant.json ok)" != "true" ]; then
     proof_runtime_build "status=fail&stage=permission-grant&route=/v1/apps/builds&grant_route=/v1/policy/permissions/grant&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&grant_response_tail=$(file_tail_query_value /tmp/app-builder-grant.json)"
   else
-    proof_runtime_build "status=fail&stage=response&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=$(proof_query_value "${build_source:-missing}")&built_artifact_id=$(proof_query_value "${build_id:-missing}")&built_artifact_name=$(proof_query_value "${build_name:-missing}")&response_bytes=$(file_size_value /tmp/build.json)&response_tail=$(file_tail_query_value /tmp/build.json)&model_direct_tail=$(file_tail_query_value /tmp/model-direct.json)&model_error_tail=$(file_tail_query_value /tmp/model-direct.err)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /tmp/fixcore.log)&resident_log_tail=$(file_tail_query_value /tmp/fixres.log)&error_tail=$(file_tail_query_value /tmp/build.err)"
+    proof_runtime_build "status=fail&stage=response&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&relay_url=$(proof_query_value "$CAPTURE_MODEL_RELAY_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=$(proof_query_value "${build_source:-missing}")&built_artifact_id=$(proof_query_value "${build_id:-missing}")&built_artifact_name=$(proof_query_value "${build_name:-missing}")&response_bytes=$(file_size_value /tmp/build.json)&response_tail=$(file_tail_query_value /tmp/build.json)&contract_direct_tail=$(file_tail_query_value /tmp/model-contract-direct.json)&contract_log_tail=$(file_tail_query_value /tmp/model-contract.log)&model_direct_tail=$(file_tail_query_value /tmp/model-direct.json)&model_error_tail=$(file_tail_query_value /tmp/model-direct.err)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /tmp/fixcore.log)&resident_log_tail=$(file_tail_query_value /tmp/fixres.log)&error_tail=$(file_tail_query_value /tmp/build.err)"
   fi
 fi
 GOBLINS_OS_CORE_URL=$FIX_URL shot 15-studio-app-detail "$B/goblins-os-shell" --studio

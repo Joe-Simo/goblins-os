@@ -3010,6 +3010,12 @@ fn source_secret_scan_hits(root: &Path) -> Result<Vec<String>, String> {
         .arg("--glob")
         .arg("!.claude/**")
         .arg("--glob")
+        .arg("!**/node_modules/**")
+        .arg("--glob")
+        .arg("!**/.next/**")
+        .arg("--glob")
+        .arg("!**/.vercel/**")
+        .arg("--glob")
         .arg("!.ci-target/**")
         .arg("--glob")
         .arg("!.ci-target-amd64/**")
@@ -7142,8 +7148,23 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-uses-loopback-contract-relay-url",
+            "CAPTURE_MODEL_RELAY_URL=http://127.0.0.1:41135/v1/resident",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-fixture-core-keeps-local-model-warm",
             "CAPTURE_MODEL_KEEP_ALIVE=\"${GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE:-30m}\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-starts-contract-relay",
+            "start_capture_model_contract_relay",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-contract-relay-listens-on-dedicated-port",
+            "LISTEN = (\"127.0.0.1\", 41135)",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -7157,6 +7178,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-passes-local-contract-relay-url",
+            "GOBLINS_OS_LOCAL_MODEL_RELAY=\"$CAPTURE_MODEL_RELAY_URL\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-fixture-core-passes-local-model-keepalive",
             "GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE=\"$CAPTURE_MODEL_KEEP_ALIVE\"",
         ),
@@ -7167,8 +7193,18 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-records-contract-relay-diagnostic",
+            "/tmp/model-contract-direct.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-fixture-core-records-runtime-log-diagnostics",
             "core_log_tail=",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-records-contract-log-diagnostics",
+            "contract_log_tail=",
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),

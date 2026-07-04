@@ -7132,8 +7132,23 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-uses-dedicated-loopback-port",
+            "LISTEN = (\"127.0.0.1\", 41134)",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-fixture-core-uses-loopback-runtime-url",
-            "GOBLINS_OS_LOCAL_RUNTIME_URL=http://127.0.0.1:11434",
+            "CAPTURE_MODEL_RUNTIME_URL=http://127.0.0.1:41134",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-passes-loopback-runtime-url",
+            "GOBLINS_OS_LOCAL_RUNTIME_URL=\"$CAPTURE_MODEL_RUNTIME_URL\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-fixture-core-records-direct-model-diagnostic",
+            "/tmp/model-direct.json",
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),

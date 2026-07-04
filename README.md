@@ -33,11 +33,12 @@ to USB or attaching it to a VM.
   containerize it.
 - A project with explicit packaging, release, SBOM, and signoff checks.
 
-## What it is not
+## Scope
 
-- It is not an app store.
-- It does not ship with bundled productivity apps.
-- It does not include credentials or client-side secrets in the OS image.
+Goblins OS focuses on the desktop operating system, the local app-building
+workflow, container-friendly release artifacts, and transparent verification.
+Credentials and API keys stay outside the OS image and are not shipped to the
+desktop as client-side secrets.
 
 ## Containers
 

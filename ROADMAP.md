@@ -1,8 +1,8 @@
 # Goblins OS Roadmap
 
-This roadmap tracks product and release work at a public level. Detailed CI runs,
-operator notes, and raw proof logs live in the release artifacts and signoff
-files, not in this overview.
+This roadmap tracks product and release work at a public level. Detailed CI
+runs, release evidence, and raw proof logs live in the release artifacts and
+signoff files, not in this overview.
 
 ## Current Release State
 
@@ -51,10 +51,12 @@ files, not in this overview.
 - Keep gaming support Steam-free by default while verifying Vulkan, GameMode,
   gamescope, MangoHud, PipeWire, and controller diagnostics.
 
-## Non-Goals
+## Release Boundaries
 
-- Goblins OS is not a mobile OS.
-- Goblins OS is not an app store.
-- Goblins OS does not bundle productivity apps as the main value proposition.
-- Goblins OS should not claim hardware, runtime, package, or app-generation
-  support that has not been verified.
+- Keep the product lane focused on an open AI-native desktop for building local
+  software, with container-friendly release artifacts and transparent
+  verification.
+- Keep user-facing claims tied to verified hardware, runtime, package,
+  installer, and app-generation evidence.
+- Keep credentials and API keys outside the OS image and out of ordinary desktop
+  UI surfaces.

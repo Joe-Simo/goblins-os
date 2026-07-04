@@ -5042,8 +5042,13 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("GO-LIVE.md"),
-            "go-live-requires-current-iso-display-proof",
-            "`x86_64` display-backed screenshot/runtime run matches the current",
+            "go-live-documents-x86-verification-iso-display-proof",
+            "`x86_64` display-backed verification-ISO screenshot/runtime run is complete",
+        ),
+        contains_check(
+            root.join("GO-LIVE.md"),
+            "go-live-requires-public-release-iso-alignment",
+            "`x86_64` public release ISO alignment is still pending",
         ),
         source_manifest_top_level_coverage_check(root),
         contains_check(
@@ -8386,6 +8391,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-screenshot-proof-manifest",
             "proof-manifest.json",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-separates-verification-proof-from-public-release-iso-alignment",
+            "screenshot_manifest_matches_public_release_iso",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),

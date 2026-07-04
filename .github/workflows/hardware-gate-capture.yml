@@ -89,6 +89,29 @@ jobs:
           GOBLINS_OS_BIB_SOURCE_IMAGE='${{ steps.ref.outputs.ref }}' \
           GOBLINS_OS_BIB_AUTH_FILE="$HOME/.docker/config.json" \
           os/iso/build-iso.sh
+      - name: Generate release evidence for the captured image
+        run: |
+          mkdir -p os/signoff-proofs/sbom/${{ matrix.arch }}
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -v "$PWD/os/signoff-proofs/sbom/${{ matrix.arch }}:/out" \
+            -w /workspace \
+            '${{ steps.ref.outputs.ref }}' \
+            /usr/libexec/goblins-os/goblins-os-verify \
+            --source-root /workspace \
+            --release-evidence /out \
+            --arch ${{ matrix.arch }}
+          docker run --rm \
+            -v "$PWD/os/signoff-proofs/sbom/${{ matrix.arch }}:/out" \
+            -w /out \
+            '${{ steps.ref.outputs.ref }}' \
+            sh rpm-packages.command
+          . ./os/hardware-gate/rpm-sbom-arch.sh
+          rpm_sbom_arch_matches os/signoff-proofs/sbom/${{ matrix.arch }}/rpm-packages.tsv ${{ matrix.arch }}
+      - name: Scan generated release evidence for secrets
+        run: |
+          . ./os/hardware-gate/secret-scan.sh
+          goblins_os_artifact_secret_scan "$PWD"
       - name: Reclaim image-build disk + serve a small model for studio-live
         run: |
           docker image prune -af || true
@@ -110,7 +133,7 @@ jobs:
         run: |
           git config user.name "goblins-os-ci"
           git config user.email "ci@goblins.os"
-          git add -f "os/screenshots/hardware-gate/${{ matrix.arch }}/" os/signoff-notes.md || true
+          git add -f "os/screenshots/hardware-gate/${{ matrix.arch }}/" "os/signoff-proofs/sbom/${{ matrix.arch }}/" os/signoff-notes.md || true
           git pull --rebase origin main || true
           git commit -m "hardware-gate: ${{ matrix.arch }} display-backed-VM capture run ${{ inputs.run_date }}" || echo "nothing to commit"
           for i in 1 2 3 4 5; do git push origin main && break || { git pull --rebase origin main; sleep $((RANDOM % 5 + 2)); }; done
@@ -122,4 +145,5 @@ jobs:
           name: hardware-gate-run-${{ matrix.arch }}
           path: |
             os/screenshots/hardware-gate/${{ matrix.arch }}/
+            os/signoff-proofs/sbom/${{ matrix.arch }}/
             os/signoff-notes.md

@@ -31,11 +31,17 @@ to a stable public release.
   with `GOBLINS_OS_DOWNLOAD_ISO=1`, verified part-by-part, decompressed, and
   verified against the final ISO SHA256.
 - [x] Source and generated artifact scans check for live secrets.
-- [ ] `x86_64` display-backed screenshot/runtime run matches the current
-  verification ISO built from the release bootc image.
-  Current check: `os/screenshots/hardware-gate/x86_64/2026-07-03` contains the
-  expected screenshot and proof files, but its `proof-manifest.json` records a
-  different ISO SHA256 than the current hydrated release `goblins-os-x86_64.iso`.
+- [x] `x86_64` display-backed verification-ISO screenshot/runtime run is complete.
+  Current proof: GitHub Actions run `28720230809` captured
+  `os/screenshots/hardware-gate/x86_64/2026-07-04` from the verification ISO
+  built from `ghcr.io/joe-simo/goblins-os:x86_64`; the proof manifest records
+  ISO SHA256 `e3c8dc30187944ab9f92a4ee7ad8139fe8b3a8e1d970feeb685390acd5f0f4cc`.
+- [ ] `x86_64` public release ISO alignment is still pending.
+  Current check: the completed x86_64 verification proof SHA differs from the
+  hydrated public release ISO SHA
+  `45abf064735fa2a2ba9ef034883d19453c4bfc02a3b0c311d29e3679c52db434`; the
+  shipping gate reports this separately instead of hiding the completed
+  verification proof.
 - [ ] `aarch64` display-backed signoff run is complete.
   Current check: the local aarch64 macOS/HVF attempt correctly failed against
   hydrated public release media because that ISO leaves storage interactive; the
@@ -44,14 +50,15 @@ to a stable public release.
 - [ ] Latest signoff row records runner, ISO, checksums, self-test, runtime
   proof, app-build proof, gaming proof, storage proof, and SBOM evidence.
   Current check: the latest `x86_64` row from GitHub Actions run
-  `28710819638` records runner, ISO, `blocked=0`, self-test, runtime/app-build,
+  `28720230809` records runner, ISO, `blocked=0`, self-test, runtime/app-build,
   gaming, and storage proof, but still records release evidence/SBOM as not
-  checked.
+  checked. The hardware-gate workflow now generates, validates, scans, and
+  commits release evidence for the captured image before close-signoff runs.
 - [ ] `./os/hardware-gate/verify-shipping-status.sh` passes.
   Current local check: with both release ISOs hydrated and checksum-verified,
-  the gate still fails because neither architecture has a complete
-  current-ISO display-backed screenshot/signoff row, and the latest signoff row
-  does not record release evidence/SBOM.
+  the gate still fails because `aarch64` has no complete display-backed
+  screenshot/signoff row, `x86_64` does not yet have public release ISO-aligned
+  proof, and the latest signoff row does not record release evidence/SBOM.
 
 ## Stable Release Promotion
 

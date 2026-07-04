@@ -234,7 +234,7 @@ screenshot_run_is_complete() {
   for shot in "${REQ_SCREENSHOTS[@]}"; do
     screenshot_file_is_valid_png "$run_dir/$shot" || return 1
   done
-  screenshot_manifest_matches_iso "$run_dir" "$arch" || return 1
+  screenshot_manifest_is_coherent "$run_dir" "$arch" || return 1
   firewall_live_toggle_proof_passes "$run_dir/$FIREWALL_LIVE_TOGGLE_PROOF" || return 1
   text_shortcuts_session_enable_proof_passes "$run_dir/$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF" || return 1
   text_shortcuts_candidate_metadata_proof_passes "$run_dir/$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF" || return 1
@@ -278,22 +278,16 @@ screenshot_file_is_valid_png() {
   [ "$signature" = "89504e470d0a1a0a" ]
 }
 
-screenshot_manifest_matches_iso() {
+screenshot_manifest_is_coherent() {
   local run_dir="$1"
   local arch="$2"
   local manifest="$run_dir/proof-manifest.json"
   local iso_path="os/iso/output/$arch/bootiso/goblins-os-$arch.iso"
-  local sha_path="$iso_path.sha256"
-  local iso_sha
 
   [ -s "$manifest" ] || return 1
-  [ -f "$iso_path" ] || return 1
-  [ -f "$sha_path" ] || return 1
-  iso_sha="$(awk '{print $1; exit}' "$sha_path")"
-  [ -n "$iso_sha" ] || return 1
   rg -q '"architecture"[[:space:]]*:[[:space:]]*"'"$arch"'"' "$manifest" \
     && rg -q '"iso"[[:space:]]*:[[:space:]]*"'"$iso_path"'"' "$manifest" \
-    && rg -q '"iso_sha256"[[:space:]]*:[[:space:]]*"'"$iso_sha"'"' "$manifest" \
+    && rg -q '"iso_sha256"[[:space:]]*:[[:space:]]*"[a-fA-F0-9]{64}"' "$manifest" \
     && rg -q '"captured_at"[[:space:]]*:[[:space:]]*"[^"]+"' "$manifest" \
     && rg -q '"screenshot_run_dir"[[:space:]]*:[[:space:]]*"'"$run_dir"'"' "$manifest" \
     && rg -q '"firewall_live_toggle_proof"[[:space:]]*:[[:space:]]*"'"$FIREWALL_LIVE_TOGGLE_PROOF"'"' "$manifest" \
@@ -313,6 +307,35 @@ screenshot_manifest_matches_iso() {
     && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest" \
     && rg -q '"audio_output_proof"[[:space:]]*:[[:space:]]*"'"$AUDIO_OUTPUT_PROOF"'"' "$manifest" \
     && rg -q '"runtime_build_proof"[[:space:]]*:[[:space:]]*"'"$RUNTIME_BUILD_PROOF"'"' "$manifest"
+}
+
+screenshot_manifest_matches_public_release_iso() {
+  local run_dir="$1"
+  local arch="$2"
+  local manifest="$run_dir/proof-manifest.json"
+  local iso_path="os/iso/output/$arch/bootiso/goblins-os-$arch.iso"
+  local sha_path="$iso_path.sha256"
+  local iso_sha
+
+  screenshot_manifest_is_coherent "$run_dir" "$arch" || return 1
+  [ -f "$iso_path" ] || return 1
+  [ -f "$sha_path" ] || return 1
+  iso_sha="$(awk '{print $1; exit}' "$sha_path")"
+  [ -n "$iso_sha" ] || return 1
+  rg -q '"iso_sha256"[[:space:]]*:[[:space:]]*"'"$iso_sha"'"' "$manifest"
+}
+
+print_public_release_iso_alignment_detail() {
+  local run_dir="$1"
+  local arch="$2"
+  local manifest="$run_dir/proof-manifest.json"
+  local sha_path="os/iso/output/$arch/bootiso/goblins-os-$arch.iso.sha256"
+  local manifest_sha release_sha
+
+  manifest_sha="$(awk -F'"' '/"iso_sha256"/ { print $4; exit }' "$manifest" 2>/dev/null || true)"
+  release_sha="$(awk '{ print $1; exit }' "$sha_path" 2>/dev/null || true)"
+  echo "[INFO] $arch verification proof ISO SHA256: ${manifest_sha:-missing}"
+  echo "[INFO] $arch hydrated public release ISO SHA256: ${release_sha:-missing}"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -698,7 +721,7 @@ print_missing_screenshot_paths() {
       missing=1
     fi
   done
-  if [ ! -s "$run_dir/proof-manifest.json" ]; then
+  if ! screenshot_manifest_is_coherent "$run_dir" "$(screenshot_run_arch "$run_dir")"; then
     echo "  $run_dir/proof-manifest.json"
     missing=1
   fi
@@ -844,10 +867,10 @@ print_screenshot_run_checks() {
       missing=1
     fi
   done
-  if [ -n "$arch" ] && screenshot_manifest_matches_iso "$run_dir" "$arch"; then
-    echo "[PASS] proof-manifest.json"
+  if [ -n "$arch" ] && screenshot_manifest_is_coherent "$run_dir" "$arch"; then
+    echo "[PASS] proof-manifest.json coherent for verification ISO proof"
   else
-    echo "[FAIL] proof-manifest.json"
+    echo "[FAIL] proof-manifest.json (missing or incoherent verification ISO proof)"
     missing=1
   fi
   if firewall_live_toggle_proof_passes "$run_dir/$FIREWALL_LIVE_TOGGLE_PROOF"; then
@@ -1178,6 +1201,8 @@ check "workflow installer ISO uses cached Buildx image and evidence steps" "rg -
 check "workflow image builds use nonblocking BuildKit GHA cache" "rg -q 'docker/setup-buildx-action@v3' \"$WORKFLOW\" && rg -q --fixed-strings 'type=gha,scope=goblins-os-bootc-\${{ matrix.arch }}' \"$WORKFLOW\" && rg -q 'mode=max,ignore-error=true' \"$WORKFLOW\""
 check "hardware gate pushes bootc image without daemon export" "rg -q 'docker/build-push-action@v7' .github/workflows/hardware-gate-capture.yml && rg -q 'push: true' .github/workflows/hardware-gate-capture.yml && rg -q 'GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1' .github/workflows/hardware-gate-capture.yml && ! rg -q 'docker build -f os/bootc/Containerfile -t localhost/goblins-os' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate uses verification ISO config" "rg -q 'GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml' .github/workflows/hardware-gate-capture.yml"
+check "hardware gate generates release evidence for captured image" 'rg -q "Generate release evidence for the captured image" .github/workflows/hardware-gate-capture.yml && rg -q -- "--release-evidence /out" .github/workflows/hardware-gate-capture.yml && rg -q "rpm_sbom_arch_matches" .github/workflows/hardware-gate-capture.yml && rg -q "Scan generated release evidence for secrets" .github/workflows/hardware-gate-capture.yml'
+check "hardware gate commits release evidence with signoff" "rg -q 'os/signoff-proofs/sbom/[$][{][{] matrix[.]arch [}][}]/' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate uses nonblocking BuildKit GHA cache and cancels superseded runs" "rg -q 'docker/setup-buildx-action@v3' .github/workflows/hardware-gate-capture.yml && rg -q --fixed-strings 'type=gha,scope=goblins-os-bootc-\${{ matrix.arch }}' .github/workflows/hardware-gate-capture.yml && rg -q 'mode=max,ignore-error=true' .github/workflows/hardware-gate-capture.yml && rg -q 'cancel-in-progress: true' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate prepares readable writable KVM for qemu" "rg -q 'sudo chmod a[+]rw /dev/kvm' .github/workflows/hardware-gate-capture.yml && rg -q 'test -r /dev/kvm && test -w /dev/kvm' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate installs close-signoff search dependency" "rg -q 'ripgrep' .github/workflows/hardware-gate-capture.yml && rg -q '\\brg -q\\b' os/hardware-gate/close-signoff.sh"
@@ -1465,7 +1490,7 @@ check "third-party notices document release evidence generator" "rg -q -- '--rel
 check "third-party notices require cargo package TSV" "rg -q 'cargo-lock-packages.tsv' os/release/third-party-notices.toml"
 check "third-party notices require RPM command file" "rg -q 'rpm-packages.command' os/release/third-party-notices.toml"
 check "release artifact hydration is bandwidth-conscious and fail-closed" "test -x os/release/hydrate-release-artifacts.sh && rg -q 'GOBLINS_OS_DOWNLOAD_ISO' os/release/hydrate-release-artifacts.sh && rg -q 'goblins-os-[$]arch.iso.zst.parts.sha256' os/release/hydrate-release-artifacts.sh && rg -q 'sha256_check' os/release/hydrate-release-artifacts.sh && rg -q 'normalize_sha256_file_paths' os/release/hydrate-release-artifacts.sh && rg -q 'zstd -d --long=31 -f' os/release/hydrate-release-artifacts.sh && rg -q 'Published release metadata/SBOM can be hydrated' GO-LIVE.md"
-check "GO-LIVE distinguishes hydrated ISOs from current display proof" "rg -q 'Full ISO release media can be hydrated from split GitHub release assets' GO-LIVE.md && rg -q 'display-backed screenshot/runtime run matches the current' GO-LIVE.md && rg -q 'neither architecture has a complete' GO-LIVE.md"
+check "GO-LIVE distinguishes verification ISO proof from public release ISO alignment" "rg -q 'Full ISO release media can be hydrated from split GitHub release assets' GO-LIVE.md && rg -q 'display-backed verification-ISO screenshot/runtime run is complete' GO-LIVE.md && rg -q 'public release ISO alignment is still pending' GO-LIVE.md"
 check "SHIP documents SBOM evidence command" "rg -q --fixed-strings -- '--release-evidence \"os/signoff-proofs/sbom/' \"$SHIP_DECL\""
 check "shipping status rejects local-only installer payload refs" "rg -q 'installer payload tracks a local-only Docker/test registry' os/hardware-gate/verify-shipping-status.sh"
 check "shipping status reports ignored legacy screenshot roots" "rg -q 'Legacy/non-shipping screenshot roots ignored by architecture proof gate' os/hardware-gate/verify-shipping-status.sh"
@@ -1489,6 +1514,7 @@ check "close-signoff uses Docker for assisted signoff testing" "rg -q 'Docker is
 check "close-signoff expects per-architecture image tag" "rg -q 'goblins-os:\\$\\{\\{ matrix.arch \\}\\}' os/hardware-gate/close-signoff.sh"
 check "close-signoff uses exact architecture ISO path" "rg -q 'expected_iso=\"os/iso/output/[$]ARCH/bootiso/goblins-os-[$]ARCH.iso\"' os/hardware-gate/close-signoff.sh"
 check "shipping status bounds signoff rows at the next markdown heading" "rg -q 'signoff_block_from_line' os/hardware-gate/verify-shipping-status.sh && rg -q 'NR < start' os/hardware-gate/verify-shipping-status.sh && rg -Fq '/^## / { exit }' os/hardware-gate/verify-shipping-status.sh && ! rg -Fq \"start + \$((60 + 60))\" os/hardware-gate/verify-shipping-status.sh"
+check "shipping status separates verification proof from public release ISO alignment" "rg -q 'screenshot_manifest_is_coherent' os/hardware-gate/verify-shipping-status.sh && rg -q 'screenshot_manifest_matches_public_release_iso' os/hardware-gate/verify-shipping-status.sh && rg -q 'public release ISO-aligned screenshot run' os/hardware-gate/verify-shipping-status.sh"
 
 for arch in "${ARCHES[@]}"; do
   ISO_PATH="os/iso/output/$arch/bootiso/goblins-os-$arch.iso"
@@ -1543,6 +1569,14 @@ for arch in "${ARCHES[@]}"; do
     done < <(find "$SCREENSHOT_ROOT/$arch" -mindepth 1 -maxdepth 1 -type d | sort -r)
     if [ -n "$LATEST_ARCH_RUN" ]; then
       echo "[PASS] $arch has complete hardware-gate screenshots: $LATEST_ARCH_RUN"
+      if screenshot_manifest_matches_public_release_iso "$LATEST_ARCH_RUN" "$arch"; then
+        echo "[PASS] $arch has a public release ISO-aligned screenshot run"
+      else
+        echo "[FAIL] $arch has no public release ISO-aligned screenshot run"
+        print_public_release_iso_alignment_detail "$LATEST_ARCH_RUN" "$arch"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        ARCH_MISSING+=("public release ISO-aligned screenshot run")
+      fi
     else
       echo "[FAIL] $arch has no complete hardware-gate screenshot run under $SCREENSHOT_ROOT/$arch"
       print_latest_incomplete_screenshot_run "$SCREENSHOT_ROOT/$arch" "$arch"

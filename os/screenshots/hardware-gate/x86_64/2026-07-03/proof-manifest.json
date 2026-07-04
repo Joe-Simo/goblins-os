@@ -1,7 +1,7 @@
 {
   "architecture": "x86_64",
   "iso": "os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso",
-  "iso_sha256": "5114ea91ae001cab10e80c7fb27972174069c75216ab762978b09eda5b9a1a18",
+  "iso_sha256": "d1b4ea4e56214868186d5e658e9151e398b27d78a56776d55c20ade230609a11",
   "captured_at": "2026-07-03T00:00:00Z",
   "screenshot_run_dir": "os/screenshots/hardware-gate/x86_64/2026-07-03",
   "firewall_live_toggle_proof": "firewall-live-toggle-proof.json",
@@ -20,5 +20,6 @@
   "app_privacy_revoke_proof": "app-privacy-revoke-proof.json",
   "preview_open_render_proof": "preview-open-render-proof.json",
   "audio_output_proof": "audio-output-proof.json",
+  "runtime_build_proof": "runtime-build-proof.json",
   "capture_method": "display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"
 }

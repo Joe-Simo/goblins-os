@@ -1,0 +1,95 @@
+# Goblins OS — aarch64 verification-only ISO for local HVF capture.
+#
+# This workflow does not publish release media and does not satisfy hardware
+# signoff by itself. It builds the noninteractive hardware-gate ISO on a native
+# GitHub arm runner, uploads it as a short-lived artifact, and leaves the real
+# display-backed capture to the Apple-Silicon/HVF route in the runbook.
+name: aarch64-verification-iso
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_date:
+        description: "Screenshot run date that will consume this ISO (YYYY-MM-DD)"
+        required: true
+
+concurrency:
+  group: aarch64-verification-iso-${{ github.ref }}-${{ inputs.run_date }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-verification-iso:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert native aarch64 runner
+        run: test "$(uname -m)" = "aarch64"
+      - name: Free disk and add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache /usr/share/swift /usr/local/lib/node_modules \
+            /usr/share/miniconda /usr/lib/jvm /usr/local/share/powershell \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+          sudo apt-get clean || true
+          sudo docker image prune -af || true
+          sudo swapoff -a || true
+          sudo rm -f /swapfile /mnt/swapfile || true
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          df -h /
+          free -h
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Compute lowercase GHCR ref
+        id: ref
+        run: |
+          owner='${{ github.repository_owner }}'
+          owner="${owner,,}"
+          echo "ref=ghcr.io/${owner}/goblins-os:aarch64" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and publish the aarch64 bootc image to GHCR
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: os/bootc/Containerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.ref.outputs.ref }}
+          cache-from: type=gha,scope=goblins-os-bootc-aarch64
+          cache-to: type=gha,scope=goblins-os-bootc-aarch64,mode=max,ignore-error=true
+      - name: Build verification-only installer ISO from the published ref
+        run: |
+          GOBLINS_OS_CONTAINER_RUNTIME=docker \
+          GOBLINS_OS_ARCH=aarch64 \
+          GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml \
+          GOBLINS_OS_IMAGE='${{ steps.ref.outputs.ref }}' \
+          GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 \
+          GOBLINS_OS_SHIPPABLE_RELEASE=1 \
+          GOBLINS_OS_BIB_SOURCE_IMAGE='${{ steps.ref.outputs.ref }}' \
+          GOBLINS_OS_BIB_AUTH_FILE="$HOME/.docker/config.json" \
+          os/iso/build-iso.sh
+      - name: Verify capture-only ISO markers
+        run: |
+          cd os/iso/output/aarch64/bootiso
+          sha256sum -c goblins-os-aarch64.iso.sha256
+          for needle in \
+            "GOBLINS_VERIFY_INSTALL_DONE" \
+            "ignoredisk --only-use=vda" \
+            "goblins-hwgate-session-orchestrator"; do
+            LC_ALL=C grep -aFq "$needle" goblins-os-aarch64.iso
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goblins-os-aarch64-verification-iso-${{ inputs.run_date }}
+          retention-days: 7
+          path: |
+            os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso
+            os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso.sha256
+            os/iso/output/aarch64/manifest-goblins-os-aarch64.json
+            os/iso/output/aarch64/manifest-anaconda-iso.json

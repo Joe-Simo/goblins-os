@@ -5050,6 +5050,32 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
             "go-live-documents-public-release-iso-artifact-checks",
             "`x86_64` public release ISO artifacts are checked separately",
         ),
+        file_check(root, ".github/workflows/aarch64-verification-iso.yml"),
+        contains_check(
+            root.join(".github/workflows/aarch64-verification-iso.yml"),
+            "aarch64-verification-iso-manual-dispatch",
+            "workflow_dispatch",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-verification-iso.yml"),
+            "aarch64-verification-iso-native-arm-runner",
+            "ubuntu-24.04-arm",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-verification-iso.yml"),
+            "aarch64-verification-iso-uses-verify-config",
+            "GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-verification-iso.yml"),
+            "aarch64-verification-iso-short-lived-artifact",
+            "retention-days: 7",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-aarch64-verification-iso-workflow",
+            "gh workflow run aarch64-verification-iso.yml",
+        ),
         source_manifest_top_level_coverage_check(root),
         contains_check(
             root.join(".gitignore"),

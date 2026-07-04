@@ -48,9 +48,28 @@ with `GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml`; hydrated public release
 ISOs do not include the noninteractive hardware-gate kickstart and cannot
 satisfy this proof.
 
+If the local Apple-Silicon machine does not have Docker running or enough free
+space to build release media, build only the aarch64 verification ISO on the
+native GitHub arm runner and download the short-lived artifact:
+
+```sh
+RUN_DATE=<YYYY-MM-DD>
+gh workflow run aarch64-verification-iso.yml -f run_date="$RUN_DATE"
+gh run list --workflow aarch64-verification-iso.yml --limit 1
+gh run download <run-id> \
+  -n "goblins-os-aarch64-verification-iso-$RUN_DATE" \
+  -D /tmp/goblins-os-aarch64-verification-iso
+```
+
+This artifact is not public release media and is retained only long enough to
+feed the local HVF capture. Keep release downloads on GitHub release assets;
+keep verification ISO artifacts inside Actions.
+
 ```sh
 RUN_DATE=<YYYY-MM-DD> \
 GOBLINS_OS_ARCH=aarch64 \
+GOBLINS_OS_CAPTURE_ISO=/tmp/goblins-os-aarch64-verification-iso/goblins-os-aarch64.iso \
+GOBLINS_OS_CAPTURE_ISO_SHA256=/tmp/goblins-os-aarch64-verification-iso/goblins-os-aarch64.iso.sha256 \
 REPO_ROOT="$REPO_ROOT" \
 os/hardware-gate/capture-harness/run-capture.sh
 ```

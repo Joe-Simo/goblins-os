@@ -48,7 +48,10 @@ to a stable public release.
   Current check: the local aarch64 macOS/HVF attempt correctly failed against
   hydrated public release media because that ISO leaves storage interactive; the
   capture harness now fail-closes before QEMU unless the ISO contains the
-  verification-only hardware-gate kickstart.
+  verification-only hardware-gate kickstart. The manual
+  `aarch64-verification-iso` workflow can build the capture-only ISO on a
+  native GitHub arm runner when the local Apple-Silicon machine cannot build
+  release media.
 - [x] Latest signoff row records runner, ISO, checksums, self-test, runtime
   proof, app-build proof, gaming proof, storage proof, and SBOM evidence.
   Current check: the latest `x86_64` row from GitHub Actions run

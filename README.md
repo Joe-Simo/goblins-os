@@ -35,7 +35,6 @@ to USB or attaching it to a VM.
 
 ## What it is not
 
-- It is not a mobile OS.
 - It is not an app store.
 - It does not ship with bundled productivity apps.
 - It does not include credentials or client-side secrets in the OS image.

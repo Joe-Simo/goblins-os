@@ -819,6 +819,26 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/bootc/Containerfile"),
+        "bootc-image-oci-title-label",
+        r#"org.opencontainers.image.title="Goblins OS""#,
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/Containerfile"),
+        "bootc-image-oci-source-label",
+        r#"org.opencontainers.image.source="https://github.com/Joe-Simo/goblins-os""#,
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/Containerfile"),
+        "bootc-image-oci-license-label",
+        r#"org.opencontainers.image.licenses="AGPL-3.0-or-later""#,
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/Containerfile"),
+        "bootc-image-oci-site-label",
+        r#"org.opencontainers.image.url="https://goblinsos.com""#,
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/Containerfile"),
         "bootc-self-tests-session-bridge",
         "goblins-os-session-bridge --self-test",
     ));

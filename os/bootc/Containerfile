@@ -95,7 +95,13 @@ COPY os/accountsservice/goblin /var/lib/AccountsService/users/goblin
 
 FROM quay.io/fedora/fedora-bootc:44 AS goblins-os
 
-LABEL org.goblins-os.supported-architectures="x86_64,aarch64"
+LABEL org.opencontainers.image.title="Goblins OS" \
+    org.opencontainers.image.description="Open AI-native desktop operating system for building local software on Fedora bootc" \
+    org.opencontainers.image.source="https://github.com/Joe-Simo/goblins-os" \
+    org.opencontainers.image.url="https://goblinsos.com" \
+    org.opencontainers.image.documentation="https://github.com/Joe-Simo/goblins-os/blob/main/SHIP.md" \
+    org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+    org.goblins-os.supported-architectures="x86_64,aarch64"
 
 RUN image_arch="$(rpm --eval '%{_arch}')" \
     && machine_arch="$(uname -m)" \

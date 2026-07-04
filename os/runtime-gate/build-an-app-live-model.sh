@@ -170,7 +170,7 @@ build_http="$(curl -s -o "$BUILD_RESPONSE_PATH" -w '%{http_code}' -X POST "$B/v1
 write_runtime_build_proof "$build_http"
 grep -o '"ok":[a-z]*\|"text":"[^"]*"' "$BUILD_RESPONSE_PATH" | sed 's/^/==> /'
 echo "==> runtime build proof: $PROOF_PATH"
-echo "==> app store count: $(curl -s "$B/v1/apps" | grep -o '"count":[0-9]*')"
+echo "==> built app count: $(curl -s "$B/v1/apps" | grep -o '"count":[0-9]*')"
 echo "==> persisted artifact:"; ls -la "$GOBLINS_OS_APPS_DIR"
 kill $CORE_PID 2>/dev/null
 echo "==> done"

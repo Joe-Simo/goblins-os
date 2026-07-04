@@ -95,9 +95,9 @@ pub async fn app_builder_catalog() -> Json<AppBuilderCatalog> {
                 status: agents_sdk_builder,
             },
             AppBuildSurface {
-                id: "app-store",
-                name: "OS-owned app store",
-                role: "Built apps are persisted under the OS state directory and listed here",
+                id: "app-library",
+                name: "Local app library",
+                role: "Built apps are persisted under the OS state directory and listed for review and launch",
                 status: BuilderStatus::Local,
             },
             AppBuildSurface {
@@ -107,9 +107,9 @@ pub async fn app_builder_catalog() -> Json<AppBuilderCatalog> {
                 status: BuilderStatus::Local,
             },
             AppBuildSurface {
-                id: "install-store",
-                name: "Traditional app store",
-                role: "Not part of Goblins OS; apps are built from intent, never installed",
+                id: "external-catalog",
+                name: "External software catalog",
+                role: "Not part of Goblins OS; apps are built from intent and local source",
                 status: BuilderStatus::Blocked,
             },
         ],
@@ -187,7 +187,7 @@ fn create_app_build_blocking(payload: AppBuildRequest) -> (StatusCode, Json<Buil
         audit_ai_action("build-app", Some("launcher"), AiActionOutcome::Failed);
         return outcome(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "The built app could not be written to the OS-owned app store.".to_string(),
+            "The built app could not be written to the local app library.".to_string(),
             None,
         );
     }

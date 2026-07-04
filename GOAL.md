@@ -9,8 +9,9 @@ the system helps turn it into working local projects.
 
 - **Local-first app creation.** The main workflow is describing an app, reviewing
   the generated project, and keeping the result on the machine.
-- **No app store dependency.** Goblins OS should not need a central app store to
-  be useful. System utilities are part of the OS; user apps are built by users.
+- **User-owned app library.** Goblins OS keeps built projects on the machine.
+  System utilities ship with the OS; user apps are created, reviewed, and owned
+  locally.
 - **Native desktop quality.** Core surfaces should feel cohesive, responsive, and
   intentional, using the Goblins OS design system and Inter typography.
 - **Fedora bootc foundation.** The base OS, updates, and rollback model stay
@@ -40,7 +41,8 @@ A surface is ready when it:
 - Uses the shared Goblins OS design tokens and Inter typography.
 - Works in light and dark appearance.
 - Handles keyboard, pointer, and accessibility expectations.
-- Avoids raw backend state, debug labels, and implementation jargon in user copy.
+- Avoids raw backend state, diagnostic labels, and implementation jargon in user
+  copy.
 - Has deterministic behavior under the verifier or hardware gate appropriate to
   that surface.
 - Does not fabricate missing hardware, runtime, package, or screenshot evidence.

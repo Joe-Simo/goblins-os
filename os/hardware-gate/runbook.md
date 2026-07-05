@@ -68,8 +68,8 @@ keep verification ISO artifacts inside Actions.
 ```sh
 RUN_DATE=<YYYY-MM-DD> \
 GOBLINS_OS_ARCH=aarch64 \
-GOBLINS_OS_CAPTURE_ISO=/tmp/goblins-os-aarch64-verification-iso/goblins-os-aarch64.iso \
-GOBLINS_OS_CAPTURE_ISO_SHA256=/tmp/goblins-os-aarch64-verification-iso/goblins-os-aarch64.iso.sha256 \
+GOBLINS_OS_CAPTURE_ISO=/tmp/goblins-os-aarch64-verification-iso/bootiso/goblins-os-aarch64.iso \
+GOBLINS_OS_CAPTURE_ISO_SHA256=/tmp/goblins-os-aarch64-verification-iso/bootiso/goblins-os-aarch64.iso.sha256 \
 REPO_ROOT="$REPO_ROOT" \
 os/hardware-gate/capture-harness/run-capture.sh
 ```

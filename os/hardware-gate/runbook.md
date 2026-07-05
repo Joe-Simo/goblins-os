@@ -77,7 +77,9 @@ os/hardware-gate/capture-harness/run-capture.sh
 This route still requires the verification ISO at
 `os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso` and the matching
 `.sha256`, a native `qemu-system-aarch64`, UEFI firmware, and enough free space
-for the VM scratch disk and proof output. Use `GOBLINS_OS_CAPTURE_ISO` and
+for the VM scratch disk and proof output. The capture harness defaults to an
+80G sparse scratch disk; set `GOBLINS_OS_CAPTURE_DISK_SIZE` only when the host
+has a separately validated disk-size requirement. Use `GOBLINS_OS_CAPTURE_ISO` and
 `GOBLINS_OS_CAPTURE_ISO_SHA256` only when the verification ISO is stored outside
 the default output path. It does not replace the GHCR/package visibility check
 or the release artifact/SBOM build.

@@ -131,6 +131,7 @@ case "$(uname -s)" in
     ;;
 esac
 QEMU_SMP="${GOBLINS_OS_QEMU_CPUS:-2}"
+SCRATCH_DISK_SIZE="${GOBLINS_OS_CAPTURE_DISK_SIZE:-80G}"
 pick() { for f in "$@"; do [ -n "$f" ] && [ -f "$f" ] && { echo "$f"; return 0; }; done; return 1; }
 VARS_TEMPLATE=""
 if [ "$ARCH" = aarch64 ]; then
@@ -179,7 +180,7 @@ prepare_vm_state() {
   else
     : > "$WORK/vars.fd"; truncate -s 67108864 "$WORK/vars.fd" 2>/dev/null || dd if=/dev/zero of="$WORK/vars.fd" bs=1m count=64 2>/dev/null
   fi
-  qemu-img create -f qcow2 "$WORK/scratch.qcow2" 16G >/dev/null
+  qemu-img create -f qcow2 "$WORK/scratch.qcow2" "$SCRATCH_DISK_SIZE" >/dev/null
 }
 
 start_qemu() {

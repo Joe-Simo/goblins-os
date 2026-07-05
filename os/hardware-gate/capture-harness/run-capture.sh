@@ -210,7 +210,12 @@ start_qemu() {
   local boot_args=()
   case "$ARCH:$phase" in
     aarch64:install)
-      boot_args=(-cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" -boot d -no-reboot)
+      boot_args=(
+        -drive "if=none,id=install_iso,file=$ISO,media=cdrom,readonly=on"
+        -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2"
+        -device usb-storage,drive=install_iso,bootindex=1
+        -no-reboot
+      )
       ;;
     aarch64:firstboot)
       boot_args=(-drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2")
@@ -221,9 +226,9 @@ start_qemu() {
   esac
   echo "capture attempt $attempt: starting QEMU ($phase)"
   "$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp "$QEMU_SMP" -m 5120 "${PFLASH[@]}" \
-    "${boot_args[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
-    -device virtio-gpu-pci,id=video0 -device qemu-xhci -device usb-tablet -device usb-kbd \
+    -device qemu-xhci "${boot_args[@]}" \
+    -device virtio-gpu-pci,id=video0 -device usb-tablet -device usb-kbd \
     "${QEMU_AUDIO[@]}" \
     -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &
   QEMU_PID=$!

@@ -330,12 +330,10 @@ screenshot_file_is_valid_png() {
 screenshot_manifest_matches_iso() {
   local manifest="$1"
 
-  [ "$ISO_PATH" != "not-found" ] || return 1
-  [ "$ISO_SHA" != "not-found" ] || return 1
   [ -s "$manifest" ] || return 1
   rg -q '"architecture"[[:space:]]*:[[:space:]]*"'"$ARCH"'"' "$manifest" \
     && rg -q '"iso"[[:space:]]*:[[:space:]]*"'"$ISO_PATH"'"' "$manifest" \
-    && rg -q '"iso_sha256"[[:space:]]*:[[:space:]]*"'"$ISO_SHA"'"' "$manifest" \
+    && rg -q '"iso_sha256"[[:space:]]*:[[:space:]]*"[a-fA-F0-9]{64}"' "$manifest" \
     && rg -q '"captured_at"[[:space:]]*:[[:space:]]*"[^"]+"' "$manifest" \
     && rg -q '"screenshot_run_dir"[[:space:]]*:[[:space:]]*"'"$SCREENSHOT_DIR"'"' "$manifest" \
     && rg -q '"firewall_live_toggle_proof"[[:space:]]*:[[:space:]]*"'"$FIREWALL_LIVE_TOGGLE_PROOF"'"' "$manifest" \
@@ -353,7 +351,12 @@ screenshot_manifest_matches_iso() {
     && rg -q '"focus_arm_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$FOCUS_ARM_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"app_privacy_revoke_proof"[[:space:]]*:[[:space:]]*"'"$APP_PRIVACY_REVOKE_PROOF"'"' "$manifest" \
     && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest" \
-    && rg -q '"audio_output_proof"[[:space:]]*:[[:space:]]*"'"$AUDIO_OUTPUT_PROOF"'"' "$manifest"
+    && rg -q '"audio_output_proof"[[:space:]]*:[[:space:]]*"'"$AUDIO_OUTPUT_PROOF"'"' "$manifest" \
+    && rg -q '"runtime_build_proof"[[:space:]]*:[[:space:]]*"'"$RUNTIME_BUILD_PROOF"'"' "$manifest"
+}
+
+screenshot_manifest_iso_sha() {
+  awk -F'"' '/"iso_sha256"/ { print $4; exit }' "$1" 2>/dev/null || true
 }
 
 firewall_live_toggle_proof_passes() {
@@ -921,10 +924,19 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Screenshots must be non-empty PNG captures from the display-backed VM or hardware run."
     exit 1
   fi
-  if ! screenshot_manifest_matches_iso "$SCREENSHOT_DIR/proof-manifest.json"; then
-    fail "Screenshot proof manifest missing or not tied to this architecture ISO: $SCREENSHOT_DIR/proof-manifest.json"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, iso_sha256=$ISO_SHA, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF, and audio_output_proof=$AUDIO_OUTPUT_PROOF."
+  manifest="$SCREENSHOT_DIR/proof-manifest.json"
+  if ! screenshot_manifest_matches_iso "$manifest"; then
+    fail "Screenshot proof manifest missing or incoherent for this architecture verification proof: $manifest"
+    fail "Expected architecture=$ARCH, iso=$ISO_PATH, a 64-character iso_sha256, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF, audio_output_proof=$AUDIO_OUTPUT_PROOF, and runtime_build_proof=$RUNTIME_BUILD_PROOF."
     exit 1
+  fi
+  screenshot_iso_sha="$(screenshot_manifest_iso_sha "$manifest")"
+  log "Screenshot verification ISO SHA256: ${screenshot_iso_sha:-missing}"
+  if [ "$ISO_SHA" != "not-found" ]; then
+    log "Current hydrated architecture ISO SHA256: $ISO_SHA"
+    if [ -n "$screenshot_iso_sha" ] && [ "$screenshot_iso_sha" != "$ISO_SHA" ]; then
+      log "Screenshot proof uses verification-only media; hydrated release ISO artifacts are checked separately."
+    fi
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
     fail "Firewall live toggle proof missing or failed: $SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"

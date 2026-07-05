@@ -6070,6 +6070,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-harness-stable-frame-hash-macos-fallback",
+            "macOS sips",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-harness-distinct-guard-ignores-debug-frames",
             "! -name '_debug-*'",
         ),

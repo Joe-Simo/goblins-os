@@ -641,10 +641,41 @@ fi
 
 stable_frame_hash() {
   local file="$1"
+  local tmp width height crop_h
   # Ignore the top shell/GDM bar: its clock changes can make one stale screen
   # look byte-distinct while the actual proof surface never foregrounded.
-  convert "$file" -gravity South -crop '100%x86%+0+0' \
-    -resize 64x64! -colorspace Gray -depth 8 gray:- 2>/dev/null | md5cmd | awk '{print $1}'
+  tmp="$(mktemp -d)"
+  if command -v magick >/dev/null 2>&1; then
+    if magick "$file" -gravity South -crop '100%x86%+0+0' \
+      -resize 64x64! -colorspace Gray -depth 8 "$tmp/stable.png" >/dev/null 2>&1; then
+      md5cmd "$tmp/stable.png" | awk '{print $1}'
+      rm -rf "$tmp"
+      return 0
+    fi
+  elif command -v convert >/dev/null 2>&1; then
+    if convert "$file" -gravity South -crop '100%x86%+0+0' \
+      -resize 64x64! -colorspace Gray -depth 8 "$tmp/stable.png" >/dev/null 2>&1; then
+      md5cmd "$tmp/stable.png" | awk '{print $1}'
+      rm -rf "$tmp"
+      return 0
+    fi
+  elif command -v sips >/dev/null 2>&1; then
+    width="$(sips -g pixelWidth "$file" 2>/dev/null | awk '/pixelWidth:/{print $2; exit}')"
+    height="$(sips -g pixelHeight "$file" 2>/dev/null | awk '/pixelHeight:/{print $2; exit}')"
+    if [ -n "$width" ] && [ -n "$height" ] && [ "$height" -gt 0 ] 2>/dev/null; then
+      crop_h=$((height * 86 / 100))
+      [ "$crop_h" -gt 0 ] || crop_h="$height"
+      if sips --cropToHeightWidth "$crop_h" "$width" --resampleHeightWidth 64 64 \
+        "$file" --out "$tmp/stable.png" >/dev/null 2>&1; then
+        md5cmd "$tmp/stable.png" | awk '{print $1}'
+        rm -rf "$tmp"
+        return 0
+      fi
+    fi
+  fi
+  rm -rf "$tmp"
+  echo "stable_frame_hash requires ImageMagick (magick/convert) or macOS sips" >&2
+  return 1
 }
 
 _surface_shots=(

@@ -1,0 +1,17 @@
+{
+  "captured_via": "display-backed VM HTTP proof signal",
+  "disable_active": "false",
+  "disable_enabled": "false",
+  "disable_http": "200",
+  "disable_ok": "true",
+  "enable_active": "true",
+  "enable_enabled": "true",
+  "enable_http": "200",
+  "enable_ok": "true",
+  "name": "firewall-live-toggle",
+  "polkit_rule": "60-goblins-os-firewall.rules",
+  "route": "/v1/firewall/enabled",
+  "status": "pass",
+  "status_route": "/v1/firewall/status",
+  "unit_template": "goblins-os-firewall@.service"
+}

@@ -1,0 +1,19 @@
+{
+  "adapter_self_test": "pass",
+  "bottom_edge_flipped": "true",
+  "captured_via": "display-backed VM HTTP proof signal",
+  "font_family": "Inter",
+  "frame_surface": "goblins-textshortcuts-accept-bubble-frame",
+  "hidden_frame_collapses": "true",
+  "layout_count": "4",
+  "live_overlay_claim": "false",
+  "name": "text-shortcuts-candidate-bubble-layout",
+  "rendered_bubble_ready_claim": "false",
+  "right_edge_clamped": "true",
+  "route": "/v1/text-shortcuts",
+  "runtime_ready_claim": "false",
+  "status": "pass",
+  "style_class": "gos-text-shortcuts-candidate",
+  "surface": "goblins-textshortcuts-accept-bubble-layout",
+  "visible_layout_count": "3"
+}

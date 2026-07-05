@@ -1,0 +1,18 @@
+{
+  "active_engine": "goblins-textshortcuts",
+  "adapter_self_test": "pass",
+  "captured_via": "display-backed VM HTTP proof signal",
+  "core_engine_available": "true",
+  "core_http": "200",
+  "core_runtime_loop_available": "true",
+  "engine_listed": "true",
+  "engine_set": "pass",
+  "input_source_configured": "true",
+  "name": "text-shortcuts-session-enable",
+  "preload_configured": "true",
+  "route": "/v1/text-shortcuts",
+  "runtime_ready_claim": "true",
+  "service": "active",
+  "service_unit": "org.freedesktop.IBus.session.GNOME.service",
+  "status": "pass"
+}

@@ -1,0 +1,22 @@
+{
+  "active_engine": "goblins-textshortcuts",
+  "captured_via": "display-backed VM HTTP proof signal",
+  "core_readiness_flip": "live",
+  "focused_field_callback": "true",
+  "font_family": "Inter",
+  "input_driver": "qmp-keyboard",
+  "live_overlay_claim": "true",
+  "name": "text-shortcuts-live-ibus-runtime-render",
+  "normal_actual": "onmyway.",
+  "passthrough_actual": "hello.",
+  "password_refusal": "true",
+  "rendered_accept_bubble": "true",
+  "rendered_bubble_ready_claim": "true",
+  "route": "/v1/text-shortcuts",
+  "runtime_ready_claim": "true",
+  "screenshot": "32-text-shortcuts-live-ibus-runtime-render.png",
+  "status": "pass",
+  "style_class": "gos-text-shortcuts-candidate",
+  "surface": "goblins-textshortcuts-live-ibus-runtime-render",
+  "text_input_v3_commit": "true"
+}

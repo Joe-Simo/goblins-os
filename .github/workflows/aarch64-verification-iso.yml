@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -44,6 +44,10 @@ jobs:
           sudo swapon /mnt/swapfile
           df -h /
           free -h
+      - name: Install signoff tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq ripgrep
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Compute lowercase GHCR ref
@@ -84,6 +88,61 @@ jobs:
             "goblins-hwgate-session-orchestrator"; do
             LC_ALL=C grep -aFq "$needle" goblins-os-aarch64.iso
           done
+      - name: Generate release evidence for the captured image
+        run: |
+          mkdir -p os/signoff-proofs/sbom/aarch64
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -v "$PWD/os/signoff-proofs/sbom/aarch64:/out" \
+            -w /workspace \
+            '${{ steps.ref.outputs.ref }}' \
+            /usr/libexec/goblins-os/goblins-os-verify \
+            --source-root /workspace \
+            --release-evidence /out \
+            --arch aarch64
+          docker run --rm \
+            -v "$PWD/os/signoff-proofs/sbom/aarch64:/out" \
+            -w /out \
+            '${{ steps.ref.outputs.ref }}' \
+            sh rpm-packages.command
+          . ./os/hardware-gate/rpm-sbom-arch.sh
+          rpm_sbom_arch_matches os/signoff-proofs/sbom/aarch64/rpm-packages.tsv aarch64
+      - name: Scan generated release evidence for secrets
+        run: |
+          . ./os/hardware-gate/secret-scan.sh
+          goblins_os_artifact_secret_scan "$PWD"
+      - name: Run Linux close-signoff for committed HVF screenshot run
+        run: |
+          screenshot_dir="os/screenshots/hardware-gate/aarch64/${{ inputs.run_date }}"
+          if [ ! -d "$screenshot_dir" ]; then
+            echo "No committed local-HVF screenshot run at $screenshot_dir; skipping close-signoff."
+            exit 0
+          fi
+          runtime_engine_source="$(jq -r '.engine_source // empty' "$screenshot_dir/runtime-build-proof.json")"
+          GOBLINS_OS_ARCH=aarch64 \
+          GOBLINS_OS_IMAGE='${{ steps.ref.outputs.ref }}' \
+          SCREENSHOT_DIR="$screenshot_dir" \
+          RUNTIME_ENGINE_MODE=local-model \
+          RUNTIME_ENGINE_SOURCE="$runtime_engine_source" \
+          RUNTIME_ENGINE_CONFIG="$screenshot_dir/runtime-build-proof.json" \
+          BUILT_ARTIFACT_PATH_URL="$screenshot_dir/runtime-build-proof.json" \
+          CI_RUST_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
+          CI_IMAGE_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
+          CI_INSTALLER_ISO_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
+            ./os/hardware-gate/close-signoff.sh
+      - name: Commit Linux aarch64 signoff evidence
+        run: |
+          git config user.name "goblins-os-ci"
+          git config user.email "ci@goblins.os"
+          git add -f os/signoff-proofs/sbom/aarch64 os/signoff-notes.md || true
+          if [ -d "os/screenshots/hardware-gate/aarch64/${{ inputs.run_date }}" ]; then
+            git add -f "os/screenshots/hardware-gate/aarch64/${{ inputs.run_date }}"
+          fi
+          git pull --rebase origin main || true
+          git commit -m "hardware-gate: aarch64 Linux signoff ${{ inputs.run_date }}" || echo "nothing to commit"
+          for i in 1 2 3 4 5; do
+            git push origin main && break || { git pull --rebase origin main; sleep $((RANDOM % 5 + 2)); }
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: goblins-os-aarch64-verification-iso-${{ inputs.run_date }}
@@ -93,3 +152,6 @@ jobs:
             os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso.sha256
             os/iso/output/aarch64/manifest-goblins-os-aarch64.json
             os/iso/output/aarch64/manifest-anaconda-iso.json
+            os/signoff-proofs/sbom/aarch64/
+            os/screenshots/hardware-gate/aarch64/${{ inputs.run_date }}/
+            os/signoff-notes.md

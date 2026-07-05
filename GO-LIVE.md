@@ -1,7 +1,7 @@
 # Goblins OS Go-Live Checklist
 
-This checklist tracks what must be true before the alpha release can be promoted
-to a stable public release.
+This checklist tracks the live alpha release and the remaining steps before a
+stable public release.
 
 ## Public Release Surface
 
@@ -14,8 +14,8 @@ to a stable public release.
   and final ISO.
 - [x] Website includes install and checksum verification guidance.
 - [ ] GHCR package visibility allows anonymous Docker and Podman pulls.
-  Current check: anonymous `docker buildx imagetools inspect
-  ghcr.io/joe-simo/goblins-os:x86_64` and `:aarch64` return `401 Unauthorized`;
+  Current check: anonymous registry manifest requests for
+  `ghcr.io/joe-simo/goblins-os:x86_64` and `:aarch64` return `403 Forbidden`;
   the connected GitHub CLI token also needs `read:packages`/`write:packages`
   before package visibility can be changed from this machine.
 
@@ -44,24 +44,30 @@ to a stable public release.
   `45abf064735fa2a2ba9ef034883d19453c4bfc02a3b0c311d29e3679c52db434` is
   checksum-verified by the release artifact gate instead of being used for
   automated capture.
-- [ ] `aarch64` display-backed signoff run is complete.
-  Current check: the local aarch64 macOS/HVF attempt correctly failed against
-  hydrated public release media because that ISO leaves storage interactive; the
-  capture harness now fail-closes before QEMU unless the ISO contains the
-  verification-only hardware-gate kickstart. The manual
-  `aarch64-verification-iso` workflow can build the capture-only ISO on a
-  native GitHub arm runner when the local Apple-Silicon machine cannot build
-  release media.
+- [x] `aarch64` display-backed verification-ISO screenshot/runtime run is
+  complete.
+  Current proof: GitHub Actions run `28727099426` captured
+  `os/screenshots/hardware-gate/aarch64/2026-07-05` from the verification ISO
+  built from `ghcr.io/joe-simo/goblins-os:aarch64`; the proof manifest records
+  ISO SHA256 `3c73a77335b8be7b1fdaeb73e7992bacf6ec253cb0755f030484a673b0c293dc`.
+- [x] `aarch64` public release ISO artifacts are checked separately from
+  automated screenshots.
+  Current check: the completed aarch64 screenshot proof uses verification-only
+  media because public release media intentionally leaves storage interactive.
+  The hydrated public release ISO SHA
+  `13b2b59ea03054d66b3f8c0986c2314631437e57074685c515a1dffa3a4f6fbf` is
+  checksum-verified by the release artifact gate instead of being used for
+  automated capture.
 - [x] Latest signoff row records runner, ISO, checksums, self-test, runtime
   proof, app-build proof, gaming proof, storage proof, and SBOM evidence.
   Current check: the latest `x86_64` row from GitHub Actions run
   `28721788279` records runner, ISO, `blocked=0`, self-test, runtime/app-build,
   gaming, storage proof, release evidence/SBOM, and `Current project completion
   status: complete`.
-- [ ] `./os/hardware-gate/verify-shipping-status.sh` passes.
-  Current local check: with both release ISOs hydrated and checksum-verified,
-  the gate still fails because `aarch64` has no complete display-backed
-  screenshot/signoff row.
+- [x] `./os/hardware-gate/verify-shipping-status.sh` passes.
+  Current local check: with both architecture release artifacts and
+  verification-ISO screenshot/signoff rows present, the shipping status gate
+  reports `Shipping status gate: PASS`.
 
 ## Stable Release Promotion
 
@@ -74,15 +80,15 @@ podman manifest inspect ghcr.io/joe-simo/goblins-os:x86_64
 podman manifest inspect ghcr.io/joe-simo/goblins-os:aarch64
 ```
 
-- [ ] Complete per-architecture display-backed signoff.
-- [ ] Hydrate release artifacts before local signoff. Use the default
+- [x] Complete per-architecture display-backed signoff for the current alpha.
+- [x] Hydrate release artifacts before local signoff. Use the default
   metadata/SBOM mode for lightweight review, or set `GOBLINS_OS_DOWNLOAD_ISO=1`
   only on a machine with enough disk and bandwidth for ISO reconstruction.
-- [ ] Build or fetch the verification-only hardware-gate ISO for screenshot
+- [x] Build or fetch the verification-only hardware-gate ISO for screenshot
   capture; do not use hydrated public release media for automated capture.
 - [ ] Create a stable release tag.
 - [ ] Update website release data from alpha to stable.
-- [ ] Run website checks:
+- [x] Run website checks:
 
 ```sh
 bun run lint
@@ -90,6 +96,6 @@ bun run typecheck
 bun run build
 ```
 
-- [ ] Deploy production website.
-- [ ] Verify live domain, download links, checksum links, source links, and
+- [x] Deploy production website.
+- [x] Verify live domain, download links, checksum links, source links, and
   container pull commands.

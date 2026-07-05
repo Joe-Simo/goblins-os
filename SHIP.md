@@ -10,8 +10,8 @@ the display-backed gate required for final signoff.
   ownership work is planned.
 - **Font stack**: Inter is the final shipped font stack (`rsms-inter-fonts`
   with `google-noto-sans-fonts` fallback in packaging for compatibility).
-- **OpenAI Sans**: Not required and not shipped. There are no remaining
-  OpenAI Sans typography licensing tasks.
+- **Typography boundary**: no non-Inter brand font dependency is required or
+  shipped.
 
 All commands assume a native **x86_64 or aarch64 Linux host with Docker**. Release
 artifacts are architecture-specific; do not treat one ISO as covering both CPU
@@ -204,8 +204,8 @@ external gate** for full sign-off, and it requires a machine or display-backed V
 - **Real-hardware/VM boot + interaction feel** — step 5 above. Everything up to it
   is automated and verified; the perceived smoothness of motion can only be judged
   on a real display.
-- **Typography** — the shipped font stack is final and Inter-only (with Noto Sans fallback).
-  No OpenAI Sans dependency is present in the shipped image.
+- **Typography** — the shipped font stack is final and Inter-only (with Noto
+  Sans fallback).
 - **A runtime model** — exercising *actual* app generation needs GPT-OSS downloaded
   (or a BYO key / Codex configured). The GUI + core build path is complete and
   honest; generation runs once an engine is present.

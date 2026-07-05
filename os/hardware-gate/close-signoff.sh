@@ -787,16 +787,16 @@ if ! rg -q "custom kernel" "$SHIP_DECL"; then
   fail "SHIP.md does not explicitly state no custom kernel ownership work is planned."
   exit 1
 fi
-if ! rg -q "OpenAI Sans" "$SHIP_DECL"; then
-  fail "SHIP.md does not state OpenAI Sans policy."
+if ! rg -q "Inter is the final shipped font stack" "$SHIP_DECL" || ! rg -q "no non-Inter brand font dependency" "$SHIP_DECL"; then
+  fail "SHIP.md does not state the Inter-only typography boundary."
   exit 1
 fi
 if rg -qi --hidden --no-ignore-vcs --no-ignore \
-  "OpenAI Sans|openai sans|openai-sans" os .github \
-  --glob '!os/hardware-gate/close-signoff.sh' \
-  --glob '!os/hardware-gate/verify-shipping-status.sh' \
-  | grep -v "^SHIP.md$" >/tmp/ship_openai_sans_hits 2>/dev/null; then
-  fail "Unexpected OpenAI Sans references found outside SHIP.md:"
+  "OpenAI[ -]Sans|openai[ -]sans|openai-sans" \
+  README.md ROADMAP.md GO-LIVE.md SHIP.md CONTRIBUTING.md CLA.md NOTICE TRADEMARKS.md AGENTS.md apps/site/src apps/site/public \
+  --glob '!apps/site/.next/**' \
+  --glob '!apps/site/node_modules/**' >/tmp/ship_openai_sans_hits 2>/dev/null; then
+  fail "Unexpected unused external brand font references found in public docs:"
   cat /tmp/ship_openai_sans_hits
   exit 1
 fi

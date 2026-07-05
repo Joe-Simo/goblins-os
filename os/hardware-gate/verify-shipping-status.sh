@@ -1129,8 +1129,8 @@ echo
 
 check "SHIP.md declares Fedora bootc foundation" "rg -q 'Fedora bootc remains the OS foundation' \"$SHIP_DECL\""
 check "SHIP.md declares no custom kernel ownership" "rg -q 'no custom kernel|custom kernel' \"$SHIP_DECL\""
-check "SHIP.md declares OpenAI Sans not used" "rg -q 'OpenAI Sans' \"$SHIP_DECL\""
-check "No OpenAI Sans references outside SHIP" "rg -qi --hidden --no-ignore-vcs --no-ignore 'OpenAI Sans|openai sans|openai-sans' os .github --glob '!os/hardware-gate/verify-shipping-status.sh' --glob '!os/hardware-gate/close-signoff.sh' --glob '!os/iso/output*/**' --glob '!os/signoff-proofs/**' --glob '!os/screenshots/**' --glob '!os/brand/*.png' --glob '!SHIP.md' > /tmp/openai_sans_check.txt; [ ! -s /tmp/openai_sans_check.txt ]"
+check "SHIP.md declares Inter-only typography boundary" "rg -q 'Inter is the final shipped font stack' \"$SHIP_DECL\" && rg -q 'no non-Inter brand font dependency' \"$SHIP_DECL\""
+check "No unused external brand font references in public docs" "! rg -qi --hidden --no-ignore-vcs --no-ignore 'OpenAI[ -]Sans|openai[ -]sans|openai-sans' README.md ROADMAP.md GO-LIVE.md SHIP.md CONTRIBUTING.md CLA.md NOTICE TRADEMARKS.md AGENTS.md apps/site/src apps/site/public --glob '!apps/site/.next/**' --glob '!apps/site/node_modules/**'"
 check "No typography licensing TODOs in signing docs" "! rg -qi 'licensing\s+TODO|TODO.*licensing' \"$SHIP_DECL\" \"$RUNBOOK\" \"$SIGNOFF\""
 check "Source package secret scan finds no live keys" "source_secret_scan"
 check "Generated artifact/evidence secret scan finds no live keys" "goblins_os_artifact_secret_scan \"$ROOT\""

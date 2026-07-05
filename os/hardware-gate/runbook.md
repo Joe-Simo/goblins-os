@@ -79,10 +79,11 @@ This route still requires the verification ISO at
 `.sha256`, a native `qemu-system-aarch64`, UEFI firmware, and enough free space
 for the VM scratch disk and proof output. The capture harness defaults to an
 80G sparse scratch disk; set `GOBLINS_OS_CAPTURE_DISK_SIZE` only when the host
-has a separately validated disk-size requirement. Use `GOBLINS_OS_CAPTURE_ISO` and
-`GOBLINS_OS_CAPTURE_ISO_SHA256` only when the verification ISO is stored outside
-the default output path. It does not replace the GHCR/package visibility check
-or the release artifact/SBOM build.
+has a separately validated disk-size requirement. The harness boots the
+verification ISO once and then prefers the installed VM disk after Anaconda
+reboots. Use `GOBLINS_OS_CAPTURE_ISO` and `GOBLINS_OS_CAPTURE_ISO_SHA256` only
+when the verification ISO is stored outside the default output path. It does not
+replace the GHCR/package visibility check or the release artifact/SBOM build.
 
 ### Docker artifact testing on a non-native machine
 
@@ -142,7 +143,7 @@ qemu-system-x86_64 -m 8192 -smp 4 \
   -accel kvm \
   -cdrom "$ISO" \
   -drive file=/tmp/goblins-os-$ARCH.qcow2,if=virtio,format=qcow2 \
-  -boot d -vga std -display gtk \
+  -boot order=c,once=d -vga std -display gtk \
   -serial mon:stdio
 ```
 
@@ -160,7 +161,7 @@ qemu-system-aarch64 -machine virt,accel=kvm,gic-version=max -cpu host -m 8192 -s
   -drive if=pflash,format=raw,file="$AARCH64_UEFI_VARS" \
   -cdrom "$ISO" \
   -drive file=/tmp/goblins-os-$ARCH.qcow2,if=virtio,format=qcow2 \
-  -boot d -device virtio-gpu-pci -display gtk \
+  -boot order=c,once=d -device virtio-gpu-pci -display gtk \
   -serial mon:stdio
 ```
 

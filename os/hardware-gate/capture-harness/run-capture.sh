@@ -188,7 +188,7 @@ start_qemu() {
   echo "capture attempt $attempt: starting QEMU"
   "$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp "$QEMU_SMP" -m 5120 "${PFLASH[@]}" \
     -cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" \
-    -boot d \
+    -boot order=c,once=d \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     -device virtio-gpu-pci,id=video0 -device qemu-xhci -device usb-tablet -device usb-kbd \
     "${QEMU_AUDIO[@]}" \

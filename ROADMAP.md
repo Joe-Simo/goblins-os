@@ -13,8 +13,8 @@ signoff files, not in this overview.
   `aarch64`.
 - Container images: built by the release workflow; public pull depends on GHCR
   package visibility.
-- Stable release status: still alpha until the remaining per-architecture
-  signoff requirements are complete.
+- Stable release status: still alpha; the current release gate passes, and a
+  stable tag waits on public container pulls and post-alpha hardening.
 
 ## Shipped Foundation
 
@@ -35,8 +35,8 @@ signoff files, not in this overview.
 
 - Make the GHCR container package public so Docker and Podman users can pull
   without authentication.
-- Complete the display-backed signoff path for every supported architecture.
-- Publish a stable tag after the release gate passes.
+- Keep display-backed signoff current for every release candidate.
+- Publish a stable tag after GHCR visibility and post-alpha hardening are done.
 - Keep the website release data synchronized with the published artifacts.
 
 ## Product Work

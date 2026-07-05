@@ -85,7 +85,7 @@ export const releaseArtifacts = [
     status: "available",
     notes: [
       "Alpha release. Use a spare device or VM and back up first.",
-      "Full release signoff is still in progress.",
+      "Release gate passed with published checksums, manifests, SBOMs, and signoff evidence.",
     ],
   },
   {
@@ -124,7 +124,7 @@ export const releaseArtifacts = [
     status: "available",
     notes: [
       "Alpha release. Use a spare device or VM and back up first.",
-      "Full release signoff is still in progress.",
+      "Release gate passed with published checksums, manifests, SBOMs, and signoff evidence.",
     ],
   },
 ] satisfies ReleaseArtifact[];

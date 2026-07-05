@@ -1416,7 +1416,7 @@ fn populate_app_detail(page: &gtk4::Box, app: &BuiltApp, stack: &gtk4::Stack) {
     column.append(&meta);
 
     column.append(&{
-        let l = label("WHAT YOU ASKED FOR", &["gos-home-ledger-kicker"]);
+        let l = label("BUILD BRIEF", &["gos-home-ledger-kicker"]);
         l.set_margin_top(28);
         l
     });
@@ -1430,7 +1430,7 @@ fn populate_app_detail(page: &gtk4::Box, app: &BuiltApp, stack: &gtk4::Stack) {
 
     if !app.plan.trim().is_empty() {
         column.append(&{
-            let l = label("WHAT GOBLINS OS BUILT", &["gos-home-ledger-kicker"]);
+            let l = label("BUILD SUMMARY", &["gos-home-ledger-kicker"]);
             l.set_margin_top(20);
             l
         });

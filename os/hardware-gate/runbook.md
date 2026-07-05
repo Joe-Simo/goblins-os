@@ -80,10 +80,13 @@ This route still requires the verification ISO at
 for the VM scratch disk and proof output. The capture harness defaults to an
 80G sparse scratch disk; set `GOBLINS_OS_CAPTURE_DISK_SIZE` only when the host
 has a separately validated disk-size requirement. The harness boots the
-verification ISO once and then prefers the installed VM disk after Anaconda
-reboots. Use `GOBLINS_OS_CAPTURE_ISO` and `GOBLINS_OS_CAPTURE_ISO_SHA256` only
-when the verification ISO is stored outside the default output path. It does not
-replace the GHCR/package visibility check or the release artifact/SBOM build.
+verification ISO only for the install pass and then prefers the installed VM
+disk after Anaconda reboots. `x86_64` uses QEMU one-time ISO boot order;
+`aarch64` uses a two-phase capture because QEMU aarch64 does not support the
+same boot-order override. Use `GOBLINS_OS_CAPTURE_ISO` and
+`GOBLINS_OS_CAPTURE_ISO_SHA256` only when the verification ISO is stored outside
+the default output path. It does not replace the GHCR/package visibility check
+or the release artifact/SBOM build.
 
 ### Docker artifact testing on a non-native machine
 
@@ -161,7 +164,19 @@ qemu-system-aarch64 -machine virt,accel=kvm,gic-version=max -cpu host -m 8192 -s
   -drive if=pflash,format=raw,file="$AARCH64_UEFI_VARS" \
   -cdrom "$ISO" \
   -drive file=/tmp/goblins-os-$ARCH.qcow2,if=virtio,format=qcow2 \
-  -boot order=c,once=d -device virtio-gpu-pci -display gtk \
+  -boot d -no-reboot -device virtio-gpu-pci -display gtk \
+  -serial mon:stdio
+```
+
+When the aarch64 installer reboots and QEMU exits, restart the same VM disk
+without the ISO:
+
+```sh
+qemu-system-aarch64 -machine virt,accel=kvm,gic-version=max -cpu host -m 8192 -smp 4 \
+  -drive if=pflash,format=raw,readonly=on,file="$AARCH64_UEFI_CODE" \
+  -drive if=pflash,format=raw,file="$AARCH64_UEFI_VARS" \
+  -drive file=/tmp/goblins-os-$ARCH.qcow2,if=virtio,format=qcow2 \
+  -device virtio-gpu-pci -display gtk \
   -serial mon:stdio
 ```
 

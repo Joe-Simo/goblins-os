@@ -28,6 +28,8 @@ ORCHESTRATOR_DEST = os.environ.get("GOS_ORCHESTRATOR_DEST")
 ABS_MAX = 0x7fff
 INSTALL_POST_TIMEOUT = int(os.environ.get("GOS_INSTALL_POST_TIMEOUT", "900"))
 INSTALL_POST_TIMEOUT_EXIT = int(os.environ.get("GOS_INSTALL_POST_TIMEOUT_EXIT", "70"))
+INSTALL_MARKER_EXIT_CODE = int(os.environ.get("GOS_EXIT_AFTER_INSTALL_MARKER", "0") or "0")
+SKIP_INSTALL_PHASE = os.environ.get("GOS_SKIP_INSTALL_PHASE") == "1"
 REQUIRED_FRAME_SETTLE_SECONDS = int(os.environ.get("GOS_REQUIRED_FRAME_SETTLE_SECONDS", "24"))
 CAPTURE_TOTAL_TIMEOUT_SECONDS = int(os.environ.get("GOS_CAPTURE_TOTAL_TIMEOUT_SECONDS", "1200"))
 CAPTURE_INACTIVITY_TIMEOUT_SECONDS = int(os.environ.get("GOS_CAPTURE_INACTIVITY_TIMEOUT_SECONDS", "180"))
@@ -443,22 +445,28 @@ def require_proofs(proofs):
 # 0. Boot the highlighted installer entry instead of burning the GRUB timeout.
 print(f"QMP display input route: {DISPLAY_DEVICE or 'default'}", flush=True)
 print(f"QMP query-mice: {try_cmd('query-mice')}", flush=True)
-wait_serial_contains("ISO boot menu", "Install Goblins OS 44", 180)
-if "Booting `Install Goblins OS 44'" not in serial_text():
-    key("ret")
-observe_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 30)
-# 1. The verification-only embedded kickstart pins the scratch VM disk and
-# should auto-start without interactive Anaconda clicks. Progress is proven only
-# by the serial %post marker, with periodic framebuffer diagnostics on timeout
-# paths.
-wait_serial_contains(
-    "kickstart install post",
-    "GOBLINS_VERIFY_INSTALL_DONE",
-    INSTALL_POST_TIMEOUT,
-    debug_label="Anaconda automated kickstart progress",
-    debug_every=120,
-    exit_code=INSTALL_POST_TIMEOUT_EXIT,
-)
+if not SKIP_INSTALL_PHASE:
+    wait_serial_contains("ISO boot menu", "Install Goblins OS 44", 180)
+    if "Booting `Install Goblins OS 44'" not in serial_text():
+        key("ret")
+    observe_serial_contains("ISO boot handoff", "Booting `Install Goblins OS 44'", 30)
+    # 1. The verification-only embedded kickstart pins the scratch VM disk and
+    # should auto-start without interactive Anaconda clicks. Progress is proven only
+    # by the serial %post marker, with periodic framebuffer diagnostics on timeout
+    # paths.
+    wait_serial_contains(
+        "kickstart install post",
+        "GOBLINS_VERIFY_INSTALL_DONE",
+        INSTALL_POST_TIMEOUT,
+        debug_label="Anaconda automated kickstart progress",
+        debug_every=120,
+        exit_code=INSTALL_POST_TIMEOUT_EXIT,
+    )
+    if INSTALL_MARKER_EXIT_CODE:
+        print("kickstart install post: returning to host for disk-only first boot", flush=True)
+        raise SystemExit(INSTALL_MARKER_EXIT_CODE)
+else:
+    print("install phase skipped by host; waiting for installed first boot", flush=True)
 # 2. Wait for first boot before treating install progress as real.
 observe_serial_contains("first boot hardware diagnostics", "GOBLINS_HWGATE_DIAG_DONE", 180)
 wait_stage("first boot desktop", 420)

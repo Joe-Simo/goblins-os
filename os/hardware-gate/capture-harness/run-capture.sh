@@ -29,6 +29,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 HTTPD=""
 QEMU_PID=""
 CAPTURE_STARTED=0
+INSTALL_MARKER_RC="${GOS_INSTALL_MARKER_EXIT_CODE:-71}"
+AARCH64_INSTALL_REBOOT_TIMEOUT="${GOS_AARCH64_INSTALL_REBOOT_TIMEOUT:-420}"
 
 dump_file_tail() {
   local label="$1"
@@ -170,6 +172,25 @@ stop_qemu() {
   fi
 }
 
+wait_for_qemu_exit() {
+  local label="$1"
+  local timeout="$2"
+  local start now
+  start="$(date +%s)"
+  while [ -n "${QEMU_PID:-}" ] && kill -0 "$QEMU_PID" 2>/dev/null; do
+    now="$(date +%s)"
+    if [ $((now - start)) -ge "$timeout" ]; then
+      echo "$label: QEMU did not exit within ${timeout}s"
+      return 1
+    fi
+    sleep 2
+  done
+  if [ -n "${QEMU_PID:-}" ]; then
+    wait "$QEMU_PID" 2>/dev/null || true
+    QEMU_PID=""
+  fi
+}
+
 prepare_vm_state() {
   local attempt="$1"
   echo "capture attempt $attempt: preparing fresh VM state"
@@ -185,10 +206,22 @@ prepare_vm_state() {
 
 start_qemu() {
   local attempt="$1"
-  echo "capture attempt $attempt: starting QEMU"
+  local phase="${2:-full}"
+  local boot_args=()
+  case "$ARCH:$phase" in
+    aarch64:install)
+      boot_args=(-cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" -boot d -no-reboot)
+      ;;
+    aarch64:firstboot)
+      boot_args=(-drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2")
+      ;;
+    *)
+      boot_args=(-cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" -boot order=c,once=d)
+      ;;
+  esac
+  echo "capture attempt $attempt: starting QEMU ($phase)"
   "$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp "$QEMU_SMP" -m 5120 "${PFLASH[@]}" \
-    -cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" \
-    -boot order=c,once=d \
+    "${boot_args[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     -device virtio-gpu-pci,id=video0 -device qemu-xhci -device usb-tablet -device usb-kbd \
     "${QEMU_AUDIO[@]}" \
@@ -200,8 +233,19 @@ start_qemu() {
 }
 
 run_driver() {
+  local phase="${1:-full}"
   set +e
-  python3 "$HERE/drive-capture.py"
+  case "$phase" in
+    install-marker)
+      GOS_EXIT_AFTER_INSTALL_MARKER="$INSTALL_MARKER_RC" python3 "$HERE/drive-capture.py"
+      ;;
+    firstboot)
+      GOS_SKIP_INSTALL_PHASE=1 python3 "$HERE/drive-capture.py"
+      ;;
+    *)
+      python3 "$HERE/drive-capture.py"
+      ;;
+  esac
   local driver_rc=$?
   set -e
   return "$driver_rc"
@@ -223,11 +267,32 @@ INSTALL_TIMEOUT_RC="${GOS_INSTALL_POST_TIMEOUT_EXIT:-70}"
 attempt=1
 while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   prepare_vm_state "$attempt"
-  start_qemu "$attempt"
-  if run_driver; then
-    break
+  if [ "$ARCH" = aarch64 ]; then
+    start_qemu "$attempt" install
+    if run_driver install-marker; then
+      break
+    else
+      driver_rc=$?
+    fi
+    copy_capture_logs "attempt-$attempt-install"
+    if [ "$driver_rc" -eq "$INSTALL_MARKER_RC" ]; then
+      if ! wait_for_qemu_exit "capture attempt $attempt install reboot" "$AARCH64_INSTALL_REBOOT_TIMEOUT"; then
+        exit 1
+      fi
+      start_qemu "$attempt" firstboot
+      if run_driver firstboot; then
+        break
+      else
+        driver_rc=$?
+      fi
+    fi
   else
-    driver_rc=$?
+    start_qemu "$attempt" full
+    if run_driver full; then
+      break
+    else
+      driver_rc=$?
+    fi
   fi
   copy_capture_logs "attempt-$attempt"
   if [ "$driver_rc" -eq "$INSTALL_TIMEOUT_RC" ] && [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then

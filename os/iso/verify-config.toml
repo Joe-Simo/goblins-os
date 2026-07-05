@@ -66,7 +66,7 @@ reboot --eject
     *) echo "goblin_shadow_state=hash-present" ;;
   esac
   echo "GOBLINS_HWGATE_POST_DIAG_DONE"
-} > /dev/ttyS0 2>&1 || true
+} 2>&1 | tee /dev/ttyS0 /dev/ttyAMA0 >/dev/null 2>/dev/null || true
 
 # Anaconda's verification-only text install writes an /etc default.target
 # override to multi-user.target even though the bootc image default is
@@ -74,14 +74,14 @@ reboot --eject
 # exercise the real GNOME/GDM session, so restore the image contract here.
 systemctl set-default graphical.target
 readlink /etc/systemd/system/default.target | grep -Fq graphical.target
-echo "GOBLINS_HWGATE_GRAPHICAL_TARGET_RESTORED" > /dev/ttyS0 || true
+printf '%s\n' "GOBLINS_HWGATE_GRAPHICAL_TARGET_RESTORED" | tee /dev/ttyS0 /dev/ttyAMA0 >/dev/null 2>/dev/null || true
 
 install -d -m 0755 /etc/goblins-os/hardware-gate
 
 cat > /etc/goblins-os/hardware-gate/goblins-hwgate-firstboot-diagnostics <<'EOF'
 #!/usr/bin/env bash
 set +e
-exec >/dev/ttyS0 2>&1
+exec > >(tee /dev/ttyS0 /dev/ttyAMA0 >/dev/null 2>/dev/null || true) 2>&1
 echo "GOBLINS_HWGATE_DIAG_BEGIN"
 echo "kernel=$(uname -r 2>&1)"
 echo "default_target=$(systemctl get-default 2>&1)"
@@ -160,7 +160,7 @@ exec >>/tmp/goblins-hwgate-session-orchestrator.log 2>&1
 
 serial() {
   echo "$*"
-  echo "$*" > /dev/ttyS0 || true
+  printf '%s\n' "$*" | tee /dev/ttyS0 /dev/ttyAMA0 >/dev/null 2>/dev/null || true
 }
 
 serial "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED"
@@ -242,7 +242,7 @@ exec >>/tmp/goblins-hwgate-start-session-orchestrator.log 2>&1
 
 serial() {
   echo "$*"
-  echo "$*" > /dev/ttyS0 || true
+  printf '%s\n' "$*" | tee /dev/ttyS0 /dev/ttyAMA0 >/dev/null 2>/dev/null || true
 }
 
 uid="$(id -u goblin)"
@@ -317,12 +317,12 @@ EOF
 if test -x /etc/goblins-os/hardware-gate/goblins-hwgate-firstboot-diagnostics \
   && test -x /etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator \
   && test -x /etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator; then
-  echo "GOBLINS_HWGATE_ETC_HELPERS_INSTALLED" > /dev/ttyS0 || true
+  printf '%s\n' "GOBLINS_HWGATE_ETC_HELPERS_INSTALLED" | tee /dev/ttyS0 /dev/ttyAMA0 >/dev/null 2>/dev/null || true
 else
-  echo "GOBLINS_HWGATE_ETC_HELPERS_MISSING" > /dev/ttyS0 || true
+  printf '%s\n' "GOBLINS_HWGATE_ETC_HELPERS_MISSING" | tee /dev/ttyS0 /dev/ttyAMA0 >/dev/null 2>/dev/null || true
 fi
 
-echo "GOBLINS_VERIFY_INSTALL_DONE" > /dev/ttyS0 || true
+printf '%s\n' "GOBLINS_VERIFY_INSTALL_DONE" | tee /dev/ttyS0 /dev/ttyAMA0 >/dev/null 2>/dev/null || true
 %end
 """
 

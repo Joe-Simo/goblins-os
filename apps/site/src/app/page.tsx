@@ -706,7 +706,7 @@ function ContainerImageCard({ image }: { image: ContainerImage }) {
             <CardDescription>{image.platform}</CardDescription>
           </div>
           <Badge variant="secondary" className="shrink-0">
-            {image.status === "public" ? "Public pull" : "Registry pending"}
+            Public pull
           </Badge>
         </div>
       </CardHeader>

@@ -38,7 +38,7 @@ export type ContainerImage = {
   verifyCommand: string;
   podmanPullCommand: string;
   podmanVerifyCommand: string;
-  status: "public" | "visibility_pending";
+  status: "public";
   note: string;
 };
 
@@ -142,8 +142,8 @@ export const containerImages = [
     podmanPullCommand: "podman pull ghcr.io/joe-simo/goblins-os:aarch64",
     podmanVerifyCommand:
       "podman run --rm ghcr.io/joe-simo/goblins-os:aarch64 /usr/libexec/goblins-os/goblins-os-verify",
-    status: "visibility_pending",
-    note: "The image has been published; public Docker and Podman pulls are waiting on GitHub Container Registry package visibility.",
+    status: "public",
+    note: "Public GHCR image. Pull with Docker or Podman, then run the verifier command before using it as an install base.",
   },
   {
     arch: "x86_64",
@@ -157,8 +157,8 @@ export const containerImages = [
     podmanPullCommand: "podman pull ghcr.io/joe-simo/goblins-os:x86_64",
     podmanVerifyCommand:
       "podman run --rm ghcr.io/joe-simo/goblins-os:x86_64 /usr/libexec/goblins-os/goblins-os-verify",
-    status: "visibility_pending",
-    note: "The image has been published; public Docker and Podman pulls are waiting on GitHub Container Registry package visibility.",
+    status: "public",
+    note: "Public GHCR image. Pull with Docker or Podman, then run the verifier command before using it as an install base.",
   },
 ] satisfies ContainerImage[];
 

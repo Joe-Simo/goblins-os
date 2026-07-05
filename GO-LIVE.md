@@ -13,11 +13,10 @@ stable public release.
 - [x] SHA256 files are published for the split download parts, compressed ISO,
   and final ISO.
 - [x] Website includes install and checksum verification guidance.
-- [ ] GHCR package visibility allows anonymous Docker and Podman pulls.
-  Current check: anonymous registry manifest requests for
-  `ghcr.io/joe-simo/goblins-os:x86_64` and `:aarch64` return `403 Forbidden`;
-  the connected GitHub CLI token also needs `read:packages`/`write:packages`
-  before package visibility can be changed from this machine.
+- [x] GHCR package visibility allows anonymous Docker and Podman pulls.
+  Current check: GitHub Packages reports `goblins-os` visibility as `public`,
+  and anonymous registry manifest requests for
+  `ghcr.io/joe-simo/goblins-os:x86_64` and `:aarch64` return `200`.
 
 ## Release Verification
 
@@ -71,7 +70,7 @@ stable public release.
 
 ## Stable Release Promotion
 
-- [ ] Make GHCR package public and verify:
+- [x] Make GHCR package public and verify:
 
 ```sh
 docker buildx imagetools inspect ghcr.io/joe-simo/goblins-os:x86_64

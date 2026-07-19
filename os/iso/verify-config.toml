@@ -230,6 +230,7 @@ Environment=XDG_CURRENT_DESKTOP=GNOME
 Environment=XDG_SESSION_DESKTOP=goblins-os
 Environment=DESKTOP_SESSION=goblins-os
 ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator
+TimeoutStartSec=3900
 
 [Install]
 WantedBy=default.target
@@ -250,7 +251,10 @@ runtime_dir="/run/user/${uid}"
 bus="${runtime_dir}/bus"
 HOST_READY_URL="${GOBLINS_HWGATE_HOST_URL:-http://10.0.2.2:8099}"
 
-for _ in $(seq 1 240); do
+# Keep the root sequence inside the host driver's two 180-second waits and the
+# starter's 360-second timeout: bus <=120s, each helper download <=45s, and the
+# first-boot core health/posts/callback path <=122s.
+for _ in $(seq 1 120); do
   if [ -S "$bus" ]; then
     serial "GOBLINS_HWGATE_SESSION_BUS_READY"
     break
@@ -283,9 +287,15 @@ download_with_wait() {
 # The desktop user service waits for the root-owned marker and never receives a
 # core URL, Unix group, or generic request relay.
 install -d -m 0700 -o root -g root /run/goblins-hwgate-root
-download_with_wait firstboot-unlock.sh /run/goblins-hwgate-root/firstboot 240
+if systemctl start goblins-os-core.service; then
+  serial "GOBLINS_HWGATE_CORE_START_REQUESTED"
+else
+  serial "GOBLINS_HWGATE_CORE_START_FAILED"
+  exit 1
+fi
+download_with_wait firstboot-unlock.sh /run/goblins-hwgate-root/firstboot 15
 serial "GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED"
-download_with_wait core-proof-operation.sh /run/goblins-hwgate-root/core-proof-operation 240
+download_with_wait core-proof-operation.sh /run/goblins-hwgate-root/core-proof-operation 15
 install -m 0755 -o root -g root /run/goblins-hwgate-root/core-proof-operation \
   /etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation
 serial "GOBLINS_HWGATE_CORE_PROOF_HELPER_INSTALLED"
@@ -443,12 +453,13 @@ systemctl daemon-reload
 cat > /etc/systemd/system/goblins-hwgate-session-orchestrator-starter.service <<'EOF'
 [Unit]
 Description=Goblins OS hardware-gate session orchestrator starter
-After=graphical.target display-manager.service gdm.service systemd-user-sessions.service
-Wants=graphical.target
+After=display-manager.service gdm.service systemd-user-sessions.service goblins-os-core.service
+Wants=goblins-os-core.service
 
 [Service]
 Type=oneshot
 ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator
+TimeoutStartSec=360
 StandardOutput=journal
 StandardError=journal
 

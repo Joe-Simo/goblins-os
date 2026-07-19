@@ -220,6 +220,6 @@ jobs:
             os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso.sha256
             os/iso/output/${{ matrix.arch }}/manifest-goblins-os-${{ matrix.arch }}.json
             os/iso/output/${{ matrix.arch }}/manifest-anaconda-iso.json
-            os/screenshots/hardware-gate/${{ matrix.arch }}/
+            os/screenshots/hardware-gate/${{ matrix.arch }}/${{ inputs.run_date }}/
             os/signoff-proofs/sbom/${{ matrix.arch }}/
             os/signoff-notes.md

@@ -817,6 +817,9 @@ rm -f "$WORK/orchestrator.sh" "$WORK/core-proof-operation.sh"
 ( cd "$WORK" \
     && sed "s/@GOS_PORT@/$PORT/g" "$HERE/firstboot-unlock.sh" > firstboot-unlock.sh \
     && install -m 0644 "$HERE/core-proof-operation.sh" core-proof-operation.sh \
+    && install -d -m 0755 ready failed \
+    && install -m 0644 /dev/null ready/FIRSTBOOT_UNLOCK \
+    && install -m 0644 /dev/null failed/FIRSTBOOT_UNLOCK \
     && python3 -m http.server "$PORT" --bind 0.0.0.0 >"$WORK/httpd.log" 2>&1 ) &
 HTTPD=$!
 

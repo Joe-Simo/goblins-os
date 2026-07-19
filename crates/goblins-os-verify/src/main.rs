@@ -10174,6 +10174,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-user-service-has-proof-timeout",
+            "ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator\nTimeoutStartSec=3900",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
             "verify-config-session-orchestrator-starter-imports-dbus-activation-env",
             "dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE",
         ),
@@ -10189,12 +10194,37 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-orders-after-core",
+            "After=display-manager.service gdm.service systemd-user-sessions.service goblins-os-core.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-starts-core",
+            "Wants=goblins-os-core.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-has-bounded-timeout",
+            "ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator\nTimeoutStartSec=360",
+        ),
+        absent_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-has-no-graphical-ordering-cycle",
+            "After=graphical.target display-manager.service",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
             "verify-config-session-orchestrator-starter-directly-wanted-by-graphical",
             "graphical.target.wants/goblins-hwgate-session-orchestrator-starter.service",
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
             "verify-config-session-orchestrator-starter-waits-for-user-bus",
+            "for _ in $(seq 1 120); do",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "verify-config-session-orchestrator-starter-reports-user-bus-ready",
             "GOBLINS_HWGATE_SESSION_BUS_READY",
         ),
         contains_check(
@@ -10463,9 +10493,75 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "/ready/FIRSTBOOT_UNLOCK",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-callbacks-failure-to-host",
+            "/failed/FIRSTBOOT_UNLOCK?stage=$CURRENT_STAGE&rc=$rc",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-emits-sanitized-stage-status",
+            "status=fail curl_rc=$curl_rc http_status=$http_status",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-emits-safe-core-unit-state",
+            "GOBLINS_HWGATE_CORE_UNIT_STATE property=$property value=$value",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-does-not-upload-journal",
+            "journalctl",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-requires-firstboot-release-proof-unlock-callback",
             "first boot release-proof unlock callback",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-fails-fast-on-firstboot-failure-callback",
+            "failure_prefix = \"/failed/FIRSTBOOT_UNLOCK?\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-fails-fast-on-firstboot-failure-serial",
+            "failure_serial_marker = \"GOBLINS_HWGATE_FIRSTBOOT_UNLOCK_FAILED\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-requires-firstboot-guest-completion-serial",
+            "success_serial_marker = \"GOBLINS_HWGATE_FIRSTBOOT_UNLOCK_DONE\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-requires-firstboot-success-http-200",
+            "request_path == success_path and http_status_code(line) == \"200\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-scopes-firstboot-http-to-current-attempt",
+            "http_start_pos = os.path.getsize(HTTPLOG) if os.path.exists(HTTPLOG) else 0",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-scopes-firstboot-serial-to-current-attempt",
+            "serial_start_pos = os.path.getsize(SERIALLOG) if os.path.exists(SERIALLOG) else 0",
+        ),
+        ordered_contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-prioritizes-firstboot-failure-before-success",
+            "if request_path and request_path.startswith(failure_prefix):",
+            "if success_http_seen and success_serial_marker in serial_data:",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-host-serves-firstboot-success-signal",
+            "install -m 0644 /dev/null ready/FIRSTBOOT_UNLOCK",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-host-serves-firstboot-failure-signal",
+            "install -m 0644 /dev/null failed/FIRSTBOOT_UNLOCK",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
@@ -10480,12 +10576,42 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/iso/verify-config.toml"),
             "firstboot-unlock-download-is-root-only",
-            "download_with_wait firstboot-unlock.sh /run/goblins-hwgate-root/firstboot 240",
+            "download_with_wait firstboot-unlock.sh /run/goblins-hwgate-root/firstboot 15",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "core-proof-operation-download-is-bounded",
+            "download_with_wait core-proof-operation.sh /run/goblins-hwgate-root/core-proof-operation 15",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "firstboot-unlock-root-starter-requests-core",
+            "GOBLINS_HWGATE_CORE_START_REQUESTED",
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
             "firstboot-unlock-publishes-root-owned-marker",
             "install -m 0644 -o root -g root /dev/null /run/goblins-hwgate-firstboot-unlocked",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "installed-selftest-exercises-release-proof-firstboot-sequence",
+            "verification first boot -> privacy=$firstboot_privacy_code installer=$firstboot_installer_code session=$firstboot_session_code",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "installed-selftest-persists-firstboot-privacy",
+            "persisted_offline=$(cat \"$GOBLINS_OS_OFFLINE_PATH\"",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "installed-selftest-persists-firstboot-installer-mode",
+            "persisted_installer_mode=$(jq -r '.mode // empty' \"$GOBLINS_OS_INSTALLER_STATE/first-boot.json\"",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "installed-selftest-persists-firstboot-session-mode",
+            "persisted_session_mode=$(jq -r '.mode // empty' \"$GOBLINS_OS_SESSION_STATE/gate.json\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
@@ -10516,6 +10642,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join(".github/workflows/hardware-gate-capture.yml"),
             "hardware-gate-uploads-artifact-on-failure",
             "if: always()",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-uploads-only-current-screenshot-run",
+            "os/screenshots/hardware-gate/${{ matrix.arch }}/${{ inputs.run_date }}/",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),

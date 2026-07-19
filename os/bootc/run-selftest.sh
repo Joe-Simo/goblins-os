@@ -13,6 +13,7 @@ export GOBLINS_OS_INSTALLER_STATE=/tmp/goblins-os-selftest-state/installer
 export GOBLINS_OS_SESSION_STATE=/tmp/goblins-os-selftest-state/session
 export GOBLINS_OS_POLICY_STATE=/tmp/goblins-os-selftest-state/policy
 export GOBLINS_OS_AI_STATE=/tmp/goblins-os-selftest-state/ai
+export GOBLINS_OS_OFFLINE_PATH=/tmp/goblins-os-selftest-state/ai/offline
 export GOBLINS_OS_MODEL_DIR=/tmp/goblins-os-selftest-state/models
 CORE_PROOF_SOCKET=/run/goblins-os-core/release-proof/control.sock
 CORE_PROOF_URL=http://localhost
@@ -67,6 +68,42 @@ for ep in /health /v1/readiness /v1/ai/actions /v1/ai/action-history /v1/system/
   echo "  GET $ep -> HTTP $code"
   [ "$code" = "200" ] || fail=1
 done
+firstboot_privacy_response=/tmp/goblins-os-firstboot-privacy.json
+firstboot_installer_response=/tmp/goblins-os-firstboot-installer.json
+firstboot_session_response=/tmp/goblins-os-firstboot-session.json
+firstboot_privacy_code=$(core_proof_curl -sS -o "$firstboot_privacy_response" -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d '{"offline":true}' \
+  "$CORE_PROOF_URL/v1/privacy")
+firstboot_installer_code=$(core_proof_curl -sS -o "$firstboot_installer_response" -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"local-gpt-oss"}' \
+  "$CORE_PROOF_URL/v1/installer/complete")
+firstboot_session_code=$(core_proof_curl -sS -o "$firstboot_session_response" -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"local-gpt-oss"}' \
+  "$CORE_PROOF_URL/v1/session/unlock")
+firstboot_privacy_offline=$(jq -r '.offline // false' "$firstboot_privacy_response" 2>/dev/null || true)
+firstboot_installer_ok=$(jq -r '.ok // false' "$firstboot_installer_response" 2>/dev/null || true)
+firstboot_installer_mode=$(jq -r '.mode // empty' "$firstboot_installer_response" 2>/dev/null || true)
+firstboot_session_ok=$(jq -r '.ok // false' "$firstboot_session_response" 2>/dev/null || true)
+firstboot_session_mode=$(jq -r '.mode // empty' "$firstboot_session_response" 2>/dev/null || true)
+persisted_offline=$(cat "$GOBLINS_OS_OFFLINE_PATH" 2>/dev/null || true)
+persisted_installer_mode=$(jq -r '.mode // empty' "$GOBLINS_OS_INSTALLER_STATE/first-boot.json" 2>/dev/null || true)
+persisted_session_mode=$(jq -r '.mode // empty' "$GOBLINS_OS_SESSION_STATE/gate.json" 2>/dev/null || true)
+echo "  verification first boot -> privacy=$firstboot_privacy_code installer=$firstboot_installer_code session=$firstboot_session_code persisted=$persisted_offline/$persisted_installer_mode/$persisted_session_mode"
+[ "$firstboot_privacy_code" = "200" ] \
+  && [ "$firstboot_privacy_offline" = "true" ] \
+  && [ "$firstboot_installer_code" = "200" ] \
+  && [ "$firstboot_installer_ok" = "true" ] \
+  && [ "$firstboot_installer_mode" = "local-gpt-oss" ] \
+  && [ "$firstboot_session_code" = "200" ] \
+  && [ "$firstboot_session_ok" = "true" ] \
+  && [ "$firstboot_session_mode" = "local-gpt-oss" ] \
+  && [ "$persisted_offline" = "on" ] \
+  && [ "$persisted_installer_mode" = "local-gpt-oss" ] \
+  && [ "$persisted_session_mode" = "local-gpt-oss" ] \
+  || fail=1
 engine_response=/tmp/goblins-os-engine-selection.json
 engine_file="$GOBLINS_OS_AI_STATE/engine"
 engine_code=$(core_proof_curl -s -o "$engine_response" -w '%{http_code}' \

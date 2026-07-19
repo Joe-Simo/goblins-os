@@ -198,6 +198,17 @@ def http_log_text():
     except OSError:
         return ""
 
+def text_after(path, start_pos):
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() < start_pos:
+                start_pos = 0
+            fh.seek(start_pos)
+            return fh.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return ""
+
 def wait_serial_contains(label, needle, timeout, debug_label=None, debug_every=0, exit_code=1):
     t = time.time()
     last_tail = ""
@@ -245,6 +256,54 @@ def wait_http_contains(label, needle, timeout):
     raise SystemExit(
         f"{label} did not appear in HTTP log within {timeout}s; "
         f"expected {needle!r}; http_tail={last_tail!r}"
+    )
+
+def wait_firstboot_unlock_result(timeout, http_start_pos, serial_start_pos):
+    success_path = "/ready/FIRSTBOOT_UNLOCK?status=pass"
+    failure_prefix = "/failed/FIRSTBOOT_UNLOCK?"
+    failure_serial_marker = "GOBLINS_HWGATE_FIRSTBOOT_UNLOCK_FAILED"
+    success_serial_marker = "GOBLINS_HWGATE_FIRSTBOOT_UNLOCK_DONE"
+    t = time.time()
+    last_http_tail = ""
+    last_serial_tail = ""
+    while time.time() - t < timeout:
+        data = text_after(HTTPLOG, http_start_pos)
+        serial_data = text_after(SERIALLOG, serial_start_pos)
+        success_http_seen = False
+        for line in data.splitlines():
+            request_path = http_get_path(line)
+            if request_path and request_path.startswith(failure_prefix):
+                fail(
+                    "first boot release-proof unlock failed in the guest: "
+                    f"{request_path}"
+                )
+            if request_path == success_path and http_status_code(line) == "200":
+                success_http_seen = True
+        serial_failures = [
+            line.strip()
+            for line in serial_data.splitlines()
+            if failure_serial_marker in line
+        ]
+        if serial_failures:
+            fail(
+                "first boot release-proof unlock failed in the guest: "
+                f"{serial_failures[-1]}"
+            )
+        if success_http_seen and success_serial_marker in serial_data:
+            print(
+                "first boot release-proof unlock callback: "
+                f"observed HTTP 200 marker {success_path!r} and guest completion marker",
+                flush=True,
+            )
+            return True
+        last_http_tail = data[-500:]
+        last_serial_tail = serial_data[-500:]
+        time.sleep(1)
+    fail(
+        "first boot release-proof unlock callback did not appear in HTTP or serial logs "
+        f"within {timeout}s; expected HTTP 200 {success_path!r} and "
+        f"{success_serial_marker!r}; http_tail={last_http_tail!r}; "
+        f"serial_tail={last_serial_tail!r}"
     )
 
 def wait_http_contains_after(label, needle, start_pos, timeout):
@@ -334,13 +393,18 @@ def probe_graphical_vts():
         time.sleep(3)
         frame_sample(debug_label, save_debug=True)
 
-def complete_first_boot_setup():
+def complete_first_boot_setup(http_start_pos, serial_start_pos):
     """Wait for the verification-only user service to complete first boot."""
     print("first boot setup: completing offline path through the root release-proof capability", flush=True)
     frame_sample("first boot before release-proof unlock", save_debug=True)
     try:
-        wait_http_contains("first boot helper download", "/firstboot-unlock.sh", 180)
-        wait_http_contains("first boot release-proof unlock callback", "/ready/FIRSTBOOT_UNLOCK", 180)
+        wait_http_contains_after(
+            "first boot helper download",
+            '"GET /firstboot-unlock.sh HTTP/1.1" 200',
+            http_start_pos,
+            180,
+        )
+        wait_firstboot_unlock_result(180, http_start_pos, serial_start_pos)
     except SystemExit:
         print("first boot setup failed before helper callback; collecting VT diagnostics", flush=True)
         probe_graphical_vts()
@@ -359,6 +423,12 @@ def http_get_path(line):
     if marker not in line:
         return None
     return line.split(marker, 1)[1].split(" ", 1)[0]
+
+def http_status_code(line):
+    marker = '" '
+    if marker not in line:
+        return None
+    return line.rsplit(marker, 1)[1].split(" ", 1)[0]
 
 def write_proof(path, proofs):
     parsed = urlparse(path)
@@ -443,6 +513,8 @@ def require_proofs(proofs):
         raise SystemExit("missing or failing required proof signals: " + ", ".join(bad))
 
 # 0. Boot the highlighted installer entry instead of burning the GRUB timeout.
+firstboot_http_start_pos = os.path.getsize(HTTPLOG) if os.path.exists(HTTPLOG) else 0
+firstboot_serial_start_pos = os.path.getsize(SERIALLOG) if os.path.exists(SERIALLOG) else 0
 print(f"QMP display input route: {DISPLAY_DEVICE or 'default'}", flush=True)
 print(f"QMP query-mice: {try_cmd('query-mice')}", flush=True)
 if not SKIP_INSTALL_PHASE:
@@ -476,7 +548,7 @@ observe_serial_contains(
     5,
 )
 # 3. complete first boot through the real offline/private core contracts.
-complete_first_boot_setup()
+complete_first_boot_setup(firstboot_http_start_pos, firstboot_serial_start_pos)
 # 4. publish orchestrator only after the host is ready to tail its signals.
 os.makedirs(OUTDIR, exist_ok=True)
 pos = os.path.getsize(HTTPLOG) if os.path.exists(HTTPLOG) else 0

@@ -1,0 +1,288 @@
+name: branding-tool-image
+run-name: installer branding tool · ${{ inputs.candidate_commit }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_commit:
+        description: Exact current main commit containing the reviewed branding-tool Containerfile
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: branding-tool-${{ inputs.candidate_commit }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+
+jobs:
+  build:
+    name: branding tool (${{ matrix.arch }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            uname: x86_64
+            platform: linux/amd64
+            image_arch: amd64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            uname: aarch64
+            platform: linux/arm64
+            image_arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Validate exact current source and native runner
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_COMMIT"
+          test "$(uname -m)" = "${{ matrix.uname }}"
+      - name: Record reviewed source inputs
+        id: source
+        run: |
+          set -euo pipefail
+          echo "containerfile_sha256=$(sha256sum os/iso/branding-tool.Containerfile | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Compute the lowercase commit-scoped image tag
+        id: image
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "tag=ghcr.io/$owner/goblins-os-installer-branding-tool:candidate-$CANDIDATE_COMMIT-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
+      - name: Build and publish the native branding tool
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: os/iso/branding-tool.Containerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.image.outputs.tag }}
+          build-args: |
+            SOURCE_COMMIT=${{ inputs.candidate_commit }}
+            CONTAINERFILE_SHA256=${{ steps.source.outputs.containerfile_sha256 }}
+          cache-from: type=gha,scope=goblins-os-branding-tool-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-branding-tool-${{ matrix.arch }},mode=max,ignore-error=true
+      - name: Verify immutable tool image and record package inventory
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          EXPECTED_IMAGE_ARCH: ${{ matrix.image_arch }}
+          BASE_IMAGE: docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
+          CONTAINERFILE_SHA256: ${{ steps.source.outputs.containerfile_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image_ref="ghcr.io/$owner/goblins-os-installer-branding-tool@$IMAGE_DIGEST"
+          docker pull --platform "${{ matrix.platform }}" "$image_ref"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image_ref")" = "$EXPECTED_IMAGE_ARCH"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref")" = "$CANDIDATE_COMMIT"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.base.name"}}' "$image_ref")" = "$BASE_IMAGE"
+          test "$(docker image inspect --format '{{index .Config.Labels "io.goblins-os.branding-tool.containerfile.sha256"}}' "$image_ref")" = "$CONTAINERFILE_SHA256"
+          output_dir="branding-tool-output/$TARGET_ARCH"
+          mkdir -p "$output_dir"
+          docker run --rm --entrypoint /bin/cat "$image_ref" \
+            /usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv \
+            > "$output_dir/rpm-packages.tsv"
+          test "$(head -n 1 "$output_dir/rpm-packages.tsv")" = $'name\tevr\tarch\tlicense\tvendor'
+          test "$(wc -l < "$output_dir/rpm-packages.tsv")" -gt 10
+          inventory_sha256="$(sha256sum "$output_dir/rpm-packages.tsv" | awk '{print $1}')"
+          jq -n \
+            --arg architecture "$TARGET_ARCH" \
+            --arg candidate_commit "$CANDIDATE_COMMIT" \
+            --arg image_ref "$image_ref" \
+            --arg base_image "$BASE_IMAGE" \
+            --arg containerfile_sha256 "$CONTAINERFILE_SHA256" \
+            --arg rpm_inventory_sha256 "$inventory_sha256" \
+            --arg workflow_run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{
+              schema: "goblins-os-installer-branding-tool-v1",
+              architecture: $architecture,
+              candidate_commit: $candidate_commit,
+              image_ref: $image_ref,
+              base_image: $base_image,
+              containerfile_sha256: $containerfile_sha256,
+              rpm_inventory_sha256: $rpm_inventory_sha256,
+              workflow_run: $workflow_run
+            }' > "$output_dir/image-ref.json"
+          jq -e \
+            --arg architecture "$TARGET_ARCH" \
+            --arg candidate_commit "$CANDIDATE_COMMIT" \
+            --arg image_ref "$image_ref" \
+            --arg base_image "$BASE_IMAGE" \
+            --arg containerfile_sha256 "$CONTAINERFILE_SHA256" \
+            --arg rpm_inventory_sha256 "$inventory_sha256" \
+            '.architecture == $architecture
+             and .candidate_commit == $candidate_commit
+             and .image_ref == $image_ref
+             and .base_image == $base_image
+             and .containerfile_sha256 == $containerfile_sha256
+             and .rpm_inventory_sha256 == $rpm_inventory_sha256' \
+            "$output_dir/image-ref.json" >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: goblins-os-branding-tool-${{ inputs.candidate_commit }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 90
+          path: branding-tool-output/${{ matrix.arch }}/
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io >/dev/null 2>&1 || true
+
+  publish-index:
+    name: publish reviewed multi-architecture index
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Validate exact current source
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_COMMIT"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: goblins-os-branding-tool-${{ inputs.candidate_commit }}-*
+          path: branding-tool-artifacts
+      - name: Validate native image metadata and package inventories
+        id: sources
+        run: |
+          set -euo pipefail
+          base_image='docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898'
+          containerfile_sha256="$(sha256sum os/iso/branding-tool.Containerfile | awk '{print $1}')"
+          for arch in x86_64 aarch64; do
+            artifact_dir="branding-tool-artifacts/goblins-os-branding-tool-$CANDIDATE_COMMIT-$arch"
+            metadata="$artifact_dir/image-ref.json"
+            inventory="$artifact_dir/rpm-packages.tsv"
+            test -s "$metadata"
+            test -s "$inventory"
+            inventory_sha256="$(sha256sum "$inventory" | awk '{print $1}')"
+            jq -e \
+              --arg arch "$arch" \
+              --arg commit "$CANDIDATE_COMMIT" \
+              --arg base "$base_image" \
+              --arg containerfile_sha256 "$containerfile_sha256" \
+              --arg inventory_sha256 "$inventory_sha256" \
+              '.schema == "goblins-os-installer-branding-tool-v1"
+               and .architecture == $arch
+               and .candidate_commit == $commit
+               and .base_image == $base
+               and .containerfile_sha256 == $containerfile_sha256
+               and .rpm_inventory_sha256 == $inventory_sha256
+               and (.image_ref | test("^ghcr\\.io/.+/goblins-os-installer-branding-tool@sha256:[0-9a-f]{64}$"))' \
+              "$metadata" >/dev/null
+          done
+          echo "x86_64_ref=$(jq -er '.image_ref' "branding-tool-artifacts/goblins-os-branding-tool-$CANDIDATE_COMMIT-x86_64/image-ref.json")" >> "$GITHUB_OUTPUT"
+          echo "aarch64_ref=$(jq -er '.image_ref' "branding-tool-artifacts/goblins-os-branding-tool-$CANDIDATE_COMMIT-aarch64/image-ref.json")" >> "$GITHUB_OUTPUT"
+          echo "base_image=$base_image" >> "$GITHUB_OUTPUT"
+          echo "containerfile_sha256=$containerfile_sha256" >> "$GITHUB_OUTPUT"
+          echo "x86_64_inventory_sha256=$(sha256sum "branding-tool-artifacts/goblins-os-branding-tool-$CANDIDATE_COMMIT-x86_64/rpm-packages.tsv" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "aarch64_inventory_sha256=$(sha256sum "branding-tool-artifacts/goblins-os-branding-tool-$CANDIDATE_COMMIT-aarch64/rpm-packages.tsv" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Publish and verify the immutable multi-architecture index
+        id: index
+        env:
+          X86_64_REF: ${{ steps.sources.outputs.x86_64_ref }}
+          AARCH64_REF: ${{ steps.sources.outputs.aarch64_ref }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/$owner/goblins-os-installer-branding-tool"
+          index_tag="$image:candidate-$CANDIDATE_COMMIT"
+          docker buildx imagetools create --tag "$index_tag" "$X86_64_REF" "$AARCH64_REF"
+          raw_manifest="$(mktemp)"
+          docker buildx imagetools inspect --raw "$index_tag" > "$raw_manifest"
+          jq -e \
+            '([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length) == 1
+             and ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length) == 1' \
+            "$raw_manifest" >/dev/null
+          digest="sha256:$(sha256sum "$raw_manifest" | awk '{print $1}')"
+          immutable_ref="$image@$digest"
+          test "sha256:$(docker buildx imagetools inspect --raw "$immutable_ref" | sha256sum | awk '{print $1}')" = "$digest"
+          output_dir='branding-tool-index'
+          mkdir -p "$output_dir"
+          jq -n \
+            --arg candidate_commit "$CANDIDATE_COMMIT" \
+            --arg image_ref "$immutable_ref" \
+            --arg x86_64_ref "$X86_64_REF" \
+            --arg aarch64_ref "$AARCH64_REF" \
+            --arg base_image '${{ steps.sources.outputs.base_image }}' \
+            --arg containerfile_sha256 '${{ steps.sources.outputs.containerfile_sha256 }}' \
+            --arg x86_64_inventory_sha256 '${{ steps.sources.outputs.x86_64_inventory_sha256 }}' \
+            --arg aarch64_inventory_sha256 '${{ steps.sources.outputs.aarch64_inventory_sha256 }}' \
+            --arg workflow_run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{
+              schema: "goblins-os-installer-branding-tool-index-v1",
+              candidate_commit: $candidate_commit,
+              image_ref: $image_ref,
+              native_images: {
+                x86_64: $x86_64_ref,
+                aarch64: $aarch64_ref
+              },
+              base_image: $base_image,
+              containerfile_sha256: $containerfile_sha256,
+              rpm_inventory_sha256: {
+                x86_64: $x86_64_inventory_sha256,
+                aarch64: $aarch64_inventory_sha256
+              },
+              workflow_run: $workflow_run
+            }' > "$output_dir/image-ref.json"
+          cp \
+            "branding-tool-artifacts/goblins-os-branding-tool-$CANDIDATE_COMMIT-x86_64/rpm-packages.tsv" \
+            "$output_dir/rpm-packages-x86_64.tsv"
+          cp \
+            "branding-tool-artifacts/goblins-os-branding-tool-$CANDIDATE_COMMIT-aarch64/rpm-packages.tsv" \
+            "$output_dir/rpm-packages-aarch64.tsv"
+          echo "ref=$immutable_ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: goblins-os-branding-tool-${{ inputs.candidate_commit }}-index
+          if-no-files-found: error
+          retention-days: 90
+          path: branding-tool-index/
+      - name: Summarize the reviewed tool index
+        env:
+          IMMUTABLE_REF: ${{ steps.index.outputs.ref }}
+        run: |
+          {
+            printf '### Installer branding tool\n\n'
+            printf -- '- Source commit: `%s`\n' "$CANDIDATE_COMMIT"
+            printf -- '- Immutable multi-architecture image: `%s`\n' "$IMMUTABLE_REF"
+            printf -- '- Release wiring: **not performed by this bootstrap workflow**\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io >/dev/null 2>&1 || true

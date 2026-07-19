@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:8ac36779c577249c4d36ad5a1c866dac1b516c3fb93ab762f707433ab07445b2
+  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:a5b2be1ce90514f1e4d1447bcd6eb6af51ea98644bc310c58ce649a7550e39c0
   GOBLINS_OS_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
   GOBLINS_OS_CANDIDATE_IMAGE_REF: ${{ inputs.candidate_image_ref }}
 

@@ -1,19 +1,19 @@
 schema = 1
-image_ref = "ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:8ac36779c577249c4d36ad5a1c866dac1b516c3fb93ab762f707433ab07445b2"
-source_commit = "c99090ce66ac6d683539ae4186255e5871af74b1"
-workflow_run = "https://github.com/Joe-Simo/goblins-os/actions/runs/29692619832"
+image_ref = "ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:a5b2be1ce90514f1e4d1447bcd6eb6af51ea98644bc310c58ce649a7550e39c0"
+source_commit = "c007ec03d0f91689a3009717a5b86aa40418dcee"
+workflow_run = "https://github.com/Joe-Simo/goblins-os/actions/runs/29695937779"
 workflow_run_attempt = 1
 base_image = "docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898"
-containerfile_sha256 = "660c87960a1490a2151e384ffe4ce040877b5ead319030617d9af0d996974dca"
+containerfile_sha256 = "758ae6a15ac2e7af1686b4e8ff9a6cf6fd4e190012c737766459d2222cd82708"
 public_pull_verified_on = "2026-07-19"
 inventory_path_in_image = "/usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv"
 
 [architectures.x86_64]
-native_image_ref = "ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:ef541a4a4389f0bb24fc55cfb646e4d830a46bc3cd9b98d899c13d80b7b87c46"
-rpm_inventory_sha256 = "044f3886abcc2901b0eb0c54cfae1482bf916d41e70c35a18b7970468a4f711e"
-rpm_package_count = 246
+native_image_ref = "ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:8b988e701d68d50c20f34a2a12a82acd4521d0673483fc25512f8a444d2f592e"
+rpm_inventory_sha256 = "9518a9b373b4ae11ceee521b5cc1d8813b5d55d00ba9c0b9de967ba73b234fbc"
+rpm_package_count = 247
 
 [architectures.aarch64]
-native_image_ref = "ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:7b3070c2f4e7276d631e7fafcd86ca57cec20e087350941b8797aaef9820ff25"
-rpm_inventory_sha256 = "454eb1667d4cda32074acdb6aa81b8ff6de4d2710caf9c9d4c9587dc326246f2"
-rpm_package_count = 245
+native_image_ref = "ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:4483609aa40e0b8f16e56becda876468309345fadf1b43572ddabfc556382205"
+rpm_inventory_sha256 = "ea63f45fa4823cc2e1d173bbba497abd07808e8536be1c6a5fdd5829e6718e90"
+rpm_package_count = 246

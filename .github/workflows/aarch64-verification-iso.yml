@@ -40,7 +40,7 @@ jobs:
   build-verification-iso:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ inputs.candidate_commit }}
           fetch-depth: 1
@@ -130,7 +130,7 @@ jobs:
             | tee /tmp/goblins-os-aarch64-installed-verify.log
           grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
             /tmp/goblins-os-aarch64-installed-verify.log
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - name: Run the exact candidate install and services self-test
         run: |
           set -euo pipefail
@@ -256,7 +256,7 @@ jobs:
         run: |
           . ./os/hardware-gate/secret-scan.sh
           goblins_os_artifact_secret_scan "$PWD"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: goblins-os-aarch64-verification-iso-${{ inputs.run_date }}
           retention-days: 7

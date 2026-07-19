@@ -117,6 +117,17 @@ check() {
   fi
 }
 
+release_workflow_action_pins_are_reviewed() {
+  cargo run --locked --quiet --release -p goblins-os-verify -- \
+    --workflow-action-pins "$ROOT" --quiet
+}
+
+release_workflow_deprecated_action_pins_are_absent() {
+  ! rg -q \
+    '34e114876b0b11c390a56381ad16ebd13914f8d5|ea165f8d65b6e75b540449e92b4886f43607fa02|d3f86a106a0bac45b974a628896c90dbdf5c8093|8d2750c68a42422c14e847fe6c8ac0403b4cbd6f' \
+    .github/workflows -g '*.yml' -g '*.yaml'
+}
+
 fail_check() {
   local label="$1"
   echo "[FAIL] $label"
@@ -2015,14 +2026,16 @@ check "ISO builder supports explicit installer config" "rg -q 'GOBLINS_OS_ISO_CO
 check "ISO builder supports explicit Docker platform for non-release artifact testing" "rg -q 'GOBLINS_OS_DOCKER_PLATFORM' os/iso/build-iso.sh && rg -q 'docker build --platform \"[$]DOCKER_PLATFORM\"' os/iso/build-iso.sh && rg -q -- '--platform \"[$]DOCKER_PLATFORM\"' os/iso/build-iso.sh && rg -q '\"docker_platform\": \"[$]DOCKER_PLATFORM\"' os/iso/build-iso.sh"
 check "ISO builder fails fast when Docker emulation cannot run rustc" "rg -q 'verify_docker_emulation_runtime' os/iso/build-iso.sh && rg -q 'emulation cannot run rustc' os/iso/build-iso.sh && rg -q 'use a native [$]ARCH runner' os/iso/build-iso.sh"
 check "workflow installer ISO uses cached Buildx image and evidence steps" "rg -q --fixed-strings 'docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a' \"$WORKFLOW\" && rg -q 'load: true' \"$WORKFLOW\" && rg -q 'docker run --rm' \"$WORKFLOW\" && rg -q 'GOBLINS_OS_CONTAINER_RUNTIME=docker' \"$WORKFLOW\""
-check "workflow image builds use nonblocking BuildKit GHA cache" "rg -q --fixed-strings 'docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f' \"$WORKFLOW\" && rg -q --fixed-strings 'type=gha,scope=goblins-os-bootc-\${{ matrix.arch }}' \"$WORKFLOW\" && rg -q 'mode=max,ignore-error=true' \"$WORKFLOW\""
+check "workflow image builds use nonblocking BuildKit GHA cache" "rg -q --fixed-strings 'docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c' \"$WORKFLOW\" && rg -q --fixed-strings 'type=gha,scope=goblins-os-bootc-\${{ matrix.arch }}' \"$WORKFLOW\" && rg -q 'mode=max,ignore-error=true' \"$WORKFLOW\""
 check "hardware gate consumes an immutable candidate image without channel promotion" "rg -q 'candidate_image_ref' .github/workflows/hardware-gate-capture.yml && rg -q 'docker pull \"[$]GOBLINS_OS_CANDIDATE_IMAGE_REF\"' .github/workflows/hardware-gate-capture.yml && rg -q 'GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1' .github/workflows/hardware-gate-capture.yml && ! rg -q 'docker/build-push-action|push: true|goblins-os:(x86_64|aarch64|latest|stable)' .github/workflows/hardware-gate-capture.yml"
 check "hardware proof inputs are restricted to this repository image" "rg -q 'expected_prefix=\"ghcr[.]io/[$]owner/goblins-os@sha256:\"' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml"
 check "hardware gate uses verification ISO config" "rg -q 'GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml' .github/workflows/hardware-gate-capture.yml"
 check "aarch64 verification ISO workflow supports local HVF capture" "test -f .github/workflows/aarch64-verification-iso.yml && rg -q 'workflow_dispatch' .github/workflows/aarch64-verification-iso.yml && rg -q 'ubuntu-24.04-arm' .github/workflows/aarch64-verification-iso.yml && rg -q 'GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml' .github/workflows/aarch64-verification-iso.yml && rg -q 'goblins-os-aarch64-verification-iso' .github/workflows/aarch64-verification-iso.yml && rg -q 'retention-days: 7' .github/workflows/aarch64-verification-iso.yml"
 check "hardware gate generates release evidence for captured image" 'rg -q "Generate release evidence for the captured image" .github/workflows/hardware-gate-capture.yml && rg -q -- "--release-evidence /out" .github/workflows/hardware-gate-capture.yml && rg -q "rpm_sbom_arch_matches" .github/workflows/hardware-gate-capture.yml && rg -q "Scan generated release evidence for secrets" .github/workflows/hardware-gate-capture.yml'
-check "hardware proof workflows are artifact-only and cannot write the repository" "rg -q --fixed-strings 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q 'contents: read' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && ! rg -q 'contents: write|git push|persist_evidence' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml"
+check "hardware proof workflows are artifact-only and cannot write the repository" "rg -q --fixed-strings 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q 'contents: read' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && ! rg -q 'contents: write|git push|persist_evidence' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml"
 check "GitHub workflows reject mutable major-version action tags" "! rg -q 'uses:[[:space:]]+[^[:space:]#]+@v[0-9]+([[:space:]#]|$)' .github/workflows"
+check "GitHub workflows use only the reviewed immutable Node 24 action pins" "release_workflow_action_pins_are_reviewed"
+check "GitHub workflows contain none of the retired Node 20 action pins" "release_workflow_deprecated_action_pins_are_absent"
 check "capture harness binds exact source tooling and safe date scope" "rg -q 'Capture tooling checkout .* does not match candidate' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'Run the capture harness from the exact candidate checkout' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'RUN_DATE must be a real calendar date in YYYY-MM-DD form' os/hardware-gate/capture-harness/run-capture.sh && rg -q '[$]RUN_DIR.*[$]RUN_ROOT/[$]DATE' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness verifies and canonicalizes external candidate proof" "rg -q 'Capture ISO checksum mismatch' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'GOBLINS_OS_CAPTURE_BIB_MANIFEST' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'GOBLINS_OS_CAPTURE_RELEASE_EVIDENCE_DIR' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'CANONICAL_ISO=' os/hardware-gate/capture-harness/run-capture.sh"
 check "hardware gate cancels superseded runs" "rg -q 'cancel-in-progress: true' .github/workflows/hardware-gate-capture.yml"

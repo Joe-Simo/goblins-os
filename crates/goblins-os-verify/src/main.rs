@@ -12,8 +12,39 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use saphyr::{LoadableYamlNode, Yaml};
 use sha2::{Digest, Sha256};
 use syn::visit::Visit;
+
+const REVIEWED_GITHUB_ACTION_PINS: &[(&str, &str)] = &[
+    (
+        "actions/checkout",
+        "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+    ),
+    (
+        "actions/upload-artifact",
+        "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    ),
+    (
+        "actions/download-artifact",
+        "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    ),
+    (
+        "docker/setup-buildx-action",
+        "bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
+    ),
+    (
+        "docker/build-push-action",
+        "53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
+    ),
+];
+
+const DEPRECATED_GITHUB_ACTION_PINS: &[&str] = &[
+    "34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+    "8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
+];
 
 const BINARIES: &[&str] = &[
     "goblins-os-control-center",
@@ -277,6 +308,7 @@ enum Mode {
     Installed,
     Stage,
     ReleaseEvidence,
+    WorkflowActions,
 }
 
 struct Config {
@@ -373,6 +405,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             installed_checks(&config.root)
         }
         Mode::ReleaseEvidence => unreachable!("release evidence mode returns before checks run"),
+        Mode::WorkflowActions => vec![
+            reviewed_github_action_pins_check(&config.root),
+            deprecated_github_action_pins_absent_check(&config.root),
+        ],
     };
     let blocked = checks
         .iter()
@@ -412,6 +448,7 @@ impl Config {
         let mut release_arch = None;
         let mut candidate_commit = None;
         let mut image_ref = None;
+        let mut workflow_action_pins_root = None;
         let mut quiet = false;
 
         while let Some(arg) = args.next() {
@@ -464,10 +501,40 @@ impl Config {
                             .ok_or_else(|| VerifyError::MissingValue(arg.clone()))?,
                     );
                 }
+                "--workflow-action-pins" => {
+                    workflow_action_pins_root = Some(PathBuf::from(
+                        args.next()
+                            .ok_or_else(|| VerifyError::MissingValue(arg.clone()))?,
+                    ));
+                }
                 "--quiet" => quiet = true,
                 "--help" | "-h" => return Err(VerifyError::Usage),
                 _ => return Err(VerifyError::UnknownArgument(arg)),
             }
+        }
+
+        if let Some(root) = workflow_action_pins_root {
+            if source_root.is_some()
+                || installed_root.is_some()
+                || stage_root.is_some()
+                || binaries.is_some()
+                || release_evidence_output.is_some()
+                || release_arch.is_some()
+                || candidate_commit.is_some()
+                || image_ref.is_some()
+            {
+                return Err(VerifyError::Usage);
+            }
+            return Ok(Self {
+                mode: Mode::WorkflowActions,
+                source: root.clone(),
+                binaries: root.join("target/release"),
+                root,
+                quiet,
+                release_arch: None,
+                candidate_commit: None,
+                image_ref: None,
+            });
         }
 
         if let Some(output) = release_evidence_output {
@@ -580,6 +647,7 @@ impl Mode {
             Self::Installed => "installed",
             Self::Stage => "stage",
             Self::ReleaseEvidence => "release-evidence",
+            Self::WorkflowActions => "workflow-actions",
         }
     }
 }
@@ -597,7 +665,7 @@ impl fmt::Display for VerifyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter.write_str(
-                "usage: goblins-os-verify [--source-root <path> | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64|x86_64> --candidate-commit <40-hex-commit> --image-ref <container-image-ref>] [--quiet]",
+                "usage: goblins-os-verify [--source-root <path> | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64|x86_64> --candidate-commit <40-hex-commit> --image-ref <container-image-ref> | --workflow-action-pins <source-root>] [--quiet]",
             ),
             Self::UnknownArgument(arg) => write!(formatter, "unknown argument {arg}"),
             Self::MissingValue(arg) => write!(formatter, "missing value for {arg}"),
@@ -1668,6 +1736,13 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "RUN chmod +x /usr/local/bin/render-desktop.sh",
     ));
     checks.push(file_check(root, "os/bootc/verify.suffix.Dockerfile"));
+    checks.push(reviewed_github_action_pins_check(root));
+    checks.push(deprecated_github_action_pins_absent_check(root));
+    checks.push(contains_check(
+        root.join("os/hardware-gate/verify-shipping-status.sh"),
+        "shipping-status-runs-structural-workflow-action-pin-check",
+        "--workflow-action-pins \"$ROOT\" --quiet",
+    ));
     checks.push(contains_check(
         root.join("os/bootc/verify.suffix.Dockerfile"),
         "image-verify-suffix-target",
@@ -1686,7 +1761,7 @@ fn source_checks(root: &Path) -> Vec<Check> {
     checks.push(contains_check(
         root.join(".github/workflows/build.yml"),
         "image-workflow-uses-buildx-builder",
-        "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
+        "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
     ));
     checks.push(contains_check(
         root.join(".github/workflows/build.yml"),
@@ -3409,6 +3484,203 @@ fn absent_check(path: PathBuf, id: &str, needle: &str) -> Check {
             id,
             &format!("{} does not contain {}", path.display(), needle),
         )
+    }
+}
+
+fn github_workflow_paths(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let directory = root.join(".github/workflows");
+    let entries = fs::read_dir(&directory)
+        .map_err(|error| format!("cannot read {}: {error}", directory.display()))?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "cannot read an entry under {}: {error}",
+                directory.display()
+            )
+        })?;
+        let path = entry.path();
+        if path.is_file()
+            && matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("yml" | "yaml")
+            )
+        {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    if paths.is_empty() {
+        Err(format!(
+            "{} contains no YAML workflows",
+            directory.display()
+        ))
+    } else {
+        Ok(paths)
+    }
+}
+
+fn reviewed_github_action_pins_check(root: &Path) -> Check {
+    let paths = match github_workflow_paths(root) {
+        Ok(paths) => paths,
+        Err(error) => return blocked("github-action-pins-reviewed-node24", &error),
+    };
+    let mut seen = BTreeMap::<String, usize>::new();
+    let mut problems = Vec::new();
+
+    for path in paths {
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                problems.push(format!("cannot read {}: {error}", path.display()));
+                continue;
+            }
+        };
+        let documents = match Yaml::load_from_str(&text) {
+            Ok(documents) if documents.len() == 1 => documents,
+            Ok(documents) => {
+                problems.push(format!(
+                    "{} must contain exactly one YAML document, found {}",
+                    path.display(),
+                    documents.len()
+                ));
+                continue;
+            }
+            Err(error) => {
+                problems.push(format!("cannot parse {} as YAML: {error}", path.display()));
+                continue;
+            }
+        };
+        let mut references = Vec::new();
+        collect_workflow_uses_references(&documents[0], &mut references, &mut problems, &path);
+        for reference in references {
+            if reference.starts_with("./") {
+                continue;
+            }
+            let Some((action, pin)) = reference.split_once('@') else {
+                problems.push(format!(
+                    "{} has an unreviewed or unpinned action reference {reference}",
+                    path.display()
+                ));
+                continue;
+            };
+            match REVIEWED_GITHUB_ACTION_PINS
+                .iter()
+                .find(|(reviewed_action, _)| *reviewed_action == action)
+            {
+                Some((_, reviewed_pin)) if *reviewed_pin == pin => {
+                    *seen.entry(action.to_string()).or_insert(0) += 1;
+                }
+                Some((_, reviewed_pin)) => problems.push(format!(
+                    "{} pins {action}@{pin}; expected {action}@{reviewed_pin}",
+                    path.display()
+                )),
+                None => problems.push(format!(
+                    "{} uses unreviewed external action {reference}",
+                    path.display()
+                )),
+            }
+        }
+    }
+
+    for (action, pin) in REVIEWED_GITHUB_ACTION_PINS {
+        if !seen.contains_key(*action) {
+            problems.push(format!("release workflows are missing {action}@{pin}"));
+        }
+    }
+
+    if problems.is_empty() {
+        let counts = REVIEWED_GITHUB_ACTION_PINS
+            .iter()
+            .map(|(action, _)| format!("{action}={}", seen.get(*action).copied().unwrap_or(0)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        ready(
+            "github-action-pins-reviewed-node24",
+            &format!("all external workflow actions use the reviewed immutable pins ({counts})"),
+        )
+    } else {
+        blocked("github-action-pins-reviewed-node24", &problems.join("; "))
+    }
+}
+
+fn collect_workflow_uses_references(
+    node: &Yaml<'_>,
+    references: &mut Vec<String>,
+    problems: &mut Vec<String>,
+    path: &Path,
+) {
+    match node {
+        Yaml::Mapping(mapping) => {
+            for (key, value) in mapping {
+                let Some(key) = key.as_str() else {
+                    problems.push(format!(
+                        "{} has a non-literal YAML mapping key; workflow keys must be explicit strings",
+                        path.display()
+                    ));
+                    collect_workflow_uses_references(value, references, problems, path);
+                    continue;
+                };
+                if key == "uses" {
+                    match value.as_str() {
+                        Some(reference) if !reference.trim().is_empty() => {
+                            references.push(reference.trim().to_string());
+                        }
+                        _ => problems.push(format!(
+                            "{} has a non-literal or empty uses value; aliases and computed action references are not allowed",
+                            path.display()
+                        )),
+                    }
+                }
+                collect_workflow_uses_references(value, references, problems, path);
+            }
+        }
+        Yaml::Sequence(sequence) => {
+            for value in sequence {
+                collect_workflow_uses_references(value, references, problems, path);
+            }
+        }
+        Yaml::Tagged(_, value) => {
+            collect_workflow_uses_references(value, references, problems, path);
+        }
+        Yaml::Alias(_) => problems.push(format!(
+            "{} uses a YAML alias; workflow action references must be explicit literals",
+            path.display()
+        )),
+        Yaml::BadValue => {
+            problems.push(format!("{} contains an invalid YAML value", path.display()))
+        }
+        _ => {}
+    }
+}
+
+fn deprecated_github_action_pins_absent_check(root: &Path) -> Check {
+    let paths = match github_workflow_paths(root) {
+        Ok(paths) => paths,
+        Err(error) => return blocked("github-action-pins-no-deprecated-node20", &error),
+    };
+    let mut hits = Vec::new();
+    for path in paths {
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                hits.push(format!("cannot read {}: {error}", path.display()));
+                continue;
+            }
+        };
+        for pin in DEPRECATED_GITHUB_ACTION_PINS {
+            if text.contains(pin) {
+                hits.push(format!("{} contains deprecated pin {pin}", path.display()));
+            }
+        }
+    }
+    if hits.is_empty() {
+        ready(
+            "github-action-pins-no-deprecated-node20",
+            "release workflows contain none of the retired Node 20 action pins",
+        )
+    } else {
+        blocked("github-action-pins-no-deprecated-node20", &hits.join("; "))
     }
 }
 
@@ -11911,7 +12183,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
             "candidate-workflow-buildx-builder-action",
-            "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
+            "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
@@ -18864,16 +19136,18 @@ fn stable_id(value: &str) -> String {
 mod tests {
     use super::{
         candidate_commit_is_valid, capability_groupadd_targets, cargo_lock_packages,
-        client_path_binding_inventory, contains_realish_openai_key, desktop_field,
-        first_executable_initialization, image_ref_is_digest_pinned, image_ref_is_valid,
-        imports_shared_core_initializer, install_files, is_allowed_dummy_secret,
-        is_suspicious_secret_line, native_design_system_checks, ordered_contains_check,
-        permission_inventory, rg_secret_scan_hit, sha256_path, should_skip_secret_scan_path,
-        source_manifest_classifies_top_level, stable_id, tmpfiles_capability_entries,
-        verify_installer_branding_tool_provenance, write_release_evidence, CheckState,
-        ForbiddenClientTokenVisitor, APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES,
-        GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS,
-        NAUTILUS_SCRIPTS, POLISH_INTERACTION_PROOF, POLISH_INTERACTION_SCREENSHOTS,
+        client_path_binding_inventory, contains_realish_openai_key,
+        deprecated_github_action_pins_absent_check, desktop_field, first_executable_initialization,
+        image_ref_is_digest_pinned, image_ref_is_valid, imports_shared_core_initializer,
+        install_files, is_allowed_dummy_secret, is_suspicious_secret_line,
+        native_design_system_checks, ordered_contains_check, permission_inventory,
+        reviewed_github_action_pins_check, rg_secret_scan_hit, sha256_path,
+        should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
+        tmpfiles_capability_entries, verify_installer_branding_tool_provenance,
+        write_release_evidence, CheckState, ForbiddenClientTokenVisitor, APPLICATIONS, AUTOSTART,
+        BINARIES, DCONF_FILES, DEPRECATED_GITHUB_ACTION_PINS, GLIB_SCHEMA_FILES,
+        GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS,
+        POLISH_INTERACTION_PROOF, POLISH_INTERACTION_SCREENSHOTS, REVIEWED_GITHUB_ACTION_PINS,
         SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS,
         SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
     };
@@ -18896,6 +19170,85 @@ mod tests {
             stable_id("systemd-goblins-os-core.service-NoNewPrivileges=yes"),
             "systemd-goblins-os-core-service-nonewprivileges-yes"
         );
+    }
+
+    #[test]
+    fn github_action_allowlist_rejects_retired_node20_pins() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-github-actions-{}",
+            std::process::id()
+        ));
+        let workflows = root.join(".github/workflows");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&workflows).expect("create workflow fixture directory");
+        let approved_steps = REVIEWED_GITHUB_ACTION_PINS
+            .iter()
+            .map(|(action, pin)| format!("  - uses: {action}@{pin}\n"))
+            .collect::<String>();
+        let approved = format!("steps:\n{approved_steps}");
+        let workflow = workflows.join("release.yml");
+        fs::write(&workflow, &approved).expect("write approved workflow fixture");
+
+        assert_eq!(
+            reviewed_github_action_pins_check(&root).state,
+            CheckState::Ready
+        );
+        assert_eq!(
+            deprecated_github_action_pins_absent_check(&root).state,
+            CheckState::Ready
+        );
+
+        let retired = approved.replace(
+            REVIEWED_GITHUB_ACTION_PINS[0].1,
+            DEPRECATED_GITHUB_ACTION_PINS[0],
+        );
+        fs::write(&workflow, retired).expect("write retired workflow fixture");
+        assert_eq!(
+            reviewed_github_action_pins_check(&root).state,
+            CheckState::Blocked
+        );
+        assert_eq!(
+            deprecated_github_action_pins_absent_check(&root).state,
+            CheckState::Blocked
+        );
+
+        let bypasses = [
+            format!(
+                "steps:\n{approved_steps}  - \"uses\": evil/action@{}\n",
+                "0".repeat(40)
+            ),
+            format!(
+                "steps:\n{approved_steps}  - uses : evil/action@{}\n",
+                "0".repeat(40)
+            ),
+            format!(
+                "pin: &pin evil/action@{}\nsteps:\n{approved_steps}  - uses: *pin\n",
+                "0".repeat(40)
+            ),
+            format!(
+                "key: &key uses\nsteps:\n{approved_steps}  - *key: evil/action@{}\n",
+                "0".repeat(40)
+            ),
+            format!(
+                "steps:\n{approved_steps}  - {{ \"uses\": evil/action@{} }}\n",
+                "0".repeat(40)
+            ),
+            format!("steps:\n{approved_steps}  - uses: actions/checkout@v7\n"),
+            format!(
+                "steps:\n{approved_steps}  - uses: actions/checkout@{}\n",
+                "0".repeat(40)
+            ),
+        ];
+        for bypass in bypasses {
+            fs::write(&workflow, &bypass).expect("write bypass workflow fixture");
+            assert_eq!(
+                reviewed_github_action_pins_check(&root).state,
+                CheckState::Blocked,
+                "action allowlist accepted bypass fixture: {bypass}"
+            );
+        }
+
+        fs::remove_dir_all(root).expect("remove workflow fixture directory");
     }
 
     #[test]

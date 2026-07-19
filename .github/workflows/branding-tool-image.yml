@@ -40,7 +40,7 @@ jobs:
             image_arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ inputs.candidate_commit }}
           fetch-depth: 1
@@ -63,7 +63,7 @@ jobs:
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - name: Compute the lowercase commit-scoped image tag
         id: image
         run: |
@@ -142,7 +142,7 @@ jobs:
              and .containerfile_sha256 == $containerfile_sha256
              and .rpm_inventory_sha256 == $rpm_inventory_sha256' \
             "$output_dir/image-ref.json" >/dev/null
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: goblins-os-branding-tool-${{ inputs.candidate_commit }}-${{ matrix.arch }}
           if-no-files-found: error
@@ -158,7 +158,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ inputs.candidate_commit }}
           fetch-depth: 1
@@ -171,7 +171,7 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=normal)"
           git fetch --no-tags --depth=1 origin main
           test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_COMMIT"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: goblins-os-branding-tool-${{ inputs.candidate_commit }}-*
           path: branding-tool-artifacts
@@ -213,7 +213,7 @@ jobs:
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - name: Publish and verify the immutable multi-architecture index
         id: index
         env:
@@ -271,7 +271,7 @@ jobs:
             "branding-tool-artifacts/goblins-os-branding-tool-$CANDIDATE_COMMIT-aarch64/rpm-packages.tsv" \
             "$output_dir/rpm-packages-aarch64.tsv"
           echo "ref=$immutable_ref" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: goblins-os-branding-tool-${{ inputs.candidate_commit }}-index
           if-no-files-found: error

@@ -7,7 +7,7 @@
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_session_command_output, probe_timeout};
 
 const INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
 const COLOR_SCHEME_KEY: &str = "color-scheme";
@@ -532,7 +532,7 @@ fn wallpaper_shading_detail(shading: &str) -> &'static str {
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
-    match bounded_command_output("gsettings", args, probe_timeout()) {
+    match bounded_session_command_output("gsettings", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }

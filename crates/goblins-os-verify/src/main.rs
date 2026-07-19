@@ -3,7 +3,7 @@ use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, BTreeSet, HashMap},
     env,
     error::Error,
     fmt, fs,
@@ -12,10 +12,14 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use syn::visit::Visit;
+
 const BINARIES: &[&str] = &[
     "goblins-os-control-center",
     "goblins-os-core",
+    "goblins-os-dictate",
     "goblins-os-file-builder",
+    "goblins-os-focus-tick",
     "goblins-os-installer",
     "goblins-os-launcher",
     "goblins-os-login",
@@ -29,6 +33,25 @@ const BINARIES: &[&str] = &[
     "goblins-os-today",
     "goblins-os-verify",
     "goblins-os-visual-lookup",
+    "goblins-os-voice-control",
+];
+
+const DESKTOP_CAPABILITY_BINARIES: &[&str] = &[
+    "goblins-os-control-center",
+    "goblins-os-dictate",
+    "goblins-os-file-builder",
+    "goblins-os-focus-tick",
+    "goblins-os-installer",
+    "goblins-os-launcher",
+    "goblins-os-login",
+    "goblins-os-markup",
+    "goblins-os-open",
+    "goblins-os-screenshot-context",
+    "goblins-os-settings",
+    "goblins-os-shell",
+    "goblins-os-today",
+    "goblins-os-visual-lookup",
+    "goblins-os-voice-control",
 ];
 
 const SYSTEMD_UNITS: &[&str] = &[
@@ -210,6 +233,25 @@ const SETTINGS_INTERACTION_SCREENSHOTS: &[&str] = &[
     "119-settings-firewall-toggle-failed.png",
 ];
 
+const POLISH_INTERACTION_SCREENSHOTS: &[&str] = &[
+    "124-settings-models-advanced-collapsed.png",
+    "125-settings-models-advanced-expanded.png",
+    "126-settings-models-engine-offline-error.png",
+    "127-studio-engine-menu.png",
+    "128-studio-engine-offline-error.png",
+    "129-first-app-grant-required.png",
+    "130-first-app-policy-granted.png",
+    "131-first-app-offline-error.png",
+    "132-first-app-policy-blocked.png",
+    "133-setup-accessibility-reduced-motion.png",
+    "134-install-progress-reduced-motion-a.png",
+    "135-install-progress-reduced-motion-b.png",
+    "136-settings-models-advanced-expanded-dark.png",
+    "137-studio-engine-menu-dark.png",
+    "138-first-boot-codex-offline.png",
+];
+const POLISH_INTERACTION_PROOF: &str = "139-polish-interactions-proof.json";
+
 const GAMING_PROOF_SCREENSHOTS: &[&str] = &[
     "19-vulkan-vkcube.png",
     "20-gamemode-active.png",
@@ -243,6 +285,7 @@ struct Config {
     binaries: PathBuf,
     quiet: bool,
     release_arch: Option<String>,
+    candidate_commit: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -263,6 +306,7 @@ enum VerifyError {
     UnknownArgument(String),
     MissingValue(String),
     InvalidArchitecture(String),
+    InvalidCandidateCommit(String),
 }
 
 fn main() {
@@ -282,7 +326,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             .release_arch
             .as_deref()
             .ok_or("release evidence requires --arch")?;
-        let manifest = write_release_evidence(&config.source, arch, &config.root)?;
+        let candidate_commit = config
+            .candidate_commit
+            .as_deref()
+            .ok_or("release evidence requires --candidate-commit")?;
+        let manifest =
+            write_release_evidence(&config.source, arch, candidate_commit, &config.root)?;
         if !config.quiet {
             println!(
                 "goblins_os_release_evidence arch={} output={} manifest={}",
@@ -349,6 +398,7 @@ impl Config {
         let mut binaries = None;
         let mut release_evidence_output = None;
         let mut release_arch = None;
+        let mut candidate_commit = None;
         let mut quiet = false;
 
         while let Some(arg) = args.next() {
@@ -389,6 +439,12 @@ impl Config {
                             .ok_or_else(|| VerifyError::MissingValue(arg.clone()))?,
                     );
                 }
+                "--candidate-commit" => {
+                    candidate_commit = Some(
+                        args.next()
+                            .ok_or_else(|| VerifyError::MissingValue(arg.clone()))?,
+                    );
+                }
                 "--quiet" => quiet = true,
                 "--help" | "-h" => return Err(VerifyError::Usage),
                 _ => return Err(VerifyError::UnknownArgument(arg)),
@@ -403,6 +459,10 @@ impl Config {
             if !SUPPORTED_RELEASE_ARCHES.contains(&arch.as_str()) {
                 return Err(VerifyError::InvalidArchitecture(arch));
             }
+            let candidate_commit = candidate_commit.ok_or(VerifyError::Usage)?;
+            if !candidate_commit_is_valid(&candidate_commit) {
+                return Err(VerifyError::InvalidCandidateCommit(candidate_commit));
+            }
             let source = match source_root {
                 Some(root) => root,
                 None => env::current_dir().map_err(|_| VerifyError::Usage)?,
@@ -414,6 +474,7 @@ impl Config {
                 binaries: source.join("target/release"),
                 quiet,
                 release_arch: Some(arch),
+                candidate_commit: Some(candidate_commit.to_ascii_lowercase()),
             });
         }
 
@@ -430,6 +491,7 @@ impl Config {
                 binaries,
                 quiet,
                 release_arch: None,
+                candidate_commit: None,
             });
         }
 
@@ -442,6 +504,7 @@ impl Config {
                 root,
                 quiet,
                 release_arch: None,
+                candidate_commit: None,
             }),
             (None, Some(root)) => Ok(Self {
                 mode: Mode::Installed,
@@ -450,6 +513,7 @@ impl Config {
                 root,
                 quiet,
                 release_arch: None,
+                candidate_commit: None,
             }),
             (None, None) => {
                 let current = env::current_dir().map_err(|_| VerifyError::Usage)?;
@@ -461,6 +525,7 @@ impl Config {
                         root: current,
                         quiet,
                         release_arch: None,
+                        candidate_commit: None,
                     })
                 } else {
                     Ok(Self {
@@ -470,6 +535,7 @@ impl Config {
                         root: PathBuf::from("/"),
                         quiet,
                         release_arch: None,
+                        candidate_commit: None,
                     })
                 }
             }
@@ -502,13 +568,17 @@ impl fmt::Display for VerifyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter.write_str(
-                "usage: goblins-os-verify [--source-root <path> | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64|x86_64>] [--quiet]",
+                "usage: goblins-os-verify [--source-root <path> | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64|x86_64> --candidate-commit <40-hex-commit>] [--quiet]",
             ),
             Self::UnknownArgument(arg) => write!(formatter, "unknown argument {arg}"),
             Self::MissingValue(arg) => write!(formatter, "missing value for {arg}"),
             Self::InvalidArchitecture(arch) => write!(
                 formatter,
                 "unsupported architecture {arch}; expected aarch64 or x86_64"
+            ),
+            Self::InvalidCandidateCommit(commit) => write!(
+                formatter,
+                "invalid candidate commit {commit}; expected exactly 40 hexadecimal characters"
             ),
         }
     }
@@ -923,10 +993,10 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "COPY os/tmpfiles/goblins-os-session.conf /usr/lib/tmpfiles.d/goblins-os-session.conf",
         "test -f /usr/lib/tmpfiles.d/goblins-os-session.conf",
     ));
-    checks.push(contains_check(
+    checks.push(absent_check(
         root.join("os/etc/goblins-os/environment"),
-        "environment-primary-core-url-is-goblins-native",
-        "GOBLINS_OS_CORE_URL=http://127.0.0.1:8787",
+        "environment-does-not-publish-browser-access-to-private-core-routes",
+        "GOBLINS_OS_CORE_URL=",
     ));
     checks.push(contains_check(
         root.join("os/etc/goblins-os/environment"),
@@ -953,20 +1023,20 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "environment-does-not-advertise-openai-os-prefix",
         "OPENAI_OS_",
     ));
-    checks.push(contains_check(
+    checks.push(absent_check(
         root.join("os/session/goblins-os-session"),
-        "session-exports-goblins-core-url-first",
-        "export GOBLINS_OS_CORE_URL=\"${GOBLINS_OS_CORE_URL:-${OPENAI_OS_CORE_URL:-http://127.0.0.1:8787}}\"",
+        "session-does-not-export-a-browser-core-url",
+        "GOBLINS_OS_CORE_URL",
     ));
     checks.push(absent_check(
         root.join("os/session/goblins-os-session"),
         "session-does-not-export-legacy-core-url",
         "export OPENAI_OS_CORE_URL=",
     ));
-    checks.push(contains_check(
+    checks.push(absent_check(
         root.join("os/systemd-user/org.goblins.OS.Shell.service"),
-        "shell-service-primary-core-url-is-goblins-native",
-        "Environment=GOBLINS_OS_CORE_URL=http://127.0.0.1:8787",
+        "shell-service-does-not-export-a-browser-core-url",
+        "Environment=GOBLINS_OS_CORE_URL",
     ));
     checks.push(absent_check(
         root.join("os/systemd-user/org.goblins.OS.Shell.service"),
@@ -985,48 +1055,45 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     for (id, path) in [
         (
-            "installer-core-url-prefers-goblins-env-name",
+            "installer-does-not-accept-core-url-overrides",
             "crates/goblins-os-installer/src/main.rs",
         ),
         (
-            "login-core-url-prefers-goblins-env-name",
+            "login-does-not-accept-core-url-overrides",
             "crates/goblins-os-login/src/main.rs",
         ),
         (
-            "shell-core-url-prefers-goblins-env-name",
+            "shell-does-not-accept-core-url-overrides",
             "crates/goblins-os-shell/src/main.rs",
         ),
         (
-            "settings-core-url-prefers-goblins-env-name",
+            "settings-does-not-accept-core-url-overrides",
             "crates/goblins-os-settings/src/main.rs",
         ),
         (
-            "launcher-core-url-prefers-goblins-env-name",
+            "launcher-does-not-accept-core-url-overrides",
             "crates/goblins-os-launcher/src/main.rs",
         ),
         (
-            "control-center-core-url-prefers-goblins-env-name",
+            "control-center-does-not-accept-core-url-overrides",
             "crates/goblins-os-control-center/src/main.rs",
         ),
         (
-            "open-helper-core-url-prefers-goblins-env-name",
+            "open-helper-does-not-accept-core-url-overrides",
             "crates/goblins-os-open/src/main.rs",
         ),
         (
-            "file-builder-core-url-prefers-goblins-env-name",
+            "file-builder-does-not-accept-core-url-overrides",
             "crates/goblins-os-file-builder/src/main.rs",
         ),
         (
-            "resident-core-url-prefers-goblins-env-name",
+            "resident-does-not-accept-core-url-overrides",
             "crates/goblins-os-resident/src/main.rs",
         ),
     ] {
-        checks.push(contains_check(
-            root.join(path),
-            id,
-            "env::var(\"GOBLINS_OS_CORE_URL\")",
-        ));
+        checks.push(absent_check(root.join(path), id, "GOBLINS_OS_CORE_URL"));
     }
+    checks.extend(core_capability_boundary_checks(root));
     checks.push(contains_check(
         root.join("crates/goblins-os-installer/src/main.rs"),
         "installer-proof-page-override-bypasses-completed-firstboot-exit",
@@ -1474,6 +1541,21 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-screens.sh"),
+        "render-desktop-user-runtime-directory",
+        "install -d -m 0700 -o goblin -g goblin \"$XDG_RUNTIME_DIR\"",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-screens.sh"),
+        "render-desktop-clients-consume-setgid-capability-as-human-user",
+        "setpriv --reuid=goblin --regid=goblin --init-groups --",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-screens.sh"),
+        "render-desktop-clients-use-hardened-launcher",
+        "run_desktop_app /usr/libexec/goblins-os/",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-screens.sh"),
         "render-chrome-focused-scope",
         "capture_chrome_surface",
     ));
@@ -1593,6 +1675,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "image-workflow-uploads-settings-interactions-artifact",
         "goblins-os-settings-interactions-${{ matrix.arch }}",
     ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-renders-polish-interactions-scope",
+        "GOBLINS_OS_RENDER_SCOPE=polish-interactions",
+    ));
+    checks.push(contains_check(
+        root.join(".github/workflows/build.yml"),
+        "image-workflow-uploads-polish-interactions-artifact",
+        "goblins-os-polish-interactions-${{ matrix.arch }}",
+    ));
     checks.push(absent_check(
         root.join(".github/workflows/build.yml"),
         "image-workflow-no-daemon-export-tag",
@@ -1615,6 +1707,7 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.extend(settings_render_screenshot_checks(root));
     checks.extend(settings_interaction_screenshot_checks(root));
+    checks.extend(polish_interaction_screenshot_checks(root));
     checks.push(file_check(root, "os/bootc/render-desktop.sh"));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
@@ -1635,6 +1728,46 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root.join("os/bootc/render-desktop.sh"),
         "render-propagates-overlay-failure",
         "exit \"$RENDER_FAILED\"",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-core-state-is-not-readable-by-desktop-user",
+        "runuser -u goblin -- test -r \"$GOBLINS_OS_INSTALLER_STATE/first-boot.json\"",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-consumes-capability-sockets-only",
+        "Native clients consume only their fixed capability sockets",
+    ));
+    checks.push(absent_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-user-never-rewrites-core-first-boot-state",
+        "if [ ! -f \"$GOBLINS_OS_INSTALLER_STATE/first-boot.json\" ]",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-rejects-failed-screenshot-response",
+        "screenshot D-Bus call returned failure",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-rejects-empty-screenshots",
+        "if [ ! -s \"$OUT/$name\" ]",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-decodes-and-sizes-pngs",
+        "magick identify -format '%m %wx%h'",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-requires-complete-28-frame-proof",
+        "if [ \"$VALID_PNGS\" -ne 28 ]",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.suffix.Dockerfile"),
+        "render-desktop-installs-png-decoder",
+        "ImageMagick",
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
@@ -1670,6 +1803,16 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root.join("os/bootc/render-desktop.sh"),
         "render-wm-snap-assist-hook",
         "showSnapAssistDemo",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-wm-snap-assist-requires-two-real-windows",
+        "renderWindowCount() >= 2",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
+        "render-wm-snap-assist-requires-mapped-window-actors",
+        "entry.actor.is_mapped()",
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.sh"),
@@ -1832,6 +1975,56 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "showPointScanDemo",
     ));
     checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-disabled-actor-invariant",
+        "renderProofInactive",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-disabled-focus-invariant",
+        "global.stage.set_key_focus(null);",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-render-proof-rejects-retained-focus",
+        "!this._panel?.has_key_focus()",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-switch-control-disabled-baseline",
+        "assert_switch_control_inactive",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-bounds-shell-dbus-calls",
+        "gdbus call --timeout 5",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-cleans-every-scheme-exit",
+        "run_render_scheme()",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-scheme-wrapper-calls-cleanup",
+        "cleanup_scheme",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-bounds-shell-teardown",
+        "kill -KILL \"$SHELL_PID\"",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-fails-on-capture-error",
+        "shoot \"50-desktop-$suffix.png\" || return 1",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/render-desktop.sh"),
+        "render-desktop-fails-on-artifact-mode-error",
+        "could not make screenshot exportable",
+    ));
+    checks.push(contains_check(
         root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/stylesheet.css"),
         "goblins-switch-inter",
         "font-family: \"Inter\"",
@@ -1864,6 +2057,53 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         checks.push(file_check(
             root,
             &format!("usr/libexec/goblins-os/{binary}"),
+        ));
+    }
+    checks.push(path_mode_check(
+        root,
+        "usr/libexec/goblins-os/ui",
+        0o755,
+        "installed-desktop-payload-directory-mode",
+    ));
+    checks.push(path_owner_check(
+        root,
+        "usr/libexec/goblins-os/ui",
+        0,
+        0,
+        "installed-desktop-payload-directory-root-owner",
+    ));
+    for binary in DESKTOP_CAPABILITY_BINARIES {
+        let entrypoint = format!("usr/libexec/goblins-os/{binary}");
+        let payload = format!("usr/libexec/goblins-os/ui/{binary}");
+        let client = binary
+            .strip_prefix("goblins-os-")
+            .expect("desktop capability binary prefix");
+        checks.push(path_mode_check(
+            root,
+            &entrypoint,
+            0o2755,
+            &format!("installed-{client}-entrypoint-setgid-mode"),
+        ));
+        checks.push(installed_named_owner_check(
+            root,
+            &entrypoint,
+            "root",
+            &format!("goblins-core-{client}"),
+            &format!("installed-{client}-entrypoint-capability-owner"),
+        ));
+        checks.push(file_check(root, &payload));
+        checks.push(path_mode_check(
+            root,
+            &payload,
+            0o755,
+            &format!("installed-{client}-payload-regular-mode"),
+        ));
+        checks.push(path_owner_check(
+            root,
+            &payload,
+            0,
+            0,
+            &format!("installed-{client}-payload-root-owner"),
         ));
     }
     for unit in SYSTEMD_UNITS {
@@ -1953,6 +2193,16 @@ fn installed_checks(root: &Path) -> Vec<Check> {
     checks.push(file_check(root, "usr/lib/bootc/install/00-goblins-os.toml"));
     checks.push(file_check(root, "etc/goblins-os/environment"));
     checks.push(file_check(root, "etc/goblins-os/openai-secrets.env"));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/system/goblins-os-core.service"),
+        "installed-core-service-loads-openai-systemd-credential",
+        "LoadCredential=openai-secrets.env:/etc/goblins-os/openai-secrets.env",
+    ));
+    checks.push(absent_check(
+        root.join("usr/lib/systemd/system/goblins-os-core.service"),
+        "installed-core-service-does-not-export-openai-secret-environment",
+        "EnvironmentFile=-/etc/goblins-os/openai-secrets.env",
+    ));
     checks.push(path_mode_check(
         root,
         "etc/goblins-os/openai-secrets.env",
@@ -2091,21 +2341,49 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         "var/lib/goblins-os/secrets/openai",
         "installed-secret-storage-owner",
     ));
+    let state_root = "var/lib/goblins-os";
+    checks.push(path_mode_check(
+        root,
+        state_root,
+        0o710,
+        "installed-state-root-traverse-mode",
+    ));
+    checks.push(installed_named_owner_check(
+        root,
+        state_root,
+        "goblins-os",
+        "goblins-core-resident",
+        "installed-state-root-owner",
+    ));
     for relative in [
         "var/lib/goblins-os/models",
         "var/lib/goblins-os/apps",
         "var/lib/goblins-os/installer",
         "var/lib/goblins-os/session",
         "var/lib/goblins-os/policy",
-        "var/lib/goblins-os/resident",
     ] {
         checks.push(installed_state_dir_check(root, relative));
         checks.push(installed_state_dir_owner_check(
             root,
             relative,
+            "goblins-os",
             &format!("{relative}-owner"),
         ));
     }
+    let resident_state = "var/lib/goblins-os/resident";
+    checks.push(installed_state_dir_check(root, resident_state));
+    checks.push(path_mode_check(
+        root,
+        resident_state,
+        0o750,
+        "installed-resident-state-mode",
+    ));
+    checks.push(installed_state_dir_owner_check(
+        root,
+        resident_state,
+        "goblins-resident",
+        &format!("{resident_state}-owner"),
+    ));
     checks.push(file_check(root, "etc/gdm/custom.conf"));
     checks.push(contains_check(
         root.join("etc/gdm/custom.conf"),
@@ -2373,13 +2651,21 @@ struct CargoLockPackage {
     checksum: String,
 }
 
+fn candidate_commit_is_valid(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn write_release_evidence(
     source: &Path,
     arch: &str,
+    candidate_commit: &str,
     output: &Path,
 ) -> Result<PathBuf, Box<dyn Error>> {
     if !SUPPORTED_RELEASE_ARCHES.contains(&arch) {
         return Err(format!("unsupported architecture {arch}").into());
+    }
+    if !candidate_commit_is_valid(candidate_commit) {
+        return Err("candidate commit must be exactly 40 hexadecimal characters".into());
     }
 
     fs::create_dir_all(output)?;
@@ -2404,7 +2690,12 @@ fn write_release_evidence(
     let manifest = output.join("release-evidence-manifest.json");
     fs::write(
         &manifest,
-        release_evidence_manifest(arch, packages.len(), &rpm_status),
+        release_evidence_manifest(
+            arch,
+            &candidate_commit.to_ascii_lowercase(),
+            packages.len(),
+            &rpm_status,
+        ),
     )?;
     Ok(manifest)
 }
@@ -2528,12 +2819,18 @@ fn write_rpm_packages_if_available(output: &Path) -> Result<String, Box<dyn Erro
     }
 }
 
-fn release_evidence_manifest(arch: &str, cargo_package_count: usize, rpm_status: &str) -> String {
+fn release_evidence_manifest(
+    arch: &str,
+    candidate_commit: &str,
+    cargo_package_count: usize,
+    rpm_status: &str,
+) -> String {
     format!(
         concat!(
             "{{\n",
-            "  \"schema\": \"goblins-os-release-evidence-v1\",\n",
+            "  \"schema\": \"goblins-os-release-evidence-v2\",\n",
             "  \"architecture\": \"{}\",\n",
+            "  \"candidate_commit\": \"{}\",\n",
             "  \"cargo_lock\": \"Cargo.lock\",\n",
             "  \"cargo_package_count\": {},\n",
             "  \"cargo_packages_tsv\": \"cargo-lock-packages.tsv\",\n",
@@ -2547,6 +2844,7 @@ fn release_evidence_manifest(arch: &str, cargo_package_count: usize, rpm_status:
             "}}\n"
         ),
         json_escape(arch),
+        json_escape(candidate_commit),
         cargo_package_count,
         json_escape(rpm_status)
     )
@@ -2745,8 +3043,15 @@ fn path_absent_check(root: &Path, relative: &str, id: &str) -> Check {
 }
 
 fn workspace_member_check(root: &Path, binary: &str) -> Check {
-    let crate_name = binary.strip_prefix("goblins-os-").unwrap_or(binary);
-    let member = format!("crates/goblins-os-{crate_name}");
+    let member = match binary {
+        "goblins-os-dictate" | "goblins-os-focus-tick" | "goblins-os-voice-control" => {
+            "crates/goblins-os-session-tools".to_string()
+        }
+        _ => {
+            let crate_name = binary.strip_prefix("goblins-os-").unwrap_or(binary);
+            format!("crates/goblins-os-{crate_name}")
+        }
+    };
     let text = read_to_string(root.join("Cargo.toml"));
     if text.contains(&member) {
         ready(
@@ -3255,6 +3560,1512 @@ fn desktop_exec_checks(root: &Path) -> Vec<Check> {
             ));
         }
     }
+    checks
+}
+
+#[derive(Clone, Copy)]
+struct NativeCoreClient {
+    slug: &'static str,
+    binary: &'static str,
+    entrypoint: &'static str,
+    kind: &'static str,
+    setgid: bool,
+}
+
+const NATIVE_CORE_CLIENTS: [NativeCoreClient; 16] = [
+    NativeCoreClient {
+        slug: "control-center",
+        binary: "goblins-os-control-center",
+        entrypoint: "crates/goblins-os-control-center/src/main.rs",
+        kind: "ControlCenter",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "dictate",
+        binary: "goblins-os-dictate",
+        entrypoint: "crates/goblins-os-session-tools/src/bin/goblins-os-dictate.rs",
+        kind: "Dictate",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "file-builder",
+        binary: "goblins-os-file-builder",
+        entrypoint: "crates/goblins-os-file-builder/src/main.rs",
+        kind: "FileBuilder",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "focus-tick",
+        binary: "goblins-os-focus-tick",
+        entrypoint: "crates/goblins-os-session-tools/src/bin/goblins-os-focus-tick.rs",
+        kind: "FocusTick",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "installer",
+        binary: "goblins-os-installer",
+        entrypoint: "crates/goblins-os-installer/src/main.rs",
+        kind: "Installer",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "launcher",
+        binary: "goblins-os-launcher",
+        entrypoint: "crates/goblins-os-launcher/src/main.rs",
+        kind: "Launcher",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "login",
+        binary: "goblins-os-login",
+        entrypoint: "crates/goblins-os-login/src/main.rs",
+        kind: "Login",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "markup",
+        binary: "goblins-os-markup",
+        entrypoint: "crates/goblins-os-markup/src/main.rs",
+        kind: "Markup",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "open",
+        binary: "goblins-os-open",
+        entrypoint: "crates/goblins-os-open/src/main.rs",
+        kind: "Open",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "resident",
+        binary: "goblins-os-resident",
+        entrypoint: "crates/goblins-os-resident/src/main.rs",
+        kind: "Resident",
+        setgid: false,
+    },
+    NativeCoreClient {
+        slug: "screenshot-context",
+        binary: "goblins-os-screenshot-context",
+        entrypoint: "crates/goblins-os-screenshot-context/src/main.rs",
+        kind: "ScreenshotContext",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "settings",
+        binary: "goblins-os-settings",
+        entrypoint: "crates/goblins-os-settings/src/main.rs",
+        kind: "Settings",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "shell",
+        binary: "goblins-os-shell",
+        entrypoint: "crates/goblins-os-shell/src/main.rs",
+        kind: "Shell",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "today",
+        binary: "goblins-os-today",
+        entrypoint: "crates/goblins-os-today/src/main.rs",
+        kind: "Today",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "visual-lookup",
+        binary: "goblins-os-visual-lookup",
+        entrypoint: "crates/goblins-os-visual-lookup/src/main.rs",
+        kind: "VisualLookup",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "voice-control",
+        binary: "goblins-os-voice-control",
+        entrypoint: "crates/goblins-os-session-tools/src/bin/goblins-os-voice-control.rs",
+        kind: "VoiceControl",
+        setgid: true,
+    },
+];
+
+const NATIVE_CORE_CLIENT_CRATES: [&str; 14] = [
+    "crates/goblins-os-control-center",
+    "crates/goblins-os-file-builder",
+    "crates/goblins-os-installer",
+    "crates/goblins-os-launcher",
+    "crates/goblins-os-login",
+    "crates/goblins-os-markup",
+    "crates/goblins-os-open",
+    "crates/goblins-os-resident",
+    "crates/goblins-os-screenshot-context",
+    "crates/goblins-os-session-tools",
+    "crates/goblins-os-settings",
+    "crates/goblins-os-shell",
+    "crates/goblins-os-today",
+    "crates/goblins-os-visual-lookup",
+];
+
+fn cfg_predicate_implies_test(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|predicates| predicates.iter().any(cfg_predicate_implies_test)),
+        syn::Meta::List(list) if list.path.is_ident("any") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|predicates| predicates.iter().all(cfg_predicate_implies_test)),
+        _ => false,
+    }
+}
+
+fn attributes_are_test_only(attributes: &[syn::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("cfg")
+            && attribute
+                .parse_args::<syn::Meta>()
+                .is_ok_and(|predicate| cfg_predicate_implies_test(&predicate))
+    })
+}
+
+fn item_is_test_only(item: &syn::Item) -> bool {
+    let attributes = match item {
+        syn::Item::Const(item) => &item.attrs,
+        syn::Item::Enum(item) => &item.attrs,
+        syn::Item::ExternCrate(item) => &item.attrs,
+        syn::Item::Fn(item) => &item.attrs,
+        syn::Item::ForeignMod(item) => &item.attrs,
+        syn::Item::Impl(item) => &item.attrs,
+        syn::Item::Macro(item) => &item.attrs,
+        syn::Item::Mod(item) => &item.attrs,
+        syn::Item::Static(item) => &item.attrs,
+        syn::Item::Struct(item) => &item.attrs,
+        syn::Item::Trait(item) => &item.attrs,
+        syn::Item::TraitAlias(item) => &item.attrs,
+        syn::Item::Type(item) => &item.attrs,
+        syn::Item::Union(item) => &item.attrs,
+        syn::Item::Use(item) => &item.attrs,
+        syn::Item::Verbatim(_) => return false,
+        _ => return false,
+    };
+    attributes_are_test_only(attributes)
+}
+
+fn impl_item_is_test_only(item: &syn::ImplItem) -> bool {
+    let attributes = match item {
+        syn::ImplItem::Const(item) => &item.attrs,
+        syn::ImplItem::Fn(item) => &item.attrs,
+        syn::ImplItem::Type(item) => &item.attrs,
+        syn::ImplItem::Macro(item) => &item.attrs,
+        syn::ImplItem::Verbatim(_) => return false,
+        _ => return false,
+    };
+    attributes_are_test_only(attributes)
+}
+
+fn trait_item_is_test_only(item: &syn::TraitItem) -> bool {
+    let attributes = match item {
+        syn::TraitItem::Const(item) => &item.attrs,
+        syn::TraitItem::Fn(item) => &item.attrs,
+        syn::TraitItem::Type(item) => &item.attrs,
+        syn::TraitItem::Macro(item) => &item.attrs,
+        syn::TraitItem::Verbatim(_) => return false,
+        _ => return false,
+    };
+    attributes_are_test_only(attributes)
+}
+
+fn foreign_item_is_test_only(item: &syn::ForeignItem) -> bool {
+    let attributes = match item {
+        syn::ForeignItem::Fn(item) => &item.attrs,
+        syn::ForeignItem::Static(item) => &item.attrs,
+        syn::ForeignItem::Type(item) => &item.attrs,
+        syn::ForeignItem::Macro(item) => &item.attrs,
+        syn::ForeignItem::Verbatim(_) => return false,
+        _ => return false,
+    };
+    attributes_are_test_only(attributes)
+}
+
+fn initialize_kind_from_call(call: &syn::ExprCall) -> Option<String> {
+    let syn::Expr::Path(function) = call.func.as_ref() else {
+        return None;
+    };
+    if !function.path.segments.last()?.ident.eq("initialize") || call.args.len() != 1 {
+        return None;
+    }
+    let syn::Expr::Path(argument) = call.args.first()? else {
+        return None;
+    };
+    let segments = argument.path.segments.iter().collect::<Vec<_>>();
+    if segments.len() < 2 || !segments[segments.len() - 2].ident.eq("ClientKind") {
+        return None;
+    }
+    Some(segments.last()?.ident.to_string())
+}
+
+fn leading_initialize_kind(expression: &syn::Expr) -> Option<String> {
+    match expression {
+        syn::Expr::Call(call) => initialize_kind_from_call(call),
+        syn::Expr::Group(group) => leading_initialize_kind(&group.expr),
+        syn::Expr::Match(expression) => leading_initialize_kind(&expression.expr),
+        syn::Expr::Paren(expression) => leading_initialize_kind(&expression.expr),
+        syn::Expr::Try(expression) => leading_initialize_kind(&expression.expr),
+        _ => None,
+    }
+}
+
+fn first_executable_initialization(function: &syn::ItemFn) -> Option<String> {
+    let statement = function
+        .block
+        .stmts
+        .iter()
+        .find(|statement| !matches!(statement, syn::Stmt::Item(_)))?;
+    match statement {
+        syn::Stmt::Local(local) => local
+            .init
+            .as_ref()
+            .and_then(|initializer| leading_initialize_kind(&initializer.expr)),
+        syn::Stmt::Expr(expression, _) => leading_initialize_kind(expression),
+        syn::Stmt::Item(_) | syn::Stmt::Macro(_) => None,
+    }
+}
+
+fn collect_use_names(tree: &syn::UseTree, names: &mut BTreeSet<String>) {
+    match tree {
+        syn::UseTree::Name(name) => {
+            names.insert(name.ident.to_string());
+        }
+        syn::UseTree::Rename(rename) => {
+            names.insert(rename.ident.to_string());
+        }
+        syn::UseTree::Path(path) => collect_use_names(&path.tree, names),
+        syn::UseTree::Group(group) => {
+            for tree in &group.items {
+                collect_use_names(tree, names);
+            }
+        }
+        syn::UseTree::Glob(_) => {}
+    }
+}
+
+fn imports_shared_core_initializer(syntax: &syn::File) -> bool {
+    let mut names = BTreeSet::new();
+    for item in &syntax.items {
+        let syn::Item::Use(item) = item else {
+            continue;
+        };
+        let syn::UseTree::Path(root) = &item.tree else {
+            continue;
+        };
+        if root.ident == "goblins_os_core_client" {
+            collect_use_names(&root.tree, &mut names);
+        }
+    }
+    names.contains("initialize") && names.contains("ClientKind")
+}
+
+fn first_main_initialization_check(path: PathBuf, slug: &str, expected_kind: &str) -> Check {
+    let id = format!("core-capability-{slug}-initializes-first-with-exact-kind");
+    let source = read_to_string(&path);
+    let syntax = match syn::parse_file(&source) {
+        Ok(syntax) => syntax,
+        Err(error) => {
+            return blocked(
+                &id,
+                &format!("{} is not valid Rust: {error}", path.display()),
+            );
+        }
+    };
+    if !imports_shared_core_initializer(&syntax) {
+        return blocked(
+            &id,
+            &format!(
+                "{} must import initialize and ClientKind from goblins_os_core_client",
+                path.display()
+            ),
+        );
+    }
+    let mains = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Fn(function)
+                if function.sig.ident == "main" && !attributes_are_test_only(&function.attrs) =>
+            {
+                Some(function)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if mains.len() != 1 {
+        return blocked(
+            &id,
+            &format!(
+                "{} must contain exactly one production main function; found {}",
+                path.display(),
+                mains.len()
+            ),
+        );
+    }
+    let actual = first_executable_initialization(mains[0]);
+    if actual.as_deref() == Some(expected_kind) {
+        ready(
+            &id,
+            &format!(
+                "{} first executable main statement consumes ClientKind::{expected_kind}",
+                path.display()
+            ),
+        )
+    } else {
+        blocked(
+            &id,
+            &format!(
+                "{} first executable main statement must begin with initialize(ClientKind::{expected_kind}); found {}",
+                path.display(),
+                actual.as_deref().unwrap_or("no leading initialize call")
+            ),
+        )
+    }
+}
+
+fn forbidden_client_token(value: &str) -> Option<&'static str> {
+    if value.contains("GOBLINS_OS_CORE_") || value.contains("OPENAI_OS_CORE_") {
+        return Some("core environment override");
+    }
+    let lower = value.to_ascii_lowercase();
+    let compact = lower
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>();
+    if compact.contains("tcpstream") {
+        return Some("raw TcpStream transport");
+    }
+    if compact.contains("coreurl") {
+        return Some("core URL override");
+    }
+    if compact.contains("coresocket") {
+        return Some("core socket override");
+    }
+    if compact.contains("coreport") {
+        return Some("core port override");
+    }
+    if lower.contains("/run/goblins-os-core") || lower.contains("control.sock") {
+        return Some("raw core socket path");
+    }
+    if lower.contains("127.0.0.1:8787") || lower.contains("localhost:8787") {
+        return Some("raw core loopback address");
+    }
+    None
+}
+
+#[derive(Default)]
+struct ForbiddenClientTokenVisitor {
+    hits: BTreeSet<String>,
+}
+
+impl ForbiddenClientTokenVisitor {
+    fn inspect(&mut self, value: &str) {
+        if let Some(reason) = forbidden_client_token(value) {
+            self.hits.insert(reason.to_string());
+        }
+    }
+
+    fn inspect_token_stream(&mut self, tokens: proc_macro2::TokenStream) {
+        for token in tokens {
+            match token {
+                proc_macro2::TokenTree::Group(group) => self.inspect_token_stream(group.stream()),
+                proc_macro2::TokenTree::Ident(identifier) => {
+                    self.inspect(&identifier.to_string());
+                }
+                proc_macro2::TokenTree::Literal(literal) => self.inspect(&literal.to_string()),
+                proc_macro2::TokenTree::Punct(_) => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ForbiddenClientTokenVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_is_test_only(item) {
+            syn::visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if !impl_item_is_test_only(item) {
+            syn::visit::visit_impl_item(self, item);
+        }
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        if !trait_item_is_test_only(item) {
+            syn::visit::visit_trait_item(self, item);
+        }
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        if !foreign_item_is_test_only(item) {
+            syn::visit::visit_foreign_item(self, item);
+        }
+    }
+
+    fn visit_ident(&mut self, identifier: &'ast syn::Ident) {
+        self.inspect(&identifier.to_string());
+    }
+
+    fn visit_lit_str(&mut self, literal: &'ast syn::LitStr) {
+        self.inspect(&literal.value());
+    }
+
+    fn visit_lit_byte_str(&mut self, literal: &'ast syn::LitByteStr) {
+        if let Ok(value) = String::from_utf8(literal.value()) {
+            self.inspect(&value);
+        }
+    }
+
+    fn visit_macro(&mut self, item: &'ast syn::Macro) {
+        self.inspect_token_stream(item.tokens.clone());
+        syn::visit::visit_macro(self, item);
+    }
+}
+
+fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("could not read {}: {error}", directory.display()))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("could not inspect {}: {error}", directory.display()))?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("could not inspect {}: {error}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_rust_files(&path, files)?;
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn client_rust_transport_check(path: PathBuf, id_suffix: &str) -> Check {
+    let id = format!("core-capability-production-source-{id_suffix}-uses-shared-client-only");
+    let source = read_to_string(&path);
+    let syntax = match syn::parse_file(&source) {
+        Ok(syntax) => syntax,
+        Err(error) => {
+            return blocked(
+                &id,
+                &format!("{} is not valid Rust: {error}", path.display()),
+            );
+        }
+    };
+    let mut visitor = ForbiddenClientTokenVisitor::default();
+    visitor.visit_file(&syntax);
+    if visitor.hits.is_empty() {
+        ready(
+            &id,
+            &format!(
+                "{} contains no production raw core transport or override token",
+                path.display()
+            ),
+        )
+    } else {
+        blocked(
+            &id,
+            &format!(
+                "{} contains forbidden production token classes: {}",
+                path.display(),
+                visitor.hits.into_iter().collect::<Vec<_>>().join(", ")
+            ),
+        )
+    }
+}
+
+fn client_manifest_transport_check(path: PathBuf, id_suffix: &str) -> Check {
+    let id = format!("core-capability-manifest-{id_suffix}-cannot-bypass-shared-client");
+    let source = read_to_string(&path);
+    let hits = source
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            forbidden_client_token(line)
+                .or_else(|| {
+                    line.contains("test-transport")
+                        .then_some("test transport feature")
+                })
+                .map(|reason| format!("line {}: {reason}", index + 1))
+        })
+        .collect::<Vec<_>>();
+    let shared_dependency = "goblins-os-core-client = { path = \"../goblins-os-core-client\" }";
+    let dependency_count = source
+        .lines()
+        .filter(|line| line.trim() == shared_dependency)
+        .count();
+    if hits.is_empty() && dependency_count == 1 {
+        ready(
+            &id,
+            &format!(
+                "{} has one exact shared-client dependency and no transport bypass dependency or feature",
+                path.display()
+            ),
+        )
+    } else {
+        blocked(
+            &id,
+            &format!(
+                "{} must have one exact {shared_dependency} dependency (found {dependency_count}) and no bypass token; findings: {}",
+                path.display(),
+                if hits.is_empty() { "none".to_string() } else { hits.join(", ") }
+            ),
+        )
+    }
+}
+
+fn enum_variant_inventory(source: &str, enum_name: &str) -> Result<Vec<String>, String> {
+    let syntax = syn::parse_file(source).map_err(|error| error.to_string())?;
+    let mut enums = syntax.items.iter().filter_map(|item| match item {
+        syn::Item::Enum(item) if item.ident == enum_name => Some(item),
+        _ => None,
+    });
+    let item = enums
+        .next()
+        .ok_or_else(|| format!("missing enum {enum_name}"))?;
+    if enums.next().is_some() {
+        return Err(format!("multiple enum {enum_name} declarations"));
+    }
+    Ok(item
+        .variants
+        .iter()
+        .map(|variant| variant.ident.to_string())
+        .collect())
+}
+
+fn client_array_inventory(source: &str, const_name: &str) -> Result<Vec<String>, String> {
+    let syntax = syn::parse_file(source).map_err(|error| error.to_string())?;
+    let mut constants = syntax.items.iter().filter_map(|item| match item {
+        syn::Item::Const(item) if item.ident == const_name => Some(item),
+        _ => None,
+    });
+    let item = constants
+        .next()
+        .ok_or_else(|| format!("missing const {const_name}"))?;
+    if constants.next().is_some() {
+        return Err(format!("multiple const {const_name} declarations"));
+    }
+    let syn::Expr::Array(array) = item.expr.as_ref() else {
+        return Err(format!("{const_name} must be an array literal"));
+    };
+    array
+        .elems
+        .iter()
+        .map(|element| match element {
+            syn::Expr::Path(path) => path
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string())
+                .ok_or_else(|| format!("{const_name} contains an empty path")),
+            _ => Err(format!("{const_name} contains a non-path entry")),
+        })
+        .collect()
+}
+
+fn client_slug_inventory(
+    source: &str,
+    type_name: &str,
+    method_name: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    let syntax = syn::parse_file(source).map_err(|error| error.to_string())?;
+    let mut methods = syntax.items.iter().filter_map(|item| {
+        let syn::Item::Impl(item) = item else {
+            return None;
+        };
+        let syn::Type::Path(self_type) = item.self_ty.as_ref() else {
+            return None;
+        };
+        if self_type.path.segments.last()?.ident != type_name {
+            return None;
+        }
+        item.items.iter().find_map(|item| match item {
+            syn::ImplItem::Fn(function) if function.sig.ident == method_name => Some(function),
+            _ => None,
+        })
+    });
+    let method = methods
+        .next()
+        .ok_or_else(|| format!("missing {type_name}::{method_name}"))?;
+    if methods.next().is_some() {
+        return Err(format!("multiple {type_name}::{method_name} methods"));
+    }
+    let match_expression = method
+        .block
+        .stmts
+        .iter()
+        .find_map(|statement| match statement {
+            syn::Stmt::Expr(syn::Expr::Match(expression), _) => Some(expression),
+            _ => None,
+        });
+    let expression = match_expression
+        .ok_or_else(|| format!("{type_name}::{method_name} must use a direct match"))?;
+    let mut result = BTreeMap::new();
+    for arm in &expression.arms {
+        if arm.guard.is_some() {
+            return Err(format!("{type_name}::{method_name} has a guarded arm"));
+        }
+        let syn::Pat::Path(pattern) = &arm.pat else {
+            return Err(format!("{type_name}::{method_name} has a non-path arm"));
+        };
+        let variant = pattern
+            .path
+            .segments
+            .last()
+            .ok_or_else(|| format!("{type_name}::{method_name} has an empty pattern"))?
+            .ident
+            .to_string();
+        let syn::Expr::Lit(expression) = arm.body.as_ref() else {
+            return Err(format!(
+                "{type_name}::{method_name} has a non-literal value"
+            ));
+        };
+        let syn::Lit::Str(slug) = &expression.lit else {
+            return Err(format!("{type_name}::{method_name} has a non-string value"));
+        };
+        if result.insert(variant.clone(), slug.value()).is_some() {
+            return Err(format!("{type_name}::{method_name} repeats {variant}"));
+        }
+    }
+    Ok(result)
+}
+
+fn client_path_binding_inventory(
+    source: &str,
+    type_name: &str,
+    method_name: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    let syntax = syn::parse_file(source).map_err(|error| error.to_string())?;
+    let mut methods = syntax.items.iter().filter_map(|item| {
+        let syn::Item::Impl(item) = item else {
+            return None;
+        };
+        let syn::Type::Path(self_type) = item.self_ty.as_ref() else {
+            return None;
+        };
+        if self_type.path.segments.last()?.ident != type_name {
+            return None;
+        }
+        item.items.iter().find_map(|item| match item {
+            syn::ImplItem::Fn(function) if function.sig.ident == method_name => Some(function),
+            _ => None,
+        })
+    });
+    let method = methods
+        .next()
+        .ok_or_else(|| format!("missing {type_name}::{method_name}"))?;
+    if methods.next().is_some() {
+        return Err(format!("multiple {type_name}::{method_name} methods"));
+    }
+    let expression = method
+        .block
+        .stmts
+        .iter()
+        .find_map(|statement| match statement {
+            syn::Stmt::Expr(syn::Expr::Match(expression), _) => Some(expression),
+            _ => None,
+        })
+        .ok_or_else(|| format!("{type_name}::{method_name} must use a direct match"))?;
+    let mut result = BTreeMap::new();
+    for arm in &expression.arms {
+        if arm.guard.is_some() {
+            return Err(format!("{type_name}::{method_name} has a guarded arm"));
+        }
+        let syn::Pat::Path(pattern) = &arm.pat else {
+            return Err(format!("{type_name}::{method_name} has a non-path arm"));
+        };
+        let variant = pattern
+            .path
+            .segments
+            .last()
+            .ok_or_else(|| format!("{type_name}::{method_name} has an empty pattern"))?
+            .ident
+            .to_string();
+        let syn::Expr::Path(binding) = arm.body.as_ref() else {
+            return Err(format!("{type_name}::{method_name} has a non-path value"));
+        };
+        let binding = binding
+            .path
+            .segments
+            .last()
+            .ok_or_else(|| format!("{type_name}::{method_name} has an empty value"))?
+            .ident
+            .to_string();
+        if result.insert(variant.clone(), binding).is_some() {
+            return Err(format!("{type_name}::{method_name} repeats {variant}"));
+        }
+    }
+    Ok(result)
+}
+
+struct PermissionEntry {
+    method: syn::Ident,
+    path: syn::LitStr,
+}
+
+impl syn::parse::Parse for PermissionEntry {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let content;
+        syn::parenthesized!(content in input);
+        let method = content.parse()?;
+        content.parse::<syn::Token![,]>()?;
+        let path = content.parse()?;
+        Ok(Self { method, path })
+    }
+}
+
+struct PermissionEntries(syn::punctuated::Punctuated<PermissionEntry, syn::Token![,]>);
+
+impl syn::parse::Parse for PermissionEntries {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        Ok(Self(syn::punctuated::Punctuated::parse_terminated(input)?))
+    }
+}
+
+fn permission_inventory(source: &str, const_name: &str) -> Result<Vec<(String, String)>, String> {
+    let syntax = syn::parse_file(source).map_err(|error| error.to_string())?;
+    let item = syntax
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Const(item) if item.ident == const_name => Some(item),
+            _ => None,
+        })
+        .ok_or_else(|| format!("missing const {const_name}"))?;
+    let syn::Expr::Macro(expression) = item.expr.as_ref() else {
+        return Err(format!("{const_name} must be a permissions macro"));
+    };
+    if !expression.mac.path.is_ident("permissions") {
+        return Err(format!("{const_name} must use permissions!"));
+    }
+    let entries = syn::parse2::<PermissionEntries>(expression.mac.tokens.clone())
+        .map_err(|error| error.to_string())?;
+    Ok(entries
+        .0
+        .into_iter()
+        .map(|entry| (entry.method.to_string(), entry.path.value()))
+        .collect())
+}
+
+fn exact_inventory_check(
+    id: &str,
+    label: &str,
+    actual: Result<Vec<String>, String>,
+    expected: Vec<String>,
+) -> Check {
+    let actual = match actual {
+        Ok(actual) => actual,
+        Err(error) => return blocked(id, &format!("could not parse {label}: {error}")),
+    };
+    let actual_set = actual.iter().cloned().collect::<BTreeSet<_>>();
+    let expected_set = expected.iter().cloned().collect::<BTreeSet<_>>();
+    if actual.len() == actual_set.len()
+        && expected.len() == expected_set.len()
+        && actual_set == expected_set
+    {
+        ready(
+            id,
+            &format!("{label} exactly covers {} unique entries", expected.len()),
+        )
+    } else {
+        blocked(
+            id,
+            &format!("{label} must be one-to-one; expected {expected_set:?}, found {actual:?}"),
+        )
+    }
+}
+
+fn shell_loop_words(source: &str, marker: &str) -> Result<Vec<String>, String> {
+    let start = source
+        .find(marker)
+        .ok_or_else(|| format!("missing shell loop marker {marker}"))?
+        + marker.len();
+    let remainder = &source[start..];
+    let end = remainder
+        .find("; do")
+        .ok_or_else(|| format!("unterminated shell loop after {marker}"))?;
+    Ok(remainder[..end]
+        .split_whitespace()
+        .map(|word| word.trim_matches(['\\', '\'', '"']))
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn capability_groupadd_targets(source: &str) -> Vec<String> {
+    let words = source
+        .split_whitespace()
+        .map(|word| word.trim_matches(['\\', '\'', '"', ';']))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let mut targets = Vec::new();
+    for (index, word) in words.iter().enumerate() {
+        if *word != "groupadd" {
+            continue;
+        }
+        if let Some(target) = words[index + 1..]
+            .iter()
+            .take_while(|candidate| !candidate.contains("&&"))
+            .find(|candidate| !candidate.starts_with('-'))
+        {
+            if target.starts_with("goblins-core-") {
+                targets.push((*target).to_string());
+            }
+        }
+    }
+    targets
+}
+
+fn tmpfiles_capability_entries(source: &str) -> Result<Vec<String>, String> {
+    let root_entries = source
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("d /run/goblins-os-core "))
+        .collect::<Vec<_>>();
+    if root_entries != ["d /run/goblins-os-core 0755 root root -"] {
+        return Err(format!(
+            "capability root must have one exact tmpfiles entry; found {root_entries:?}"
+        ));
+    }
+    let mut slugs = Vec::new();
+    for line in source
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("d /run/goblins-os-core/"))
+    {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() != 6 || fields[0] != "d" {
+            return Err(format!("malformed capability tmpfiles entry {line:?}"));
+        }
+        let slug = fields[1]
+            .strip_prefix("/run/goblins-os-core/")
+            .ok_or_else(|| format!("invalid capability path in {line:?}"))?;
+        let expected_group = format!("goblins-core-{slug}");
+        if fields[2] != "2750"
+            || fields[3] != "goblins-os"
+            || fields[4] != expected_group
+            || fields[5] != "-"
+        {
+            return Err(format!("unsafe capability tmpfiles entry {line:?}"));
+        }
+        slugs.push(slug.to_string());
+    }
+    Ok(slugs)
+}
+
+fn service_unit_values(source: &str) -> BTreeMap<String, Vec<String>> {
+    let mut service = false;
+    let mut result = BTreeMap::<String, Vec<String>>::new();
+    for line in source.lines().map(str::trim) {
+        if line.starts_with('[') && line.ends_with(']') {
+            service = line == "[Service]";
+            continue;
+        }
+        if !service || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            result
+                .entry(key.trim().to_string())
+                .or_default()
+                .push(value.trim().to_string());
+        }
+    }
+    result
+}
+
+fn exact_service_value(values: &BTreeMap<String, Vec<String>>, key: &str, value: &str) -> bool {
+    values
+        .get(key)
+        .is_some_and(|actual| actual.len() == 1 && actual[0] == value)
+}
+
+/// Pin the native private-control boundary as a release contract. Desktop
+/// processes receive one setgid capability, connect to one fixed AF_UNIX
+/// listener before parsing UI state, permanently drop that group, and keep the
+/// single descriptor until exit. The dedicated resident service starts and
+/// remains in its one narrow primary group. Loopback TCP remains browser-safe
+/// and exposes only health plus the exact OAuth callback.
+fn core_capability_boundary_checks(root: &Path) -> Vec<Check> {
+    let control_plane = root.join("crates/goblins-os-core/src/control_plane.rs");
+    let core_main = root.join("crates/goblins-os-core/src/main.rs");
+    let client = root.join("crates/goblins-os-core-client/src/lib.rs");
+    let client_manifest = root.join("crates/goblins-os-core-client/Cargo.toml");
+    let container = root.join("os/bootc/Containerfile");
+    let tmpfiles = root.join("os/tmpfiles/goblins-os-core.conf");
+
+    let mut checks = vec![
+        file_check(root, "crates/goblins-os-core-client/Cargo.toml"),
+        file_check(root, "crates/goblins-os-core-client/src/lib.rs"),
+        file_check(root, "crates/goblins-os-core/src/control_plane.rs"),
+        file_check(root, "os/tmpfiles/goblins-os-core.conf"),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-root-is-fixed",
+            "const PRODUCTION_ROOT: &str = \"/run/goblins-os-core\";",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-directories-require-2750",
+            "const REQUIRED_DIRECTORY_MODE: u32 = 0o2750;",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-sockets-require-0660",
+            "const REQUIRED_SOCKET_MODE: u32 = 0o660;",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-all-sockets-bind-before-serving",
+            "fn bind_production_sockets()",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-groups-must-be-unique",
+            "unique_groups.len() != sockets.len()",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-directory-owner-is-core-euid",
+            "metadata.uid() != effective_uid()",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-stale-socket-replacement-is-validated",
+            "fn remove_stale_socket",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-routes-are-exact-method-and-path-pairs",
+            "permission.method == method.as_str() && permission.path == path",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-tcp-surface-is-get-only",
+            "request.method() == Method::GET",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-tcp-surface-is-health-and-oauth-only",
+            "matches!(request.uri().path(), \"/health\" | \"/v1/auth/openai/callback\")",
+        ),
+        contains_check(
+            core_main.clone(),
+            "core-tcp-router-applies-exact-surface-filter",
+            "control_plane::tcp_surface_router",
+        ),
+        contains_check(
+            core_main.clone(),
+            "core-private-router-serves-capability-sockets",
+            "control_plane::serve(listener, tcp_router(), private_router(), shutdown_signal())",
+        ),
+        absent_check(
+            client_manifest.clone(),
+            "core-client-test-transport-is-not-default",
+            "default = [\"test-transport\"]",
+        ),
+        contains_check(
+            client_manifest,
+            "core-client-default-feature-set-is-empty",
+            "default = []",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-socket-path-is-fixed",
+            "PathBuf::from(\"/run/goblins-os-core\")",
+        ),
+        ordered_contains_check(
+            client.clone(),
+            "core-client-sanitizes-before-linux-initialization",
+            "sanitize_environment();",
+            "initialize_linux(kind)",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-clears-all-goblins-core-overrides",
+            "name.starts_with(\"GOBLINS_OS_CORE_\")",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-clears-all-legacy-core-overrides",
+            "name.starts_with(\"OPENAI_OS_CORE_\")",
+        ),
+        ordered_contains_check(
+            client.clone(),
+            "core-client-disables-dumps-before-socket-retry",
+            "disable_dumpability().map_err(Error::Initialization)?;",
+            "connect_initial_socket(&socket_path)",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-uses-unix-domain-sockets",
+            "Socket::new(Domain::UNIX, Type::STREAM, None)",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-descriptor-is-close-on-exec",
+            "socket.set_cloexec(true)?;",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-desktop-payload-root-is-fixed",
+            "const DESKTOP_PAYLOAD_ROOT: &str = \"/usr/libexec/goblins-os/ui\";",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-transfer-descriptor-is-fixed",
+            "const TRANSFERRED_CAPABILITY_FD: libc::c_int = 3;",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-reexec-closes-unrelated-descriptors",
+            "libc::CLOSE_RANGE_CLOEXEC",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-payload-rejects-at-secure",
+            "desktop payload must start from a non-privileged exec",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-payload-verifies-fixed-socket-peer-path",
+            "peer.as_pathname() != Some(socket_path)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core-client/tests/native_capability.rs"),
+            "core-client-native-test-proves-at-secure-cleared",
+            "regular desktop payload retained AT_SECURE",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-verifies-peer-credentials",
+            "libc::SO_PEERCRED",
+        ),
+        ordered_contains_check(
+            client.clone(),
+            "core-client-desktop-only-permanently-drops-effective-and-saved-group",
+            "if !kind.requires_no_new_privs() {",
+            "libc::setresgid(real_gid, real_gid, real_gid)",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-closes-capability-in-forked-child",
+            "libc::pthread_atfork(None, None, Some(close_core_fd_in_child))",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-marks-broken-connection-terminal",
+            "state.broken = true;",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-tests-no-reconnect-contract",
+            "fn broken_connection_never_reconnects()",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-enforces-nondumpable-process",
+            "libc::PR_SET_DUMPABLE, 0",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-no-new-privileges-is-resident-only",
+            "matches!(self, Self::Resident)",
+        ),
+        contains_check(
+            client.clone(),
+            "core-client-resident-enables-no-new-privileges",
+            "libc::PR_SET_NO_NEW_PRIVS, 1",
+        ),
+        contains_check(
+            container.clone(),
+            "container-creates-distinct-core-capability-groups",
+            "groupadd --system \"goblins-core-${client}\"",
+        ),
+        contains_check(
+            container.clone(),
+            "container-installs-desktop-capabilities-as-setgid",
+            "chmod 2755 \"/usr/libexec/goblins-os/${binary}\"",
+        ),
+        contains_check(
+            container.clone(),
+            "container-installs-root-owned-regular-desktop-payloads",
+            "install -m 0755 -o root -g root \"/usr/libexec/goblins-os/${binary}\" \"/usr/libexec/goblins-os/ui/${binary}\"",
+        ),
+        contains_check(
+            container.clone(),
+            "container-verifies-regular-desktop-payload-owner-and-mode",
+            "root:root:755",
+        ),
+        contains_check(
+            container.clone(),
+            "container-refuses-desktop-user-capability-membership",
+            "! id -nG goblin | tr ' ' '\\n' | grep -Eq '^goblins-core-'",
+        ),
+        contains_check(
+            container.clone(),
+            "container-resident-binary-is-not-setgid",
+            "root:goblins-core-resident:755",
+        ),
+        contains_check(
+            root.join("os/systemd/goblins-os-resident.service"),
+            "resident-runs-as-dedicated-capability-user",
+            "User=goblins-resident",
+        ),
+        contains_check(
+            root.join("os/systemd/goblins-os-resident.service"),
+            "resident-runs-with-exact-capability-group",
+            "Group=goblins-core-resident",
+        ),
+        absent_check(
+            root.join("os/systemd/goblins-os-resident.service"),
+            "resident-has-no-ambient-capability-escalation",
+            "AmbientCapabilities=",
+        ),
+        absent_check(
+            root.join("os/systemd/goblins-os-resident.service"),
+            "resident-has-no-capability-bounding-override",
+            "CapabilityBoundingSet=",
+        ),
+        absent_check(
+            root.join("os/systemd/goblins-os-resident.service"),
+            "resident-does-not-request-cap-setgid",
+            "CAP_SETGID",
+        ),
+        contains_check(
+            root.join("os/systemd/goblins-os-core.service"),
+            "core-loads-provider-secrets-as-systemd-credential",
+            "LoadCredential=openai-secrets.env:/etc/goblins-os/openai-secrets.env",
+        ),
+        absent_check(
+            root.join("os/systemd/goblins-os-core.service"),
+            "core-does-not-source-provider-secrets-as-environment",
+            "EnvironmentFile=-/etc/goblins-os/openai-secrets.env",
+        ),
+    ];
+
+    for client_spec in NATIVE_CORE_CLIENTS {
+        checks.push(first_main_initialization_check(
+            root.join(client_spec.entrypoint),
+            client_spec.slug,
+            client_spec.kind,
+        ));
+    }
+
+    for crate_dir in NATIVE_CORE_CLIENT_CRATES {
+        let crate_path = root.join(crate_dir);
+        let manifest = crate_path.join("Cargo.toml");
+        let id_suffix = crate_dir
+            .trim_start_matches("crates/")
+            .replace(['/', '.'], "-");
+        checks.push(client_manifest_transport_check(manifest, &id_suffix));
+
+        let mut rust_files = Vec::new();
+        match collect_rust_files(&crate_path.join("src"), &mut rust_files) {
+            Ok(()) => {
+                rust_files.sort();
+                if rust_files.is_empty() {
+                    checks.push(blocked(
+                        &format!("core-capability-{id_suffix}-source-inventory"),
+                        &format!("{} contains no Rust source files", crate_path.display()),
+                    ));
+                }
+                for path in rust_files {
+                    let relative = path.strip_prefix(root).unwrap_or(&path);
+                    let source_id = stable_id(&relative.to_string_lossy());
+                    checks.push(client_rust_transport_check(path, &source_id));
+                }
+            }
+            Err(error) => checks.push(blocked(
+                &format!("core-capability-{id_suffix}-source-inventory"),
+                &error,
+            )),
+        }
+    }
+
+    let expected_client_kinds = NATIVE_CORE_CLIENTS
+        .iter()
+        .map(|client_spec| client_spec.kind.to_string())
+        .collect::<Vec<_>>();
+    let mut expected_server_kinds = expected_client_kinds.clone();
+    expected_server_kinds.push("ReleaseProof".to_string());
+    checks.push(exact_inventory_check(
+        "core-client-kind-inventory-is-one-to-one",
+        "shared client ClientKind enum",
+        enum_variant_inventory(&read_to_string(&client), "ClientKind"),
+        expected_client_kinds.clone(),
+    ));
+    checks.push(exact_inventory_check(
+        "core-server-capability-kind-inventory-is-one-to-one",
+        "core control-plane ClientKind enum",
+        enum_variant_inventory(&read_to_string(&control_plane), "ClientKind"),
+        expected_server_kinds.clone(),
+    ));
+    checks.push(exact_inventory_check(
+        "core-server-bound-socket-inventory-is-one-to-one",
+        "core control-plane ALL_CLIENTS array",
+        client_array_inventory(&read_to_string(&control_plane), "ALL_CLIENTS"),
+        expected_server_kinds,
+    ));
+
+    let expected_client_slugs = NATIVE_CORE_CLIENTS
+        .iter()
+        .map(|client_spec| (client_spec.kind.to_string(), client_spec.slug.to_string()))
+        .collect::<BTreeMap<_, _>>();
+    let mut expected_server_slugs = expected_client_slugs.clone();
+    expected_server_slugs.insert("ReleaseProof".to_string(), "release-proof".to_string());
+    for (id, label, actual, expected) in [
+        (
+            "core-client-kind-to-socket-slug-map-is-exact",
+            "shared client ClientKind::slug",
+            client_slug_inventory(&read_to_string(&client), "ClientKind", "slug"),
+            expected_client_slugs,
+        ),
+        (
+            "core-server-kind-to-socket-slug-map-is-exact",
+            "core control-plane ClientKind::id",
+            client_slug_inventory(&read_to_string(&control_plane), "ClientKind", "id"),
+            expected_server_slugs,
+        ),
+    ] {
+        match actual {
+            Ok(actual) if actual == expected => checks.push(ready(
+                id,
+                &format!("{label} exactly maps {} capabilities", expected.len()),
+            )),
+            Ok(actual) => checks.push(blocked(
+                id,
+                &format!("{label} must be one-to-one; expected {expected:?}, found {actual:?}"),
+            )),
+            Err(error) => checks.push(blocked(id, &format!("could not parse {label}: {error}"))),
+        }
+    }
+
+    let expected_socket_slugs = NATIVE_CORE_CLIENTS
+        .iter()
+        .map(|client_spec| client_spec.slug.to_string())
+        .chain(std::iter::once("release-proof".to_string()))
+        .collect::<Vec<_>>();
+    checks.push(exact_inventory_check(
+        "core-tmpfiles-capability-directory-inventory-is-one-to-one",
+        "tmpfiles capability directory inventory",
+        tmpfiles_capability_entries(&read_to_string(&tmpfiles)),
+        expected_socket_slugs.clone(),
+    ));
+    checks.push(exact_inventory_check(
+        "container-core-capability-group-inventory-is-one-to-one",
+        "Containerfile capability group loop",
+        shell_loop_words(&read_to_string(&container), "RUN for client in"),
+        expected_socket_slugs,
+    ));
+    checks.push(exact_inventory_check(
+        "container-creates-no-capability-groups-outside-canonical-loop",
+        "Containerfile capability groupadd targets",
+        Ok(capability_groupadd_targets(&read_to_string(&container))),
+        vec!["goblins-core-${client}".to_string()],
+    ));
+    let expected_setgid_bindings = NATIVE_CORE_CLIENTS
+        .iter()
+        .filter(|client_spec| client_spec.setgid)
+        .map(|client_spec| format!("{}:{}", client_spec.slug, client_spec.binary))
+        .collect::<Vec<_>>();
+    checks.push(exact_inventory_check(
+        "container-setgid-capability-binding-inventory-is-one-to-one",
+        "Containerfile setgid binding loop",
+        shell_loop_words(&read_to_string(&container), "for binding in"),
+        expected_setgid_bindings,
+    ));
+    let container_text = read_to_string(&container);
+    if container_text
+        .matches("chmod 2755 \"/usr/libexec/goblins-os/${binary}\"")
+        .count()
+        == 1
+        && container_text
+            .matches("chown \"root:goblins-core-${client}\" \"/usr/libexec/goblins-os/${binary}\"")
+            .count()
+            == 1
+        && container_text
+            .matches("install -m 0755 -o root -g root \"/usr/libexec/goblins-os/${binary}\" \"/usr/libexec/goblins-os/ui/${binary}\"")
+            .count()
+            == 1
+    {
+        checks.push(ready(
+            "container-setgid-mode-and-owner-apply-only-to-canonical-binding-loop",
+            "Containerfile has one canonical setgid entrypoint and regular-payload implementation for the exact binding inventory",
+        ));
+    } else {
+        checks.push(blocked(
+            "container-setgid-mode-and-owner-apply-only-to-canonical-binding-loop",
+            "Containerfile must have exactly one canonical setgid entrypoint and regular-payload implementation",
+        ));
+    }
+
+    let control_plane_source = read_to_string(&control_plane);
+    match client_path_binding_inventory(&control_plane_source, "ClientKind", "permissions") {
+        Ok(bindings)
+            if bindings.get("Resident").map(String::as_str) == Some("RESIDENT_PERMISSIONS") =>
+        {
+            checks.push(ready(
+                "resident-kind-is-bound-to-resident-permission-manifest",
+                "ClientKind::Resident resolves to RESIDENT_PERMISSIONS",
+            ));
+        }
+        Ok(bindings) => checks.push(blocked(
+            "resident-kind-is-bound-to-resident-permission-manifest",
+            &format!(
+                "ClientKind::Resident must resolve to RESIDENT_PERMISSIONS; found {:?}",
+                bindings.get("Resident")
+            ),
+        )),
+        Err(error) => checks.push(blocked(
+            "resident-kind-is-bound-to-resident-permission-manifest",
+            &format!("could not parse ClientKind::permissions: {error}"),
+        )),
+    }
+    let resident_permissions = permission_inventory(&control_plane_source, "RESIDENT_PERMISSIONS");
+    match resident_permissions {
+        Ok(actual) if actual == [("POST".to_string(), "/v1/codex/resident".to_string())] => {
+            checks.push(ready(
+                "resident-capability-permission-is-one-exact-post-route",
+                "Resident permits only POST /v1/codex/resident",
+            ));
+        }
+        Ok(actual) => checks.push(blocked(
+            "resident-capability-permission-is-one-exact-post-route",
+            &format!("Resident must permit only POST /v1/codex/resident; found {actual:?}"),
+        )),
+        Err(error) => checks.push(blocked(
+            "resident-capability-permission-is-one-exact-post-route",
+            &format!("could not parse Resident permissions: {error}"),
+        )),
+    }
+
+    let container_source = container_text;
+    let normalized_container = container_source
+        .split_whitespace()
+        .filter(|word| *word != "\\")
+        .collect::<Vec<_>>()
+        .join(" ");
+    let resident_account = "useradd --system --no-user-group --gid goblins-core-resident --home-dir /var/lib/goblins-os/resident --shell /usr/sbin/nologin goblins-resident";
+    if normalized_container.matches(resident_account).count() == 1 {
+        checks.push(ready(
+            "resident-account-has-one-dedicated-nologin-primary-capability-group",
+            "Containerfile creates one nologin goblins-resident account with goblins-core-resident as its primary group",
+        ));
+    } else {
+        checks.push(blocked(
+            "resident-account-has-one-dedicated-nologin-primary-capability-group",
+            "Containerfile must create exactly one nologin goblins-resident account whose primary group is goblins-core-resident",
+        ));
+    }
+    let resident_state_layout = "install -d -m 0710 -o goblins-os -g goblins-core-resident /var/lib/goblins-os && install -d -m 0750 -o goblins-resident -g goblins-core-resident /var/lib/goblins-os/resident";
+    if normalized_container.matches(resident_state_layout).count() == 1 {
+        checks.push(ready(
+            "resident-state-layout-has-narrow-parent-traverse-and-private-leaf",
+            "Containerfile grants only the Resident capability group traversal to a private Resident-owned state directory",
+        ));
+    } else {
+        checks.push(blocked(
+            "resident-state-layout-has-narrow-parent-traverse-and-private-leaf",
+            "Containerfile must install /var/lib/goblins-os as goblins-os:goblins-core-resident mode 0710 and its resident leaf as goblins-resident:goblins-core-resident mode 0750",
+        ));
+    }
+    if !normalized_container.split("&&").any(|command| {
+        command.contains("goblins-resident")
+            && ["usermod", "gpasswd", "adduser"]
+                .iter()
+                .any(|membership_tool| command.contains(membership_tool))
+    }) {
+        checks.push(ready(
+            "resident-account-has-no-supplementary-core-capability-group",
+            "Containerfile never adds goblins-resident to a supplementary group",
+        ));
+    } else {
+        checks.push(blocked(
+            "resident-account-has-no-supplementary-core-capability-group",
+            "goblins-resident must not receive supplementary group membership",
+        ));
+    }
+    for (id, needle) in [
+        (
+            "resident-binary-owner-and-mode-are-exact",
+            "test \"$(stat -c '%U:%G:%a' /usr/libexec/goblins-os/goblins-os-resident)\" = \"root:goblins-core-resident:755\"",
+        ),
+        (
+            "resident-binary-mode-is-explicitly-not-setgid",
+            "chmod 0755 /usr/libexec/goblins-os/goblins-os-resident",
+        ),
+    ] {
+        if normalized_container.contains(needle) {
+            checks.push(ready(id, &format!("Containerfile contains {needle}")));
+        } else {
+            checks.push(blocked(id, &format!("Containerfile missing {needle}")));
+        }
+    }
+
+    let resident_unit_path = root.join("os/systemd/goblins-os-resident.service");
+    let resident_unit_source = read_to_string(&resident_unit_path);
+    let resident_service = service_unit_values(&resident_unit_source);
+    let required_resident_service_values = [
+        ("Type", "simple"),
+        ("User", "goblins-resident"),
+        ("Group", "goblins-core-resident"),
+        ("ExecStart", "/usr/libexec/goblins-os/goblins-os-resident"),
+        ("UMask", "0027"),
+        ("NoNewPrivileges", "yes"),
+        ("PrivateTmp", "yes"),
+        ("ProtectSystem", "strict"),
+        ("ProtectHome", "yes"),
+        ("ReadWritePaths", "/var/lib/goblins-os/resident"),
+        ("RestrictSUIDSGID", "yes"),
+        ("LockPersonality", "yes"),
+        ("MemoryDenyWriteExecute", "yes"),
+        ("SystemCallArchitectures", "native"),
+    ];
+    let invalid_service_values = required_resident_service_values
+        .iter()
+        .filter(|(key, value)| !exact_service_value(&resident_service, key, value))
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>();
+    let forbidden_capability_keys = [
+        "AmbientCapabilities",
+        "CapabilityBoundingSet",
+        "SupplementaryGroups",
+    ]
+    .into_iter()
+    .filter(|key| resident_service.contains_key(*key))
+    .collect::<Vec<_>>();
+    if invalid_service_values.is_empty()
+        && forbidden_capability_keys.is_empty()
+        && !resident_unit_source.contains("CAP_SETGID")
+    {
+        checks.push(ready(
+            "resident-systemd-sandbox-and-identity-are-exact",
+            "resident service keeps its exact dedicated identity and full NNP/seccomp hardening without transient capabilities",
+        ));
+    } else {
+        checks.push(blocked(
+            "resident-systemd-sandbox-and-identity-are-exact",
+            &format!(
+                "resident service drift: invalid required values {invalid_service_values:?}; forbidden capability keys {forbidden_capability_keys:?}; CAP_SETGID present={} ",
+                resident_unit_source.contains("CAP_SETGID")
+            ),
+        ));
+    }
+
     checks
 }
 
@@ -4386,7 +6197,87 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
             "installer-first-app-copy-is-product-facing",
-            "Goblins OS builds it locally with the selected engine",
+            "Goblins OS builds it with your selected engine",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-first-app-grant-is-explicit",
+            "Allow and build first app",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-first-app-grants-policy-before-build",
+            "grant_setup_app_builder_permission",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-first-app-shows-live-progress",
+            "Building with the selected engine…",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-first-boot-discloses-codex-egress",
+            "Requests leave this device for OpenAI",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-first-boot-defaults-to-device-engine",
+            "Start with GPT-OSS on this device",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-first-boot-codex-has-accessible-label",
+            "Use OpenAI account through Codex",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-first-app-build-has-accessible-description",
+            "Allow app creation and build first app",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-installer/src/main.rs"),
+            "installer-reduced-motion-removes-transitions",
+            "installer_transition_duration(false), 0",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-models-leads-with-engine-choice",
+            "Goblins AI engine",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-models-collapses-advanced-diagnostics",
+            "Advanced · Actions and activity",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-models-advanced-diagnostics-default-closed",
+            "disclosure.set_expanded(false)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-models-advanced-has-accessible-description",
+            "Advanced Goblins AI actions and activity",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "studio-engine-choice-is-explicit-menu",
+            "let picker = gtk::MenuButton::new()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "studio-engine-menu-has-accessible-label",
+            "Choose Goblins AI engine",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "studio-send-button-has-accessible-name",
+            "gtk::accessible::Property::Label(\"Send build request\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-design/src/lib.rs"),
+            "studio-engine-menu-has-keyboard-focus-ring",
+            ".gos-studio-engine-option:focus:focus-visible",
         ),
         absent_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
@@ -4642,7 +6533,7 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/bootc/render-screens.sh"),
             "installer-render-focused-scope",
-            "GOBLINS_OS_RENDER_SCOPE=$RENDER_SCOPE (expected all, chrome, installer, settings, or settings-interactions)",
+            "GOBLINS_OS_RENDER_SCOPE=$RENDER_SCOPE (expected all, chrome, installer, settings, settings-interactions, or polish-interactions)",
         ),
         contains_check(
             root.join("os/bootc/render-screens.sh"),
@@ -4779,6 +6670,93 @@ fn settings_interaction_screenshot_checks(root: &Path) -> Vec<Check> {
             )
         })
         .collect()
+}
+
+fn polish_interaction_screenshot_checks(root: &Path) -> Vec<Check> {
+    let render_script = root.join("os/bootc/render-screens.sh");
+    let mut checks = POLISH_INTERACTION_SCREENSHOTS
+        .iter()
+        .map(|screenshot| {
+            contains_check(
+                render_script.clone(),
+                &format!("render-polish-interaction-screenshot-{screenshot}"),
+                screenshot,
+            )
+        })
+        .collect::<Vec<_>>();
+    checks.extend([
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-machine-proof",
+            POLISH_INTERACTION_PROOF,
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-isolates-policy-state",
+            "GOBLINS_OS_POLICY_STATE=\"$GOBLINS_OS_RENDER_STATE_DIR/policy\"",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-uses-real-policy-grant-route",
+            "/v1/policy/permissions/grant",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-stops-real-core-for-offline-proof",
+            "offline_driver\": \"stop and restart the real goblins-os-core process",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-requires-zero-motion-difference",
+            "reduced_motion_zero_difference",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-counts-exact-changed-pixels",
+            "round(mean*w*h)",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-error-differs-from-closed-studio",
+            "studio_offline_error_vs_closed_changed_pixels",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-finds-native-transient-surfaces",
+            "xdotool search --onlyvisible --pid",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-reconstructs-transient-alpha",
+            "color 0,0 floodfill",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-uses-real-dark-theme",
+            "export GOBLINS_OS_THEME=dark",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-gates-offline-codex-on-real-status",
+            "supported_by_real_render_state",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-uses-real-codex-status-route",
+            "/v1/codex/status",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-uses-real-network-status-route",
+            "/v1/network/status",
+        ),
+        contains_check(
+            render_script,
+            "render-polish-interaction-does-not-claim-codex-auth",
+            "authenticated_codex_claim\": False",
+        ),
+    ]);
+    checks
 }
 
 fn native_design_system_checks(root: &Path) -> Vec<Check> {
@@ -4967,8 +6945,8 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/release/source-tree-manifest.toml"),
-            "source-manifest-classifies-voice-helpers",
-            "os/voice/",
+            "source-manifest-classifies-rust-session-tools",
+            "crates/",
         ),
         contains_check(
             root.join("os/release/source-tree-manifest.toml"),
@@ -5485,7 +7463,7 @@ fn secret_hygiene_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/etc/goblins-os/openai-secrets.env"),
             "secret-template-server-side-relay-only",
-            "client GUIs only ever receive booleans and file paths",
+            "native clients receive only readiness and plain-language storage labels",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),
@@ -6360,13 +8338,23 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-audio-status-curl-is-bounded",
-            "GOS_AUDIO_CURL_MAX_TIME_SECONDS",
+            "capture-harness-audio-status-uses-finite-release-proof-operation",
+            "core_proof_request audio-status \"$status_file\" || true",
         ),
         contains_check(
-            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-audio-status-curl-budget-has-headroom",
-            r#"GOS_AUDIO_CURL_MAX_TIME_SECONDS:-4"#,
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-harness-audio-status-operation-is-one-exact-route",
+            "audio-status) request audio-status GET /v1/audio/status ;;",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-harness-release-proof-request-has-connect-timeout",
+            "--connect-timeout 2",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-harness-release-proof-request-has-total-timeout",
+            "--max-time \"$timeout\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -6476,7 +8464,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/audio.rs"),
             "core-audio-status-defers-sound-preference-reads",
-            "Audio endpoint readiness does not wait for desktop sound preference reads.",
+            "Audio device readiness does not wait for desktop sound preferences. Changing system sounds still checks the current session.",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/audio.rs"),
@@ -6521,7 +8509,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/audio.rs"),
             "core-audio-wpctl-probe-is-bounded",
-            "bounded_command_output",
+            "bounded_session_command_output",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/bounded.rs"),
@@ -6649,9 +8637,14 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "/v1/focus/deactivate",
         ),
         contains_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-harness-focus-mode-seed-is-one-exact-operation",
+            "focus-mode-seed) request focus-mode-seed POST /v1/focus/mode '{\"id\":\"gate-work\",\"name\":\"Gate Work\"}' ;;",
+        ),
+        contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-uses-focus-mode-route-for-proof-seed",
-            "/v1/focus/mode",
+            "capture-harness-invokes-finite-focus-mode-seed-operation",
+            "core_proof_request focus-mode-seed /tmp/gate-focus-mode-seed.json || true",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -7194,29 +9187,34 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "HONESTY GUARD: missing or failing Preview open/render proof",
         ),
         contains_check(
-            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-fixture-core-uses-ephemeral-state-root",
-            "FIX_STATE=/tmp/goblins-os-fixture-state",
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-fixture-core-uses-root-owned-ephemeral-state-root",
+            "FIXTURE_STATE=/run/goblins-hwgate-fixture-state",
         ),
         contains_check(
-            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            root.join("os/iso/verify-config.toml"),
             "capture-fixture-core-uses-ephemeral-policy-state",
-            "GOBLINS_OS_POLICY_STATE=\"$FIX_STATE/policy\"",
+            "Environment=GOBLINS_OS_POLICY_STATE=/run/goblins-hwgate-fixture-state/policy",
         ),
         contains_check(
-            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            root.join("os/iso/verify-config.toml"),
             "capture-fixture-core-uses-ephemeral-apps-state",
-            "GOBLINS_OS_APPS_DIR=\"$FIX_STATE/apps\"",
+            "Environment=GOBLINS_OS_APPS_DIR=/run/goblins-hwgate-fixture-state/apps",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "capture-fixture-core-uses-ephemeral-ai-state",
+            "Environment=GOBLINS_OS_AI_STATE=/run/goblins-hwgate-fixture-state/ai",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-fixture-core-has-local-model-default",
-            "CAPTURE_LOCAL_MODEL=\"${GOBLINS_OS_LOCAL_MODEL:-llama3.2:1b}\"",
+            "capture-fixture-core-pins-local-model",
+            "CAPTURE_LOCAL_MODEL=llama3.2:1b",
         ),
         contains_check(
-            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            root.join("os/iso/verify-config.toml"),
             "capture-fixture-core-passes-local-model",
-            "GOBLINS_OS_LOCAL_MODEL=\"$CAPTURE_LOCAL_MODEL\"",
+            "Environment=GOBLINS_OS_LOCAL_MODEL=llama3.2:1b",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -7246,7 +9244,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
             "capture-fixture-core-keeps-local-model-warm",
-            "CAPTURE_MODEL_KEEP_ALIVE=\"${GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE:-30m}\"",
+            "CAPTURE_MODEL_KEEP_ALIVE=30m",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -7264,19 +9262,54 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "\\\"keep_alive\\\":$CAPTURE_MODEL_KEEP_ALIVE_JSON",
         ),
         contains_check(
-            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            root.join("os/iso/verify-config.toml"),
             "capture-fixture-core-passes-loopback-runtime-url",
-            "GOBLINS_OS_LOCAL_RUNTIME_URL=\"$CAPTURE_MODEL_RUNTIME_URL\"",
+            "Environment=GOBLINS_OS_LOCAL_RUNTIME_URL=http://127.0.0.1:41134",
         ),
         contains_check(
-            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            root.join("os/iso/verify-config.toml"),
             "capture-fixture-core-passes-local-contract-relay-url",
-            "GOBLINS_OS_LOCAL_MODEL_RELAY=\"$CAPTURE_MODEL_RELAY_URL\"",
+            "Environment=GOBLINS_OS_LOCAL_MODEL_RELAY=http://127.0.0.1:41135/v1/resident",
         ),
         contains_check(
-            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            root.join("os/iso/verify-config.toml"),
             "capture-fixture-core-passes-local-model-keepalive",
-            "GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE=\"$CAPTURE_MODEL_KEEP_ALIVE\"",
+            "Environment=GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE=30m",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-proof-helper-uses-fixed-release-proof-socket",
+            "CORE_SOCKET=/run/goblins-os-core/release-proof/control.sock",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-proof-helper-has-finite-fixture-start-operation",
+            "fixture-start) fixture_start ;;",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-proof-helper-has-finite-fixture-restore-operation",
+            "fixture-restore) fixture_restore ;;",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "capture-fixture-core-has-finite-runtime",
+            "RuntimeMaxSec=1800",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-proof-helper-has-no-legacy-8788-listener",
+            "8788",
+        ),
+        absent_check(
+            root.join("os/iso/verify-config.toml"),
+            "capture-fixture-services-have-no-core-url-override",
+            "GOBLINS_OS_CORE_URL",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-session-has-no-core-url-override",
+            "GOBLINS_OS_CORE_URL",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -7920,8 +9953,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-completes-first-boot-private-path-through-core-api",
-            "first boot setup: completing private offline path through session core APIs",
+            "capture-driver-completes-first-boot-through-root-release-proof-capability",
+            "first boot setup: completing offline path through the root release-proof capability",
         ),
         absent_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
@@ -7940,8 +9973,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-saves-post-first-boot-private-unlock-debug-frame",
-            "post first boot private unlock",
+            "capture-driver-saves-post-first-boot-release-proof-unlock-debug-frame",
+            "post first boot release-proof unlock",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -7985,8 +10018,28 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-requires-firstboot-unlock-callback",
-            "first boot private unlock callback",
+            "capture-driver-requires-firstboot-release-proof-unlock-callback",
+            "first boot release-proof unlock callback",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-uses-fixed-release-proof-socket",
+            "CORE_PROOF_SOCKET=/run/goblins-os-core/release-proof/control.sock",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-uses-unix-socket-transport",
+            "curl --unix-socket \"$CORE_PROOF_SOCKET\"",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "firstboot-unlock-download-is-root-only",
+            "download_with_wait firstboot-unlock.sh /run/goblins-hwgate-root/firstboot 240",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "firstboot-unlock-publishes-root-owned-marker",
+            "install -m 0644 -o root -g root /dev/null /run/goblins-hwgate-firstboot-unlocked",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
@@ -8746,7 +10799,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-preview-uses-fixed-string-xdg-open-check",
-            r#"rg -Fq 'Command::new(\"xdg-open\")'"#,
+            r#"rg -Fq 'isolated_session_command(\"xdg-open\")'"#,
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -9867,8 +11920,18 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/openai_key.rs"),
-            "core-openai-default-model-current-gpt55",
-            "gpt-5.5",
+            "core-openai-default-model-current-gpt56",
+            "gpt-5.6",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "core-openai-gpt56-reasoning-is-explicitly-balanced",
+            r#"payload["reasoning"] = serde_json::json!({ "effort": "medium" })"#,
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "core-openai-gpt56-payload-contract-is-tested",
+            "gpt_5_6_responses_payload_is_private_and_explicitly_balanced",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/service_catalog.rs"),
@@ -9877,8 +11940,8 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/service_catalog.rs"),
-            "service-catalog-build-studio-agents-sdk-relay",
-            "Ready through the server-side official OpenAI Agents SDK relay.",
+            "service-catalog-build-studio-selected-engine-only",
+            "always uses the explicitly selected Goblins AI engine",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/service_catalog.rs"),
@@ -9907,8 +11970,8 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/etc/goblins-os/openai-secrets.env"),
-            "openai-secret-template-build-studio-agents-sdk-relay",
-            "Build Studio can use",
+            "openai-secret-template-separates-agents-sdk-from-build-studio",
+            "never overrides Build Studio's selected engine",
         ),
         contains_check(
             root.join("os/etc/goblins-os/openai-secrets.env"),
@@ -9951,39 +12014,302 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "GOBLINS_OS_LOCAL_MODEL_RUNTIME_REJECTED",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "resident-route-matrix-is-exhaustive",
+            "route_matrix_is_exhaustive_and_never_crosses_provider_or_locality",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "resident-cloud-policy-is-checked-at-execution",
+            "relay.locality() == EngineLocality::Cloud && !hosted_execution_allowed()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "resident-cloud-policy-is-authoritative",
+            "policy_state_for_control(\"cloud-openai\") == PolicyControlState::Allowed",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "resident-openai-api-base-is-https-without-query",
+            "server_https_url(base) && uri.query().is_none()",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "resident-never-logs-model-response-body",
+            "body_tail=",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-engine-selection-is-typed",
+            "enum EngineSelection",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-engine-state-default-path-is-core-owned",
+            "const DEFAULT_ENGINE_PATH: &str = \"/var/lib/goblins-os/ai/engine\";",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-engine-state-follows-core-ai-state-root",
+            "env::var_os(\"GOBLINS_OS_AI_STATE\").map(|dir| PathBuf::from(dir).join(\"engine\"))",
+        ),
+        ordered_contains_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-engine-state-uses-exclusive-temp-before-atomic-rename",
+            ".create_new(true)",
+            "fs::rename(&tmp, path)",
+        ),
+        ordered_contains_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-engine-state-syncs-file-before-atomic-rename",
+            "file.sync_all()?;",
+            "fs::rename(&tmp, path)",
+        ),
+        ordered_contains_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-engine-state-syncs-parent-after-atomic-rename",
+            "fs::rename(&tmp, path)",
+            "fs::File::open(parent)?.sync_all()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-engine-state-atomic-roundtrip-is-tested",
+            "engine_preference_round_trips_through_os_owned_state",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-status-uses-opaque-storage-label",
+            "storage: PRIVATE_STORAGE_LABEL",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-byo-key-is-read-only-from-systemd-credential",
+            "openai_credential(\"OPENAI_API_KEY\")",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-core-has-no-desktop-key-ingest-handler",
+            "pub async fn set_openai_key",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/openai_key.rs"),
+            "openai-core-has-no-mutable-byo-key-file-path",
+            "GOBLINS_OS_OPENAI_KEY_PATH",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-child-clears-parent-environment",
+            "command.env_clear()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-conversation-sandbox-is-read-only",
+            "Self::Resident => \":read-only\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-builder-sandbox-is-workspace-write",
+            "Self::Studio => \":workspace\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-ignores-user-execution-config",
+            ".arg(\"--ignore-user-config\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-studio-denies-service-owned-state-and-credentials",
+            "codex_policies_deny_os_credentials_without_shadowing_the_workspace",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-permission-profiles-have-real-behavior-proof",
+            "installed_codex_enforces_both_permission_profiles",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-permission-profiles-reject-unknown-config",
+            ".arg(\"--strict-config\")",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-does-not-shadow-permission-profiles-with-legacy-sandbox-mode",
+            ".arg(\"--sandbox\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-studio-shell-inherits-no-parent-environment",
+            r#".arg("shell_environment_policy.inherit=\"none\"")"#,
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-studio-does-not-load-project-instructions",
+            "project_doc_max_bytes=0",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-does-not-accept-env-supplied-exec-flags",
+            "GOBLINS_OS_CODEX_EXEC_FLAGS",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-workspace-components-open-without-following-symlinks",
+            "open_dir_nofollow",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-workspace-refuses-hardlinked-files",
+            "metadata.nlink() != 1",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-workspace-escape-regressions-are-tested",
+            "workspace_links_cannot_read_list_or_overwrite_external_secrets",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-status-uses-opaque-storage-label",
+            "codex_home: PRIVATE_STORAGE_LABEL",
+        ),
+        contains_check(
+            root.join("os/systemd/goblins-os-core.service"),
+            "core-service-loads-openai-systemd-credential",
+            "LoadCredential=openai-secrets.env:/etc/goblins-os/openai-secrets.env",
+        ),
+        absent_check(
+            root.join("os/systemd/goblins-os-core.service"),
+            "core-service-does-not-export-openai-secret-environment",
+            "EnvironmentFile=-/etc/goblins-os/openai-secrets.env",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/credentials.rs"),
+            "core-secret-reader-uses-systemd-credentials-directory",
+            "env::var_os(\"CREDENTIALS_DIRECTORY\")",
+        ),
+        contains_check(
+            root.join("os/etc/goblins-os/openai-secrets.env"),
+            "openai-byo-key-template-is-server-side-only",
+            "#OPENAI_API_KEY=<server-side-only-openai-api-key>",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/auth.rs"),
+            "core-auth-reads-systemd-credential-values",
+            "openai_credential(\"OPENAI_ACCOUNT_CLIENT_SECRET\")",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/auth.rs"),
+            "core-auth-does-not-read-oauth-secret-from-environment",
+            "std::env::var(\"OPENAI_ACCOUNT_CLIENT_SECRET\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/auth.rs"),
+            "core-oauth-callback-requires-exact-loopback-host",
+            "callback_host_matches_redirect(&headers, &config.redirect_uri)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/auth.rs"),
+            "core-oauth-callback-host-contract-is-tested",
+            "oauth_callback_host_must_match_the_registered_loopback_authority",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/auth.rs"),
+            "core-oauth-lifecycle-serializes-signout-and-session-commit",
+            "struct AuthLifecycle",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/auth.rs"),
+            "core-oauth-inflight-results-require-current-generation",
+            "persist_auth_session_if_current",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/auth.rs"),
+            "core-oauth-signout-race-has-regression-test",
+            "sign_out_generation_cancels_every_in_flight_auth_flow",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "core-relay-reads-systemd-credential-values",
+            "openai_credential(\"AI_GATEWAY_API_KEY\")",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "core-relay-does-not-read-gateway-secret-from-environment",
+            "env::var(\"AI_GATEWAY_API_KEY\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/bounded.rs"),
+            "core-bounded-children-clear-parent-environment",
+            "command.env_clear();",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/bounded.rs"),
+            "core-session-children-use-narrow-environment-opt-in",
+            "const SESSION_ENV_ALLOWLIST",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/bounded.rs"),
+            "core-long-operations-use-fail-fast-admission",
+            ".try_acquire_owned()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/bounded.rs"),
+            "core-long-operation-admission-is-tested",
+            "long_operation_admission_fails_fast_without_queueing",
+        ),
+        absent_check(
+            root.join("os/systemd/goblins-os-resident.service"),
+            "resident-service-does-not-receive-openai-secrets",
+            "EnvironmentFile=-/etc/goblins-os/openai-secrets.env",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-resident/src/main.rs"),
+            "resident-source-never-names-full-gateway-secret-environment-variable",
+            "AI_GATEWAY_API_KEY",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-resident/src/main.rs"),
+            "resident-source-never-names-full-openai-secret-environment-variable",
+            "OPENAI_API_KEY",
+        ),
+        contains_check(
+            root.join("os/systemd/goblins-os-core.service"),
+            "core-service-codex-and-app-state-is-writable",
+            "/var/lib/goblins-os/apps /var/lib/goblins-os/codex",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/service_catalog.rs"),
             "service-catalog-prefers-goblins-agents-sdk-relay-env",
             "GOBLINS_OS_AGENTS_SDK_RELAY_URL",
         ),
-        contains_check(
+        absent_check(
             root.join("crates/goblins-os-core/src/app_builder.rs"),
-            "app-builder-agents-sdk-relay-primary-env",
-            "const AGENTS_SDK_RELAY_ENV: &str = \"GOBLINS_OS_AGENTS_SDK_RELAY_URL\"",
+            "app-builder-no-hidden-agents-sdk-primary-env",
+            "GOBLINS_OS_AGENTS_SDK_RELAY_URL",
         ),
-        contains_check(
+        absent_check(
             root.join("crates/goblins-os-core/src/app_builder.rs"),
-            "app-builder-agents-sdk-relay-compat-env",
-            "const AGENTS_SDK_RELAY_LEGACY_ENV: &str = \"OPENAI_OS_AGENTS_SDK_RELAY_URL\"",
+            "app-builder-no-hidden-agents-sdk-compat-env",
+            "OPENAI_OS_AGENTS_SDK_RELAY_URL",
         ),
-        contains_check(
+        absent_check(
             root.join("crates/goblins-os-core/src/app_builder.rs"),
-            "app-builder-agents-sdk-source-marker",
+            "app-builder-no-false-agents-sdk-source-marker",
             "official-openai-agents-sdk",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/app_builder.rs"),
-            "app-builder-agents-sdk-capabilities",
-            "sandbox-execution",
+            "app-builder-uses-authoritative-resident-route",
+            "resident_generate_with_engine",
         ),
-        contains_check(
+        absent_check(
             root.join("crates/goblins-os-core/src/app_builder.rs"),
-            "app-builder-agents-sdk-https-only",
-            "server_https_url(&url)",
-        ),
-        contains_check(
-            root.join("crates/goblins-os-core/src/app_builder.rs"),
-            "app-builder-agents-sdk-secret-header",
+            "app-builder-does-not-route-or-authorize-directly",
             "\"Authorization\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/service_catalog.rs"),
+            "service-catalog-tests-agents-sdk-is-separate",
+            "never an invisible Build Studio route",
         ),
         absent_check(
             root.join("crates/goblins-os-core/src/app_builder.rs"),
@@ -10035,6 +12361,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "settings-fetches-ai-runtime-status",
             "/v1/ai/runtime/status",
         ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-deserializes-authoritative-engine-route-status",
+            "selected: ResidentEngineSelection,\n    ready: bool,\n    provider: ResidentEngineProvider,\n    locality: ResidentEngineLocality,",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-uses-core-engine-ready-as-route-truth",
+            "fn resident_engine_ready(resident: &ResidentStatus) -> bool {\n    resident.engine.ready\n}",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-recognizes-core-process-states",
+            "enum ResidentProcessState {\n    Online,\n    Stale,\n    Waiting,\n}",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-resident-contract-fails-closed",
+            "resident_status_deserialization_accepts_only_the_core_readiness_contract",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-does-not-guess-route-readiness-from-process-words",
+            "\"active\" | \"ready\" | \"running\" | \"healthy\"",
+        ),
         absent_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-no-legacy-runtime-status-route",
@@ -10047,13 +12398,33 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-api-key-readiness-says-key-never-enters-settings",
+            "The key never enters Settings",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-never-serializes-an-openai-api-key",
+            r#""api_key": api_key"#,
+        ),
+        absent_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-has-no-openai-key-save-control",
+            "Save OpenAI key",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-ai-runtime-copy",
             "Goblins AI runtime",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
-            "settings-ai-runtime-state-copy",
-            "Goblins AI runtime is {}",
+            "settings-ai-process-state-copy",
+            "Goblins AI process is {}",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-ai-process-and-route-status-are-separate",
+            "resident_engine_state_label(resident)",
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),
@@ -10082,8 +12453,8 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
-            "settings-ai-route-copy",
-            "Goblins AI route",
+            "settings-ai-engine-copy",
+            "Goblins AI engine",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
@@ -10566,17 +12937,17 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-control-center/src/main.rs"),
             "control-center-gates-selected-text-context",
-            "ai_action_availability(&config.core_url, \"ask-selected-text\")",
+            "ai_action_availability(&config.core, \"ask-selected-text\")",
         ),
         contains_check(
             root.join("crates/goblins-os-control-center/src/main.rs"),
             "control-center-gates-writing-tools",
-            "ai_action_availability(&config.core_url, \"write-with-goblins\")",
+            "ai_action_availability(&config.core, \"write-with-goblins\")",
         ),
         contains_check(
             root.join("crates/goblins-os-control-center/src/main.rs"),
             "control-center-gates-screen-context",
-            "ai_action_availability(&config.core_url, \"summarize-screen\")",
+            "ai_action_availability(&config.core, \"summarize-screen\")",
         ),
         contains_check(
             root.join("crates/goblins-os-control-center/src/main.rs"),
@@ -10662,6 +13033,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
             "menubar-adaptive-chrome-unloads-in-dark",
             "theme?.unload_stylesheet(this._lightChromeFile)",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-adaptive-chrome-has-reentrancy-guard",
+            "if (this._applyingSchemeChrome)",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
+            "menubar-adaptive-chrome-tracks-theme-identity",
+            "currentTheme !== this._lightChromeTheme",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js"),
@@ -10797,6 +13178,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell-light.css"),
             "menubar-today-light-mode-recolor",
             ".goblins-date-indicator { color: #1a1a1f; }",
+        ),
+        contains_check(
+            root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell-light.css"),
+            "menubar-light-mode-recolor-outranks-extension-base",
+            "#panel .goblins-menubar-name { color: #1a1a1f; }",
         ),
         contains_check(
             root.join("os/bootc/render-desktop.sh"),
@@ -11156,7 +13542,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
             "installer-product-copy-enter-goblins-desktop",
-            "Enter Goblins OS desktop",
+            "Enter Goblins OS",
         ),
         contains_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
@@ -11677,7 +14063,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/input.rs"),
             "core-input-source-add-probes-ibus",
-            "bounded_command_output(\"ibus\", &[\"list-engine\"], probe_timeout())",
+            "bounded_session_command_output(\"ibus\", &[\"list-engine\"], probe_timeout())",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/input.rs"),
@@ -11857,7 +14243,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/preview.rs"),
             "core-preview-uses-xdg-open",
-            "Command::new(\"xdg-open\")",
+            "isolated_session_command(\"xdg-open\")",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/preview.rs"),
@@ -12694,18 +15080,25 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "control-center-focus-render-restores-modes",
             "gsettings set org.goblins.os.focus modes '[]'",
         ),
-        file_check(root, "os/focus/goblins-os-focus-tick"),
+        file_check(
+            root,
+            "crates/goblins-os-session-tools/src/bin/goblins-os-focus-tick.rs",
+        ),
         file_check(root, "os/systemd-user/org.goblins.OS.FocusTick.service"),
         file_check(root, "os/systemd-user/org.goblins.OS.FocusTick.timer"),
         contains_check(
-            root.join("os/focus/goblins-os-focus-tick"),
+            root.join(
+                "crates/goblins-os-session-tools/src/bin/goblins-os-focus-tick.rs",
+            ),
             "focus-tick-helper-posts-core-route",
             "/v1/focus/tick",
         ),
         contains_check(
-            root.join("os/focus/goblins-os-focus-tick"),
-            "focus-tick-helper-local-core-only",
-            "core URL must be local HTTP",
+            root.join(
+                "crates/goblins-os-session-tools/src/bin/goblins-os-focus-tick.rs",
+            ),
+            "focus-tick-helper-uses-exact-unix-capability",
+            "initialize(ClientKind::FocusTick)",
         ),
         contains_check(
             root.join("os/systemd-user/org.goblins.OS.FocusTick.service"),
@@ -12725,12 +15118,12 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/bootc/Containerfile"),
             "focus-tick-helper-installed",
-            "COPY --chmod=0755 os/focus/goblins-os-focus-tick /usr/libexec/goblins-os/goblins-os-focus-tick",
+            "focus-tick:goblins-os-focus-tick",
         ),
-        contains_check(
+        absent_check(
             root.join("os/bootc/Containerfile"),
-            "focus-tick-python-asserted",
-            "command -v python3",
+            "focus-tick-old-script-is-not-copied",
+            "COPY --chmod=0755 os/focus/goblins-os-focus-tick",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/focus.rs"),
@@ -12809,8 +15202,18 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/firewall.rs"),
-            "core-firewall-waits-up-to-ninety-seconds",
-            "for _ in 0..180",
+            "core-firewall-bounds-success-state-poll-to-five-seconds",
+            "const FIREWALL_STATE_POLL_ATTEMPTS: usize = 20;",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/firewall.rs"),
+            "core-firewall-polls-at-two-hundred-fifty-milliseconds",
+            "const FIREWALL_STATE_POLL_INTERVAL: Duration = Duration::from_millis(250);",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/firewall.rs"),
+            "core-firewall-requires-live-systemd-and-system-bus-runtime",
+            "system_control_runtime_ready()",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/main.rs"),
@@ -14495,14 +16898,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "AiEntrypoint::Voice",
         ),
         contains_check(
-            root.join("os/voice/goblins-os-voice-control"),
+            root.join(
+                "crates/goblins-os-session-tools/src/bin/goblins-os-voice-control.rs",
+            ),
             "voice-control-helper-calls-core-route",
             "/v1/voice/control",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),
-            "bootc-copies-voice-control-helper",
-            "goblins-os-voice-control",
+            "bootc-installs-voice-control-helper-as-exact-capability",
+            "voice-control:goblins-os-voice-control",
+        ),
+        absent_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-does-not-copy-old-voice-control-script",
+            "COPY --chmod=0755 os/voice/goblins-os-voice-control",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
@@ -14552,7 +16962,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-visual-lookup/src/main.rs"),
             "visual-lookup-helper-checks-status-before-capture",
-            "vision_status(&config.core_host)",
+            "vision_status(&config.core)",
         ),
         contains_check(
             root.join("crates/goblins-os-visual-lookup/src/main.rs"),
@@ -15041,6 +17451,36 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-disabled-actor-invariant",
+            "renderProofInactive",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-waiting-actor-invariant",
+            "renderProofWaiting",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-waiting-proof-requires-mapped-actor",
+            "this._overlay.is_mapped()",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-disabled-clears-stale-text",
+            "this._label.set_text('');",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-disabled-rejects-caption-surface",
+            "!this._settings?.get_boolean('enabled')",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
+            "live-captions-clears-floating-dock",
+            "const BOTTOM_DOCK_CLEARANCE = 120;",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/extension.js"),
             "live-captions-extension-render-proof-false-capture-claim",
             "captureRuntimeReadyClaim: false",
         ),
@@ -15053,6 +17493,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/bootc/render-desktop.sh"),
             "live-captions-desktop-render-proof-hook",
             "58-live-captions-waiting-$suffix.png",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "live-captions-desktop-disabled-baseline",
+            "assert_live_captions_inactive",
+        ),
+        contains_check(
+            root.join("os/bootc/render-desktop.sh"),
+            "live-captions-desktop-waiting-mapped-proof",
+            "live-captions-waiting-mapped",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-captions@goblins.os/stylesheet.css"),
@@ -15178,6 +17628,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
             "goblins-wm-snap-assist-render-hook",
             "showSnapAssistDemo",
+        ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
+            "goblins-wm-snap-assist-render-rejects-one-window-fallback",
+            "return false;",
         ),
         // Color picker — portal eyedropper helper, packaged + keybound, copying via
         // wl-clipboard with an honest no-clipboard fallback.
@@ -15442,19 +17897,102 @@ fn resolve_passwd_id(root: &Path, username: &str) -> Option<(u32, u32)> {
     })
 }
 
-/// Assert an installed state directory is owned by the `goblins-os` service
-/// account. This only has teeth against a real installed `/` (where
-/// `etc/passwd` exists); against a staged DESTDIR the passwd database is absent,
-/// so the check resolves to `ready`/skip and never fails the stage gate. We do
-/// not assert a uniform mode — those diverge per directory in the Containerfile.
 #[cfg(unix)]
-fn installed_state_dir_owner_check(root: &Path, relative: &str, id: &str) -> Check {
+fn resolve_group_id(root: &Path, group_name: &str) -> Option<u32> {
+    let groups = fs::read_to_string(root.join("etc/group")).ok()?;
+    groups.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        if fields.next()? != group_name {
+            return None;
+        }
+        let _password = fields.next()?;
+        fields.next()?.parse().ok()
+    })
+}
+
+#[cfg(unix)]
+fn installed_named_owner_check(
+    root: &Path,
+    relative: &str,
+    expected_user: &str,
+    expected_group: &str,
+    id: &str,
+) -> Check {
     use std::os::unix::fs::MetadataExt;
 
-    let Some((expected_uid, expected_gid)) = resolve_passwd_id(root, "goblins-os") else {
+    let Some((expected_uid, _)) = resolve_passwd_id(root, expected_user) else {
         return ready(
             id,
-            &format!("ownership check skipped for {relative}: goblins-os not resolvable from rootfs passwd"),
+            &format!(
+                "ownership check skipped for {relative}: {expected_user} not resolvable from rootfs passwd"
+            ),
+        );
+    };
+    let Some(expected_gid) = resolve_group_id(root, expected_group) else {
+        return ready(
+            id,
+            &format!(
+                "ownership check skipped for {relative}: {expected_group} not resolvable from rootfs group"
+            ),
+        );
+    };
+
+    let path = root.join(relative);
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.uid() == expected_uid && metadata.gid() == expected_gid => ready(
+            id,
+            &format!(
+                "{} owned by {expected_user}:{expected_group} ({expected_uid}:{expected_gid})",
+                path.display()
+            ),
+        ),
+        Ok(metadata) => blocked(
+            id,
+            &format!(
+                "{} owned by uid {}:{}; expected {expected_user}:{expected_group} {expected_uid}:{expected_gid}",
+                path.display(),
+                metadata.uid(),
+                metadata.gid()
+            ),
+        ),
+        Err(_) => blocked(id, &format!("missing {}", path.display())),
+    }
+}
+
+#[cfg(not(unix))]
+fn installed_named_owner_check(
+    _root: &Path,
+    relative: &str,
+    _expected_user: &str,
+    _expected_group: &str,
+    id: &str,
+) -> Check {
+    ready(
+        id,
+        &format!("ownership check skipped for {relative} on non-Unix host"),
+    )
+}
+
+/// Assert an installed state directory is owned by the expected service account.
+/// This only has teeth against a real installed `/` (where `etc/passwd` exists);
+/// against a staged DESTDIR the passwd database is absent, so the check resolves
+/// to `ready`/skip and never fails the stage gate. We do not assert a uniform
+/// mode — those diverge per directory in the Containerfile.
+#[cfg(unix)]
+fn installed_state_dir_owner_check(
+    root: &Path,
+    relative: &str,
+    expected_user: &str,
+    id: &str,
+) -> Check {
+    use std::os::unix::fs::MetadataExt;
+
+    let Some((expected_uid, expected_gid)) = resolve_passwd_id(root, expected_user) else {
+        return ready(
+            id,
+            &format!(
+                "ownership check skipped for {relative}: {expected_user} not resolvable from rootfs passwd"
+            ),
         );
     };
 
@@ -15466,13 +18004,13 @@ fn installed_state_dir_owner_check(root: &Path, relative: &str, id: &str) -> Che
             if uid == expected_uid && gid == expected_gid {
                 ready(
                     id,
-                    &format!("{} owned by goblins-os ({uid}:{gid})", path.display()),
+                    &format!("{} owned by {expected_user} ({uid}:{gid})", path.display()),
                 )
             } else {
                 blocked(
                     id,
                     &format!(
-                        "{} owned by uid {uid}:{gid}; expected goblins-os {expected_uid}:{expected_gid}",
+                        "{} owned by uid {uid}:{gid}; expected {expected_user} {expected_uid}:{expected_gid}",
                         path.display()
                     ),
                 )
@@ -15483,7 +18021,12 @@ fn installed_state_dir_owner_check(root: &Path, relative: &str, id: &str) -> Che
 }
 
 #[cfg(not(unix))]
-fn installed_state_dir_owner_check(_root: &Path, relative: &str, id: &str) -> Check {
+fn installed_state_dir_owner_check(
+    _root: &Path,
+    relative: &str,
+    _expected_user: &str,
+    id: &str,
+) -> Check {
     ready(
         id,
         &format!("ownership check skipped for {relative} on non-Unix host"),
@@ -15553,18 +18096,23 @@ fn stable_id(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cargo_lock_packages, contains_realish_openai_key, desktop_field, install_files,
+        candidate_commit_is_valid, capability_groupadd_targets, cargo_lock_packages,
+        client_path_binding_inventory, contains_realish_openai_key, desktop_field,
+        first_executable_initialization, imports_shared_core_initializer, install_files,
         is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
-        ordered_contains_check, rg_secret_scan_hit, should_skip_secret_scan_path,
-        source_manifest_classifies_top_level, stable_id, write_release_evidence, CheckState,
-        APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES, GLIB_SCHEMA_FILES,
-        GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS,
+        ordered_contains_check, permission_inventory, rg_secret_scan_hit,
+        should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
+        tmpfiles_capability_entries, write_release_evidence, CheckState,
+        ForbiddenClientTokenVisitor, APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES,
+        GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS,
+        NAUTILUS_SCRIPTS, POLISH_INTERACTION_PROOF, POLISH_INTERACTION_SCREENSHOTS,
         SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS,
         SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
     };
     use std::collections::HashSet;
     use std::fs;
     use std::path::Path;
+    use syn::visit::Visit;
 
     #[test]
     fn parses_desktop_exec_field() {
@@ -15595,6 +18143,128 @@ mod tests {
         assert_eq!(blocked.state, CheckState::Blocked);
 
         fs::remove_file(path).expect("remove temp source");
+    }
+
+    fn parsed_main(source: &str) -> syn::ItemFn {
+        syn::parse_file(source)
+            .expect("valid Rust fixture")
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                syn::Item::Fn(function) if function.sig.ident == "main" => Some(function),
+                _ => None,
+            })
+            .expect("fixture main")
+    }
+
+    #[test]
+    fn capability_initialization_parser_accepts_current_leading_forms_only() {
+        let shared_import = syn::parse_file(
+            "use goblins_os_core_client::{initialize, ClientKind, CoreClient}; fn main() {}",
+        )
+        .unwrap();
+        assert!(imports_shared_core_initializer(&shared_import));
+        let local_only = syn::parse_file(
+            "fn initialize(_: ClientKind) {} enum ClientKind { Settings } fn main() {}",
+        )
+        .unwrap();
+        assert!(!imports_shared_core_initializer(&local_only));
+
+        let direct = parsed_main(
+            "fn main() -> Result<(), Error> { let core = initialize(ClientKind::Settings)?; Ok(()) }",
+        );
+        assert_eq!(
+            first_executable_initialization(&direct).as_deref(),
+            Some("Settings")
+        );
+
+        let matched = parsed_main(
+            "fn main() { fn declaration_is_not_executable() {} let core = match initialize(ClientKind::Open) { Ok(core) => core, Err(_) => return }; }",
+        );
+        assert_eq!(
+            first_executable_initialization(&matched).as_deref(),
+            Some("Open")
+        );
+
+        let late = parsed_main(
+            "fn main() { parse_arguments(); let core = initialize(ClientKind::Shell); }",
+        );
+        assert_eq!(first_executable_initialization(&late), None);
+    }
+
+    #[test]
+    fn capability_source_scan_skips_only_code_that_cfg_implies_is_test_only() {
+        let test_only = syn::parse_file(
+            r#"
+                #[cfg(test)]
+                fn fixture() { let _ = "GOBLINS_OS_CORE_URL"; }
+                #[cfg(all(test, target_os = "linux"))]
+                fn linux_fixture() { let _ = std::net::TcpStream::connect("localhost:8787"); }
+                fn main() {}
+            "#,
+        )
+        .expect("valid Rust fixture");
+        let mut visitor = ForbiddenClientTokenVisitor::default();
+        visitor.visit_file(&test_only);
+        assert!(visitor.hits.is_empty());
+
+        let not_test_only = syn::parse_file(
+            r#"
+                #[cfg(any(test, feature = "diagnostics"))]
+                fn production_feature() { let _ = "GOBLINS_OS_CORE_URL"; }
+            "#,
+        )
+        .expect("valid Rust fixture");
+        let mut visitor = ForbiddenClientTokenVisitor::default();
+        visitor.visit_file(&not_test_only);
+        assert!(visitor.hits.contains("core environment override"));
+    }
+
+    #[test]
+    fn capability_manifests_parse_exact_route_and_tmpfiles_inventories() {
+        let permissions = r#"
+            const RESIDENT_PERMISSIONS: &[Permission] =
+                permissions![(POST, "/v1/codex/resident")];
+        "#;
+        assert_eq!(
+            permission_inventory(permissions, "RESIDENT_PERMISSIONS").unwrap(),
+            [("POST".to_string(), "/v1/codex/resident".to_string())]
+        );
+        let binding = r#"
+            impl ClientKind {
+                fn permissions(self) -> &'static [Permission] {
+                    match self { Self::Resident => RESIDENT_PERMISSIONS }
+                }
+            }
+        "#;
+        assert_eq!(
+            client_path_binding_inventory(binding, "ClientKind", "permissions")
+                .unwrap()
+                .get("Resident")
+                .map(String::as_str),
+            Some("RESIDENT_PERMISSIONS")
+        );
+
+        let tmpfiles = concat!(
+            "d /run/goblins-os-core 0755 root root -\n",
+            "d /run/goblins-os-core/settings 2750 goblins-os goblins-core-settings -\n",
+            "d /run/goblins-os-core/release-proof 2750 goblins-os goblins-core-release-proof -\n",
+        );
+        assert_eq!(
+            tmpfiles_capability_entries(tmpfiles).unwrap(),
+            ["settings".to_string(), "release-proof".to_string()]
+        );
+
+        let container = r#"
+            RUN for client in settings release-proof; do \
+                  groupadd --system "goblins-core-${client}"; \
+                done \
+                && groupadd --system goblins-session-bridge
+        "#;
+        assert_eq!(
+            capability_groupadd_targets(container),
+            ["goblins-core-${client}".to_string()]
+        );
     }
 
     #[test]
@@ -15719,7 +18389,9 @@ checksum = "abc123"
         )
         .unwrap();
 
-        let manifest = write_release_evidence(&source, "aarch64", &output).unwrap();
+        let candidate_commit = "0123456789abcdef0123456789abcdef01234567";
+        let manifest =
+            write_release_evidence(&source, "aarch64", candidate_commit, &output).unwrap();
         let cargo_tsv = fs::read_to_string(output.join("cargo-lock-packages.tsv")).unwrap();
         let rpm_command = fs::read_to_string(output.join("rpm-packages.command")).unwrap();
         let manifest_text = fs::read_to_string(manifest).unwrap();
@@ -15729,6 +18401,7 @@ checksum = "abc123"
         assert!(rpm_command.contains("rpm -qa --qf"));
         assert!(rpm_command.contains("name\\tversion_release\\tarch\\tlicense"));
         assert!(manifest_text.contains("\"architecture\": \"aarch64\""));
+        assert!(manifest_text.contains(&format!("\"candidate_commit\": \"{candidate_commit}\"")));
         assert!(manifest_text.contains("\"cargo_package_count\": 1"));
         assert!(
             output.join("rpm-packages.tsv").is_file()
@@ -15736,6 +18409,17 @@ checksum = "abc123"
         );
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn release_evidence_candidate_commit_is_full_hex() {
+        assert!(candidate_commit_is_valid(
+            "0123456789abcdef0123456789ABCDEF01234567"
+        ));
+        assert!(!candidate_commit_is_valid("0123456789abcdef"));
+        assert!(!candidate_commit_is_valid(
+            "0123456789abcdef0123456789abcdef0123456g"
+        ));
     }
 
     #[test]
@@ -15790,6 +18474,43 @@ checksum = "abc123"
                 "missing required Settings interaction screenshot {screenshot}"
             );
         }
+    }
+
+    #[test]
+    fn polish_interaction_contract_covers_changed_semantic_states() {
+        let unique = POLISH_INTERACTION_SCREENSHOTS
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+
+        assert_eq!(POLISH_INTERACTION_SCREENSHOTS.len(), 15);
+        assert_eq!(unique.len(), POLISH_INTERACTION_SCREENSHOTS.len());
+        for screenshot in [
+            "124-settings-models-advanced-collapsed.png",
+            "125-settings-models-advanced-expanded.png",
+            "126-settings-models-engine-offline-error.png",
+            "127-studio-engine-menu.png",
+            "128-studio-engine-offline-error.png",
+            "129-first-app-grant-required.png",
+            "130-first-app-policy-granted.png",
+            "131-first-app-offline-error.png",
+            "132-first-app-policy-blocked.png",
+            "133-setup-accessibility-reduced-motion.png",
+            "134-install-progress-reduced-motion-a.png",
+            "135-install-progress-reduced-motion-b.png",
+            "136-settings-models-advanced-expanded-dark.png",
+            "137-studio-engine-menu-dark.png",
+            "138-first-boot-codex-offline.png",
+        ] {
+            assert!(
+                unique.contains(screenshot),
+                "missing required polish interaction screenshot contract {screenshot}"
+            );
+        }
+        assert_eq!(
+            POLISH_INTERACTION_PROOF,
+            "139-polish-interactions-proof.json"
+        );
     }
 
     #[test]
@@ -16087,7 +18808,7 @@ checksum = "abc123"
     #[cfg(unix)]
     #[test]
     fn installed_state_dir_owner_check_skips_when_passwd_unresolvable() {
-        use super::installed_state_dir_owner_check;
+        use super::{installed_state_dir_owner_check, resolve_group_id};
 
         // A staged DESTDIR has no etc/passwd, so goblins-os is unresolvable and
         // the ownership assertion resolves to ready/skip rather than failing.
@@ -16099,7 +18820,8 @@ checksum = "abc123"
         fs::create_dir_all(root.join("var/lib/goblins-os/apps")).unwrap();
 
         assert_eq!(
-            installed_state_dir_owner_check(&root, "var/lib/goblins-os/apps", "test").state,
+            installed_state_dir_owner_check(&root, "var/lib/goblins-os/apps", "goblins-os", "test")
+                .state,
             CheckState::Ready
         );
 
@@ -16110,8 +18832,16 @@ checksum = "abc123"
             "root:x:0:0:root:/root:/bin/bash\ngoblins-os:x:991:991::/var/lib/goblins-os:/usr/sbin/nologin\n",
         )
         .unwrap();
+        fs::write(
+            root.join("etc/group"),
+            "root:x:0:\ngoblins-core-resident:x:992:goblins-os\n",
+        )
+        .unwrap();
+        assert_eq!(resolve_group_id(&root, "goblins-core-resident"), Some(992));
+        assert_eq!(resolve_group_id(&root, "missing"), None);
         assert_eq!(
-            installed_state_dir_owner_check(&root, "var/lib/goblins-os/apps", "test").state,
+            installed_state_dir_owner_check(&root, "var/lib/goblins-os/apps", "goblins-os", "test")
+                .state,
             CheckState::Blocked
         );
 

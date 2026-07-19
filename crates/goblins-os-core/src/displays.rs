@@ -10,7 +10,7 @@ use std::{env, fs, time::Duration};
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
+use crate::bounded::{bounded_session_command_output, probe_timeout, BoundedCommandError};
 use crate::session_bridge::{
     DisplayConfigLogicalMonitor, DisplayConfigMonitor, SessionBridgeResult,
 };
@@ -386,7 +386,7 @@ fn bridge_logical_monitors(
 }
 
 fn xrandr_outputs() -> Option<Vec<DisplayOutputStatus>> {
-    let output = bounded_command_output("xrandr", &["--query"], probe_timeout()).ok()?;
+    let output = bounded_session_command_output("xrandr", &["--query"], probe_timeout()).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -405,7 +405,7 @@ fn gdbus_call(args: &[&str], timeout: Duration) -> Result<String, DisplayConfigE
         "--method",
     ];
     full_args.extend_from_slice(args);
-    let output = match bounded_command_output("gdbus", &full_args, timeout) {
+    let output = match bounded_session_command_output("gdbus", &full_args, timeout) {
         Ok(output) => output,
         Err(BoundedCommandError::Missing) => return Err(DisplayConfigError::Missing),
         Err(BoundedCommandError::TimedOut | BoundedCommandError::Failed) => {

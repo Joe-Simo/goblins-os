@@ -6,13 +6,11 @@
 use std::{
     env,
     error::Error,
-    fmt,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    thread,
+    fmt, thread,
     time::{Duration, Instant},
 };
 
+use goblins_os_core_client::{initialize, ClientKind, CoreClient, Response};
 use serde::{Deserialize, Serialize};
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -27,9 +25,10 @@ use goblins_os_ui::status_pill;
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 use gtk4::prelude::*;
 
-const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
 const DEFAULT_CORE_WAIT_SECS: u64 = 45;
-const MAX_CORE_BODY_BYTES: usize = 1024 * 1024;
+// Local inference can consume its full 3600-second core bound. Keep 300 seconds
+// for response finalization without exceeding the capability client's ceiling.
+const LONG_CORE_JOB_TIMEOUT: Duration = Duration::from_secs(65 * 60);
 const SETTINGS_DEFAULT_WIDTH: i32 = 1055;
 const SETTINGS_DEFAULT_HEIGHT: i32 = 840;
 const GNOME_CONTROL_CENTER: &str = "gnome-control-center";
@@ -44,7 +43,7 @@ type SettingsResult<T> = Result<T, Box<dyn Error>>;
 
 #[derive(Clone)]
 struct SettingsConfig {
-    core_url: String,
+    core: CoreClient,
     core_wait: Duration,
     panel: SettingsPanel,
 }
@@ -93,6 +92,7 @@ enum SettingsPanel {
 
 #[derive(Clone)]
 struct SettingsState {
+    core: CoreClient,
     core_ready: bool,
     system: Option<SettingsSystemStatus>,
     system_image: Option<SystemImageStatus>,
@@ -1072,6 +1072,19 @@ struct CodexStatus {
 
 /// The browser sign-in URL the core captured from `codex login`. Booleans + a URL
 /// only — never a credential.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Deserialize)]
+struct CodexLoginStart {
+    #[serde(default)]
+    started: bool,
+    #[serde(default)]
+    authenticated: bool,
+    #[serde(default)]
+    already_running: bool,
+    #[allow(dead_code)]
+    detail: String,
+}
+
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 #[derive(Clone, Deserialize)]
 struct CodexLoginUrl {
@@ -1079,6 +1092,15 @@ struct CodexLoginUrl {
     authenticated: bool,
     #[serde(default)]
     auth_url: Option<String>,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Debug, PartialEq, Eq)]
+enum CodexLoginOutcome {
+    Ready,
+    AlreadyRunning,
+    OpenUrl(String),
+    Started,
 }
 
 /// Visual Look Up capability from Goblins OS. GPT-OSS is text-only, so this row
@@ -1665,9 +1687,8 @@ struct DesktopPrivacyStatus {
     detail: String,
 }
 
-/// Status of the optional bring-your-own OpenAI API key. The key itself is never
-/// returned by the core — only whether one is configured, the selected model, and
-/// where the secret is held. The OS owns the secret; the GUI only mirrors status.
+/// Status of the optional administrator-installed OpenAI API credential. The key
+/// itself is never returned — Settings only mirrors readiness and selected model.
 #[derive(Clone, Deserialize)]
 struct OpenAiKeyStatus {
     configured: bool,
@@ -1883,7 +1904,7 @@ const SETTINGS_SEARCH_ITEMS: &[SettingsSearchItem] = &[
     SettingsSearchItem {
         panel: SettingsPanel::Notifications,
         title: "Per-app notifications",
-        terms: &["apps", "notification registry", "application alerts"],
+        terms: &["apps", "notification preferences", "application alerts"],
     },
     SettingsSearchItem {
         panel: SettingsPanel::LockScreen,
@@ -2385,7 +2406,6 @@ struct SessionSettings {
     desktop: String,
     gui_platform: String,
     shell_mode: String,
-    core_url: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -2579,25 +2599,164 @@ struct ResidentStatus {
 
 #[derive(Clone, Deserialize)]
 struct ResidentProcess {
-    state: String,
+    state: ResidentProcessState,
+    pid: Option<u32>,
     mode: String,
     heartbeat_age_secs: Option<u64>,
     detail: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum ResidentProcessState {
+    Online,
+    Stale,
+    Waiting,
+}
+
+impl ResidentProcessState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Stale => "stale",
+            Self::Waiting => "waiting",
+        }
+    }
+}
+
 #[derive(Clone, Deserialize)]
 struct ResidentEngine {
-    selected: String,
+    selected: ResidentEngineSelection,
+    ready: bool,
+    provider: ResidentEngineProvider,
+    locality: ResidentEngineLocality,
     cloud_relay_configured: bool,
     local_relay_configured: bool,
     relay_contract: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+enum ResidentEngineSelection {
+    #[serde(rename = "local-gpt-oss")]
+    LocalGptOss,
+    #[serde(rename = "codex")]
+    Codex,
+    #[serde(rename = "openai-api")]
+    OpenAiApi,
+    #[serde(rename = "cloud-openai")]
+    ManagedCloud,
+}
+
+impl ResidentEngineSelection {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalGptOss => "local-gpt-oss",
+            Self::Codex => "codex",
+            Self::OpenAiApi => "openai-api",
+            Self::ManagedCloud => "cloud-openai",
+        }
+    }
+
+    const fn display_name(self) -> &'static str {
+        match self {
+            Self::LocalGptOss => "GPT-OSS",
+            Self::Codex => "your OpenAI account through Codex",
+            Self::OpenAiApi => "OpenAI hosted models with a protected service credential",
+            Self::ManagedCloud => "managed OpenAI cloud",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+enum ResidentEngineProvider {
+    #[serde(rename = "gpt-oss-local-contract")]
+    LocalContract,
+    #[serde(rename = "gpt-oss-local-runtime")]
+    LocalRuntime,
+    #[serde(rename = "codex")]
+    Codex,
+    #[serde(rename = "openai-api")]
+    OpenAiApi,
+    #[serde(rename = "managed-openai-relay")]
+    ManagedOpenAiRelay,
+    #[serde(rename = "not-ready")]
+    NotReady,
+}
+
+impl ResidentEngineProvider {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalContract => "gpt-oss-local-contract",
+            Self::LocalRuntime => "gpt-oss-local-runtime",
+            Self::Codex => "codex",
+            Self::OpenAiApi => "openai-api",
+            Self::ManagedOpenAiRelay => "managed-openai-relay",
+            Self::NotReady => "not-ready",
+        }
+    }
+
+    const fn display_name(self) -> &'static str {
+        match self {
+            Self::LocalContract => "the GPT-OSS local adapter",
+            Self::LocalRuntime => "the GPT-OSS local runtime",
+            Self::Codex => "Codex",
+            Self::OpenAiApi => "the OpenAI API",
+            Self::ManagedOpenAiRelay => "the managed OpenAI service",
+            Self::NotReady => "no ready provider",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum ResidentEngineLocality {
+    OnDevice,
+    Cloud,
+    Unavailable,
+}
+
+impl ResidentEngineLocality {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::OnDevice => "on-device",
+            Self::Cloud => "cloud",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    const fn display_name(self) -> &'static str {
+        match self {
+            Self::OnDevice => "on this device",
+            Self::Cloud => "in the cloud",
+            Self::Unavailable => "not available",
+        }
+    }
+}
+
 #[derive(Clone, Deserialize)]
 struct ResidentCapability {
+    id: String,
     label: String,
-    state: String,
+    state: ResidentCapabilityState,
     detail: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum ResidentCapabilityState {
+    Ready,
+    Waiting,
+    PermissionGated,
+}
+
+impl ResidentCapabilityState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Waiting => "waiting",
+            Self::PermissionGated => "permission-gated",
+        }
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -2709,12 +2868,6 @@ struct PolicyPermissionGrant {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct HttpEndpoint {
-    host: String,
-    port: u16,
-}
-
-#[derive(Debug, PartialEq, Eq)]
 struct HttpResponse {
     status: u16,
     headers: Vec<(String, String)>,
@@ -2741,8 +2894,9 @@ impl fmt::Display for CoreFetchError {
 }
 
 fn main() -> SettingsResult<()> {
-    let config = SettingsConfig::from_env();
-    let core_ready = wait_for_core(&config.core_url, config.core_wait);
+    let core = initialize(ClientKind::Settings)?;
+    let config = SettingsConfig::from_env(core);
+    let core_ready = wait_for_core(&config.core, config.core_wait);
     let state = load_settings_state(&config, core_ready);
 
     println!("Goblins OS Settings started");
@@ -2756,11 +2910,9 @@ fn main() -> SettingsResult<()> {
 }
 
 impl SettingsConfig {
-    fn from_env() -> Self {
+    fn from_env(core: CoreClient) -> Self {
         Self {
-            core_url: env::var("GOBLINS_OS_CORE_URL")
-                .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
-                .unwrap_or_else(|_| DEFAULT_CORE_URL.into()),
+            core,
             core_wait: Duration::from_secs(env_u64(
                 "GOBLINS_OS_SETTINGS_CORE_WAIT_SECS",
                 DEFAULT_CORE_WAIT_SECS,
@@ -3234,7 +3386,7 @@ impl SettingsPanel {
             }
             Self::DesktopWallpaper => "Desktop background, session theme, and wallpaper ownership.",
             Self::Notifications => {
-                "Desktop notification banner, lock-screen notification, and notification registry preferences."
+                "Desktop banners, lock-screen notifications, and per-application notification preferences."
             }
             Self::LockScreen => "Screen lock, lock-screen privacy, blanking, and sign-in recovery.",
             Self::SearchIndexing => "Desktop search providers, indexing, and result visibility.",
@@ -3363,6 +3515,7 @@ impl SettingsPanel {
 fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsState {
     if !core_ready {
         return SettingsState {
+            core: config.core.clone(),
             core_ready,
             system: None,
             system_image: None,
@@ -3407,47 +3560,47 @@ fn load_settings_state(config: &SettingsConfig, core_ready: bool) -> SettingsSta
     }
 
     SettingsState {
+        core: config.core.clone(),
         core_ready,
-        system: get_core_json(&config.core_url, "/v1/settings/system").ok(),
-        system_image: get_core_json(&config.core_url, "/v1/system/image").ok(),
-        openai_auth: get_core_json(&config.core_url, "/v1/auth/openai/status").ok(),
-        system_services: get_core_json(&config.core_url, "/v1/system/services").ok(),
-        hardware: get_core_json(&config.core_url, "/v1/system/hardware").ok(),
-        recovery: get_core_json(&config.core_url, "/v1/recovery/status").ok(),
-        encryption: get_core_json(&config.core_url, "/v1/security/encryption").ok(),
-        snapshots: get_core_json(&config.core_url, "/v1/snapshots/status").ok(),
-        local_models: get_core_json(&config.core_url, "/v1/local-models").ok(),
-        resident: get_core_json(&config.core_url, "/v1/ai/runtime/status").ok(),
-        ai_actions: get_core_json(&config.core_url, "/v1/ai/actions").ok(),
-        ai_action_history: get_core_json(&config.core_url, "/v1/ai/action-history").ok(),
-        policy: get_core_json(&config.core_url, "/v1/policy/status").ok(),
-        openai_key: get_core_json(&config.core_url, "/v1/models/openai-key").ok(),
-        privacy: get_core_json(&config.core_url, "/v1/privacy/status").ok(),
-        vision: get_core_json(&config.core_url, "/v1/vision/status").ok(),
-        voice: get_core_json(&config.core_url, "/v1/voice/status").ok(),
-        switch_control: get_core_json(&config.core_url, "/v1/accessibility/switch-control/status")
-            .ok(),
-        sound_recognition: get_core_json(&config.core_url, "/v1/sound-recognition/status").ok(),
-        live_captions: get_core_json(&config.core_url, "/v1/live-captions/status").ok(),
-        codex: get_core_json(&config.core_url, "/v1/codex/status").ok(),
-        appearance: get_core_json(&config.core_url, "/v1/appearance/status").ok(),
-        network: get_core_json(&config.core_url, "/v1/network/status").ok(),
-        notifications: get_core_json(&config.core_url, "/v1/notifications/status").ok(),
-        focus: get_core_json(&config.core_url, "/v1/focus/status").ok(),
-        displays: get_core_json(&config.core_url, "/v1/displays/status").ok(),
-        bluetooth: get_core_json(&config.core_url, "/v1/bluetooth/status").ok(),
-        audio: get_core_json(&config.core_url, "/v1/audio/status").ok(),
-        input: get_core_json(&config.core_url, "/v1/input/status").ok(),
-        text_shortcuts: get_core_json(&config.core_url, "/v1/text-shortcuts").ok(),
-        accessibility: get_core_json(&config.core_url, "/v1/accessibility/status").ok(),
-        firewall: get_core_json(&config.core_url, "/v1/firewall/status").ok(),
-        hotspot: get_core_json(&config.core_url, "/v1/hotspot/status").ok(),
-        window_management: get_core_json(&config.core_url, "/v1/window-management/status").ok(),
-        shortcuts: get_core_json(&config.core_url, "/v1/shortcuts/status").ok(),
-        keychain: get_core_json(&config.core_url, "/v1/keychain/status").ok(),
-        keychain_collections: get_core_json(&config.core_url, "/v1/keychain/collections").ok(),
-        fingerprint: get_core_json(&config.core_url, "/v1/fingerprint/status").ok(),
-        app_privacy: get_core_json(&config.core_url, "/v1/app-privacy/status").ok(),
+        system: get_core_json(&config.core, "/v1/settings/system").ok(),
+        system_image: get_core_json(&config.core, "/v1/system/image").ok(),
+        openai_auth: get_core_json(&config.core, "/v1/auth/openai/status").ok(),
+        system_services: get_core_json(&config.core, "/v1/system/services").ok(),
+        hardware: get_core_json(&config.core, "/v1/system/hardware").ok(),
+        recovery: get_core_json(&config.core, "/v1/recovery/status").ok(),
+        encryption: get_core_json(&config.core, "/v1/security/encryption").ok(),
+        snapshots: get_core_json(&config.core, "/v1/snapshots/status").ok(),
+        local_models: get_core_json(&config.core, "/v1/local-models").ok(),
+        resident: get_core_json(&config.core, "/v1/ai/runtime/status").ok(),
+        ai_actions: get_core_json(&config.core, "/v1/ai/actions").ok(),
+        ai_action_history: get_core_json(&config.core, "/v1/ai/action-history").ok(),
+        policy: get_core_json(&config.core, "/v1/policy/status").ok(),
+        openai_key: get_core_json(&config.core, "/v1/models/openai-key").ok(),
+        privacy: get_core_json(&config.core, "/v1/privacy/status").ok(),
+        vision: get_core_json(&config.core, "/v1/vision/status").ok(),
+        voice: get_core_json(&config.core, "/v1/voice/status").ok(),
+        switch_control: get_core_json(&config.core, "/v1/accessibility/switch-control/status").ok(),
+        sound_recognition: get_core_json(&config.core, "/v1/sound-recognition/status").ok(),
+        live_captions: get_core_json(&config.core, "/v1/live-captions/status").ok(),
+        codex: get_core_json(&config.core, "/v1/codex/status").ok(),
+        appearance: get_core_json(&config.core, "/v1/appearance/status").ok(),
+        network: get_core_json(&config.core, "/v1/network/status").ok(),
+        notifications: get_core_json(&config.core, "/v1/notifications/status").ok(),
+        focus: get_core_json(&config.core, "/v1/focus/status").ok(),
+        displays: get_core_json(&config.core, "/v1/displays/status").ok(),
+        bluetooth: get_core_json(&config.core, "/v1/bluetooth/status").ok(),
+        audio: get_core_json(&config.core, "/v1/audio/status").ok(),
+        input: get_core_json(&config.core, "/v1/input/status").ok(),
+        text_shortcuts: get_core_json(&config.core, "/v1/text-shortcuts").ok(),
+        accessibility: get_core_json(&config.core, "/v1/accessibility/status").ok(),
+        firewall: get_core_json(&config.core, "/v1/firewall/status").ok(),
+        hotspot: get_core_json(&config.core, "/v1/hotspot/status").ok(),
+        window_management: get_core_json(&config.core, "/v1/window-management/status").ok(),
+        shortcuts: get_core_json(&config.core, "/v1/shortcuts/status").ok(),
+        keychain: get_core_json(&config.core, "/v1/keychain/status").ok(),
+        keychain_collections: get_core_json(&config.core, "/v1/keychain/collections").ok(),
+        fingerprint: get_core_json(&config.core, "/v1/fingerprint/status").ok(),
+        app_privacy: get_core_json(&config.core, "/v1/app-privacy/status").ok(),
     }
 }
 
@@ -3628,13 +3781,12 @@ fn settings_state_debug_summary(state: &SettingsState) -> String {
        .as_ref()
        .map(|system| {
             format!(
-                "{}:{} session={}/{}/{} core={} identity=provider:{} account:{} session-path={} storage=models:{} installer:{} session:{} policy:{} resident:{} secrets:{} services=bootc-image:{} bootc:{} systemctl:{} network:{}",
+                "{}:{} session={}/{}/{} identity=provider:{} account:{} session-path={} storage=models:{} installer:{} session:{} policy:{} resident:{} secrets:{} services=bootc-image:{} bootc:{} systemctl:{} network:{}",
                 system.source,
                 system.generated_at,
                 system.session.desktop,
                 system.session.gui_platform,
                 system.session.shell_mode,
-                system.session.core_url,
                 system.identity.provider_configured,
                 system.identity.account_authenticated,
                 system.identity.session_path,
@@ -3814,17 +3966,21 @@ fn settings_state_debug_summary(state: &SettingsState) -> String {
                .first()
                .map(|capability| {
                     format!(
-                        "{}:{}:{}",
-                        capability.label, capability.state, capability.detail
+                        "{}:{}:{}:{}",
+                        capability.id,
+                        capability.label,
+                        capability.state.as_str(),
+                        capability.detail
                     )
                 })
                .unwrap_or_else(|| "none".to_string());
             format!(
-                "{}:{} path={} process={}:{}:{}:{} engine={}:{}:{} contract={} capabilities={} first_capability=[{}]",
+                "{}:{} path={} process={}:{:?}:{}:{}:{} engine={}:{}:{}:{}:{}:{} contract={} capabilities={} first_capability=[{}]",
                 resident.source,
                 resident.generated_at,
                 resident.state_path,
-                resident.process.state,
+                resident.process.state.as_str(),
+                resident.process.pid,
                 resident.process.mode,
                 resident
                    .process
@@ -3832,7 +3988,10 @@ fn settings_state_debug_summary(state: &SettingsState) -> String {
                    .map(|age| format!("{age}s"))
                    .unwrap_or_else(|| "waiting".to_string()),
                 resident.process.detail,
-                resident.engine.selected,
+                resident.engine.selected.as_str(),
+                resident.engine.ready,
+                resident.engine.provider.as_str(),
+                resident.engine.locality.as_str(),
                 resident.engine.cloud_relay_configured,
                 resident.engine.local_relay_configured,
                 resident.engine.relay_contract,
@@ -4058,6 +4217,54 @@ fn audio_endpoint_summary(endpoint: &AudioEndpointStatus) -> String {
             .unwrap_or_else(|| "unknown".to_string()),
         option_bool_word(endpoint.muted)
     )
+}
+
+/// Run a Settings control-plane request without ever blocking GTK's main loop.
+///
+/// The worker owns only plain, `Send` data. Its typed error is converted to a
+/// user-safe detail string before crossing the channel, and every widget update
+/// stays inside the GLib poll callback on the desktop thread. A stopped worker
+/// still completes with an error so controls cannot remain permanently busy.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn run_settings_action<T, E, F, C>(action: F, complete: C)
+where
+    T: Send + 'static,
+    E: fmt::Display + Send + 'static,
+    F: FnOnce() -> Result<T, E> + Send + 'static,
+    C: FnOnce(Result<T, String>) + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::channel();
+    if let Err(error) = thread::Builder::new()
+        .name("goblins-settings-action".to_string())
+        .spawn(move || {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action))
+                .map_err(|_| "the Settings action stopped unexpectedly".to_string())
+                .and_then(|result| result.map_err(|error| error.to_string()));
+            let _ = sender.send(outcome);
+        })
+    {
+        complete(Err(format!(
+            "Goblins OS could not start the Settings worker: {error}"
+        )));
+        return;
+    }
+
+    let mut complete = Some(complete);
+    gtk4::glib::timeout_add_local(Duration::from_millis(50), move || {
+        use std::sync::mpsc::TryRecvError;
+
+        let outcome = match receiver.try_recv() {
+            Ok(outcome) => outcome,
+            Err(TryRecvError::Empty) => return gtk4::glib::ControlFlow::Continue,
+            Err(TryRecvError::Disconnected) => {
+                Err("the Settings action ended before Goblins OS replied".to_string())
+            }
+        };
+        if let Some(complete) = complete.take() {
+            complete(outcome);
+        }
+        gtk4::glib::ControlFlow::Break
+    });
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -5091,7 +5298,7 @@ fn populate_panel(
         SettingsPanel::Storage => build_storage(main, state),
         SettingsPanel::UpdatesAbout => build_updates_about(main, state),
         SettingsPanel::Recovery => build_recovery(main, state),
-        SettingsPanel::Developer => build_developer(main, state, config),
+        SettingsPanel::Developer => build_developer(main, state),
     }
     append_settings_ai_help(main, panel, state);
     fade_in_panel(main);
@@ -5179,13 +5386,13 @@ fn build_policy(panel: &gtk4::Box, config: &SettingsConfig, state: &SettingsStat
                         &["gos-permission-action"],
                     );
                     action.set_valign(gtk4::Align::Center);
-                    let core_url = config.core_url.clone();
+                    let core = config.core.clone();
                     let control_id = control.id.clone();
                     let profile = policy.profile.clone();
                     let feedback = permission_feedback.clone();
                     action.connect_clicked(move |_| {
                         let acknowledgement = permission_acknowledgement(&control_id, &profile);
-                        match grant_policy_permission(&core_url, &control_id, &acknowledgement) {
+                        match grant_policy_permission(&core, &control_id, &acknowledgement) {
                             Ok(detail) => feedback.set_text(&detail),
                             Err(error) => {
                                 feedback.set_text("Goblins OS rejected the permission grant.");
@@ -5585,16 +5792,16 @@ fn append_hot_corner_settings(panel: &gtk4::Box, state: &SettingsState) {
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     for corner in &hot_corners.corners {
-        let core_url = core_url.clone();
+        let core = core.clone();
         let corner_id = corner.id.clone();
         panel.append(&choice_row(
             &corner.title,
             &corner.action,
             HOT_CORNER_ACTION_OPTIONS,
             hot_corner_action_detail,
-            move |action| set_hot_corner_action(&core_url, &corner_id, action),
+            move |action| set_hot_corner_action(&core, &corner_id, action),
         ));
     }
 }
@@ -6049,7 +6256,7 @@ fn encryption_recovery_key_state(status: &EncryptionStatus) -> (&'static str, bo
 
 fn encryption_enrollment_detail(status: &EncryptionStatus) -> &'static str {
     if status.executes_enrollment {
-        "Core reports enrollment writes enabled; hardware proof must pass before this can ship."
+        "This device can save encryption enrollment changes. Store a recovery key safely before continuing."
     } else if status.systemd_cryptenroll_available {
         "Settings reads encryption posture only. Recovery-key minting and TPM enrollment remain installer and hardware-gated."
     } else {
@@ -6138,7 +6345,7 @@ fn append_firewall_control(panel: &gtk4::Box, state: &SettingsState, firewall: &
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let current_enabled = Rc::new(Cell::new(firewall.active));
     let updating_switch = Rc::new(Cell::new(false));
     {
@@ -6157,7 +6364,7 @@ fn append_firewall_control(panel: &gtk4::Box, state: &SettingsState, firewall: &
             }
 
             toggle.set_sensitive(false);
-            match set_firewall_enabled(&core_url, next_enabled) {
+            match set_firewall_enabled(&core, next_enabled) {
                 Ok(message) => {
                     current_enabled.set(next_enabled);
                     title.set_text(firewall_toggle_label(next_enabled));
@@ -6498,7 +6705,7 @@ fn append_hotspot_management(panel: &gtk4::Box, state: &SettingsState) {
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let current_active = Rc::new(Cell::new(hotspot.active));
     let updating_switch = Rc::new(Cell::new(false));
     {
@@ -6537,8 +6744,8 @@ fn append_hotspot_management(panel: &gtk4::Box, state: &SettingsState) {
             ssid_entry.set_sensitive(false);
             password_entry.set_sensitive(false);
             let result = match payload.as_ref() {
-                Some((ssid, password)) => set_hotspot(&core_url, true, Some(ssid), Some(password)),
-                None => set_hotspot(&core_url, false, None, None),
+                Some((ssid, password)) => set_hotspot(&core, true, Some(ssid), Some(password)),
+                None => set_hotspot(&core, false, None, None),
             };
             match result {
                 Ok(message) => {
@@ -6738,8 +6945,8 @@ fn append_wifi_management(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
 
     panel.append(&label("Wi-Fi", &["gos-subsection-title"]));
-    let core_url = config_core_url(state);
-    match get_core_json::<WifiScan>(&core_url, "/v1/network/wifi/scan") {
+    let core = config_core(state);
+    match get_core_json::<WifiScan>(&core, "/v1/network/wifi/scan") {
         Ok(scan) => {
             panel.append(&system_row(
                 "Wi-Fi scan",
@@ -6767,7 +6974,7 @@ fn append_wifi_management(panel: &gtk4::Box, state: &SettingsState) {
             );
             panel.append(&feedback);
             for network in &scan.networks {
-                panel.append(&wifi_network_row(&core_url, network, &feedback));
+                panel.append(&wifi_network_row(&core, network, &feedback));
             }
         }
         Err(error) => panel.append(&system_row(
@@ -6805,13 +7012,13 @@ fn append_proxy_settings(panel: &gtk4::Box, state: &SettingsState) {
     }
 
     if proxy.mode_available {
-        let core_url = config_core_url(state);
+        let core = config_core(state);
         panel.append(&choice_row(
             "Proxy mode",
             normalized_proxy_mode(&proxy.mode),
             PROXY_MODE_OPTIONS,
             |value| proxy_mode_detail(value).to_string(),
-            move |value| set_proxy_mode(&core_url, value),
+            move |value| set_proxy_mode(&core, value),
         ));
     } else {
         panel.append(&system_row(
@@ -6857,7 +7064,7 @@ fn append_proxy_settings(panel: &gtk4::Box, state: &SettingsState) {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn wifi_network_row(core_url: &str, network: &WifiNetwork, feedback: &gtk4::Label) -> gtk4::Box {
+fn wifi_network_row(core: &CoreClient, network: &WifiNetwork, feedback: &gtk4::Label) -> gtk4::Box {
     use gtk4::prelude::*;
 
     let row = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
@@ -6923,7 +7130,7 @@ fn wifi_network_row(core_url: &str, network: &WifiNetwork, feedback: &gtk4::Labe
     };
 
     {
-        let core_url = core_url.to_string();
+        let core = core.clone();
         let ssid = network.ssid.clone();
         let requires_password = wifi_requires_password(network) && !network.in_use;
         let password_entry = password_entry.clone();
@@ -6936,7 +7143,7 @@ fn wifi_network_row(core_url: &str, network: &WifiNetwork, feedback: &gtk4::Labe
                 feedback.set_text("Enter the network password before joining this Wi-Fi network.");
                 return;
             }
-            match connect_wifi(&core_url, &ssid, password.as_deref()) {
+            match connect_wifi(&core, &ssid, password.as_deref()) {
                 Ok(detail) => {
                     if let Some(entry) = &password_entry {
                         entry.set_text("");
@@ -7083,7 +7290,7 @@ fn append_bluetooth_power_control(
     );
     panel.append(&feedback);
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let current_powered = Rc::new(Cell::new(powered));
     let updating_switch = Rc::new(Cell::new(false));
     {
@@ -7102,7 +7309,7 @@ fn append_bluetooth_power_control(
             }
 
             toggle.set_sensitive(false);
-            match set_bluetooth_power(&core_url, next_powered) {
+            match set_bluetooth_power(&core, next_powered) {
                 Ok(message) => {
                     current_powered.set(next_powered);
                     title.set_text(bluetooth_power_label(next_powered));
@@ -7323,7 +7530,7 @@ fn append_audio_endpoint_controls(
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let volume = endpoint.volume_percent.unwrap_or(0);
     panel.append(&slider_row(
         SliderSpec {
@@ -7336,17 +7543,17 @@ fn append_audio_endpoint_controls(
         },
         audio_volume_label,
         normalized_audio_volume,
-        move |value| set_audio_volume(&core_url, target, value.round() as u8),
+        move |value| set_audio_volume(&core, target, value.round() as u8),
     ));
 
     if let Some(muted) = endpoint.muted {
-        let core_url = config_core_url(state);
+        let core = config_core(state);
         panel.append(&switch_row_dynamic(
             audio_mute_title(target),
             muted,
             true,
             move |muted| audio_mute_detail(target, muted).to_string(),
-            move |muted| set_audio_mute(&core_url, target, muted),
+            move |muted| set_audio_mute(&core, target, muted),
         ));
     }
 }
@@ -7394,13 +7601,13 @@ fn append_audio_device_selection(
         .collect();
     let devices = endpoint.devices.clone();
     let detail_devices = devices.clone();
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&choice_row(
         title,
         current_id,
         &options,
         move |device_id| audio_device_choice_detail(target, &detail_devices, device_id),
-        move |device_id| set_audio_default_device(&core_url, target, device_id),
+        move |device_id| set_audio_default_device(&core, target, device_id),
     ));
 }
 
@@ -7693,14 +7900,14 @@ fn append_background_image_settings(panel: &gtk4::Box, state: &SettingsState) {
     ));
 
     if wallpaper.picture_options_available {
-        let core_url = config_core_url(state);
+        let core = config_core(state);
         let current = normalized_background_picture_option(&wallpaper.picture_options);
         panel.append(&choice_row(
             "Image placement",
             current,
             BACKGROUND_PICTURE_OPTIONS,
             |value| background_picture_option_detail(value).to_string(),
-            move |value| set_wallpaper_placement(&core_url, value),
+            move |value| set_wallpaper_placement(&core, value),
         ));
     } else {
         panel.append(&system_row(
@@ -7725,14 +7932,14 @@ fn append_background_image_settings(panel: &gtk4::Box, state: &SettingsState) {
         ),
     ));
     if wallpaper.color_shading_type_available {
-        let core_url = config_core_url(state);
+        let core = config_core(state);
         let current = normalized_background_shading(&wallpaper.color_shading_type);
         panel.append(&choice_row(
             "Color blending",
             current,
             BACKGROUND_SHADING_OPTIONS,
             |value| background_shading_detail(value).to_string(),
-            move |value| set_wallpaper_shading(&core_url, value),
+            move |value| set_wallpaper_shading(&core, value),
         ));
     } else {
         panel.append(&system_row(
@@ -7944,7 +8151,7 @@ fn append_focus_settings(panel: &gtk4::Box, state: &SettingsState) {
         panel.append(&system_row(
             "Active Focus mode",
             &format!(
-                "Core reports active Focus mode '{}', but it is not in the configured mode list. Choose Off to clear it.",
+                "Focus mode '{}' is active, but no longer appears in the saved mode list. Choose Off to clear it.",
                 focus.active_mode
             ),
         ));
@@ -7962,7 +8169,7 @@ fn append_focus_settings(panel: &gtk4::Box, state: &SettingsState) {
     let current = focus_choice_value(focus);
     let modes_for_detail = focus.modes.clone();
     let scheduled_for_detail = focus.scheduled_mode.clone();
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&choice_row(
         "Active Focus mode",
         current,
@@ -7970,7 +8177,7 @@ fn append_focus_settings(panel: &gtk4::Box, state: &SettingsState) {
         move |value| {
             focus_mode_choice_detail(value, &modes_for_detail, scheduled_for_detail.as_deref())
         },
-        move |value| set_focus_mode(&core_url, value),
+        move |value| set_focus_mode(&core, value),
     ));
 }
 
@@ -8112,7 +8319,7 @@ fn append_notification_bool_row(
     detail_for_state: fn(bool) -> &'static str,
 ) {
     if let Some(value) = value {
-        let core_url = config_core_url(state);
+        let core = config_core(state);
         let child = child.map(str::to_string);
         panel.append(&switch_row_dynamic(
             title,
@@ -8120,7 +8327,7 @@ fn append_notification_bool_row(
             true,
             move |enabled| detail_for_state(enabled).to_string(),
             move |enabled| {
-                set_notification_preference_bool(&core_url, target, child.as_deref(), enabled)
+                set_notification_preference_bool(&core, target, child.as_deref(), enabled)
             },
         ));
     } else {
@@ -8144,13 +8351,13 @@ fn build_users_accounts(panel: &gtk4::Box, state: &SettingsState) {
     let feedback = label("", &["gos-row-copy"]);
     let has_openai_action = append_openai_account_settings(panel, state, &feedback);
     panel.append(&label("Codex", &["gos-subsection-title"]));
-    let has_codex_action = append_codex_settings(panel, state, &feedback);
+    let has_codex_action = append_codex_settings(panel, state, &feedback, None);
     append_local_user_settings(panel, state);
     panel.append(&label("Desktop", &["gos-subsection-title"]));
     append_desktop_session_identity(panel, state);
     if has_openai_action || has_codex_action {
         feedback.set_text(
-            "Account actions open the configured provider or Codex sign-in flow. Secrets stay private.",
+            "Account actions connect or disconnect the configured provider and Codex. Secrets stay private.",
         );
         panel.append(&feedback);
     }
@@ -8224,7 +8431,7 @@ fn append_openai_account_settings(
     use gtk4::prelude::*;
 
     panel.append(&label("OpenAI Account", &["gos-subsection-title"]));
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let mut has_action = false;
     match &state.openai_auth {
         Some(auth) => {
@@ -8247,27 +8454,132 @@ fn append_openai_account_settings(
                     "Sign in with OpenAI",
                     "Opens the configured OpenAI account provider. Secrets remain in OS-owned storage.",
                 );
-                let core_url = core_url.clone();
+                let core = core.clone();
                 let feedback = feedback.clone();
-                signin.connect_clicked(move |_| match openai_login_destination(&core_url) {
-                    Ok(destination) => {
-                        feedback.set_text("Opening the configured OpenAI account provider.");
-                        if let Err(error) = gtk4::gio::AppInfo::launch_default_for_uri(
-                            &destination,
-                            None::<&gtk4::gio::AppLaunchContext>,
-                        ) {
-                            feedback.set_text(
-                                "The desktop could not open the OpenAI account provider.",
-                            );
-                            eprintln!("settings_openai_account_launch_error={error}");
-                        }
-                    }
-                    Err(error) => {
-                        feedback.set_text("OpenAI account handoff did not start.");
-                        eprintln!("settings_openai_account_start_error={error}");
-                    }
+                signin.connect_clicked(move |signin| {
+                    signin.set_sensitive(false);
+                    signin.set_label("Connecting…");
+                    feedback.set_text("Starting the OpenAI account handoff securely.");
+
+                    let signin = signin.clone();
+                    let feedback = feedback.clone();
+                    let core = core.clone();
+                    run_settings_action(
+                        move || openai_login_destination(&core),
+                        move |outcome| {
+                            signin.set_label("Sign in with OpenAI");
+                            signin.set_sensitive(true);
+                            match outcome {
+                                Ok(destination) => {
+                                    feedback.set_text(
+                                        "Opening the configured OpenAI account provider.",
+                                    );
+                                    if let Err(error) =
+                                        gtk4::gio::AppInfo::launch_default_for_uri(
+                                            &destination,
+                                            None::<&gtk4::gio::AppLaunchContext>,
+                                        )
+                                    {
+                                        feedback.set_text(
+                                            "The account handoff started, but the desktop could not open its sign-in page.",
+                                        );
+                                        eprintln!(
+                                            "settings_openai_account_launch_error={error}"
+                                        );
+                                    }
+                                }
+                                Err(error) => {
+                                    feedback.set_text(&format!(
+                                        "OpenAI account handoff did not start: {error}."
+                                    ));
+                                    eprintln!("settings_openai_account_start_error={error}");
+                                }
+                            }
+                        },
+                    );
                 });
                 panel.append(&signin);
+                has_action = true;
+            } else if auth.authenticated {
+                let forget = button("Sign out on this device…", &["gos-destructive-action"]);
+                set_accessible_label_description(
+                    &forget,
+                    "Sign out of OpenAI on this device",
+                    "Opens a confirmation before removing this device's OpenAI account session. Other OpenAI sessions are not revoked.",
+                );
+                let confirmation = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+                confirmation.set_visible(false);
+                confirmation.append(&label(
+                    "Remove the OpenAI account session from this device? A cloud-identity desktop will lock until you sign in again. Other OpenAI sessions are unchanged.",
+                    &["gos-row-copy"],
+                ));
+                let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                let cancel = button("Cancel", &["gos-permission-action"]);
+                let confirm = button("Sign out", &["gos-destructive-action"]);
+                actions.append(&cancel);
+                actions.append(&confirm);
+                confirmation.append(&actions);
+
+                {
+                    let confirmation = confirmation.clone();
+                    forget.connect_clicked(move |forget| {
+                        forget.set_sensitive(false);
+                        confirmation.set_visible(true);
+                    });
+                }
+                {
+                    let forget = forget.clone();
+                    let confirmation = confirmation.clone();
+                    cancel.connect_clicked(move |_| {
+                        confirmation.set_visible(false);
+                        forget.set_sensitive(true);
+                    });
+                }
+                {
+                    let core = core.clone();
+                    let feedback = feedback.clone();
+                    let forget = forget.clone();
+                    let confirmation = confirmation.clone();
+                    let cancel = cancel.clone();
+                    confirm.connect_clicked(move |confirm| {
+                        confirm.set_sensitive(false);
+                        confirm.set_label("Signing out…");
+                        cancel.set_sensitive(false);
+                        feedback.set_text("Removing this device's OpenAI session securely.");
+
+                        let confirm = confirm.clone();
+                        let cancel = cancel.clone();
+                        let feedback = feedback.clone();
+                        let forget = forget.clone();
+                        let confirmation = confirmation.clone();
+                        let core = core.clone();
+                        run_settings_action(
+                            move || forget_openai_account_session(&core),
+                            move |outcome| match outcome {
+                                Ok(()) => {
+                                    confirmation.set_visible(false);
+                                    forget.set_visible(false);
+                                    feedback.set_text(
+                                        "Signed out on this device. Other OpenAI sessions were not changed.",
+                                    );
+                                }
+                                Err(error) => {
+                                    feedback.set_text(&format!(
+                                        "Goblins OS could not remove this device's OpenAI session: {error}."
+                                    ));
+                                    eprintln!(
+                                        "settings_openai_account_forget_error={error}"
+                                    );
+                                    confirm.set_label("Sign out");
+                                    confirm.set_sensitive(true);
+                                    cancel.set_sensitive(true);
+                                }
+                            },
+                        );
+                    });
+                }
+                panel.append(&forget);
+                panel.append(&confirmation);
                 has_action = true;
             }
         }
@@ -8431,7 +8743,7 @@ fn append_app_permissions(panel: &gtk4::Box, state: &SettingsState) {
         return;
     }
     let mut rows: Vec<gtk4::Box> = Vec::new();
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     for table in &app_privacy.tables {
         if table.entries.is_empty() {
             rows.push(system_row(&table.label, "No apps have a recorded grant."));
@@ -8451,7 +8763,7 @@ fn append_app_permissions(panel: &gtk4::Box, state: &SettingsState) {
             continue;
         }
         for entry in &table.entries {
-            rows.push(app_permission_revoke_row(&core_url, table, entry));
+            rows.push(app_permission_revoke_row(&core, table, entry));
         }
     }
     append_preference_group(panel, "Granted access", rows);
@@ -8459,7 +8771,7 @@ fn append_app_permissions(panel: &gtk4::Box, state: &SettingsState) {
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn app_permission_revoke_row(
-    core_url: &str,
+    core: &CoreClient,
     table: &PermissionTable,
     entry: &PermissionEntry,
 ) -> gtk4::Box {
@@ -8485,14 +8797,14 @@ fn app_permission_revoke_row(
     let action = button("Revoke", &["gos-permission-action"]);
     action.set_valign(gtk4::Align::Center);
     set_accessible_label_description(&action, "Revoke permission", &initial_detail);
-    let core_url = core_url.to_string();
+    let core = core.clone();
     let table_id = table.table.clone();
     let grant_id = entry.id.clone();
     let app_id = entry.app.clone();
     let detail_clone = detail.clone();
     action.connect_clicked(move |button| {
         button.set_sensitive(false);
-        match revoke_app_permission(&core_url, &table_id, &grant_id, &app_id) {
+        match revoke_app_permission(&core, &table_id, &grant_id, &app_id) {
             Ok(message) => {
                 detail_clone.set_text(&message);
                 set_accessible_label_description(button, "Permission revoked", &message);
@@ -8764,30 +9076,30 @@ fn append_storage_cleanup_settings(panel: &gtk4::Box, state: &SettingsState) {
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let mut cleanup_rows = Vec::new();
     if let Some(value) = desktop.remove_old_trash_files {
-        let core_url = core_url.clone();
+        let core = core.clone();
         cleanup_rows.push(switch_row_dynamic(
             "Remove aged Trash items",
             value,
             true,
             |enabled| cleanup_trash_detail(enabled).to_string(),
-            move |enabled| set_desktop_privacy_bool(&core_url, "remove-old-trash-files", enabled),
+            move |enabled| set_desktop_privacy_bool(&core, "remove-old-trash-files", enabled),
         ));
     }
     if let Some(value) = desktop.remove_old_temp_files {
-        let core_url = core_url.clone();
+        let core = core.clone();
         cleanup_rows.push(switch_row_dynamic(
             "Remove aged temporary files",
             value,
             true,
             |enabled| cleanup_temp_detail(enabled).to_string(),
-            move |enabled| set_desktop_privacy_bool(&core_url, "remove-old-temp-files", enabled),
+            move |enabled| set_desktop_privacy_bool(&core, "remove-old-temp-files", enabled),
         ));
     }
     if let Some(age) = desktop.old_files_age_days {
-        let core_url = core_url.clone();
+        let core = core.clone();
         cleanup_rows.push(slider_row(
             SliderSpec {
                 title: "Cleanup age",
@@ -8800,7 +9112,7 @@ fn append_storage_cleanup_settings(panel: &gtk4::Box, state: &SettingsState) {
             },
             days_label,
             normalized_old_files_age_slider,
-            move |value| set_desktop_privacy_number(&core_url, "old-files-age-days", value),
+            move |value| set_desktop_privacy_number(&core, "old-files-age-days", value),
         ));
     }
 
@@ -9301,7 +9613,7 @@ fn append_native_updates_handoff(panel: &gtk4::Box) {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn build_developer(panel: &gtk4::Box, state: &SettingsState, config: &SettingsConfig) {
+fn build_developer(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
 
     append_panel_header(
@@ -9309,7 +9621,7 @@ fn build_developer(panel: &gtk4::Box, state: &SettingsState, config: &SettingsCo
         "Diagnostics",
         "Service health, app activity, logs, update times, and device status.",
     );
-    append_developer_summary(panel, state, config);
+    append_developer_summary(panel, state);
     append_native_diagnostics_handoffs(panel);
 
     panel.append(&label("Diagnostic status", &["gos-subsection-title"]));
@@ -9354,7 +9666,7 @@ fn build_developer(panel: &gtk4::Box, state: &SettingsState, config: &SettingsCo
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn append_developer_summary(panel: &gtk4::Box, state: &SettingsState, config: &SettingsConfig) {
+fn append_developer_summary(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
 
     panel.append(&label("Diagnostics summary", &["gos-subsection-title"]));
@@ -9367,7 +9679,7 @@ fn append_developer_summary(panel: &gtk4::Box, state: &SettingsState, config: &S
     grid.set_hexpand(true);
 
     for (index, item) in [
-        developer_core_summary_spec(state.core_ready, config),
+        developer_core_summary_spec(state.core_ready),
         developer_desktop_summary_spec(state.system.as_ref(), state.hardware.as_ref()),
         developer_services_summary_spec(state.system_services.as_ref()),
         developer_resident_summary_spec(state.resident.as_ref()),
@@ -9558,22 +9870,25 @@ fn append_resident_settings(panel: &gtk4::Box, state: &SettingsState) {
     match &state.resident {
         Some(resident) => {
             panel.append(&system_row(
-                "Goblins AI runtime",
+                &diagnostic_status_row_title("Goblins AI process", resident.process.state.as_str()),
                 &resident_process_summary_detail(resident),
             ));
             panel.append(&system_row(
-                "Goblins AI route",
+                &diagnostic_status_row_title(
+                    "Goblins AI engine",
+                    resident_engine_state_label(resident),
+                ),
                 &diagnostic_resident_relay_detail(resident),
             ));
             for capability in &resident.capabilities {
                 panel.append(&system_row(
-                    &diagnostic_status_row_title(&capability.label, &capability.state),
+                    &diagnostic_status_row_title(&capability.label, capability.state.as_str()),
                     &diagnostic_capability_detail(capability),
                 ));
             }
         }
         None => panel.append(&system_row(
-            "Goblins AI runtime",
+            "Goblins AI process · Waiting",
             "Waiting for Goblins AI runtime status from Goblins OS.",
         )),
     }
@@ -9597,7 +9912,6 @@ fn diagnostic_capability_detail(capability: &ResidentCapability) -> String {
 
 fn diagnostic_detail_copy(detail: &str) -> String {
     let without_paths = detail
-        .replace(DEFAULT_CORE_URL, "local diagnostics")
         .replace("/usr/lib/systemd/system", "system service files")
         .replace("/usr/libexec/goblins-os", "OS service tools")
         .replace("/var/lib/goblins-os", "private OS storage");
@@ -9636,14 +9950,28 @@ fn diagnostic_hardware_platform_detail(hardware: &HardwareStatus) -> String {
 }
 
 fn diagnostic_resident_relay_detail(resident: &ResidentStatus) -> String {
-    match (
-        resident.engine.cloud_relay_configured,
-        resident.engine.local_relay_configured,
-    ) {
-        (true, true) => "Cloud and local assistant routes are configured.".to_string(),
-        (true, false) => "Cloud assistant route is configured; local route is waiting.".to_string(),
-        (false, true) => "Local assistant route is configured; cloud route is waiting.".to_string(),
-        (false, false) => "Assistant routes are not configured yet.".to_string(),
+    if resident.engine.ready {
+        format!(
+            "{} is ready with {} processing. {}",
+            resident.engine.selected.display_name(),
+            resident.engine.locality.display_name(),
+            diagnostic_detail_copy(&resident.engine.relay_contract)
+        )
+    } else {
+        format!(
+            "{} is selected, but it is not ready yet. Provider: {}. Processing: {}.",
+            resident.engine.selected.display_name(),
+            resident.engine.provider.display_name(),
+            resident.engine.locality.display_name()
+        )
+    }
+}
+
+fn resident_engine_state_label(resident: &ResidentStatus) -> &'static str {
+    if resident.engine.ready {
+        "ready"
+    } else {
+        "waiting"
     }
 }
 
@@ -9668,7 +9996,7 @@ fn developer_summary_spec(
     }
 }
 
-fn developer_core_summary_spec(core_ready: bool, _config: &SettingsConfig) -> DeveloperSummarySpec {
+fn developer_core_summary_spec(core_ready: bool) -> DeveloperSummarySpec {
     developer_summary_spec(
         "Local diagnostics",
         if core_ready { "ready" } else { "waiting" },
@@ -9797,13 +10125,13 @@ fn developer_services_summary_spec(status: Option<&SystemServicesStatus>) -> Dev
 fn developer_resident_summary_spec(resident: Option<&ResidentStatus>) -> DeveloperSummarySpec {
     match resident {
         Some(resident) => developer_summary_spec(
-            "Goblins AI runtime",
+            "Goblins AI process",
             resident.process.state.as_str(),
-            model_resident_ready(resident),
+            resident_process_online(resident),
             resident_process_summary_detail(resident),
         ),
         None => developer_summary_spec(
-            "Goblins AI runtime",
+            "Goblins AI process",
             "waiting",
             false,
             "Waiting for Goblins AI runtime status.",
@@ -9851,7 +10179,7 @@ fn append_model_settings(panel: &gtk4::Box, state: &SettingsState) {
 
     match &state.local_models {
         Some(catalog) => {
-            let core_url = config_core_url(state);
+            let core = config_core(state);
             panel.append(&system_row(
                 "Local model policy",
                 &format!(
@@ -9861,7 +10189,7 @@ fn append_model_settings(panel: &gtk4::Box, state: &SettingsState) {
                 ),
             ));
             for model in &catalog.models {
-                panel.append(&local_model_row(&core_url, model));
+                panel.append(&local_model_row(&core, model));
             }
         }
         None => panel.append(&system_row(
@@ -9872,7 +10200,7 @@ fn append_model_settings(panel: &gtk4::Box, state: &SettingsState) {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn local_model_row(core_url: &str, model: &LocalModelOption) -> gtk4::Box {
+fn local_model_row(core: &CoreClient, model: &LocalModelOption) -> gtk4::Box {
     use gtk4::prelude::*;
 
     let row = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
@@ -9909,19 +10237,37 @@ fn local_model_row(core_url: &str, model: &LocalModelOption) -> gtk4::Box {
             action,
             "Records explicit consent with Goblins OS before any model weight download can start.",
         );
-        let core_url = core_url.to_string();
+        let core = core.clone();
         let model_id = model.id.clone();
         let feedback_clone = feedback.clone();
         button.connect_clicked(move |button| {
             button.set_sensitive(false);
-            match install_local_model(&core_url, &model_id) {
-                Ok(message) => feedback_clone.set_text(&message),
-                Err(error) => {
-                    feedback_clone.set_text("Goblins OS could not start that local model install.");
-                    eprintln!("settings_local_model_install_error={error}");
-                    button.set_sensitive(true);
-                }
-            }
+            button.set_label("Starting download…");
+            feedback_clone.set_text(
+                "Recording consent and asking the OS model manager to start the download.",
+            );
+
+            let button = button.clone();
+            let feedback = feedback_clone.clone();
+            let core = core.clone();
+            let model_id = model_id.clone();
+            run_settings_action(
+                move || install_local_model(&core, &model_id),
+                move |outcome| match outcome {
+                    Ok(message) => {
+                        button.set_label("Download requested");
+                        feedback.set_text(&message);
+                    }
+                    Err(error) => {
+                        button.set_label(action);
+                        button.set_sensitive(true);
+                        feedback.set_text(&format!(
+                            "Goblins OS could not start that local model download: {error}."
+                        ));
+                        eprintln!("settings_local_model_install_error={error}");
+                    }
+                },
+            );
         });
         row.append(&button);
         row.append(&feedback);
@@ -9932,44 +10278,44 @@ fn local_model_row(core_url: &str, model: &LocalModelOption) -> gtk4::Box {
     row
 }
 
-/// The bring-your-own OpenAI API key panel. GPT-OSS is the heart of Goblins OS;
-/// adding a personal OpenAI API key is the optional way to use OpenAI's hosted
-/// models instead. The key is sent once to Goblins OS, which stores it
-/// owner-only on disk — it is never displayed back or held in the GUI process.
+/// Hosted OpenAI readiness for an administrator-installed protected service
+/// credential. Settings never accepts, stores, or receives the API key itself.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
 
-    panel.append(&label("OpenAI models", &["gos-subsection-title"]));
+    panel.append(&label("Goblins AI engine", &["gos-subsection-title"]));
 
     let status = state.openai_key.as_ref();
     let engine_selected = status.is_some_and(|status| status.engine_selected);
     let configured = status.is_some_and(|status| status.configured);
-    let core_url = config_core_url(state);
+    let core = config_core(state);
 
     // Engine selector — three honest engines: GPT-OSS on this device, the user's
-    // OpenAI account via Codex CLI, or a bring-your-own API key. Each option is
-    // only selectable once it can actually be honored.
+    // OpenAI account via Codex CLI, or an administrator-installed service
+    // credential. Each option is selectable only when it can be honored.
     let _ = engine_selected;
-    let active_engine = status
-        .map(|status| status.engine.as_str())
-        .unwrap_or("local-gpt-oss");
+    let active_engine = status.map(|status| status.engine.as_str());
     let codex_ready = state
         .codex
         .as_ref()
         .is_some_and(|codex| codex.installed && codex.authenticated);
+    let engine_status_available = status.is_some();
+    let codex_available = Rc::new(Cell::new(engine_status_available && codex_ready));
+    let hosted_available = Rc::new(Cell::new(engine_status_available && configured));
+    let engine_pending = Rc::new(Cell::new(false));
 
     panel.append(&label("Engine", &["gos-kicker"]));
     let choice = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
     choice.add_css_class("gos-engine-choice");
 
-    // Two honest primary paths: build on-device with GPT-OSS (keyless, private,
-    // the default), or with your OpenAI account through Codex. A bring-your-own
-    // API key is an advanced option below, not a co-equal third choice.
+    // Two primary paths: build on-device with GPT-OSS (keyless, private, the
+    // default), or with your OpenAI account through Codex. An administrator-
+    // installed API credential is an advanced option below.
     let gpt_btn = button("On-device · GPT-OSS", &["gos-engine-option"]);
     let codex_btn = button("OpenAI account · Codex", &["gos-engine-option"]);
     let hosted_btn = button(
-        "Use my OpenAI API key",
+        "Use administrator OpenAI key",
         &["gos-engine-option", "gos-engine-advanced"],
     );
     set_accessible_label_description(
@@ -9984,24 +10330,31 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
     set_accessible_label_description(
         &hosted_btn,
-        "Use my OpenAI API key",
-        "Select hosted OpenAI models after adding an OS-owned personal API key.",
+        "Use an administrator-installed OpenAI API key",
+        "Select hosted OpenAI models when a protected service credential is ready.",
     );
     // The two primary segments share the column width, flush with the cards' margin.
     gpt_btn.set_hexpand(true);
     codex_btn.set_hexpand(true);
     match active_engine {
-        "openai-api" => hosted_btn.add_css_class("gos-engine-active"),
-        "codex" => codex_btn.add_css_class("gos-engine-active"),
-        _ => gpt_btn.add_css_class("gos-engine-active"),
+        Some("openai-api") => hosted_btn.add_css_class("gos-engine-active"),
+        Some("codex") => codex_btn.add_css_class("gos-engine-active"),
+        Some("local-gpt-oss") => gpt_btn.add_css_class("gos-engine-active"),
+        _ => {}
     }
-    codex_btn.set_sensitive(codex_ready);
-    hosted_btn.set_sensitive(configured);
+    gpt_btn.set_sensitive(engine_status_available);
+    codex_btn.set_sensitive(codex_available.get());
+    hosted_btn.set_sensitive(hosted_available.get());
     choice.append(&gpt_btn);
     choice.append(&codex_btn);
     panel.append(&choice);
 
-    let engine_feedback = label(engine_active_copy(active_engine), &["gos-row-copy"]);
+    let engine_feedback = label(
+        active_engine
+            .map(engine_active_copy)
+            .unwrap_or("Engine status is unavailable. Reconnect to Goblins OS before changing engines or building."),
+        &["gos-row-copy", "gos-engine-disclosure"],
+    );
     panel.append(&engine_feedback);
 
     // Each engine button moves the active highlight across all three on success.
@@ -10010,18 +10363,54 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let codex = codex_btn.clone();
         let hosted = hosted_btn.clone();
         let feedback = engine_feedback.clone();
-        let core_url = core_url.clone();
-        gpt_btn.connect_clicked(move |_| match set_engine(&core_url, "local-gpt-oss") {
-            Ok(detail) => {
-                gpt.add_css_class("gos-engine-active");
-                codex.remove_css_class("gos-engine-active");
-                hosted.remove_css_class("gos-engine-active");
-                feedback.set_text(&detail);
+        let core = core.clone();
+        let hosted_available = hosted_available.clone();
+        let codex_available = codex_available.clone();
+        let engine_pending = engine_pending.clone();
+        gpt_btn.connect_clicked(move |_| {
+            if engine_pending.get() {
+                feedback.set_text("Wait for the current AI engine action to finish.");
+                return;
             }
-            Err(error) => {
-                feedback.set_text("Goblins OS could not switch to the on-device engine.");
-                eprintln!("settings_engine_error={error}");
-            }
+            engine_pending.set(true);
+            gpt.set_label("Switching…");
+            gpt.set_sensitive(false);
+            codex.set_sensitive(false);
+            hosted.set_sensitive(false);
+            feedback.set_text("Switching Goblins AI to on-device GPT-OSS.");
+
+            let gpt = gpt.clone();
+            let codex = codex.clone();
+            let hosted = hosted.clone();
+            let feedback = feedback.clone();
+            let core = core.clone();
+            let hosted_available = hosted_available.clone();
+            let codex_available = codex_available.clone();
+            let engine_pending = engine_pending.clone();
+            run_settings_action(
+                move || set_engine(&core, "local-gpt-oss"),
+                move |outcome| {
+                    engine_pending.set(false);
+                    gpt.set_label("On-device · GPT-OSS");
+                    gpt.set_sensitive(engine_status_available);
+                    codex.set_sensitive(codex_available.get());
+                    hosted.set_sensitive(hosted_available.get());
+                    match outcome {
+                        Ok(detail) => {
+                            gpt.add_css_class("gos-engine-active");
+                            codex.remove_css_class("gos-engine-active");
+                            hosted.remove_css_class("gos-engine-active");
+                            feedback.set_text(&detail);
+                        }
+                        Err(error) => {
+                            feedback.set_text(&format!(
+                                "Goblins OS could not switch to the on-device engine: {error}."
+                            ));
+                            eprintln!("settings_engine_error={error}");
+                        }
+                    }
+                },
+            );
         });
     }
     {
@@ -10029,18 +10418,54 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let codex = codex_btn.clone();
         let hosted = hosted_btn.clone();
         let feedback = engine_feedback.clone();
-        let core_url = core_url.clone();
-        codex_btn.connect_clicked(move |_| match set_engine(&core_url, "codex") {
-            Ok(detail) => {
-                codex.add_css_class("gos-engine-active");
-                gpt.remove_css_class("gos-engine-active");
-                hosted.remove_css_class("gos-engine-active");
-                feedback.set_text(&detail);
+        let core = core.clone();
+        let hosted_available = hosted_available.clone();
+        let codex_available = codex_available.clone();
+        let engine_pending = engine_pending.clone();
+        codex_btn.connect_clicked(move |_| {
+            if engine_pending.get() {
+                feedback.set_text("Wait for the current AI engine action to finish.");
+                return;
             }
-            Err(error) => {
-                feedback.set_text("Sign in to Codex with your OpenAI account first.");
-                eprintln!("settings_engine_error={error}");
-            }
+            engine_pending.set(true);
+            codex.set_label("Switching…");
+            gpt.set_sensitive(false);
+            codex.set_sensitive(false);
+            hosted.set_sensitive(false);
+            feedback.set_text("Switching Goblins AI to your OpenAI account through Codex.");
+
+            let gpt = gpt.clone();
+            let codex = codex.clone();
+            let hosted = hosted.clone();
+            let feedback = feedback.clone();
+            let core = core.clone();
+            let hosted_available = hosted_available.clone();
+            let codex_available = codex_available.clone();
+            let engine_pending = engine_pending.clone();
+            run_settings_action(
+                move || set_engine(&core, "codex"),
+                move |outcome| {
+                    engine_pending.set(false);
+                    codex.set_label("OpenAI account · Codex");
+                    gpt.set_sensitive(engine_status_available);
+                    codex.set_sensitive(codex_available.get());
+                    hosted.set_sensitive(hosted_available.get());
+                    match outcome {
+                        Ok(detail) => {
+                            codex.add_css_class("gos-engine-active");
+                            gpt.remove_css_class("gos-engine-active");
+                            hosted.remove_css_class("gos-engine-active");
+                            feedback.set_text(&detail);
+                        }
+                        Err(error) => {
+                            feedback.set_text(&format!(
+                                "Goblins OS could not switch to Codex: {error}. Confirm that Codex is signed in and try again."
+                            ));
+                            eprintln!("settings_engine_error={error}");
+                        }
+                    }
+                },
+            );
         });
     }
     {
@@ -10048,29 +10473,79 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let codex = codex_btn.clone();
         let hosted = hosted_btn.clone();
         let feedback = engine_feedback.clone();
-        let core_url = core_url.clone();
-        hosted_btn.connect_clicked(move |_| match set_engine(&core_url, "openai-api") {
-            Ok(detail) => {
-                hosted.add_css_class("gos-engine-active");
-                gpt.remove_css_class("gos-engine-active");
-                codex.remove_css_class("gos-engine-active");
-                feedback.set_text(&detail);
+        let core = core.clone();
+        let hosted_available = hosted_available.clone();
+        let codex_available = codex_available.clone();
+        let engine_pending = engine_pending.clone();
+        hosted_btn.connect_clicked(move |_| {
+            if engine_pending.get() {
+                feedback.set_text("Wait for the current AI engine action to finish.");
+                return;
             }
-            Err(error) => {
-                feedback.set_text(
-                    "Add an OpenAI API key first, then switch to OpenAI's hosted models.",
-                );
-                eprintln!("settings_engine_error={error}");
-            }
+            engine_pending.set(true);
+            hosted.set_label("Switching…");
+            gpt.set_sensitive(false);
+            codex.set_sensitive(false);
+            hosted.set_sensitive(false);
+            feedback.set_text(
+                "Switching Goblins AI to OpenAI hosted models using the protected service credential.",
+            );
+
+            let gpt = gpt.clone();
+            let codex = codex.clone();
+            let hosted = hosted.clone();
+            let feedback = feedback.clone();
+            let core = core.clone();
+            let hosted_available = hosted_available.clone();
+            let codex_available = codex_available.clone();
+            let engine_pending = engine_pending.clone();
+            run_settings_action(
+                move || set_engine(&core, "openai-api"),
+                move |outcome| {
+                    engine_pending.set(false);
+                    hosted.set_label("Use administrator OpenAI key");
+                    gpt.set_sensitive(engine_status_available);
+                    codex.set_sensitive(codex_available.get());
+                    hosted.set_sensitive(hosted_available.get());
+                    match outcome {
+                        Ok(detail) => {
+                            hosted.add_css_class("gos-engine-active");
+                            gpt.remove_css_class("gos-engine-active");
+                            codex.remove_css_class("gos-engine-active");
+                            feedback.set_text(&detail);
+                        }
+                        Err(error) => {
+                            feedback.set_text(&format!(
+                                "Goblins OS could not switch to hosted OpenAI models: {error}. Confirm that a key is configured and try again."
+                            ));
+                            eprintln!("settings_engine_error={error}");
+                        }
+                    }
+                },
+            );
         });
     }
 
     // Codex sign-in: the honest way to use a real OpenAI account. The OS triggers
     // `codex login` (browser) and never sees the credentials — Codex owns them.
-    append_codex_settings(panel, state, &engine_feedback);
+    append_codex_settings(
+        panel,
+        state,
+        &engine_feedback,
+        Some(SettingsEngineControls {
+            gpt: gpt_btn.clone(),
+            codex: codex_btn.clone(),
+            hosted: hosted_btn.clone(),
+            status_available: engine_status_available,
+            codex_available: codex_available.clone(),
+            hosted_available: hosted_available.clone(),
+            engine_pending: engine_pending.clone(),
+        }),
+    );
 
-    // Advanced: a bring-your-own OpenAI API key (hosted models), kept out of the
-    // primary On-device / OpenAI-account choice above.
+    // Advanced: an administrator-provisioned OpenAI API key. The desktop only
+    // receives readiness; the credential itself is accepted and read solely by
+    // the protected core service.
     panel.append(&label(
         "Advanced · OpenAI API key",
         &["gos-subsection-title"],
@@ -10082,90 +10557,29 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     match status {
         Some(status) => panel.append(&system_row(
             if status.configured {
-                "Personal key · configured"
+                "OpenAI API key · ready"
             } else {
-                "Personal key · not set"
+                "OpenAI API key · not installed"
             },
             &if status.configured {
                 format!(
-                    "Hosted model {} · held owner-only at {}",
+                    "Hosted model {} · loaded only by the core from a {}",
                     status.model, status.storage
                 )
             } else {
-                "Add a personal OpenAI API key to use OpenAI's hosted models. Goblins OS stays on GPT-OSS until you do.".to_string()
+                "A device administrator can install an OpenAI API key in Goblins OS protected service credentials. The key never enters Settings; Goblins OS stays on GPT-OSS until one is ready.".to_string()
             },
         )),
         None => panel.append(&system_row(
-            "Personal key",
-            "Waiting for key status.",
+            "OpenAI API key",
+            "Waiting for protected credential readiness.",
         )),
     }
-
-    let field = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
-    field.add_css_class("gos-key-field");
-
-    let entry = gtk4::PasswordEntry::new();
-    entry.set_show_peek_icon(true);
-    entry.set_placeholder_text(Some("sk-…"));
-    set_accessible_label_description(
-        &entry,
-        "OpenAI API key",
-        "Paste a personal API key. Settings sends it once to Goblins OS and never displays it again.",
-    );
-    entry.add_css_class("gos-key-entry");
-    field.append(&entry);
-
-    let feedback = label(
-        if configured {
-            "A personal key is configured. Paste a new key to replace it."
-        } else {
-            "Your key is stored by the OS, never shown again, and never leaves this device except to call OpenAI."
-        },
-        &["gos-row-copy"],
-    );
-
-    let save = button("Save OpenAI key", &["gos-permission-action"]);
-    set_accessible_label_description(
-        &save,
-        "Save OpenAI API key",
-        "Stores the key in OS-owned secret storage through Goblins OS.",
-    );
-    {
-        let entry = entry.clone();
-        let feedback = feedback.clone();
-        let hosted = hosted_btn.clone();
-        let core_url = core_url.clone();
-        save.connect_clicked(move |_| {
-            let key = entry.text().to_string();
-            if key.trim().is_empty() {
-                feedback.set_text("Paste your OpenAI API key first.");
-                return;
-            }
-            match set_openai_key(&core_url, key.trim()) {
-                Ok(detail) => {
-                    entry.set_text("");
-                    feedback.set_text(&detail);
-                    // The hosted engine is now selectable in this session.
-                    hosted.set_sensitive(true);
-                }
-                Err(error) => {
-                    feedback.set_text(
-                        "Goblins OS could not store that key — check that it is a valid 'sk-' OpenAI key.",
-                    );
-                    eprintln!("settings_openai_key_error={error}");
-                }
-            }
-        });
-    }
-
-    field.append(&save);
-    field.append(&feedback);
-    panel.append(&field);
 }
 
 /// The Models panel: the focused home for the engine that powers Goblins OS.
-/// GPT-OSS runs on-device by default (the heart of the OS); bringing a personal
-/// OpenAI API key is the optional way to use OpenAI's hosted models instead.
+/// The route choice and its local/cloud boundary come first; operational detail
+/// remains available below without obscuring the decision people came here to make.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn build_models(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
@@ -10173,15 +10587,15 @@ fn build_models(panel: &gtk4::Box, state: &SettingsState) {
     append_panel_header(
         panel,
         "Goblin & Models",
-        "GPT-OSS is the heart of Goblins OS — it runs on this device, private by default, and \
-         builds the apps you ask for. Add your own OpenAI API key to use OpenAI's hosted models \
-         instead; the choice is yours and the OS keeps any key owner-only.",
+        "Choose where Goblins AI works: GPT-OSS on this device, your OpenAI account through \
+         Codex, or OpenAI models with an administrator-installed protected service credential. The active choice applies across Goblins \
+         OS, and Private mode always keeps requests on this device.",
     );
 
-    append_goblins_ai_settings(panel, state);
+    append_openai_key_settings(panel, state);
     append_models_summary(panel, state);
     append_privacy_settings(panel, state);
-    append_openai_key_settings(panel, state);
+    append_goblins_ai_settings(panel, state);
     append_voice_settings(panel, state);
 
     panel.append(&label("Local models", &["gos-subsection-title"]));
@@ -10195,10 +10609,10 @@ fn append_goblins_ai_settings(panel: &gtk4::Box, state: &SettingsState) {
             panel,
             "Goblin",
             vec![health_row(
-                "Action registry",
+                "Available actions",
                 "waiting",
                 false,
-                "Waiting for the Goblin action catalog from local OS services.",
+                "Waiting for Goblins OS to list the actions available here.",
             )],
         );
         return;
@@ -10216,13 +10630,10 @@ fn append_goblins_ai_settings(panel: &gtk4::Box, state: &SettingsState) {
                 &catalog.engine.detail,
             ),
             health_row(
-                "Action registry",
+                "Available actions",
                 &format!("{} actions", catalog.actions.len()),
                 true,
-                &format!(
-                    "{} Registry {}.",
-                    catalog.permission_model, catalog.registry_version
-                ),
+                &catalog.permission_model,
             ),
             health_row(
                 "Entry points",
@@ -10257,8 +10668,20 @@ fn append_goblins_ai_settings(panel: &gtk4::Box, state: &SettingsState) {
     })
     .collect::<Vec<_>>();
 
-    append_preference_group(panel, "Goblin actions", rows);
-    append_goblins_ai_history(panel, state.ai_action_history.as_ref());
+    let advanced = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    append_preference_group(&advanced, "Available actions", rows);
+    append_goblins_ai_history(&advanced, state.ai_action_history.as_ref());
+
+    let disclosure = gtk4::Expander::new(Some("Advanced · Actions and activity"));
+    disclosure.add_css_class("gos-advanced-disclosure");
+    disclosure.set_expanded(false);
+    disclosure.set_child(Some(&advanced));
+    set_accessible_label_description(
+        &disclosure,
+        "Advanced Goblins AI actions and activity",
+        "Show available actions and recent metadata-only Goblins AI activity.",
+    );
+    panel.append(&disclosure);
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -10317,7 +10740,7 @@ fn append_goblins_ai_history(panel: &gtk4::Box, history: Option<&AiActionHistory
 fn append_settings_ai_help(panel: &gtk4::Box, active_panel: SettingsPanel, state: &SettingsState) {
     use gtk4::prelude::*;
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let readiness = settings_ai_help_readiness(state);
     let entry = gtk4::Entry::new();
     entry.add_css_class("gos-search-entry");
@@ -10361,13 +10784,33 @@ fn append_settings_ai_help(panel: &gtk4::Box, active_panel: SettingsPanel, state
     let panel_summary = settings_ai_panel_status_summary(active_panel, state);
     let topic = active_panel.display_name().to_string();
     let panel_id = active_panel.as_str().to_string();
-    ask.connect_clicked(move |_| {
+    let ask_enabled = readiness.enabled;
+    ask.connect_clicked(move |ask| {
         let question = entry.text().to_string();
+        ask.set_sensitive(false);
+        ask.set_label("Asking…");
+        entry.set_sensitive(false);
         feedback.set_text("Asking Goblin through the OS-owned Settings context route.");
-        match ask_settings_context(&core_url, &panel_id, &topic, &question, &panel_summary) {
-            Ok(answer) => feedback.set_text(&answer),
-            Err(detail) => feedback.set_text(&detail),
-        }
+
+        let ask = ask.clone();
+        let entry = entry.clone();
+        let feedback = feedback.clone();
+        let core = core.clone();
+        let panel_id = panel_id.clone();
+        let topic = topic.clone();
+        let panel_summary = panel_summary.clone();
+        run_settings_action(
+            move || ask_settings_context(&core, &panel_id, &topic, &question, &panel_summary),
+            move |outcome| {
+                ask.set_label("Ask Goblin");
+                ask.set_sensitive(ask_enabled);
+                entry.set_sensitive(true);
+                match outcome {
+                    Ok(answer) => feedback.set_text(&answer),
+                    Err(detail) => feedback.set_text(&detail),
+                }
+            },
+        );
     });
 
     append_preference_group(panel, "Goblin help", vec![row]);
@@ -10516,12 +10959,7 @@ fn append_models_summary(panel: &gtk4::Box, state: &SettingsState) {
     grid.set_hexpand(true);
 
     for (index, item) in [
-        active_engine_summary_spec(
-            state.openai_key.as_ref(),
-            state.codex.as_ref(),
-            state.privacy.as_ref(),
-            state.resident.as_ref(),
-        ),
+        active_engine_summary_spec(state.resident.as_ref()),
         local_model_summary_spec(state.local_models.as_ref()),
         openai_access_summary_spec(state.openai_key.as_ref(), state.codex.as_ref()),
         vision_model_summary_spec(state.vision.as_ref()),
@@ -10603,7 +11041,7 @@ fn append_appearance_settings(panel: &gtk4::Box, state: &SettingsState) {
     }
 
     let current = normalized_appearance_theme(&appearance.theme);
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let feedback = label(appearance_scheme_detail(current), &["gos-row-copy"]);
     panel.append(&feedback);
 
@@ -10623,10 +11061,10 @@ fn append_appearance_settings(panel: &gtk4::Box, state: &SettingsState) {
         if theme == current {
             option.add_css_class("is-selected");
         }
-        let core_url = core_url.clone();
+        let core = core.clone();
         let feedback = feedback.clone();
         option.connect_clicked(
-            move |option| match set_appearance_color_scheme(&core_url, theme) {
+            move |option| match set_appearance_color_scheme(&core, theme) {
                 Ok(outcome) => {
                     if let Some(parent) = option.parent() {
                         let mut child = parent.first_child();
@@ -10689,7 +11127,7 @@ fn append_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
         "Private mode keeps every prompt on this device. Hosted OpenAI models and model downloads need the internet, so they pause while it’s on.",
         &["gos-row-copy"],
     );
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let current_offline = Rc::new(Cell::new(offline));
     let updating_switch = Rc::new(Cell::new(false));
     {
@@ -10708,26 +11146,47 @@ fn append_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
             }
 
             toggle.set_sensitive(false);
-            match set_privacy(&core_url, next_offline) {
-                Ok(detail) => {
-                    current_offline.set(next_offline);
-                    title.set_text(privacy_state_label(next_offline));
-                    detail_label.set_text(&detail);
-                    feedback.set_text(&detail);
-                    toggle.update_property(&[gtk4::accessible::Property::Description(&detail)]);
-                }
-                Err(error) => {
-                    let error_detail = setting_change_rejected_detail(&error.to_string());
-                    feedback.set_text(&error_detail);
-                    toggle
-                        .update_property(&[gtk4::accessible::Property::Description(&error_detail)]);
-                    updating_switch.set(true);
-                    toggle.set_active(current_offline.get());
-                    updating_switch.set(false);
-                    eprintln!("settings_privacy_error={error}");
-                }
-            }
-            toggle.set_sensitive(true);
+            feedback.set_text(if next_offline {
+                "Turning on Private mode through the OS policy service."
+            } else {
+                "Turning off Private mode through the OS policy service."
+            });
+
+            let toggle = toggle.clone();
+            let feedback = feedback.clone();
+            let title = title.clone();
+            let detail_label = detail_label.clone();
+            let current_offline = current_offline.clone();
+            let updating_switch = updating_switch.clone();
+            let core = core.clone();
+            run_settings_action(
+                move || set_privacy(&core, next_offline),
+                move |outcome| {
+                    match outcome {
+                        Ok(detail) => {
+                            current_offline.set(next_offline);
+                            title.set_text(privacy_state_label(next_offline));
+                            detail_label.set_text(&detail);
+                            feedback.set_text(&detail);
+                            toggle.update_property(&[gtk4::accessible::Property::Description(
+                                &detail,
+                            )]);
+                        }
+                        Err(error) => {
+                            let error_detail = setting_change_rejected_detail(&error);
+                            feedback.set_text(&error_detail);
+                            toggle.update_property(&[gtk4::accessible::Property::Description(
+                                &error_detail,
+                            )]);
+                            updating_switch.set(true);
+                            toggle.set_active(current_offline.get());
+                            updating_switch.set(false);
+                            eprintln!("settings_privacy_error={error}");
+                        }
+                    }
+                    toggle.set_sensitive(true);
+                },
+            );
         });
     }
     panel.append(&row);
@@ -11558,62 +12017,42 @@ fn model_summary_spec(
     }
 }
 
-fn active_engine_summary_spec(
-    key: Option<&OpenAiKeyStatus>,
-    codex: Option<&CodexStatus>,
-    privacy: Option<&PrivacyStatus>,
-    resident: Option<&ResidentStatus>,
-) -> ModelSummarySpec {
-    let Some(key) = key else {
+fn active_engine_summary_spec(resident: Option<&ResidentStatus>) -> ModelSummarySpec {
+    let Some(resident) = resident else {
         return model_summary_spec(
             "Active engine",
             "waiting",
             false,
-            "Waiting for model engine status.",
+            "Waiting for Goblins OS to report the active engine.",
         );
     };
 
-    let private_mode = privacy.is_some_and(|privacy| privacy.offline);
-    let resident_detail = resident
-        .map(resident_process_summary_detail)
-        .unwrap_or_else(|| "Goblins AI runtime status is waiting.".to_string());
+    model_summary_spec(
+        "Active engine",
+        resident_engine_summary_state(resident),
+        resident_engine_ready(resident),
+        format!(
+            "{} {}",
+            diagnostic_resident_relay_detail(resident),
+            resident_process_summary_detail(resident)
+        ),
+    )
+}
 
-    match key.engine.as_str() {
-        "openai-api" => model_summary_spec(
-            "Active engine",
-            "hosted",
-            key.configured && !private_mode,
-            format!(
-                "{} {} {}",
-                engine_active_copy("openai-api"),
-                hosted_engine_readiness_detail(key, private_mode),
-                resident_detail
-            ),
-        ),
-        "codex" => {
-            let codex_ready = codex.is_some_and(|codex| codex.installed && codex.authenticated);
-            model_summary_spec(
-                "Active engine",
-                "codex",
-                codex_ready && !private_mode,
-                format!(
-                    "{} {} {}",
-                    engine_active_copy("codex"),
-                    codex_engine_readiness_detail(codex, private_mode),
-                    resident_detail
-                ),
-            )
+fn resident_engine_summary_state(resident: &ResidentStatus) -> &'static str {
+    if !resident.engine.ready {
+        return "waiting";
+    }
+
+    match resident.engine.locality {
+        ResidentEngineLocality::OnDevice => "on-device",
+        ResidentEngineLocality::Cloud
+            if resident.engine.selected == ResidentEngineSelection::Codex =>
+        {
+            "codex"
         }
-        _ => model_summary_spec(
-            "Active engine",
-            "on-device",
-            resident.is_some_and(model_resident_ready),
-            format!(
-                "{} {}",
-                engine_active_copy("local-gpt-oss"),
-                resident_detail
-            ),
-        ),
+        ResidentEngineLocality::Cloud => "hosted",
+        ResidentEngineLocality::Unavailable => "waiting",
     }
 }
 
@@ -11737,34 +12176,6 @@ fn voice_model_summary_spec(voice: Option<&VoiceStatus>) -> ModelSummarySpec {
     }
 }
 
-fn hosted_engine_readiness_detail(key: &OpenAiKeyStatus, private_mode: bool) -> String {
-    if private_mode {
-        return "Private mode is on, so hosted OpenAI calls are paused until you turn it off."
-            .to_string();
-    }
-    if key.configured {
-        format!(
-            "Hosted model {} can run through the OS-owned key store.",
-            key.model
-        )
-    } else {
-        "Add an OS-owned OpenAI API key before hosted models can run.".to_string()
-    }
-}
-
-fn codex_engine_readiness_detail(codex: Option<&CodexStatus>, private_mode: bool) -> String {
-    if private_mode {
-        return "Private mode is on, so Codex/OpenAI account access is paused.".to_string();
-    }
-    match codex {
-        Some(codex) if codex.installed && codex.authenticated => {
-            "Codex is signed in and ready.".to_string()
-        }
-        Some(codex) => codex.detail.clone(),
-        None => "Waiting for Codex account status.".to_string(),
-    }
-}
-
 fn resident_process_summary_detail(resident: &ResidentStatus) -> String {
     let last_check = resident
         .process
@@ -11772,18 +12183,18 @@ fn resident_process_summary_detail(resident: &ResidentStatus) -> String {
         .map(|age| format!("Last check updated {age}s ago"))
         .unwrap_or_else(|| "Last check is waiting".to_string());
     format!(
-        "Goblins AI runtime is {}. Model engine {}. {}.",
-        resident.process.state,
-        readable_runtime_value(&resident.engine.selected),
+        "Goblins AI process is {}. {}.",
+        resident.process.state.as_str(),
         last_check
     )
 }
 
-fn model_resident_ready(resident: &ResidentStatus) -> bool {
-    matches!(
-        resident.process.state.as_str(),
-        "active" | "ready" | "running" | "healthy"
-    )
+fn resident_process_online(resident: &ResidentStatus) -> bool {
+    resident.process.state == ResidentProcessState::Online
+}
+
+fn resident_engine_ready(resident: &ResidentStatus) -> bool {
+    resident.engine.ready
 }
 
 fn overview_first_blocker_detail(reason: &str) -> String {
@@ -11899,11 +12310,11 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     let mut rows = 0;
     append_desktop_privacy_bool_row(
         panel,
-        &core_url,
+        &core,
         "remember-recent-files",
         "Remember recent files",
         desktop.remember_recent_files,
@@ -11912,7 +12323,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_desktop_privacy_bool_row(
         panel,
-        &core_url,
+        &core,
         "remember-app-usage",
         "Remember app usage",
         desktop.remember_app_usage,
@@ -11921,7 +12332,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_desktop_privacy_bool_row(
         panel,
-        &core_url,
+        &core,
         "remove-old-trash-files",
         "Remove aged Trash items",
         desktop.remove_old_trash_files,
@@ -11930,7 +12341,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_desktop_privacy_bool_row(
         panel,
-        &core_url,
+        &core,
         "remove-old-temp-files",
         "Remove aged temporary files",
         desktop.remove_old_temp_files,
@@ -11939,7 +12350,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
 
     if let Some(age) = desktop.old_files_age_days {
-        let core_url = core_url.clone();
+        let core = core.clone();
         panel.append(&slider_row(
             SliderSpec {
                 title: "Cleanup age",
@@ -11952,7 +12363,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
             },
             days_label,
             normalized_old_files_age_slider,
-            move |value| set_desktop_privacy_number(&core_url, "old-files-age-days", value),
+            move |value| set_desktop_privacy_number(&core, "old-files-age-days", value),
         ));
         rows += 1;
     }
@@ -11961,7 +12372,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
     let mut access_rows = 0;
     append_desktop_privacy_bool_row(
         panel,
-        &core_url,
+        &core,
         "disable-microphone",
         "Block microphone access",
         desktop.disable_microphone,
@@ -11970,7 +12381,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_desktop_privacy_bool_row(
         panel,
-        &core_url,
+        &core,
         "disable-camera",
         "Block camera access",
         desktop.disable_camera,
@@ -11979,7 +12390,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_desktop_privacy_bool_row(
         panel,
-        &core_url,
+        &core,
         "disable-sound-output",
         "Block sound output",
         desktop.disable_sound_output,
@@ -11988,7 +12399,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_desktop_privacy_bool_row(
         panel,
-        &core_url,
+        &core,
         "usb-protection",
         "Protect new USB devices",
         desktop.usb_protection,
@@ -12012,7 +12423,7 @@ fn append_desktop_privacy_settings(panel: &gtk4::Box, state: &SettingsState) {
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_desktop_privacy_bool_row(
     panel: &gtk4::Box,
-    core_url: &str,
+    core: &CoreClient,
     target: &'static str,
     title: &'static str,
     value: Option<bool>,
@@ -12020,13 +12431,13 @@ fn append_desktop_privacy_bool_row(
     rows: &mut usize,
 ) {
     if let Some(value) = value {
-        let core_url = core_url.to_string();
+        let core = core.clone();
         panel.append(&switch_row_dynamic(
             title,
             value,
             true,
             move |enabled| detail_for_state(enabled).to_string(),
-            move |enabled| set_desktop_privacy_bool(&core_url, target, enabled),
+            move |enabled| set_desktop_privacy_bool(&core, target, enabled),
         ));
         *rows += 1;
     }
@@ -12035,7 +12446,7 @@ fn append_desktop_privacy_bool_row(
 fn engine_selection_success_copy(engine: &str) -> &'static str {
     match engine {
         "openai-api" => {
-            "Active engine: OpenAI hosted models. Answers now come from OpenAI's API using your key."
+            "Active engine: OpenAI hosted models. Answers use the administrator-installed protected service credential."
         }
         "codex" => {
             "Active engine: your OpenAI account via Codex. Goblins OS works through OpenAI's own coding agent."
@@ -12864,13 +13275,13 @@ fn append_motion_preference(panel: &gtk4::Box, state: &SettingsState) {
         return;
     };
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&switch_row_dynamic(
         "Reduce motion",
         reduce_motion,
         true,
         |reduce_motion| motion_preference_detail(reduce_motion).to_string(),
-        move |reduce_motion| set_accessibility_bool(&core_url, "reduce-motion", reduce_motion),
+        move |reduce_motion| set_accessibility_bool(&core, "reduce-motion", reduce_motion),
     ));
 }
 
@@ -12897,7 +13308,7 @@ fn append_text_scale_preference(panel: &gtk4::Box, state: &SettingsState) {
         return;
     };
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&slider_row(
         SliderSpec {
             title: "Text size",
@@ -12910,7 +13321,7 @@ fn append_text_scale_preference(panel: &gtk4::Box, state: &SettingsState) {
         },
         text_scale_percent,
         normalized_text_scale,
-        move |next_scale| set_accessibility_number(&core_url, "text-scale", next_scale),
+        move |next_scale| set_accessibility_number(&core, "text-scale", next_scale),
     ));
 }
 
@@ -13071,7 +13482,7 @@ fn append_magnifier_controls(
     }
 
     if let Some(zoom_factor) = magnifier.zoom_factor {
-        let core_url = config_core_url(state);
+        let core = config_core(state);
         panel.append(&slider_row(
             SliderSpec {
                 title: "Magnifier zoom",
@@ -13083,7 +13494,7 @@ fn append_magnifier_controls(
             },
             magnifier_zoom_label,
             normalized_magnifier_zoom,
-            move |value| set_accessibility_number(&core_url, "magnifier-zoom", value),
+            move |value| set_accessibility_number(&core, "magnifier-zoom", value),
         ));
     } else {
         panel.append(&system_row(
@@ -13126,35 +13537,35 @@ fn append_switch_control_settings(panel: &gtk4::Box, state: &SettingsState) {
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&switch_row_dynamic(
         "Switch Control",
         status.enabled,
         true,
         switch_control_enabled_detail,
-        move |enabled| set_switch_control_bool(&core_url, "enabled", enabled),
+        move |enabled| set_switch_control_bool(&core, "enabled", enabled),
     ));
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&choice_row(
         "Scan mode",
         &status.mode,
         SWITCH_CONTROL_MODE_OPTIONS,
         switch_control_mode_detail,
-        move |value| set_switch_control_string(&core_url, "mode", value),
+        move |value| set_switch_control_string(&core, "mode", value),
     ));
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&choice_row(
         "Scanning",
         &status.scanning,
         SWITCH_CONTROL_SCANNING_OPTIONS,
         switch_control_scanning_detail,
-        move |value| set_switch_control_string(&core_url, "scanning", value),
+        move |value| set_switch_control_string(&core, "scanning", value),
     ));
 
     panel.append(&label("Switch timing", &["gos-subsection-title"]));
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&slider_row(
         SliderSpec {
             title: "Auto interval",
@@ -13166,10 +13577,10 @@ fn append_switch_control_settings(panel: &gtk4::Box, state: &SettingsState) {
         },
         milliseconds_label,
         normalized_switch_interval_ms,
-        move |value| set_switch_control_number(&core_url, "auto-interval-ms", value),
+        move |value| set_switch_control_number(&core, "auto-interval-ms", value),
     ));
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&slider_row(
         SliderSpec {
             title: "Dwell time",
@@ -13181,10 +13592,10 @@ fn append_switch_control_settings(panel: &gtk4::Box, state: &SettingsState) {
         },
         milliseconds_label,
         normalized_switch_dwell_ms,
-        move |value| set_switch_control_number(&core_url, "dwell-ms", value),
+        move |value| set_switch_control_number(&core, "dwell-ms", value),
     ));
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&slider_row(
         SliderSpec {
             title: "Debounce",
@@ -13196,7 +13607,7 @@ fn append_switch_control_settings(panel: &gtk4::Box, state: &SettingsState) {
         },
         milliseconds_label,
         normalized_switch_debounce_ms,
-        move |value| set_switch_control_number(&core_url, "debounce-ms", value),
+        move |value| set_switch_control_number(&core, "debounce-ms", value),
     ));
 }
 
@@ -13290,25 +13701,25 @@ fn append_sound_recognition_settings(panel: &gtk4::Box, state: &SettingsState) {
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&switch_row_dynamic(
         "Sound Recognition",
         status.enabled,
         true,
         sound_recognition_enabled_detail,
-        move |enabled| set_sound_recognition_bool(&core_url, "enabled", enabled),
+        move |enabled| set_sound_recognition_bool(&core, "enabled", enabled),
     ));
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&choice_row(
         "Sensitivity",
         &status.sensitivity,
         SOUND_RECOGNITION_SENSITIVITY_OPTIONS,
         sound_recognition_sensitivity_detail,
-        move |value| set_sound_recognition_string(&core_url, "sensitivity", value),
+        move |value| set_sound_recognition_string(&core, "sensitivity", value),
     ));
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&slider_row(
         SliderSpec {
             title: "Minimum confidence",
@@ -13320,18 +13731,18 @@ fn append_sound_recognition_settings(panel: &gtk4::Box, state: &SettingsState) {
         },
         sound_recognition_confidence_label,
         normalized_sound_recognition_confidence,
-        move |value| set_sound_recognition_number(&core_url, "min-confidence", value),
+        move |value| set_sound_recognition_number(&core, "min-confidence", value),
     ));
 
     panel.append(&label("Sound categories", &["gos-subsection-title"]));
     if status.sounds.is_empty() {
         panel.append(&system_row(
             "Sound categories",
-            "The Sound Recognition category registry is empty in this build.",
+            "No Sound Recognition categories are available in this build.",
         ));
     } else {
         for sound in &status.sounds {
-            let core_url = config_core_url(state);
+            let core = config_core(state);
             let id = sound.id.clone();
             let name = sound.name.clone();
             let group = sound.group.clone();
@@ -13343,7 +13754,7 @@ fn append_sound_recognition_settings(panel: &gtk4::Box, state: &SettingsState) {
                 move |enabled| {
                     sound_recognition_category_detail(&name, &group, &description, enabled)
                 },
-                move |enabled| set_sound_recognition_sound(&core_url, &id, enabled),
+                move |enabled| set_sound_recognition_sound(&core, &id, enabled),
             ));
         }
     }
@@ -13384,13 +13795,13 @@ fn append_sound_recognition_bool_row(
     value: bool,
     detail_for_state: fn(bool) -> String,
 ) {
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     panel.append(&switch_row_dynamic(
         title,
         value,
         true,
         detail_for_state,
-        move |enabled| set_sound_recognition_bool(&core_url, target, enabled),
+        move |enabled| set_sound_recognition_bool(&core, target, enabled),
     ));
 }
 
@@ -13428,7 +13839,7 @@ fn append_night_light_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
 
     if let Some(temperature) = display.temperature {
-        let core_url = config_core_url(state);
+        let core = config_core(state);
         let temperature = normalized_night_light_temperature(temperature);
         panel.append(&slider_row(
             SliderSpec {
@@ -13441,7 +13852,7 @@ fn append_night_light_settings(panel: &gtk4::Box, state: &SettingsState) {
             },
             night_light_temperature_label,
             |value| f64::from(normalized_night_light_temperature(value.round() as u32)),
-            move |value| set_accessibility_number(&core_url, "night-light-temperature", value),
+            move |value| set_accessibility_number(&core, "night-light-temperature", value),
         ));
     }
 }
@@ -13456,13 +13867,13 @@ fn append_accessibility_bool_row(
     detail_for_state: fn(bool) -> &'static str,
 ) {
     if let Some(value) = value {
-        let core_url = config_core_url(state);
+        let core = config_core(state);
         panel.append(&switch_row_dynamic(
             title,
             value,
             true,
             move |enabled| detail_for_state(enabled).to_string(),
-            move |enabled| set_accessibility_bool(&core_url, target, enabled),
+            move |enabled| set_accessibility_bool(&core, target, enabled),
         ));
     } else {
         panel.append(&system_row(
@@ -13490,10 +13901,10 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     append_input_bool_preference(
         panel,
-        &core_url,
+        &core,
         "keyboard-repeat",
         "Key repeat",
         keyboard.repeat,
@@ -13502,7 +13913,7 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
     );
 
     if let Some(delay) = keyboard.delay_ms {
-        let core_url = core_url.clone();
+        let core = core.clone();
         panel.append(&slider_row(
             SliderSpec {
                 title: "Repeat delay",
@@ -13514,7 +13925,7 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
             },
             milliseconds_label,
             normalized_keyboard_delay_slider,
-            move |value| set_input_number(&core_url, "keyboard-delay-ms", value),
+            move |value| set_input_number(&core, "keyboard-delay-ms", value),
         ));
     } else {
         panel.append(&system_row(
@@ -13524,7 +13935,7 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
     }
 
     if let Some(interval) = keyboard.repeat_interval_ms {
-        let core_url = core_url.clone();
+        let core = core.clone();
         panel.append(&slider_row(
             SliderSpec {
                 title: "Repeat interval",
@@ -13536,7 +13947,7 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
             },
             milliseconds_label,
             normalized_keyboard_repeat_interval_slider,
-            move |value| set_input_number(&core_url, "keyboard-repeat-interval-ms", value),
+            move |value| set_input_number(&core, "keyboard-repeat-interval-ms", value),
         ));
     } else {
         panel.append(&system_row(
@@ -13547,7 +13958,7 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
 
     append_input_bool_preference(
         panel,
-        &core_url,
+        &core,
         "keyboard-remember-numlock-state",
         "Remember Num Lock",
         keyboard.remember_numlock_state,
@@ -13567,14 +13978,14 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
     } else {
         for (index, source) in input_sources.sources.iter().enumerate() {
             panel.append(&input_source_row(
-                &core_url,
+                &core,
                 &input_sources.sources,
                 index,
                 source,
             ));
         }
     }
-    panel.append(&input_source_add_sheet(&core_url, input_sources));
+    panel.append(&input_source_add_sheet(&core, input_sources));
     append_input_engine_packages(panel, &input.input_engine_packages);
 
     append_text_shortcuts_editor(panel, state);
@@ -13583,7 +13994,7 @@ fn append_keyboard_preferences(panel: &gtk4::Box, state: &SettingsState) {
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn input_source_row(
-    core_url: &str,
+    core: &CoreClient,
     sources: &[InputSourceEntry],
     index: usize,
     source: &InputSourceEntry,
@@ -13634,7 +14045,7 @@ fn input_source_row(
         ),
     ] {
         actions.append(&input_source_action_button(
-            core_url, text, tooltip, &title, &row, &status, updated,
+            core, text, tooltip, &title, &row, &status, updated,
         ));
     }
 
@@ -13644,7 +14055,7 @@ fn input_source_row(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn input_source_add_sheet(core_url: &str, input_sources: &InputSourcesStatus) -> gtk4::Box {
+fn input_source_add_sheet(core: &CoreClient, input_sources: &InputSourcesStatus) -> gtk4::Box {
     use gtk4::prelude::*;
 
     let detail_text = input_source_add_sheet_detail(input_sources);
@@ -13665,7 +14076,7 @@ fn input_source_add_sheet(core_url: &str, input_sources: &InputSourcesStatus) ->
 
     let choices = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
     for source in &input_sources.addable_sources {
-        choices.append(&input_source_choice_row(core_url, source, &row, &status));
+        choices.append(&input_source_choice_row(core, source, &row, &status));
     }
     row.append(&choices);
     row
@@ -13673,7 +14084,7 @@ fn input_source_add_sheet(core_url: &str, input_sources: &InputSourcesStatus) ->
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn input_source_choice_row(
-    core_url: &str,
+    core: &CoreClient,
     source: &InputSourceChoice,
     parent: &gtk4::Box,
     status: &gtk4::Label,
@@ -13694,13 +14105,13 @@ fn input_source_choice_row(
     add.set_tooltip_text(Some("Add this installed input method to the session."));
     set_accessible_label_description(&add, "Add input source", &source.label);
 
-    let core_url = core_url.to_string();
+    let core = core.clone();
     let source = source.clone();
     let parent = parent.clone();
     let status = status.clone();
     add.connect_clicked(move |button| {
         button.set_sensitive(false);
-        let detail = match add_input_source(&core_url, &source) {
+        let detail = match add_input_source(&core, &source) {
             Ok(message) => message,
             Err(error) => {
                 button.set_sensitive(true);
@@ -13723,7 +14134,7 @@ fn input_source_add_sheet_detail(input_sources: &InputSourcesStatus) -> String {
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn input_source_action_button(
-    core_url: &str,
+    core: &CoreClient,
     text: &str,
     tooltip: &str,
     source_title: &str,
@@ -13742,13 +14153,13 @@ fn input_source_action_button(
         return action;
     };
 
-    let core_url = core_url.to_string();
+    let core = core.clone();
     let title = source_title.to_string();
     let row_accessibility = row.clone();
     let status = status.clone();
     action.connect_clicked(move |button| {
         button.set_sensitive(false);
-        let detail = match set_input_sources(&core_url, &updated_sources) {
+        let detail = match set_input_sources(&core, &updated_sources) {
             Ok(message) => settings_detail_display_copy(&message),
             Err(error) => {
                 eprintln!("settings_control_change_rejected title={title:?} error={error:?}");
@@ -13800,7 +14211,7 @@ fn append_input_engine_packages(panel: &gtk4::Box, status: &InputEnginePackagesS
     if status.installed_count == 0 && status.engines.is_empty() {
         panel.append(&system_row(
             "CJK input methods",
-            "No packaged CJK input method registry was reported by core.",
+            "No packaged CJK input methods are available in this build.",
         ));
     }
 }
@@ -13832,7 +14243,7 @@ fn append_text_shortcuts_editor(panel: &gtk4::Box, state: &SettingsState) {
         &text_shortcuts_autocorrect_detail(status.autocorrect.as_ref()),
     ));
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     if status.shortcuts.is_empty() {
         panel.append(&system_row(
             "Saved shortcuts",
@@ -13841,19 +14252,19 @@ fn append_text_shortcuts_editor(panel: &gtk4::Box, state: &SettingsState) {
     } else {
         for (index, shortcut) in status.shortcuts.iter().enumerate() {
             panel.append(&text_shortcut_row(
-                &core_url,
+                &core,
                 &status.shortcuts,
                 index,
                 shortcut,
             ));
         }
     }
-    panel.append(&text_shortcut_add_row(&core_url, &status.shortcuts));
+    panel.append(&text_shortcut_add_row(&core, &status.shortcuts));
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn text_shortcut_row(
-    core_url: &str,
+    core: &CoreClient,
     shortcuts: &[TextShortcutEntry],
     index: usize,
     shortcut: &TextShortcutEntry,
@@ -13886,12 +14297,12 @@ fn text_shortcut_row(
     let updated = text_shortcuts_without(shortcuts, index);
     remove.set_sensitive(updated.is_some());
     if let Some(updated) = updated {
-        let core_url = core_url.to_string();
+        let core = core.clone();
         let row_accessibility = row.clone();
         let status = status.clone();
         remove.connect_clicked(move |button| {
             button.set_sensitive(false);
-            let (detail, keep_action_available) = match set_text_shortcuts(&core_url, &updated) {
+            let (detail, keep_action_available) = match set_text_shortcuts(&core, &updated) {
                 Ok(message) => (settings_detail_display_copy(&message), false),
                 Err(error) => {
                     eprintln!("settings_control_change_rejected title={title:?} error={error:?}");
@@ -13911,7 +14322,7 @@ fn text_shortcut_row(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn text_shortcut_add_row(core_url: &str, shortcuts: &[TextShortcutEntry]) -> gtk4::Box {
+fn text_shortcut_add_row(core: &CoreClient, shortcuts: &[TextShortcutEntry]) -> gtk4::Box {
     use gtk4::prelude::*;
 
     let row = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
@@ -13957,7 +14368,7 @@ fn text_shortcut_add_row(core_url: &str, shortcuts: &[TextShortcutEntry]) -> gtk
     row.append(&fields);
 
     let current = Rc::new(RefCell::new(shortcuts.to_vec()));
-    let core_url = core_url.to_string();
+    let core = core.clone();
     let row_accessibility = row.clone();
     let status_for_click = status.clone();
     add.connect_clicked(move |button| {
@@ -13966,7 +14377,7 @@ fn text_shortcut_add_row(core_url: &str, shortcuts: &[TextShortcutEntry]) -> gtk
         let with_text = with_entry.text().to_string();
         let current_snapshot = current.borrow().clone();
         let detail = match text_shortcuts_with_entry(&current_snapshot, &replace, &with_text) {
-            Some(updated) => match set_text_shortcuts(&core_url, &updated) {
+            Some(updated) => match set_text_shortcuts(&core, &updated) {
                 Ok(message) => {
                     *current.borrow_mut() = updated;
                     replace_entry.set_text("");
@@ -14042,10 +14453,10 @@ fn append_mouse_preferences(panel: &gtk4::Box, state: &SettingsState, input: &In
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     append_input_speed_preference(
         panel,
-        &core_url,
+        &core,
         "mouse-speed",
         "Tracking speed",
         mouse.speed,
@@ -14054,7 +14465,7 @@ fn append_mouse_preferences(panel: &gtk4::Box, state: &SettingsState, input: &In
     );
     append_input_bool_preference(
         panel,
-        &core_url,
+        &core,
         "mouse-natural-scroll",
         "Natural scrolling",
         mouse.natural_scroll,
@@ -14063,7 +14474,7 @@ fn append_mouse_preferences(panel: &gtk4::Box, state: &SettingsState, input: &In
     );
     append_input_bool_preference(
         panel,
-        &core_url,
+        &core,
         "mouse-left-handed",
         "Primary button on right",
         mouse.left_handed,
@@ -14072,7 +14483,7 @@ fn append_mouse_preferences(panel: &gtk4::Box, state: &SettingsState, input: &In
     );
     append_input_bool_preference(
         panel,
-        &core_url,
+        &core,
         "mouse-middle-click-emulation",
         "Middle-click emulation",
         mouse.middle_click_emulation,
@@ -14090,10 +14501,10 @@ fn append_touchpad_preferences(panel: &gtk4::Box, state: &SettingsState, input: 
         return;
     }
 
-    let core_url = config_core_url(state);
+    let core = config_core(state);
     append_input_speed_preference(
         panel,
-        &core_url,
+        &core,
         "touchpad-speed",
         "Tracking speed",
         touchpad.speed,
@@ -14102,7 +14513,7 @@ fn append_touchpad_preferences(panel: &gtk4::Box, state: &SettingsState, input: 
     );
     append_input_bool_preference(
         panel,
-        &core_url,
+        &core,
         "touchpad-tap-to-click",
         "Tap to click",
         touchpad.tap_to_click,
@@ -14111,7 +14522,7 @@ fn append_touchpad_preferences(panel: &gtk4::Box, state: &SettingsState, input: 
     );
     append_input_bool_preference(
         panel,
-        &core_url,
+        &core,
         "touchpad-natural-scroll",
         "Natural scrolling",
         touchpad.natural_scroll,
@@ -14120,7 +14531,7 @@ fn append_touchpad_preferences(panel: &gtk4::Box, state: &SettingsState, input: 
     );
     append_input_bool_preference(
         panel,
-        &core_url,
+        &core,
         "touchpad-two-finger-scrolling",
         "Two-finger scrolling",
         touchpad.two_finger_scrolling_enabled,
@@ -14129,7 +14540,7 @@ fn append_touchpad_preferences(panel: &gtk4::Box, state: &SettingsState, input: 
     );
     append_input_bool_preference(
         panel,
-        &core_url,
+        &core,
         "touchpad-disable-while-typing",
         "Ignore trackpad while typing",
         touchpad.disable_while_typing,
@@ -14155,7 +14566,7 @@ fn input_settings_health_row(input: &InputStatus) -> gtk4::Box {
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_input_bool_preference(
     panel: &gtk4::Box,
-    core_url: &str,
+    core: &CoreClient,
     target: &'static str,
     title: &'static str,
     value: Option<bool>,
@@ -14163,13 +14574,13 @@ fn append_input_bool_preference(
     unavailable_detail: &'static str,
 ) {
     if let Some(value) = value {
-        let core_url = core_url.to_string();
+        let core = core.clone();
         panel.append(&switch_row_dynamic(
             title,
             value,
             true,
             move |enabled| detail_for_state(enabled).to_string(),
-            move |enabled| set_input_bool(&core_url, target, enabled),
+            move |enabled| set_input_bool(&core, target, enabled),
         ));
     } else {
         panel.append(&system_row(title, unavailable_detail));
@@ -14179,7 +14590,7 @@ fn append_input_bool_preference(
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_input_speed_preference(
     panel: &gtk4::Box,
-    core_url: &str,
+    core: &CoreClient,
     target: &'static str,
     title: &'static str,
     value: Option<f64>,
@@ -14187,7 +14598,7 @@ fn append_input_speed_preference(
     unavailable_detail: &'static str,
 ) {
     if let Some(speed) = value {
-        let core_url = core_url.to_string();
+        let core = core.clone();
         panel.append(&slider_row(
             SliderSpec {
                 title,
@@ -14199,7 +14610,7 @@ fn append_input_speed_preference(
             },
             pointer_speed_label,
             normalized_unit_speed,
-            move |value| set_input_number(&core_url, target, value),
+            move |value| set_input_number(&core, target, value),
         ));
     } else {
         panel.append(&system_row(title, unavailable_detail));
@@ -14275,13 +14686,13 @@ fn append_sound_bool_row(
     detail_for_state: fn(bool) -> &'static str,
 ) {
     if let Some(value) = value {
-        let core_url = config_core_url(state);
+        let core = config_core(state);
         panel.append(&switch_row_dynamic(
             title,
             value,
             true,
             move |enabled| detail_for_state(enabled).to_string(),
-            move |enabled| set_sound_preference_bool(&core_url, target, enabled),
+            move |enabled| set_sound_preference_bool(&core, target, enabled),
         ));
     } else {
         panel.append(&system_row(
@@ -14494,7 +14905,7 @@ fn proxy_mode_detail(mode: &str) -> &'static str {
         "auto" => {
             "Uses the automatic configuration URL below when the desktop supports proxy lookup."
         }
-        "manual" => "Uses the manual HTTP, HTTPS, FTP, and SOCKS proxy endpoints below.",
+        "manual" => "Uses the manual HTTP, HTTPS, FTP, and SOCKS proxy addresses below.",
         _ => "Direct network connections are used; no desktop proxy is configured.",
     }
 }
@@ -15579,13 +15990,11 @@ fn audio_endpoint_unavailable_detail(target: &str, endpoint: &AudioEndpointStatu
     }
     if lower.contains("did not report") {
         return format!(
-            "Audio routing did not report a readable {target_kind} endpoint in this session."
+            "Audio routing did not find a readable {target_kind} device in this session."
         );
     }
     if detail.is_empty() {
-        return format!(
-            "The Goblins OS did not report a readable {target_kind} endpoint in this session."
-        );
+        return format!("Goblins OS did not find a readable {target_kind} device in this session.");
     }
 
     let concise = detail
@@ -16331,7 +16740,7 @@ fn notification_app_enable_detail(enabled: bool) -> &'static str {
     if enabled {
         "This application can deliver notifications when global delivery allows it."
     } else {
-        "This application is muted in the desktop notification registry."
+        "Notifications are muted for this application."
     }
 }
 
@@ -19004,11 +19413,11 @@ fn run_native_settings(_config: SettingsConfig, _state: SettingsState) -> Settin
     Ok(())
 }
 
-fn wait_for_core(core_url: &str, timeout: Duration) -> bool {
+fn wait_for_core(core: &CoreClient, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
-        if matches!(http_status(core_url, "/health"), Some(200)) {
+        if matches!(http_status(core, "/health"), Some(200)) {
             return true;
         }
 
@@ -19018,39 +19427,17 @@ fn wait_for_core(core_url: &str, timeout: Duration) -> bool {
     false
 }
 
-fn http_status(base_url: &str, path: &str) -> Option<u16> {
-    let endpoint = parse_http_endpoint(base_url)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .ok()?
-        .next()?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(600)).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(900)))
-        .ok()?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(900)))
-        .ok()?;
-
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        endpoint.host
-    );
-    stream.write_all(request.as_bytes()).ok()?;
-
-    let mut buffer = [0_u8; 128];
-    let read = stream.read(&mut buffer).ok()?;
-    let response = std::str::from_utf8(&buffer[..read]).ok()?;
-    let status = response.split_whitespace().nth(1)?;
-
-    status.parse().ok()
+fn http_status(core: &CoreClient, path: &str) -> Option<u16> {
+    core.get(path, Duration::from_millis(900))
+        .ok()
+        .map(|response| response.status)
 }
 
-fn get_core_json<T>(base_url: &str, path: &str) -> Result<T, CoreFetchError>
+fn get_core_json<T>(core: &CoreClient, path: &str) -> Result<T, CoreFetchError>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let response = http_get_response(base_url, path)?;
+    let response = http_get_response(core, path)?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
@@ -19060,8 +19447,8 @@ where
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn openai_login_destination(core_url: &str) -> Result<String, CoreFetchError> {
-    let response = http_get_response(core_url, "/v1/auth/openai/start")?;
+fn openai_login_destination(core: &CoreClient) -> Result<String, CoreFetchError> {
+    let response = http_get_response(core, "/v1/auth/openai/start")?;
     openai_login_destination_from_response(&response)
 }
 
@@ -19080,7 +19467,7 @@ fn openai_login_destination_from_response(
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn grant_policy_permission(
-    base_url: &str,
+    core: &CoreClient,
     control_id: &str,
     acknowledgement: &str,
 ) -> Result<String, CoreFetchError> {
@@ -19089,7 +19476,7 @@ fn grant_policy_permission(
         "acknowledgement": acknowledgement,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/policy/permissions/grant", &body)?;
+    let response = http_post_json_response(core, "/v1/policy/permissions/grant", &body)?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
@@ -19103,16 +19490,11 @@ fn permission_acknowledgement(control_id: &str, profile: &str) -> String {
     format!("GRANT GOBLINS OS PERMISSION {control_id} FOR {profile}")
 }
 
-/// The core relay URL as reported by the running Goblins OS, falling back to the
-/// local default. The `append_*` panel helpers only receive `state`, so the
-/// authoritative URL comes from the system status the core itself published.
+/// Clone the initialized capability client for async panel actions. Every clone
+/// reuses the one authenticated, close-on-exec connection opened at startup.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn config_core_url(state: &SettingsState) -> String {
-    state
-        .system
-        .as_ref()
-        .map(|system| system.session.core_url.clone())
-        .unwrap_or_else(|| DEFAULT_CORE_URL.to_string())
+fn config_core(state: &SettingsState) -> CoreClient {
+    state.core.clone()
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -19248,7 +19630,7 @@ fn bounded_status_summary(value: &str) -> String {
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn ask_settings_context(
-    base_url: &str,
+    core: &CoreClient,
     panel: &str,
     topic: &str,
     question: &str,
@@ -19261,7 +19643,7 @@ fn ask_settings_context(
         "status_summary": status_summary,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/ai/settings-context", &body)
+    let response = http_post_json_response(core, "/v1/ai/settings-context", &body)
         .map_err(|error| format!("Goblins OS could not reach the Settings AI helper: {error}."))?;
     let outcome: SettingsContextAiResponse =
         serde_json::from_slice(&response.body).map_err(|error| error.to_string())?;
@@ -19273,23 +19655,14 @@ fn ask_settings_context(
     }
 }
 
-/// Hand the user's personal OpenAI API key to Goblins OS for owner-only
-/// storage. Consent is implicit in pressing Save in this OS-owned panel; the key
-/// travels once over the loopback relay and is never echoed back to the GUI.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_openai_key(base_url: &str, api_key: &str) -> Result<String, CoreFetchError> {
-    let body = serde_json::json!({
-        "api_key": api_key,
-        "consent": true,
-    })
-    .to_string();
-    let response = http_post_json_response(base_url, "/v1/models/openai-key", &body)?;
-
-    if !(200..=299).contains(&response.status) {
-        return Err(CoreFetchError::Status(response.status));
+fn forget_openai_account_session(core: &CoreClient) -> Result<(), CoreFetchError> {
+    let response = http_delete_response(core, "/v1/auth/openai/session")?;
+    if (200..=299).contains(&response.status) {
+        Ok(())
+    } else {
+        Err(CoreFetchError::Status(response.status))
     }
-
-    Ok("Saved. Goblins OS now holds your OpenAI key owner-only — pick \"OpenAI hosted\" above to use it.".to_string())
 }
 
 /// Select which engine powers the Goblins AI runtime: the on-device GPT-OSS heart, or the
@@ -19297,9 +19670,9 @@ fn set_openai_key(base_url: &str, api_key: &str) -> Result<String, CoreFetchErro
 /// and rejects the hosted engine when no key is stored, so the GUI never honors
 /// a switch the OS cannot back.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_engine(base_url: &str, engine: &str) -> Result<String, CoreFetchError> {
+fn set_engine(core: &CoreClient, engine: &str) -> Result<String, CoreFetchError> {
     let body = serde_json::json!({ "engine": engine }).to_string();
-    let response = http_post_json_response(base_url, "/v1/models/engine", &body)?;
+    let response = http_post_json_response(core, "/v1/models/engine", &body)?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
@@ -19309,13 +19682,13 @@ fn set_engine(base_url: &str, engine: &str) -> Result<String, CoreFetchError> {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn install_local_model(base_url: &str, model_id: &str) -> Result<String, CoreFetchError> {
+fn install_local_model(core: &CoreClient, model_id: &str) -> Result<String, CoreFetchError> {
     let body = serde_json::json!({
         "model_id": model_id,
         "consent": true,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/local-models/install", &body)?;
+    let response = http_post_json_response(core, "/v1/local-models/install", &body)?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
@@ -19329,9 +19702,9 @@ fn install_local_model(base_url: &str, model_id: &str) -> Result<String, CoreFet
 /// Flip the OS-owned offline / private-mode flag. The core enforces the egress
 /// gate; this only records the user's choice.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_privacy(base_url: &str, offline: bool) -> Result<String, CoreFetchError> {
+fn set_privacy(core: &CoreClient, offline: bool) -> Result<String, CoreFetchError> {
     let body = serde_json::json!({ "offline": offline }).to_string();
-    let response = http_post_json_response(base_url, "/v1/privacy", &body)?;
+    let response = http_post_json_response(core, "/v1/privacy", &body)?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
@@ -19346,13 +19719,13 @@ fn set_privacy(base_url: &str, offline: bool) -> Result<String, CoreFetchError> 
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn connect_wifi(base_url: &str, ssid: &str, password: Option<&str>) -> Result<String, String> {
+fn connect_wifi(core: &CoreClient, ssid: &str, password: Option<&str>) -> Result<String, String> {
     let body = serde_json::json!({
         "ssid": ssid,
         "password": password.map(str::trim).filter(|password| !password.is_empty()),
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/network/wifi/connect", &body)
+    let response = http_post_json_response(core, "/v1/network/wifi/connect", &body)
         .map_err(|error| format!("Goblins OS could not reach the Wi-Fi manager: {error}."))?;
     let outcome = wifi_connect_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19369,7 +19742,7 @@ fn wifi_connect_outcome(body: &[u8]) -> Result<WifiConnectOutcome, CoreFetchErro
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_hotspot(
-    base_url: &str,
+    core: &CoreClient,
     enabled: bool,
     ssid: Option<&str>,
     password: Option<&str>,
@@ -19380,7 +19753,7 @@ fn set_hotspot(
         "password": password.map(str::trim).filter(|value| !value.is_empty()),
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/hotspot/enabled", &body)
+    let response = http_post_json_response(core, "/v1/hotspot/enabled", &body)
         .map_err(|error| format!("Goblins OS could not reach Personal Hotspot: {error}."))?;
     let outcome = hotspot_toggle_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19396,13 +19769,13 @@ fn hotspot_toggle_outcome(body: &[u8]) -> Result<HotspotToggleOutcome, CoreFetch
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_hot_corner_action(base_url: &str, corner: &str, action: &str) -> Result<String, String> {
+fn set_hot_corner_action(core: &CoreClient, corner: &str, action: &str) -> Result<String, String> {
     let body = serde_json::json!({
         "corner": corner,
         "action": action,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/window-management/hot-corner", &body)
+    let response = http_post_json_response(core, "/v1/window-management/hot-corner", &body)
         .map_err(|error| format!("Goblins OS could not reach Hot Corners: {error}."))?;
     let outcome = hot_corner_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19418,9 +19791,9 @@ fn hot_corner_outcome(body: &[u8]) -> Result<HotCornerOutcome, CoreFetchError> {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_proxy_mode(base_url: &str, mode: &str) -> Result<String, String> {
+fn set_proxy_mode(core: &CoreClient, mode: &str) -> Result<String, String> {
     let body = serde_json::json!({ "mode": mode }).to_string();
-    let response = http_post_json_response(base_url, "/v1/network/proxy/mode", &body)
+    let response = http_post_json_response(core, "/v1/network/proxy/mode", &body)
         .map_err(|error| format!("Goblins OS could not reach the proxy manager: {error}."))?;
     let outcome = proxy_mode_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19440,9 +19813,9 @@ fn proxy_mode_outcome(body: &[u8]) -> Result<ProxyModeOutcome, CoreFetchError> {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_bluetooth_power(base_url: &str, powered: bool) -> Result<String, String> {
+fn set_bluetooth_power(core: &CoreClient, powered: bool) -> Result<String, String> {
     let body = serde_json::json!({ "powered": powered }).to_string();
-    let response = http_post_json_response(base_url, "/v1/bluetooth/power", &body)
+    let response = http_post_json_response(core, "/v1/bluetooth/power", &body)
         .map_err(|error| format!("Goblins OS could not reach the Bluetooth manager: {error}."))?;
     let outcome = bluetooth_power_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19458,9 +19831,9 @@ fn bluetooth_power_outcome(body: &[u8]) -> Result<BluetoothPowerOutcome, CoreFet
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_firewall_enabled(base_url: &str, enabled: bool) -> Result<String, String> {
+fn set_firewall_enabled(core: &CoreClient, enabled: bool) -> Result<String, String> {
     let body = serde_json::json!({ "enabled": enabled }).to_string();
-    let response = http_post_json_response(base_url, "/v1/firewall/enabled", &body)
+    let response = http_post_json_response(core, "/v1/firewall/enabled", &body)
         .map_err(|error| format!("Goblins OS could not reach the firewall manager: {error}."))?;
     let outcome = firewall_toggle_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19477,7 +19850,7 @@ fn firewall_toggle_outcome(body: &[u8]) -> Result<FirewallToggleOutcome, CoreFet
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn revoke_app_permission(
-    base_url: &str,
+    core: &CoreClient,
     table: &str,
     id: &str,
     app: &str,
@@ -19488,7 +19861,7 @@ fn revoke_app_permission(
         "app": app,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/app-privacy/revoke", &body)
+    let response = http_post_json_response(core, "/v1/app-privacy/revoke", &body)
         .map_err(|error| format!("Goblins OS could not reach app permissions: {error}."))?;
     let outcome = app_privacy_revoke_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19504,13 +19877,13 @@ fn app_privacy_revoke_outcome(body: &[u8]) -> Result<AppPrivacyRevokeOutcome, Co
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_audio_volume(base_url: &str, target: &str, volume_percent: u8) -> Result<String, String> {
+fn set_audio_volume(core: &CoreClient, target: &str, volume_percent: u8) -> Result<String, String> {
     let body = serde_json::json!({
         "target": target,
         "volume_percent": volume_percent,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/audio/volume", &body)
+    let response = http_post_json_response(core, "/v1/audio/volume", &body)
         .map_err(|error| format!("Goblins OS could not reach the audio manager: {error}."))?;
     let outcome = audio_control_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19522,13 +19895,13 @@ fn set_audio_volume(base_url: &str, target: &str, volume_percent: u8) -> Result<
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_audio_mute(base_url: &str, target: &str, muted: bool) -> Result<String, String> {
+fn set_audio_mute(core: &CoreClient, target: &str, muted: bool) -> Result<String, String> {
     let body = serde_json::json!({
         "target": target,
         "muted": muted,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/audio/mute", &body)
+    let response = http_post_json_response(core, "/v1/audio/mute", &body)
         .map_err(|error| format!("Goblins OS could not reach the audio manager: {error}."))?;
     let outcome = audio_control_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19541,7 +19914,7 @@ fn set_audio_mute(base_url: &str, target: &str, muted: bool) -> Result<String, S
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_audio_default_device(
-    base_url: &str,
+    core: &CoreClient,
     target: &str,
     device_id: &str,
 ) -> Result<String, String> {
@@ -19550,7 +19923,7 @@ fn set_audio_default_device(
         "device_id": device_id,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/audio/default-device", &body)
+    let response = http_post_json_response(core, "/v1/audio/default-device", &body)
         .map_err(|error| format!("Goblins OS could not reach the audio manager: {error}."))?;
     let outcome = audio_control_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19566,13 +19939,17 @@ fn audio_control_outcome(body: &[u8]) -> Result<AudioControlOutcome, CoreFetchEr
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_sound_preference_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
+fn set_sound_preference_bool(
+    core: &CoreClient,
+    target: &str,
+    value: bool,
+) -> Result<String, String> {
     let body = serde_json::json!({
         "target": target,
         "value": value,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/audio/preference", &body)
+    let response = http_post_json_response(core, "/v1/audio/preference", &body)
         .map_err(|error| format!("Goblins OS could not reach sound preferences: {error}."))?;
     let outcome = sound_preference_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19589,7 +19966,7 @@ fn sound_preference_outcome(body: &[u8]) -> Result<SoundPreferenceOutcome, CoreF
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_notification_preference_bool(
-    base_url: &str,
+    core: &CoreClient,
     target: &str,
     child: Option<&str>,
     value: bool,
@@ -19600,8 +19977,8 @@ fn set_notification_preference_bool(
         "value": value,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/notifications/preference", &body)
-        .map_err(|error| {
+    let response =
+        http_post_json_response(core, "/v1/notifications/preference", &body).map_err(|error| {
             format!("Goblins OS could not reach notification preferences: {error}.")
         })?;
     let outcome =
@@ -19621,12 +19998,12 @@ fn notification_preference_outcome(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_focus_mode(base_url: &str, mode: &str) -> Result<String, String> {
+fn set_focus_mode(core: &CoreClient, mode: &str) -> Result<String, String> {
     let response = if mode == "off" {
-        http_post_json_response(base_url, "/v1/focus/deactivate", "{}")
+        http_post_json_response(core, "/v1/focus/deactivate", "{}")
     } else {
         let body = serde_json::json!({ "mode": mode }).to_string();
-        http_post_json_response(base_url, "/v1/focus/activate", &body)
+        http_post_json_response(core, "/v1/focus/activate", &body)
     }
     .map_err(|error| format!("Goblins OS could not reach Focus controls: {error}."))?;
     let outcome = focus_action_outcome(&response.body).map_err(|error| error.to_string())?;
@@ -19643,9 +20020,9 @@ fn focus_action_outcome(body: &[u8]) -> Result<FocusActionOutcome, CoreFetchErro
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_appearance_color_scheme(base_url: &str, theme: &str) -> Result<String, String> {
+fn set_appearance_color_scheme(core: &CoreClient, theme: &str) -> Result<String, String> {
     let body = serde_json::json!({ "scheme": theme }).to_string();
-    let response = http_post_json_response(base_url, "/v1/appearance/color-scheme", &body)
+    let response = http_post_json_response(core, "/v1/appearance/color-scheme", &body)
         .map_err(|error| format!("Goblins OS could not reach the appearance manager: {error}."))?;
     let outcome = appearance_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19665,12 +20042,10 @@ fn appearance_outcome(body: &[u8]) -> Result<AppearanceOutcome, CoreFetchError> 
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_wallpaper_placement(base_url: &str, placement: &str) -> Result<String, String> {
+fn set_wallpaper_placement(core: &CoreClient, placement: &str) -> Result<String, String> {
     let body = serde_json::json!({ "placement": placement }).to_string();
-    let response = http_post_json_response(base_url, "/v1/appearance/wallpaper-placement", &body)
-        .map_err(|error| {
-        format!("Goblins OS could not reach the wallpaper manager: {error}.")
-    })?;
+    let response = http_post_json_response(core, "/v1/appearance/wallpaper-placement", &body)
+        .map_err(|error| format!("Goblins OS could not reach the wallpaper manager: {error}."))?;
     let outcome = wallpaper_placement_outcome(&response.body).map_err(|error| error.to_string())?;
 
     if (200..=299).contains(&response.status) && outcome.ok {
@@ -19689,9 +20064,9 @@ fn wallpaper_placement_outcome(body: &[u8]) -> Result<WallpaperPlacementOutcome,
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_wallpaper_shading(base_url: &str, shading: &str) -> Result<String, String> {
+fn set_wallpaper_shading(core: &CoreClient, shading: &str) -> Result<String, String> {
     let body = serde_json::json!({ "shading": shading }).to_string();
-    let response = http_post_json_response(base_url, "/v1/appearance/wallpaper-shading", &body)
+    let response = http_post_json_response(core, "/v1/appearance/wallpaper-shading", &body)
         .map_err(|error| {
             format!("Goblins OS could not reach the wallpaper color manager: {error}.")
         })?;
@@ -19713,18 +20088,26 @@ fn wallpaper_shading_outcome(body: &[u8]) -> Result<WallpaperShadingOutcome, Cor
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_desktop_privacy_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
-    set_desktop_privacy_preference(base_url, target, serde_json::json!(value))
+fn set_desktop_privacy_bool(
+    core: &CoreClient,
+    target: &str,
+    value: bool,
+) -> Result<String, String> {
+    set_desktop_privacy_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_desktop_privacy_number(base_url: &str, target: &str, value: f64) -> Result<String, String> {
-    set_desktop_privacy_preference(base_url, target, serde_json::json!(value))
+fn set_desktop_privacy_number(
+    core: &CoreClient,
+    target: &str,
+    value: f64,
+) -> Result<String, String> {
+    set_desktop_privacy_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_desktop_privacy_preference(
-    base_url: &str,
+    core: &CoreClient,
     target: &str,
     value: serde_json::Value,
 ) -> Result<String, String> {
@@ -19733,7 +20116,7 @@ fn set_desktop_privacy_preference(
         "value": value,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/privacy/desktop", &body)
+    let response = http_post_json_response(core, "/v1/privacy/desktop", &body)
         .map_err(|error| format!("Goblins OS could not reach the privacy manager: {error}."))?;
     let outcome = desktop_privacy_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19749,18 +20132,18 @@ fn desktop_privacy_outcome(body: &[u8]) -> Result<DesktopPrivacyOutcome, CoreFet
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_accessibility_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
-    set_accessibility_preference(base_url, target, serde_json::json!(value))
+fn set_accessibility_bool(core: &CoreClient, target: &str, value: bool) -> Result<String, String> {
+    set_accessibility_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_accessibility_number(base_url: &str, target: &str, value: f64) -> Result<String, String> {
-    set_accessibility_preference(base_url, target, serde_json::json!(value))
+fn set_accessibility_number(core: &CoreClient, target: &str, value: f64) -> Result<String, String> {
+    set_accessibility_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_accessibility_preference(
-    base_url: &str,
+    core: &CoreClient,
     target: &str,
     value: serde_json::Value,
 ) -> Result<String, String> {
@@ -19769,7 +20152,7 @@ fn set_accessibility_preference(
         "value": value,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/accessibility/preference", &body)
+    let response = http_post_json_response(core, "/v1/accessibility/preference", &body)
         .map_err(|error| format!("Goblins OS could not reach accessibility settings: {error}."))?;
     let outcome =
         accessibility_preference_outcome(&response.body).map_err(|error| error.to_string())?;
@@ -19788,23 +20171,31 @@ fn accessibility_preference_outcome(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_switch_control_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
-    set_switch_control_preference(base_url, target, serde_json::json!(value))
+fn set_switch_control_bool(core: &CoreClient, target: &str, value: bool) -> Result<String, String> {
+    set_switch_control_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_switch_control_number(base_url: &str, target: &str, value: f64) -> Result<String, String> {
-    set_switch_control_preference(base_url, target, serde_json::json!(value.round() as i64))
+fn set_switch_control_number(
+    core: &CoreClient,
+    target: &str,
+    value: f64,
+) -> Result<String, String> {
+    set_switch_control_preference(core, target, serde_json::json!(value.round() as i64))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_switch_control_string(base_url: &str, target: &str, value: &str) -> Result<String, String> {
-    set_switch_control_preference(base_url, target, serde_json::json!(value))
+fn set_switch_control_string(
+    core: &CoreClient,
+    target: &str,
+    value: &str,
+) -> Result<String, String> {
+    set_switch_control_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_switch_control_preference(
-    base_url: &str,
+    core: &CoreClient,
     target: &str,
     value: serde_json::Value,
 ) -> Result<String, String> {
@@ -19813,12 +20204,11 @@ fn set_switch_control_preference(
         "value": value,
     })
     .to_string();
-    let response = http_post_json_response(
-        base_url,
-        "/v1/accessibility/switch-control/preference",
-        &body,
-    )
-    .map_err(|error| format!("Goblins OS could not reach Switch Control settings: {error}."))?;
+    let response =
+        http_post_json_response(core, "/v1/accessibility/switch-control/preference", &body)
+            .map_err(|error| {
+                format!("Goblins OS could not reach Switch Control settings: {error}.")
+            })?;
     let outcome =
         switch_control_preference_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19836,31 +20226,35 @@ fn switch_control_preference_outcome(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_sound_recognition_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
-    set_sound_recognition_preference(base_url, target, serde_json::json!(value))
+fn set_sound_recognition_bool(
+    core: &CoreClient,
+    target: &str,
+    value: bool,
+) -> Result<String, String> {
+    set_sound_recognition_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_sound_recognition_number(
-    base_url: &str,
+    core: &CoreClient,
     target: &str,
     value: f64,
 ) -> Result<String, String> {
-    set_sound_recognition_preference(base_url, target, serde_json::json!(value))
+    set_sound_recognition_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_sound_recognition_string(
-    base_url: &str,
+    core: &CoreClient,
     target: &str,
     value: &str,
 ) -> Result<String, String> {
-    set_sound_recognition_preference(base_url, target, serde_json::json!(value))
+    set_sound_recognition_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_sound_recognition_preference(
-    base_url: &str,
+    core: &CoreClient,
     target: &str,
     value: serde_json::Value,
 ) -> Result<String, String> {
@@ -19869,7 +20263,7 @@ fn set_sound_recognition_preference(
         "value": value,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/sound-recognition/preference", &body)
+    let response = http_post_json_response(core, "/v1/sound-recognition/preference", &body)
         .map_err(|error| {
             format!("Goblins OS could not reach Sound Recognition settings: {error}.")
         })?;
@@ -19884,16 +20278,20 @@ fn set_sound_recognition_preference(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_sound_recognition_sound(base_url: &str, id: &str, enabled: bool) -> Result<String, String> {
+fn set_sound_recognition_sound(
+    core: &CoreClient,
+    id: &str,
+    enabled: bool,
+) -> Result<String, String> {
     let body = serde_json::json!({
         "id": id,
         "enabled": enabled,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/sound-recognition/sound-toggle", &body)
+    let response = http_post_json_response(core, "/v1/sound-recognition/sound-toggle", &body)
         .map_err(|error| {
-        format!("Goblins OS could not reach Sound Recognition settings: {error}.")
-    })?;
+            format!("Goblins OS could not reach Sound Recognition settings: {error}.")
+        })?;
     let outcome =
         sound_recognition_sound_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19917,18 +20315,18 @@ fn sound_recognition_sound_outcome(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_input_bool(base_url: &str, target: &str, value: bool) -> Result<String, String> {
-    set_input_preference(base_url, target, serde_json::json!(value))
+fn set_input_bool(core: &CoreClient, target: &str, value: bool) -> Result<String, String> {
+    set_input_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_input_number(base_url: &str, target: &str, value: f64) -> Result<String, String> {
-    set_input_preference(base_url, target, serde_json::json!(value))
+fn set_input_number(core: &CoreClient, target: &str, value: f64) -> Result<String, String> {
+    set_input_preference(core, target, serde_json::json!(value))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_input_preference(
-    base_url: &str,
+    core: &CoreClient,
     target: &str,
     value: serde_json::Value,
 ) -> Result<String, String> {
@@ -19937,7 +20335,7 @@ fn set_input_preference(
         "value": value,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/input/preference", &body)
+    let response = http_post_json_response(core, "/v1/input/preference", &body)
         .map_err(|error| format!("Goblins OS could not reach the input manager: {error}."))?;
     let outcome = input_preference_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19949,12 +20347,12 @@ fn set_input_preference(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_input_sources(base_url: &str, sources: &[InputSourceEntry]) -> Result<String, String> {
+fn set_input_sources(core: &CoreClient, sources: &[InputSourceEntry]) -> Result<String, String> {
     let body = serde_json::json!({
         "sources": sources,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/input/sources", &body)
+    let response = http_post_json_response(core, "/v1/input/sources", &body)
         .map_err(|error| format!("Goblins OS could not reach the input manager: {error}."))?;
     let outcome = input_sources_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19966,13 +20364,13 @@ fn set_input_sources(base_url: &str, sources: &[InputSourceEntry]) -> Result<Str
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn add_input_source(base_url: &str, source: &InputSourceChoice) -> Result<String, String> {
+fn add_input_source(core: &CoreClient, source: &InputSourceChoice) -> Result<String, String> {
     let body = serde_json::json!({
         "kind": source.kind,
         "id": source.id,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/input/source", &body)
+    let response = http_post_json_response(core, "/v1/input/source", &body)
         .map_err(|error| format!("Goblins OS could not reach the input manager: {error}."))?;
     let outcome = input_sources_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19984,12 +20382,15 @@ fn add_input_source(base_url: &str, source: &InputSourceChoice) -> Result<String
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_text_shortcuts(base_url: &str, shortcuts: &[TextShortcutEntry]) -> Result<String, String> {
+fn set_text_shortcuts(
+    core: &CoreClient,
+    shortcuts: &[TextShortcutEntry],
+) -> Result<String, String> {
     let body = serde_json::json!({
         "shortcuts": shortcuts,
     })
     .to_string();
-    let response = http_post_json_response(base_url, "/v1/text-shortcuts", &body)
+    let response = http_post_json_response(core, "/v1/text-shortcuts", &body)
         .map_err(|error| format!("Goblins OS could not reach Text Shortcuts: {error}."))?;
     let outcome = text_shortcuts_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -20031,28 +20432,179 @@ fn wifi_security_label(security: &str) -> String {
 
 fn engine_active_copy(engine: &str) -> &'static str {
     match engine {
+        "cloud-openai" => {
+            "Active engine: managed OpenAI cloud — requests leave this device through your organization's protected service."
+        }
         "openai-api" => {
-            "Active engine: OpenAI hosted models — answers come from OpenAI's API using your key."
+            "Active engine: OpenAI hosted models — answers use the administrator-installed protected service credential."
         }
         "codex" => {
             "Active engine: your OpenAI account via Codex — Goblins OS works through OpenAI's own coding agent."
         }
-        _ => {
+        "local-gpt-oss" => {
             "Active engine: GPT-OSS on-device — the heart of Goblins OS, private and local by default."
         }
+        _ => "Active engine is unavailable. Goblins OS will not guess which engine to use.",
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone)]
+struct SettingsEngineControls {
+    gpt: gtk4::Button,
+    codex: gtk4::Button,
+    hosted: gtk4::Button,
+    status_available: bool,
+    codex_available: Rc<Cell<bool>>,
+    hosted_available: Rc<Cell<bool>>,
+    engine_pending: Rc<Cell<bool>>,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+impl SettingsEngineControls {
+    fn begin_account_action(&self) -> bool {
+        if self.engine_pending.get() {
+            return false;
+        }
+        self.engine_pending.set(true);
+        self.gpt.set_sensitive(false);
+        self.codex.set_sensitive(false);
+        self.hosted.set_sensitive(false);
+        true
+    }
+
+    fn finish_account_action(&self) {
+        self.engine_pending.set(false);
+        self.gpt.set_sensitive(self.status_available);
+        self.codex
+            .set_sensitive(self.codex_available.get() && self.status_available);
+        self.hosted
+            .set_sensitive(self.hosted_available.get() && self.status_available);
+    }
+
+    fn set_codex_available(&self, available: bool) {
+        self.codex_available.set(self.status_available && available);
+    }
+
+    fn show_local_active(&self) {
+        self.gpt.add_css_class("gos-engine-active");
+        self.codex.remove_css_class("gos-engine-active");
+        self.hosted.remove_css_class("gos-engine-active");
     }
 }
 
 /// The Codex sign-in row beneath the engine selector. When Codex is ready but
 /// not signed in, it offers a single button that starts `codex login`.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn append_codex_settings(panel: &gtk4::Box, state: &SettingsState, feedback: &gtk4::Label) -> bool {
+fn append_codex_settings(
+    panel: &gtk4::Box,
+    state: &SettingsState,
+    feedback: &gtk4::Label,
+    engine_controls: Option<SettingsEngineControls>,
+) -> bool {
     use gtk4::prelude::*;
 
     match &state.codex {
         Some(codex) if codex.authenticated => {
             panel.append(&system_row("Codex · signed in", &codex.detail));
-            false
+            let signout = button("Sign out of Codex…", &["gos-destructive-action"]);
+            set_accessible_label_description(
+                &signout,
+                "Sign out of Codex on this device",
+                "Opens a confirmation before disconnecting Codex and returning Goblins AI to on-device GPT-OSS.",
+            );
+            let confirmation = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+            confirmation.set_visible(false);
+            confirmation.append(&label(
+                "Sign out of Codex on this device? Goblins OS will switch to on-device GPT-OSS before Codex removes its account credentials.",
+                &["gos-row-copy"],
+            ));
+            let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            let cancel = button("Cancel", &["gos-permission-action"]);
+            let confirm = button("Sign out", &["gos-destructive-action"]);
+            actions.append(&cancel);
+            actions.append(&confirm);
+            confirmation.append(&actions);
+
+            {
+                let confirmation = confirmation.clone();
+                signout.connect_clicked(move |signout| {
+                    signout.set_sensitive(false);
+                    confirmation.set_visible(true);
+                });
+            }
+            {
+                let signout = signout.clone();
+                let confirmation = confirmation.clone();
+                cancel.connect_clicked(move |_| {
+                    confirmation.set_visible(false);
+                    signout.set_sensitive(true);
+                });
+            }
+            {
+                let signout = signout.clone();
+                let confirmation = confirmation.clone();
+                let feedback = feedback.clone();
+                let core = config_core(state);
+                let cancel = cancel.clone();
+                let engine_controls = engine_controls.clone();
+                confirm.connect_clicked(move |confirm| {
+                    if engine_controls
+                        .as_ref()
+                        .is_some_and(|controls| !controls.begin_account_action())
+                    {
+                        feedback.set_text("Wait for the current AI engine action to finish.");
+                        return;
+                    }
+                    confirm.set_sensitive(false);
+                    confirm.set_label("Signing out…");
+                    cancel.set_sensitive(false);
+                    feedback.set_text(
+                        "Signing out of Codex and returning Goblins AI to on-device GPT-OSS.",
+                    );
+
+                    let signout = signout.clone();
+                    let confirmation = confirmation.clone();
+                    let feedback = feedback.clone();
+                    let confirm = confirm.clone();
+                    let cancel = cancel.clone();
+                    let core = core.clone();
+                    let engine_controls = engine_controls.clone();
+                    run_settings_action(
+                        move || forget_codex_account(&core),
+                        move |outcome| {
+                            if let Some(controls) = engine_controls.as_ref() {
+                                if outcome.is_ok() {
+                                    controls.set_codex_available(false);
+                                    controls.show_local_active();
+                                }
+                                controls.finish_account_action();
+                            }
+                            match outcome {
+                                Ok(()) => {
+                                    confirmation.set_visible(false);
+                                    signout.set_visible(false);
+                                    feedback.set_text(
+                                        "Signed out of Codex. Goblins AI is using on-device GPT-OSS; reopen Settings to refresh account controls.",
+                                    );
+                                }
+                                Err(error) => {
+                                    feedback.set_text(&format!(
+                                        "Goblins OS could not sign out of Codex safely: {error}. The active engine was not left without credentials."
+                                    ));
+                                    eprintln!("settings_codex_logout_error={error}");
+                                    confirm.set_label("Sign out");
+                                    confirm.set_sensitive(true);
+                                    cancel.set_sensitive(true);
+                                }
+                            }
+                        },
+                    );
+                });
+            }
+            panel.append(&signout);
+            panel.append(&confirmation);
+            true
         }
         Some(codex) if codex.installed => {
             panel.append(&system_row("Codex · sign in", &codex.detail));
@@ -20066,31 +20618,80 @@ fn append_codex_settings(panel: &gtk4::Box, state: &SettingsState, feedback: &gt
                 "Asks Goblins OS to start codex login and opens the browser. The credential stays with the OS service, never the session.",
             );
             let feedback = feedback.clone();
-            let core_url = config_core_url(state);
-            signin.connect_clicked(move |_| match start_codex_login(&core_url) {
-                Ok(Some(url)) => {
-                    if gtk4::gio::AppInfo::launch_default_for_uri(
-                        &url,
-                        None::<&gtk4::gio::AppLaunchContext>,
-                    )
-                    .is_ok()
-                    {
-                        feedback.set_text(
-                            "Opening Codex sign-in — finish in the browser, then reopen Settings.",
-                        );
-                    } else {
-                        feedback.set_text(
-                            "Codex sign-in is ready — open the link in your browser, then reopen Settings.",
-                        );
-                    }
+            let core = config_core(state);
+            let engine_controls = engine_controls.clone();
+            signin.connect_clicked(move |signin| {
+                if engine_controls
+                    .as_ref()
+                    .is_some_and(|controls| !controls.begin_account_action())
+                {
+                    feedback.set_text("Wait for the current AI engine action to finish.");
+                    return;
                 }
-                Ok(None) => feedback.set_text(
-                    "Codex sign-in started — finish in the browser, then reopen Settings.",
-                ),
-                Err(error) => {
-                    feedback.set_text("Goblins OS could not start Codex sign-in.");
-                    eprintln!("settings_codex_login_error={error:?}");
-                }
+                signin.set_sensitive(false);
+                signin.set_label("Starting sign-in…");
+                feedback.set_text("Starting Codex sign-in through OS-owned private storage.");
+
+                let signin = signin.clone();
+                let feedback = feedback.clone();
+                let core = core.clone();
+                let engine_controls = engine_controls.clone();
+                run_settings_action(
+                    move || start_codex_login(&core),
+                    move |outcome| {
+                        if let Some(controls) = engine_controls.as_ref() {
+                            if matches!(&outcome, Ok(CodexLoginOutcome::Ready)) {
+                                controls.set_codex_available(true);
+                            }
+                            controls.finish_account_action();
+                        }
+                        match outcome {
+                            Ok(CodexLoginOutcome::OpenUrl(url)) => {
+                                signin.set_label("Sign-in in progress");
+                                if gtk4::gio::AppInfo::launch_default_for_uri(
+                                    &url,
+                                    None::<&gtk4::gio::AppLaunchContext>,
+                                )
+                                .is_ok()
+                                {
+                                    feedback.set_text(
+                                        "Opening Codex sign-in — finish in the browser, then reopen Settings.",
+                                    );
+                                } else {
+                                    feedback.set_text(
+                                        "Codex sign-in started, but the desktop could not open its browser page. Reopen Settings to try the handoff again.",
+                                    );
+                                    signin.set_label("Open sign-in again");
+                                    signin.set_sensitive(true);
+                                }
+                            }
+                            Ok(CodexLoginOutcome::Started) => {
+                                signin.set_label("Sign-in in progress");
+                                feedback.set_text(
+                                    "Codex sign-in started — finish in the browser, then reopen Settings.",
+                                );
+                            }
+                            Ok(CodexLoginOutcome::AlreadyRunning) => {
+                                signin.set_label("Sign-in in progress");
+                                feedback.set_text(
+                                    "Codex sign-in is already in progress — finish in the browser, then reopen Settings.",
+                                );
+                            }
+                            Ok(CodexLoginOutcome::Ready) => {
+                                signin.set_label("Signed in");
+                                feedback.set_text("Codex is already signed in and ready.");
+                            }
+                            Err(error) => {
+                                signin.set_label("Sign in with your OpenAI account");
+                                signin.set_sensitive(true);
+                                feedback.set_text(&format!(
+                                    "Goblins OS could not start Codex sign-in: {error}."
+                                ));
+                                eprintln!("settings_codex_login_error={error}");
+                            }
+                        }
+                    },
+                );
             });
             panel.append(&signin);
             true
@@ -20107,150 +20708,106 @@ fn append_codex_settings(panel: &gtk4::Box, state: &SettingsState, feedback: &gt
 /// URL for the session to open. The core runs `codex login` as the `goblins-os`
 /// service user, so the OpenAI account token is written under the 0700
 /// service-owned CODEX_HOME and is never reachable by this desktop session — the
-/// GUI only POSTs to the core and opens the URL the core captured. Ok(None) means
-/// sign-in started but no URL was captured yet (Codex may open the browser itself).
+/// GUI only POSTs to the core and opens the URL the core captured. The response
+/// body is authoritative: a 2xx with every state boolean false is rejected as a
+/// contract error instead of being presented as a successful start.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn start_codex_login(core_url: &str) -> Result<Option<String>, CoreFetchError> {
-    let response = http_post_json_response(core_url, "/v1/codex/login", "{}")?;
-    if !(200..=299).contains(&response.status) {
-        return Err(CoreFetchError::Status(response.status));
+fn start_codex_login(core: &CoreClient) -> Result<CodexLoginOutcome, CoreFetchError> {
+    let response = http_post_json_response(core, "/v1/codex/login", "{}")?;
+    let start = codex_login_outcome_from_response(&response)?;
+    if start == CodexLoginOutcome::Ready {
+        return Ok(start);
     }
     // Poll briefly for the browser URL Codex prints just after it starts.
     for _ in 0..4 {
-        if let Ok(status) = get_core_json::<CodexLoginUrl>(core_url, "/v1/codex/login/url") {
+        if let Ok(status) = get_core_json::<CodexLoginUrl>(core, "/v1/codex/login/url") {
             if status.authenticated {
-                return Ok(None);
+                return Ok(CodexLoginOutcome::Ready);
             }
             if let Some(url) = status.auth_url {
-                return Ok(Some(url));
+                return Ok(CodexLoginOutcome::OpenUrl(url));
             }
         }
         std::thread::sleep(Duration::from_millis(350));
     }
-    Ok(None)
+    Ok(start)
 }
 
-fn http_get_response(base_url: &str, path: &str) -> Result<HttpResponse, CoreFetchError> {
-    let endpoint = parse_http_endpoint(base_url).ok_or(CoreFetchError::Malformed)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .map_err(|_| CoreFetchError::Transport)?
-        .next()
-        .ok_or(CoreFetchError::Transport)?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(700))
-        .map_err(|_| CoreFetchError::Transport)?;
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn forget_codex_account(core: &CoreClient) -> Result<(), CoreFetchError> {
+    let response = http_delete_response(core, "/v1/codex/login")?;
+    if (200..=299).contains(&response.status) {
+        Ok(())
+    } else {
+        Err(CoreFetchError::Status(response.status))
+    }
+}
 
-    stream
-        .set_read_timeout(Some(Duration::from_millis(1200)))
-        .map_err(|_| CoreFetchError::Transport)?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(900)))
-        .map_err(|_| CoreFetchError::Transport)?;
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn codex_login_outcome_from_response(
+    response: &HttpResponse,
+) -> Result<CodexLoginOutcome, CoreFetchError> {
+    if !(200..=299).contains(&response.status) {
+        return Err(CoreFetchError::Status(response.status));
+    }
+    let body: CodexLoginStart =
+        serde_json::from_slice(&response.body).map_err(|_| CoreFetchError::Decode)?;
+    match response.status {
+        200 if body.authenticated && !body.started && !body.already_running => {
+            Ok(CodexLoginOutcome::Ready)
+        }
+        200 if body.already_running && !body.started && !body.authenticated => {
+            Ok(CodexLoginOutcome::AlreadyRunning)
+        }
+        202 if body.started && !body.authenticated && !body.already_running => {
+            Ok(CodexLoginOutcome::Started)
+        }
+        _ => Err(CoreFetchError::Decode),
+    }
+}
 
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
-        endpoint.host
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    let mut response = Vec::new();
-    stream
-        .take(MAX_CORE_BODY_BYTES as u64)
-        .read_to_end(&mut response)
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    parse_http_response(&response)
+fn http_get_response(core: &CoreClient, path: &str) -> Result<HttpResponse, CoreFetchError> {
+    core.get(path, settings_request_timeout(path))
+        .map(core_response)
+        .map_err(|_| CoreFetchError::Transport)
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn http_post_json_response(
-    base_url: &str,
+    core: &CoreClient,
     path: &str,
     body: &str,
 ) -> Result<HttpResponse, CoreFetchError> {
-    let endpoint = parse_http_endpoint(base_url).ok_or(CoreFetchError::Malformed)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .map_err(|_| CoreFetchError::Transport)?
-        .next()
-        .ok_or(CoreFetchError::Transport)?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(700))
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    stream
-        .set_read_timeout(Some(Duration::from_millis(1200)))
-        .map_err(|_| CoreFetchError::Transport)?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(900)))
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        endpoint.host,
-        body.len(),
-        body
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    let mut response = Vec::new();
-    stream
-        .take(MAX_CORE_BODY_BYTES as u64)
-        .read_to_end(&mut response)
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    parse_http_response(&response)
+    core.post_json(path, body.as_bytes(), settings_request_timeout(path))
+        .map(core_response)
+        .map_err(|_| CoreFetchError::Transport)
 }
 
-fn parse_http_response(response: &[u8]) -> Result<HttpResponse, CoreFetchError> {
-    let header_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or(CoreFetchError::Malformed)?;
-    let headers =
-        std::str::from_utf8(&response[..header_end]).map_err(|_| CoreFetchError::Malformed)?;
-    let mut header_lines = headers.lines();
-    let status = header_lines
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|status| status.parse::<u16>().ok())
-        .ok_or(CoreFetchError::Malformed)?;
-    let headers = header_lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
-        .collect();
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn http_delete_response(core: &CoreClient, path: &str) -> Result<HttpResponse, CoreFetchError> {
+    core.delete(path, settings_request_timeout(path))
+        .map(core_response)
+        .map_err(|_| CoreFetchError::Transport)
+}
 
-    Ok(HttpResponse {
-        status,
+fn settings_request_timeout(path: &str) -> Duration {
+    match path {
+        "/v1/ai/settings-context" => LONG_CORE_JOB_TIMEOUT,
+        "/v1/network/wifi/connect" | "/v1/local-models/install" => Duration::from_secs(30),
+        _ => Duration::from_secs(5),
+    }
+}
+
+fn core_response(response: Response) -> HttpResponse {
+    let headers = response
+        .header("location")
+        .map(|value| vec![("location".to_string(), value.to_string())])
+        .unwrap_or_default();
+    HttpResponse {
+        status: response.status,
         headers,
-        body: response[(header_end + 4)..].to_vec(),
-    })
-}
-
-fn parse_http_endpoint(url: &str) -> Option<HttpEndpoint> {
-    let rest = url.strip_prefix("http://")?;
-    let authority = rest.split('/').next()?.trim();
-
-    if authority.is_empty() {
-        return None;
+        body: response.body,
     }
-
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) => (host, port.parse().ok()?),
-        None => (authority, 80),
-    };
-
-    if host.is_empty() {
-        return None;
-    }
-
-    Some(HttpEndpoint {
-        host: host.to_string(),
-        port,
-    })
 }
 
 fn env_u64(key: &str, fallback: u64) -> u64 {
@@ -20913,6 +21470,29 @@ window.gos-settings-window {
   background: @gos_surface_muted;
 }
 
+.gos-engine-disclosure {
+  color: @gos_ink;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.gos-advanced-disclosure {
+  margin-top: 8px;
+  margin-left: 2px;
+  margin-right: 2px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  color: @gos_ink_muted;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.gos-advanced-disclosure:focus {
+  color: @gos_ink;
+  box-shadow: 0 0 0 3px @gos_focus;
+}
+
 .gos-preference-choice {
   margin-top: 0;
   margin-bottom: 0;
@@ -21278,10 +21858,10 @@ fn test_local_model_catalog(model_dir_available_gb: Option<u64>) -> LocalModelCa
 fn test_openai_key_status(configured: bool, engine: &str) -> OpenAiKeyStatus {
     OpenAiKeyStatus {
         configured,
-        model: "gpt-5.5".to_string(),
-        engine_selected: engine != "local-gpt-oss",
+        model: "gpt-5.6".to_string(),
+        engine_selected: engine == "openai-api",
         engine: engine.to_string(),
-        storage: "/var/lib/goblins-os/secrets/openai/api-key".to_string(),
+        storage: "OS-owned private storage".to_string(),
     }
 }
 
@@ -21315,29 +21895,78 @@ fn test_vision_status(runtime_configured: bool) -> VisionStatus {
 
 #[cfg(test)]
 fn test_resident_status(
-    process_state: &str,
-    selected_engine: &str,
+    process_state: ResidentProcessState,
+    selected_engine: ResidentEngineSelection,
+    engine_ready: bool,
     heartbeat_age_secs: Option<u64>,
 ) -> ResidentStatus {
+    let (provider, locality, cloud_relay_configured, local_relay_configured, relay_contract) =
+        match (engine_ready, selected_engine) {
+            (true, ResidentEngineSelection::LocalGptOss) => (
+                ResidentEngineProvider::LocalRuntime,
+                ResidentEngineLocality::OnDevice,
+                false,
+                true,
+                "On-device GPT-OSS through the local model runtime.",
+            ),
+            (true, ResidentEngineSelection::Codex) => (
+                ResidentEngineProvider::Codex,
+                ResidentEngineLocality::Cloud,
+                true,
+                false,
+                "OpenAI account access through the sandboxed Codex CLI.",
+            ),
+            (true, ResidentEngineSelection::OpenAiApi) => (
+                ResidentEngineProvider::OpenAiApi,
+                ResidentEngineLocality::Cloud,
+                true,
+                false,
+                "Hosted OpenAI through the Responses API using your OS-owned key.",
+            ),
+            (true, ResidentEngineSelection::ManagedCloud) => (
+                ResidentEngineProvider::ManagedOpenAiRelay,
+                ResidentEngineLocality::Cloud,
+                true,
+                false,
+                "Hosted OpenAI through the explicitly selected managed HTTPS service.",
+            ),
+            (false, _) => (
+                ResidentEngineProvider::NotReady,
+                ResidentEngineLocality::Unavailable,
+                false,
+                false,
+                "The selected engine is not ready.",
+            ),
+        };
+
     ResidentStatus {
         generated_at: "test-generated-at".to_string(),
         source: "goblins-os-core".to_string(),
         state_path: "/var/lib/goblins-os/resident/resident.json".to_string(),
         process: ResidentProcess {
-            state: process_state.to_string(),
+            state: process_state,
+            pid: (process_state != ResidentProcessState::Waiting).then_some(4242),
             mode: "persistent".to_string(),
             heartbeat_age_secs,
             detail: "Goblins AI runtime status is reported by Goblins OS.".to_string(),
         },
         engine: ResidentEngine {
-            selected: selected_engine.to_string(),
-            cloud_relay_configured: false,
-            local_relay_configured: true,
-            relay_contract: "POST JSON {message:string} -> {text:string}".to_string(),
+            selected: selected_engine,
+            ready: engine_ready,
+            provider,
+            locality,
+            cloud_relay_configured,
+            local_relay_configured,
+            relay_contract: relay_contract.to_string(),
         },
         capabilities: vec![ResidentCapability {
+            id: "conversation".to_string(),
             label: "Conversation".to_string(),
-            state: process_state.to_string(),
+            state: if engine_ready {
+                ResidentCapabilityState::Ready
+            } else {
+                ResidentCapabilityState::Waiting
+            },
             detail: "Conversation capability follows the Goblins AI runtime.".to_string(),
         }],
     }
@@ -21913,7 +22542,6 @@ fn test_settings_system(
             desktop: "goblins".to_string(),
             gui_platform: "gtk4".to_string(),
             shell_mode: "native".to_string(),
-            core_url: "http://127.0.0.1:8787".to_string(),
         },
         identity: IdentitySettings {
             provider_configured: false,
@@ -22013,38 +22641,57 @@ mod tests {
         background_picture_option_detail, background_shading_detail, bluetooth_adapter_detail,
         bluetooth_adapter_state_detail, bluetooth_power_detail, bluetooth_power_label,
         bluetooth_power_outcome, camera_access_detail, cleanup_temp_detail, cleanup_trash_detail,
-        days_label, desktop_privacy_outcome, display_output_detail, display_output_title,
-        engine_selection_success_copy, facility_state_is_ready, facility_state_label,
-        facility_user_detail, hotspot_client_title, hotspot_connected_clients_detail,
-        hotspot_connected_clients_label, hotspot_settings_inputs, hotspot_toggle_outcome,
-        input_feedback_sounds_detail, interface_sounds_detail, key_repeat_detail,
-        local_account_identity_detail, local_account_type_detail, lock_screen_notifications_detail,
-        magnifier_detail, magnifier_lens_mode_detail, magnifier_zoom_label,
-        microphone_access_detail, milliseconds_label, motion_preference_detail, night_light_detail,
-        night_light_schedule_detail, night_light_temperature_label, normalized_appearance_theme,
-        normalized_audio_volume, normalized_background_picture_option,
-        normalized_background_shading, normalized_keyboard_delay,
-        normalized_keyboard_repeat_interval, normalized_magnifier_zoom,
+        codex_login_outcome_from_response, days_label, desktop_privacy_outcome,
+        display_output_detail, display_output_title, engine_selection_success_copy,
+        facility_state_is_ready, facility_state_label, facility_user_detail, hotspot_client_title,
+        hotspot_connected_clients_detail, hotspot_connected_clients_label, hotspot_settings_inputs,
+        hotspot_toggle_outcome, input_feedback_sounds_detail, interface_sounds_detail,
+        key_repeat_detail, local_account_identity_detail, local_account_type_detail,
+        lock_screen_notifications_detail, magnifier_detail, magnifier_lens_mode_detail,
+        magnifier_zoom_label, microphone_access_detail, milliseconds_label,
+        motion_preference_detail, night_light_detail, night_light_schedule_detail,
+        night_light_temperature_label, normalized_appearance_theme, normalized_audio_volume,
+        normalized_background_picture_option, normalized_background_shading,
+        normalized_keyboard_delay, normalized_keyboard_repeat_interval, normalized_magnifier_zoom,
         normalized_night_light_temperature, normalized_old_files_age, normalized_proxy_mode,
         normalized_text_scale, normalized_unit_speed, notification_app_children_detail,
         notification_app_enable_detail, notification_app_expand_detail,
         notification_app_lock_screen_detail, notification_app_lock_screen_details_detail,
         notification_app_sound_detail, notification_banners_detail,
         notification_preference_outcome, openai_account_detail,
-        openai_login_destination_from_response, parse_http_endpoint, parse_http_response,
-        pointer_speed_label, privacy_control_waiting_detail, privacy_state_label,
-        proxy_auto_config_detail, proxy_endpoint_detail, proxy_ignore_hosts_detail,
-        proxy_mode_detail, proxy_mode_outcome, recent_files_detail, screen_keyboard_detail,
-        screen_reader_detail, sidebar_keyboard_target, sidebar_movement_from_key_name,
+        openai_login_destination_from_response, pointer_speed_label,
+        privacy_control_waiting_detail, privacy_state_label, proxy_auto_config_detail,
+        proxy_endpoint_detail, proxy_ignore_hosts_detail, proxy_mode_detail, proxy_mode_outcome,
+        recent_files_detail, screen_keyboard_detail, screen_reader_detail,
+        settings_request_timeout, sidebar_keyboard_target, sidebar_movement_from_key_name,
         sound_output_access_detail, sound_preference_outcome, sound_theme_detail,
         storage_capacity_detail, storage_capacity_percent_text, storage_used_fraction,
         storage_used_gb, text_scale_percent, usb_protection_detail, volume_boost_detail,
         wallpaper_color_detail, wallpaper_placement_outcome, wallpaper_shading_outcome,
         wallpaper_uri_detail, wifi_connect_outcome, AudioDeviceStatus, AudioEndpointStatus,
-        BluetoothAdapterStatus, DisplayOutputStatus, DisplaysStatus, HotspotClient, HotspotStatus,
-        HttpEndpoint, HttpResponse, LocalAccountSummary, LocalModelInstallOutcome,
-        OpenAIAuthStatus, SettingsPanel, SidebarMovement, SystemFacility,
+        BluetoothAdapterStatus, CodexLoginOutcome, CoreFetchError, DisplayOutputStatus,
+        DisplaysStatus, HotspotClient, HotspotStatus, HttpResponse, LocalAccountSummary,
+        LocalModelInstallOutcome, OpenAIAuthStatus, SettingsPanel, SidebarMovement, SystemFacility,
+        LONG_CORE_JOB_TIMEOUT,
     };
+
+    #[test]
+    fn settings_ai_timeout_covers_model_bounds_without_widening_controls() {
+        assert_eq!(
+            settings_request_timeout("/v1/ai/settings-context"),
+            LONG_CORE_JOB_TIMEOUT
+        );
+        assert_eq!(LONG_CORE_JOB_TIMEOUT, std::time::Duration::from_secs(3900));
+        assert!(LONG_CORE_JOB_TIMEOUT <= goblins_os_core_client::MAX_READ_TIMEOUT);
+        assert_eq!(
+            settings_request_timeout("/v1/network/wifi/connect"),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(
+            settings_request_timeout("/v1/models/engine"),
+            std::time::Duration::from_secs(5)
+        );
+    }
 
     #[test]
     fn parses_recovery_panel_argument() {
@@ -22483,7 +23130,6 @@ mod tests {
             ["desktop ", "chrome"].join(""),
             ["core", " health"].join(""),
             ["core", " status"].join(""),
-            ["core", ": "].join(""),
             ["goblins os ", "core"].join(""),
             ["the os ", "core"].join(""),
         ] {
@@ -23329,37 +23975,66 @@ mod tests {
     }
 
     #[test]
-    fn parses_local_core_endpoint() {
-        assert_eq!(
-            parse_http_endpoint("http://127.0.0.1:8787"),
-            Some(HttpEndpoint {
-                host: "127.0.0.1".to_string(),
-                port: 8787,
-            })
-        );
-    }
+    fn codex_login_requires_a_truthful_success_body() {
+        let response = |status, body: &str| HttpResponse {
+            status,
+            headers: Vec::new(),
+            body: body.as_bytes().to_vec(),
+        };
 
-    #[test]
-    fn parses_core_json_response() {
-        let response = parse_http_response(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}",
-        )
-        .unwrap();
-
-        assert_eq!(response.status, 200);
         assert_eq!(
-            super::header_value(&response.headers, "content-type"),
-            Some("application/json")
+            codex_login_outcome_from_response(&response(
+                202,
+                r#"{"started":true,"authenticated":false,"already_running":false,"detail":"started"}"#,
+            )),
+            Ok(CodexLoginOutcome::Started)
         );
-        assert_eq!(response.body, br#"{"ok":true}"#);
+        assert_eq!(
+            codex_login_outcome_from_response(&response(
+                200,
+                r#"{"started":false,"authenticated":true,"already_running":false,"detail":"ready"}"#,
+            )),
+            Ok(CodexLoginOutcome::Ready)
+        );
+        assert_eq!(
+            codex_login_outcome_from_response(&response(
+                200,
+                r#"{"started":false,"authenticated":false,"already_running":true,"detail":"running"}"#,
+            )),
+            Ok(CodexLoginOutcome::AlreadyRunning)
+        );
+
+        let false_success = response(
+            202,
+            r#"{"started":false,"authenticated":false,"already_running":false,"detail":"unavailable"}"#,
+        );
+        assert_eq!(
+            codex_login_outcome_from_response(&false_success),
+            Err(CoreFetchError::Decode)
+        );
+        assert_eq!(
+            codex_login_outcome_from_response(&response(
+                503,
+                r#"{"started":false,"authenticated":false,"already_running":false,"detail":"unavailable"}"#,
+            )),
+            Err(CoreFetchError::Status(503))
+        );
+        assert!(matches!(
+            CodexLoginOutcome::OpenUrl("https://auth.openai.example/codex".to_string()),
+            CodexLoginOutcome::OpenUrl(_)
+        ));
     }
 
     #[test]
     fn parses_openai_account_login_redirect() {
-        let response = parse_http_response(
-            b"HTTP/1.1 302 Found\r\nLocation: https://auth.openai.example/start\r\n\r\n",
-        )
-        .unwrap();
+        let response = HttpResponse {
+            status: 302,
+            headers: vec![(
+                "location".to_string(),
+                "https://auth.openai.example/start".to_string(),
+            )],
+            body: Vec::new(),
+        };
 
         assert_eq!(
             openai_login_destination_from_response(&response),
@@ -25553,39 +26228,51 @@ mod tests {
     #[test]
     fn model_summary_tiles_use_engine_models_access_and_voice_state() {
         let key = super::test_openai_key_status(false, "local-gpt-oss");
-        let privacy = super::test_privacy_status(false, true, true);
-        let resident = super::test_resident_status("active", "local-gpt-oss", Some(4));
+        let resident = super::test_resident_status(
+            super::ResidentProcessState::Online,
+            super::ResidentEngineSelection::LocalGptOss,
+            true,
+            Some(4),
+        );
         let catalog = super::test_local_model_catalog(Some(414));
         let codex = super::test_codex_status(true, false);
         let vision = super::test_vision_status(false);
         let voice = super::test_voice_status(true);
 
-        let engine = super::active_engine_summary_spec(
-            Some(&key),
-            Some(&codex),
-            Some(&privacy),
-            Some(&resident),
-        );
+        let engine = super::active_engine_summary_spec(Some(&resident));
         assert_eq!(engine.state, "on-device");
         assert!(engine.ready);
         assert!(engine.detail.contains("GPT-OSS"));
-        assert!(engine.detail.contains("Goblins AI runtime is active"));
+        assert!(engine.detail.contains("Goblins AI process is online"));
         assert!(engine.detail.contains("Last check updated 4s ago"));
         assert!(!engine.detail.contains(&["Codex", "resident"].join(" ")));
         assert!(!engine.detail.contains("Heartbeat"));
 
-        let waiting_resident = super::test_resident_status("waiting", "local-gpt-oss", None);
-        let waiting_engine = super::active_engine_summary_spec(
-            Some(&key),
-            Some(&codex),
-            Some(&privacy),
-            Some(&waiting_resident),
+        let waiting_process = super::test_resident_status(
+            super::ResidentProcessState::Waiting,
+            super::ResidentEngineSelection::LocalGptOss,
+            true,
+            None,
         );
-        assert_eq!(waiting_engine.state, "on-device");
-        assert!(!waiting_engine.ready);
-        assert!(waiting_engine
+        let ready_route = super::active_engine_summary_spec(Some(&waiting_process));
+        assert_eq!(ready_route.state, "on-device");
+        assert!(ready_route.ready);
+        assert!(ready_route.detail.contains("Goblins AI process is waiting"));
+
+        let waiting_route = super::test_resident_status(
+            super::ResidentProcessState::Online,
+            super::ResidentEngineSelection::LocalGptOss,
+            false,
+            Some(4),
+        );
+        let waiting_route = super::active_engine_summary_spec(Some(&waiting_route));
+        assert_eq!(waiting_route.state, "waiting");
+        assert!(!waiting_route.ready);
+        assert!(waiting_route.detail.contains("not ready yet"));
+        assert!(!waiting_route.detail.contains("model route"));
+        assert!(waiting_route
             .detail
-            .contains("Goblins AI runtime is waiting"));
+            .contains("Goblins AI process is online"));
 
         let models = super::local_model_summary_spec(Some(&catalog));
         assert_eq!(models.state, "ready to download");
@@ -25789,51 +26476,138 @@ mod tests {
     }
 
     #[test]
-    fn model_summary_tiles_report_private_mode_and_cloud_readiness_truthfully() {
+    fn model_summary_uses_authoritative_engine_route_for_cloud_readiness() {
         let hosted_key = super::test_openai_key_status(true, "openai-api");
-        let private = super::test_privacy_status(true, true, true);
-        let resident = super::test_resident_status("waiting", "openai-api", None);
-
-        let hosted = super::active_engine_summary_spec(
-            Some(&hosted_key),
-            None,
-            Some(&private),
-            Some(&resident),
+        let waiting_hosted = super::test_resident_status(
+            super::ResidentProcessState::Online,
+            super::ResidentEngineSelection::OpenAiApi,
+            false,
+            Some(2),
         );
-        assert_eq!(hosted.state, "hosted");
-        assert!(!hosted.ready);
-        assert!(hosted.detail.contains("Private mode is on"));
+        let waiting_hosted = super::active_engine_summary_spec(Some(&waiting_hosted));
+        assert_eq!(waiting_hosted.state, "waiting");
+        assert!(!waiting_hosted.ready);
+        assert!(waiting_hosted.detail.contains("no ready provider"));
 
-        let public = super::test_privacy_status(false, true, true);
-        let hosted = super::active_engine_summary_spec(
-            Some(&hosted_key),
+        let ready_hosted = super::test_resident_status(
+            super::ResidentProcessState::Waiting,
+            super::ResidentEngineSelection::OpenAiApi,
+            true,
             None,
-            Some(&public),
-            Some(&resident),
         );
-        assert_eq!(hosted.state, "hosted");
-        assert!(hosted.ready);
-        assert!(hosted.detail.contains("OS-owned key store"));
+        let ready_hosted = super::active_engine_summary_spec(Some(&ready_hosted));
+        assert_eq!(ready_hosted.state, "hosted");
+        assert!(ready_hosted.ready);
+        assert!(ready_hosted
+            .detail
+            .contains("Hosted OpenAI through the Responses API"));
+        assert!(ready_hosted
+            .detail
+            .contains("Goblins AI process is waiting"));
 
-        let codex_key = super::test_openai_key_status(false, "codex");
         let codex = super::test_codex_status(true, true);
-        let codex_engine = super::active_engine_summary_spec(
-            Some(&codex_key),
-            Some(&codex),
-            Some(&public),
-            Some(&resident),
+        let ready_codex = super::test_resident_status(
+            super::ResidentProcessState::Stale,
+            super::ResidentEngineSelection::Codex,
+            true,
+            Some(120),
         );
+        let codex_engine = super::active_engine_summary_spec(Some(&ready_codex));
         assert_eq!(codex_engine.state, "codex");
         assert!(codex_engine.ready);
-        assert!(codex_engine.detail.contains("Codex is signed in and ready"));
+        assert!(codex_engine
+            .detail
+            .contains("OpenAI account access through the sandboxed Codex CLI"));
+        assert!(codex_engine.detail.contains("Goblins AI process is stale"));
 
         let access = super::openai_access_summary_spec(Some(&hosted_key), Some(&codex));
         assert_eq!(access.state, "codex signed in");
         assert!(access.ready);
 
-        let waiting = super::active_engine_summary_spec(None, None, None, None);
+        let waiting = super::active_engine_summary_spec(None);
         assert_eq!(waiting.state, "waiting");
         assert!(!waiting.ready);
+    }
+
+    #[test]
+    fn resident_status_deserialization_accepts_only_the_core_readiness_contract() {
+        let exact = serde_json::json!({
+            "generated_at": "test-generated-at",
+            "source": "goblins-os-core",
+            "state_path": "/var/lib/goblins-os/resident/resident.json",
+            "process": {
+                "state": "online",
+                "pid": 4242,
+                "mode": "persistent",
+                "heartbeat_age_secs": 4,
+                "detail": "Goblins AI runtime checked in 4s ago."
+            },
+            "engine": {
+                "selected": "local-gpt-oss",
+                "ready": true,
+                "provider": "gpt-oss-local-runtime",
+                "locality": "on-device",
+                "cloud_relay_configured": false,
+                "local_relay_configured": true,
+                "relay_contract": "On-device GPT-OSS through the local model runtime."
+            },
+            "capabilities": [{
+                "id": "conversation",
+                "label": "Conversation",
+                "state": "ready",
+                "detail": "Waiting for Goblins AI runtime status."
+            }]
+        });
+
+        let status: super::ResidentStatus =
+            serde_json::from_value(exact.clone()).expect("exact core resident contract");
+        assert_eq!(status.process.state, super::ResidentProcessState::Online);
+        assert_eq!(status.process.pid, Some(4242));
+        assert!(status.engine.ready);
+        assert_eq!(
+            status.engine.provider,
+            super::ResidentEngineProvider::LocalRuntime
+        );
+        assert_eq!(
+            status.engine.locality,
+            super::ResidentEngineLocality::OnDevice
+        );
+        assert_eq!(
+            status.capabilities[0].state,
+            super::ResidentCapabilityState::Ready
+        );
+
+        for field in ["ready", "provider", "locality"] {
+            let mut missing = exact.clone();
+            missing["engine"]
+                .as_object_mut()
+                .expect("engine object")
+                .remove(field);
+            assert!(serde_json::from_value::<super::ResidentStatus>(missing).is_err());
+        }
+
+        let mut missing_process_state = exact.clone();
+        missing_process_state["process"]
+            .as_object_mut()
+            .expect("process object")
+            .remove("state");
+        assert!(serde_json::from_value::<super::ResidentStatus>(missing_process_state).is_err());
+
+        for (path, unknown) in [
+            (("process", "state"), "active"),
+            (("engine", "selected"), "future-engine"),
+            (("engine", "provider"), "future-provider"),
+            (("engine", "locality"), "hybrid"),
+        ] {
+            let mut payload = exact.clone();
+            payload[path.0][path.1] = serde_json::Value::String(unknown.to_string());
+            assert!(serde_json::from_value::<super::ResidentStatus>(payload).is_err());
+        }
+
+        let mut unknown_capability = exact;
+        unknown_capability["capabilities"][0]["state"] =
+            serde_json::Value::String("future-state".to_string());
+        assert!(serde_json::from_value::<super::ResidentStatus>(unknown_capability).is_err());
     }
 
     #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -25882,16 +26656,10 @@ mod tests {
 
     #[test]
     fn developer_summary_reports_core_desktop_services_and_resident_truthfully() {
-        let config = super::SettingsConfig {
-            core_url: "http://127.0.0.1:8787".to_string(),
-            core_wait: std::time::Duration::from_secs(1),
-            panel: SettingsPanel::Developer,
-        };
-        let core = super::developer_core_summary_spec(true, &config);
+        let core = super::developer_core_summary_spec(true);
         assert_eq!(core.state, "ready");
         assert!(core.ready);
         assert!(core.detail.contains("local diagnostics"));
-        assert!(!core.detail.contains("127.0.0.1:8787"));
 
         let system = super::test_settings_system("localhost/goblins-os:latest", true, true, true);
         let hardware = super::test_storage_hardware(Vec::new());
@@ -25946,25 +26714,29 @@ mod tests {
         assert!(service_detail.contains("OS service tools"));
         assert!(!service_detail.contains("/usr/lib"));
 
-        let resident = super::test_resident_status("waiting", "local-gpt-oss", None);
+        let resident = super::test_resident_status(
+            super::ResidentProcessState::Waiting,
+            super::ResidentEngineSelection::LocalGptOss,
+            true,
+            None,
+        );
         let resident_summary = super::developer_resident_summary_spec(Some(&resident));
-        assert_eq!(resident_summary.title, "Goblins AI runtime");
+        assert_eq!(resident_summary.title, "Goblins AI process");
         assert_eq!(resident_summary.state, "waiting");
         assert!(!resident_summary.ready);
         assert!(resident_summary
             .detail
-            .contains("Goblins AI runtime is waiting"));
+            .contains("Goblins AI process is waiting"));
         assert!(!resident_summary.detail.contains("State path"));
         assert!(!resident_summary
             .detail
             .contains(&["Codex", "resident"].join(" ")));
         let mut pathy_capability = resident.capabilities[0].clone();
         pathy_capability.detail =
-            "Waiting for http://127.0.0.1:8787 and /var/lib/goblins-os/resident.".to_string();
+            "Waiting for local diagnostics and /var/lib/goblins-os/resident.".to_string();
         let capability_detail = super::diagnostic_capability_detail(&pathy_capability);
         assert!(capability_detail.contains("local diagnostics"));
         assert!(capability_detail.contains("private OS storage"));
-        assert!(!capability_detail.contains("127.0.0.1"));
         assert!(!capability_detail.contains("/var/lib"));
 
         let facility = super::SystemFacility {
@@ -26525,6 +27297,31 @@ mod tests {
         assert!(engine_selection_success_copy("local-gpt-oss").contains("GPT-OSS"));
         assert!(engine_selection_success_copy("codex").contains("Codex"));
         assert!(engine_selection_success_copy("openai-api").contains("hosted models"));
+        assert!(super::engine_active_copy("cloud-openai").contains("leave this device"));
+    }
+
+    #[test]
+    fn models_surface_leads_with_route_and_hides_diagnostics_by_default() {
+        let source = include_str!("main.rs");
+        let start = source.find("fn build_models(").expect("Models builder");
+        let remainder = &source[start..];
+        let end = remainder
+            .find("fn append_goblins_ai_settings(")
+            .expect("Models builder end");
+        let builder = &remainder[..end];
+
+        let route = builder
+            .find("append_openai_key_settings(panel, state)")
+            .expect("route controls");
+        let diagnostics = builder
+            .find("append_goblins_ai_settings(panel, state)")
+            .expect("AI diagnostics");
+        assert!(
+            route < diagnostics,
+            "the active engine and privacy boundary must precede diagnostics"
+        );
+        assert!(source.contains("gtk4::Expander::new(Some(\"Advanced · Actions and activity\"))"));
+        assert!(source.contains("disclosure.set_expanded(false)"));
     }
 
     #[test]

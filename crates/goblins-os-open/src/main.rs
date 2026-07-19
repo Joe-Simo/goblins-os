@@ -1,26 +1,15 @@
-use std::{
-    env,
-    error::Error,
-    fmt,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    process::Command,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{env, error::Error, fmt, process::Command, time::Duration};
 
+use goblins_os_core_client::{initialize, ClientKind, CoreClient};
 use serde::Deserialize;
 
-const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
-const DEFAULT_CORE_WAIT_SECS: u64 = 45;
-const MAX_CORE_BODY_BYTES: usize = 1024 * 1024;
+const CORE_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 type LauncherResult<T> = Result<T, LauncherError>;
 
 #[derive(Clone)]
 struct LauncherConfig {
-    core_url: String,
-    core_wait: Duration,
+    core: CoreClient,
     service_id: String,
 }
 
@@ -49,18 +38,6 @@ struct ServiceCatalogEntry {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct HttpEndpoint {
-    host: String,
-    port: u16,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct HttpResponse {
-    status: u16,
-    body: Vec<u8>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
 enum LaunchTarget {
     ExternalOpenAI(String),
     LocalAction(String),
@@ -69,7 +46,6 @@ enum LaunchTarget {
 #[derive(Debug, PartialEq, Eq)]
 enum LauncherError {
     Usage,
-    InvalidCoreUrl(String),
     CoreUnavailable,
     CoreFetch(String),
     SessionLocked(String),
@@ -82,7 +58,14 @@ enum LauncherError {
 }
 
 fn main() {
-    match run() {
+    let core = match initialize(ClientKind::Open) {
+        Ok(core) => core,
+        Err(error) => {
+            eprintln!("goblins-os-open: {error}");
+            std::process::exit(69);
+        }
+    };
+    match run(core) {
         Ok(message) => println!("{message}"),
         Err(error) => {
             eprintln!("goblins-os-open: {error}");
@@ -91,19 +74,20 @@ fn main() {
     }
 }
 
-fn run() -> LauncherResult<String> {
-    let config = LauncherConfig::from_env_and_args()?;
+fn run(core: CoreClient) -> LauncherResult<String> {
+    let config = LauncherConfig::from_env_and_args(core)?;
 
-    if !wait_for_core(&config.core_url, config.core_wait) {
+    if !get_core_status(&config.core, "/health").is_some_and(|status| (200..=299).contains(&status))
+    {
         return Err(LauncherError::CoreUnavailable);
     }
 
-    let gate: SessionGateStatus = get_core_json(&config.core_url, "/v1/session/gate")?;
+    let gate: SessionGateStatus = get_core_json(&config.core, "/v1/session/gate")?;
     if !gate.unlocked {
         return Err(LauncherError::SessionLocked(gate.lock.reason));
     }
 
-    let catalog: ServiceCatalog = get_core_json(&config.core_url, "/v1/services")?;
+    let catalog: ServiceCatalog = get_core_json(&config.core, "/v1/services")?;
     let service = service_by_id(&catalog, &config.service_id)
         .ok_or_else(|| LauncherError::UnknownService(config.service_id.clone()))?;
     if service.status == "policy-blocked" {
@@ -120,7 +104,7 @@ fn run() -> LauncherResult<String> {
 }
 
 impl LauncherConfig {
-    fn from_env_and_args() -> LauncherResult<Self> {
+    fn from_env_and_args(core: CoreClient) -> LauncherResult<Self> {
         let mut args = env::args().skip(1);
         let Some(service_id) = args.next() else {
             return Err(LauncherError::Usage);
@@ -130,20 +114,7 @@ impl LauncherConfig {
             return Err(LauncherError::Usage);
         }
 
-        let core_url = validate_core_url(
-            &env::var("GOBLINS_OS_CORE_URL")
-                .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
-                .unwrap_or_else(|_| DEFAULT_CORE_URL.to_string()),
-        )?;
-
-        Ok(Self {
-            core_url,
-            core_wait: Duration::from_secs(env_u64(
-                "GOBLINS_OS_OPEN_CORE_WAIT_SECS",
-                DEFAULT_CORE_WAIT_SECS,
-            )),
-            service_id,
-        })
+        Ok(Self { core, service_id })
     }
 }
 
@@ -151,9 +122,7 @@ impl LauncherError {
     fn exit_code(&self) -> i32 {
         match self {
             Self::Usage => 64,
-            Self::InvalidCoreUrl(_) | Self::UnsupportedTarget(_) | Self::UnsafeOpenAITarget(_) => {
-                65
-            }
+            Self::UnsupportedTarget(_) | Self::UnsafeOpenAITarget(_) => 65,
             Self::CoreUnavailable | Self::CoreFetch(_) => 69,
             Self::SessionLocked(_) => 77,
             Self::UnknownService(_) => 66,
@@ -168,10 +137,6 @@ impl fmt::Display for LauncherError {
         match self {
             Self::Usage => formatter.write_str(
                 "usage: goblins-os-open <service-id>; services are resolved through the local OS core",
-            ),
-            Self::InvalidCoreUrl(value) => write!(
-                formatter,
-                "GOBLINS_OS_CORE_URL must be a local http endpoint, got {value}"
             ),
             Self::CoreUnavailable => {
                 formatter.write_str("the local Goblins OS core did not become ready")
@@ -210,29 +175,13 @@ impl fmt::Display for LauncherError {
 
 impl Error for LauncherError {}
 
-fn wait_for_core(core_url: &str, wait: Duration) -> bool {
-    let deadline = Instant::now() + wait;
-
-    loop {
-        if get_core_status(core_url, "/health").is_some_and(|status| (200..=299).contains(&status))
-        {
-            return true;
-        }
-
-        if Instant::now() >= deadline {
-            return false;
-        }
-
-        thread::sleep(Duration::from_millis(250));
-    }
-}
-
 fn get_core_json<T: for<'de> Deserialize<'de>>(
-    core_url: &str,
+    core: &CoreClient,
     path: &'static str,
 ) -> LauncherResult<T> {
-    let response =
-        http_get(core_url, path).map_err(|_| LauncherError::CoreFetch(path.to_string()))?;
+    let response = core
+        .get(path, CORE_READ_TIMEOUT)
+        .map_err(|_| LauncherError::CoreFetch(path.to_string()))?;
     if !(200..=299).contains(&response.status) {
         return Err(LauncherError::CoreFetch(path.to_string()));
     }
@@ -240,8 +189,8 @@ fn get_core_json<T: for<'de> Deserialize<'de>>(
     serde_json::from_slice(&response.body).map_err(|_| LauncherError::CoreFetch(path.to_string()))
 }
 
-fn get_core_status(core_url: &str, path: &str) -> Option<u16> {
-    http_get(core_url, path)
+fn get_core_status(core: &CoreClient, path: &str) -> Option<u16> {
+    core.get(path, CORE_READ_TIMEOUT)
         .ok()
         .map(|response| response.status)
 }
@@ -254,18 +203,6 @@ fn service_by_id<'a>(
         .services
         .iter()
         .find(|service| service.id == service_id)
-}
-
-fn validate_core_url(value: &str) -> LauncherResult<String> {
-    let trimmed = value.trim_end_matches('/');
-    let endpoint = parse_http_endpoint(trimmed)
-        .ok_or_else(|| LauncherError::InvalidCoreUrl(value.to_string()))?;
-
-    if !matches!(endpoint.host.as_str(), "127.0.0.1" | "localhost" | "::1") {
-        return Err(LauncherError::InvalidCoreUrl(value.to_string()));
-    }
-
-    Ok(trimmed.to_string())
 }
 
 fn classify_launch_target(target: &str) -> LauncherResult<LaunchTarget> {
@@ -354,99 +291,6 @@ fn command_status(program: &str, args: &[&str]) -> LauncherResult<bool> {
     }
 }
 
-fn env_u64(key: &str, fallback: u64) -> u64 {
-    env::var(key)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(fallback)
-}
-
-fn http_get(core_url: &str, path: &str) -> Result<HttpResponse, ()> {
-    let endpoint = parse_http_endpoint(core_url).ok_or(())?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .map_err(|_| ())?
-        .next()
-        .ok_or(())?;
-    let mut stream =
-        TcpStream::connect_timeout(&address, Duration::from_secs(2)).map_err(|_| ())?;
-
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|_| ())?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .map_err(|_| ())?;
-
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nUser-Agent: goblins-os-open\r\nConnection: close\r\n\r\n",
-        endpoint.host
-    );
-    stream.write_all(request.as_bytes()).map_err(|_| ())?;
-
-    let mut bytes = Vec::new();
-    stream
-        .take((MAX_CORE_BODY_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ())?;
-
-    if bytes.len() > MAX_CORE_BODY_BYTES {
-        return Err(());
-    }
-
-    parse_http_response(&bytes).ok_or(())
-}
-
-fn parse_http_response(bytes: &[u8]) -> Option<HttpResponse> {
-    let split = bytes.windows(4).position(|window| window == b"\r\n\r\n")?;
-    let headers = std::str::from_utf8(&bytes[..split]).ok()?;
-    let status_line = headers.lines().next()?;
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|status| status.parse::<u16>().ok())?;
-
-    Some(HttpResponse {
-        status,
-        body: bytes[split + 4..].to_vec(),
-    })
-}
-
-fn parse_http_endpoint(url: &str) -> Option<HttpEndpoint> {
-    let authority_and_path = url.strip_prefix("http://")?;
-    let authority = authority_and_path.split('/').next()?;
-    if authority.is_empty() || authority.contains('@') {
-        return None;
-    }
-
-    if let Some(rest) = authority.strip_prefix('[') {
-        let (host, suffix) = rest.split_once(']')?;
-        let port = if let Some(port) = suffix.strip_prefix(':') {
-            port.parse().ok()?
-        } else if suffix.is_empty() {
-            80
-        } else {
-            return None;
-        };
-
-        return Some(HttpEndpoint {
-            host: host.to_string(),
-            port,
-        });
-    }
-
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) if !host.contains(':') => (host, port.parse().ok()?),
-        Some(_) => return None,
-        None => (authority, 80),
-    };
-
-    Some(HttpEndpoint {
-        host: host.to_string(),
-        port,
-    })
-}
-
 fn https_host(target: &str) -> Option<String> {
     let rest = target.strip_prefix("https://")?;
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
@@ -468,33 +312,9 @@ fn https_host(target: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_launch_target, https_host, local_action_command, openai_https_url,
-        parse_http_endpoint, parse_http_response, service_by_id, validate_core_url, HttpEndpoint,
+        classify_launch_target, https_host, local_action_command, openai_https_url, service_by_id,
         LaunchTarget, LauncherError, ServiceCatalog, ServiceCatalogEntry,
     };
-
-    #[test]
-    fn core_url_must_be_local_http() {
-        assert_eq!(
-            validate_core_url("http://127.0.0.1:8787").unwrap(),
-            "http://127.0.0.1:8787"
-        );
-        assert!(matches!(
-            validate_core_url("https://127.0.0.1:8787"),
-            Err(LauncherError::InvalidCoreUrl(_))
-        ));
-        assert!(matches!(
-            validate_core_url("http://example.com:8787"),
-            Err(LauncherError::InvalidCoreUrl(_))
-        ));
-        assert_eq!(
-            parse_http_endpoint("http://[::1]:8787").unwrap(),
-            HttpEndpoint {
-                host: "::1".to_string(),
-                port: 8787
-            }
-        );
-    }
 
     #[test]
     fn only_openai_https_targets_are_external_launches() {
@@ -562,15 +382,5 @@ mod tests {
 
         assert_eq!(error.exit_code(), 77);
         assert!(error.to_string().contains("blocked by the active"));
-    }
-
-    #[test]
-    fn parses_core_http_response_body() {
-        let response =
-            parse_http_response(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{}")
-                .unwrap();
-
-        assert_eq!(response.status, 200);
-        assert_eq!(response.body, b"{}");
     }
 }

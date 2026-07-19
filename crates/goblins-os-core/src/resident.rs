@@ -1,4 +1,7 @@
-use axum::{http::StatusCode, Json};
+use axum::{
+    http::{StatusCode, Uri},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
@@ -6,7 +9,12 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::ai::{audit_ai_action, AiActionOutcome};
+use crate::{
+    ai::{audit_ai_action, AiActionOutcome},
+    credentials::{openai_credential, openai_credential_with_compat},
+    openai_key::EngineSelection,
+    policy::{policy_state_for_control, PolicyControlState},
+};
 
 const DEFAULT_RESIDENT_STATE_DIR: &str = "/var/lib/goblins-os/resident";
 const RESIDENT_HEARTBEAT_STALE_SECS: u64 = 90;
@@ -15,6 +23,7 @@ const LOCAL_MODEL_RELAY_LEGACY_ENV: &str = "OPENAI_OS_LOCAL_MODEL_RELAY";
 const LOCAL_MODEL_KEEP_ALIVE_ENV: &str = "GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE";
 const RESIDENT_RELAY_ENV: &str = "GOBLINS_OS_RESIDENT_RELAY_URL";
 const RESIDENT_RELAY_LEGACY_ENV: &str = "OPENAI_OS_RESIDENT_RELAY_URL";
+const DEFAULT_OPENAI_API_BASE: &str = "https://api.openai.com";
 
 #[derive(Deserialize)]
 pub struct ResidentRequest {
@@ -48,6 +57,9 @@ pub struct ResidentProcess {
 #[derive(Serialize)]
 pub struct ResidentEngine {
     selected: String,
+    ready: bool,
+    provider: String,
+    locality: String,
     cloud_relay_configured: bool,
     local_relay_configured: bool,
     relay_contract: String,
@@ -81,16 +93,9 @@ pub enum CapabilityState {
 struct StoredResidentState {
     pid: u32,
     mode: String,
-    engine: StoredResidentEngine,
+    #[serde(rename = "engine")]
+    _engine: serde_json::Value,
     capabilities: Vec<ResidentCapability>,
-}
-
-#[derive(Deserialize)]
-struct StoredResidentEngine {
-    selected: String,
-    cloud_relay_configured: bool,
-    local_relay_configured: bool,
-    relay_contract: String,
 }
 
 #[derive(Deserialize)]
@@ -127,16 +132,12 @@ struct OpenAiResponseContent {
 
 #[derive(Debug, PartialEq, Eq)]
 enum ResidentRelay {
-    /// An OS-owned relay speaking the `{message} -> {text}` resident contract
-    /// (a server-side OpenAI relay or a local contract adapter).
-    Contract {
-        url: String,
-        authorization: Option<String>,
-    },
+    /// An on-device loopback adapter speaking the `{message} -> {text}` contract.
+    LocalContract { url: String },
     /// A locally-detected open-weight inference runtime spoken to natively, so
     /// local-only users get a working resident with just a supported runtime
     /// installed — no hand-written adapter required. This is the GPT-OSS heart.
-    Ollama { url: String, model: String },
+    LocalRuntime { url: String, model: String },
     /// The user's own OpenAI API key (OS-owned), used only when they explicitly
     /// pick the hosted-OpenAI engine over the default local GPT-OSS heart.
     OpenAiApi {
@@ -147,6 +148,103 @@ enum ResidentRelay {
     /// The user's OpenAI *account* via OpenAI's Codex CLI (Sign in with ChatGPT).
     /// The OS drives `codex exec` non-interactively; credentials stay with Codex.
     Codex,
+    /// An operator-managed HTTPS relay, used only when the explicit
+    /// `cloud-openai` engine selection is active.
+    ManagedCloud { url: String, authorization: String },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EngineLocality {
+    OnDevice,
+    Cloud,
+}
+
+impl EngineLocality {
+    const fn as_id(self) -> &'static str {
+        match self {
+            Self::OnDevice => "on-device",
+            Self::Cloud => "cloud",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResidentRouteKind {
+    LocalContract,
+    LocalRuntime,
+    Codex,
+    OpenAiApi,
+    ManagedCloud,
+}
+
+impl ResidentRouteKind {
+    const fn engine_label(self) -> &'static str {
+        match self {
+            Self::LocalContract | Self::LocalRuntime => "local-gpt-oss",
+            Self::Codex => "codex",
+            Self::OpenAiApi => "openai-api",
+            Self::ManagedCloud => "cloud-openai",
+        }
+    }
+
+    const fn provider(self) -> &'static str {
+        match self {
+            Self::LocalContract => "gpt-oss-local-contract",
+            Self::LocalRuntime => "gpt-oss-local-runtime",
+            Self::Codex => "codex",
+            Self::OpenAiApi => "openai-api",
+            Self::ManagedCloud => "managed-openai-relay",
+        }
+    }
+
+    const fn locality(self) -> EngineLocality {
+        match self {
+            Self::LocalContract | Self::LocalRuntime => EngineLocality::OnDevice,
+            Self::Codex | Self::OpenAiApi | Self::ManagedCloud => EngineLocality::Cloud,
+        }
+    }
+
+    const fn contract_detail(self) -> &'static str {
+        match self {
+            Self::LocalContract => "On-device GPT-OSS through an OS-owned loopback adapter.",
+            Self::LocalRuntime => "On-device GPT-OSS through the local model runtime.",
+            Self::Codex => "OpenAI account access through the sandboxed Codex CLI.",
+            Self::OpenAiApi => "Hosted OpenAI through the Responses API using your OS-owned key.",
+            Self::ManagedCloud => {
+                "Hosted OpenAI through the explicitly selected managed HTTPS service."
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RouteInputs {
+    selection: EngineSelection,
+    private_mode: bool,
+    cloud_allowed: bool,
+    local_contract_ready: bool,
+    local_runtime_ready: bool,
+    codex_ready: bool,
+    openai_key_ready: bool,
+    openai_base_https: bool,
+    managed_cloud_ready: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RouteUnavailable {
+    PrivateMode,
+    CloudPolicyBlocked,
+    LocalNotReady,
+    CodexNotReady,
+    OpenAiKeyMissing,
+    OpenAiBaseInvalid,
+    ManagedCloudNotReady,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ResolvedResidentRoute {
+    kind: ResidentRouteKind,
+    relay: ResidentRelay,
 }
 
 pub async fn ai_runtime_status() -> Json<ResidentStatus> {
@@ -159,7 +257,16 @@ pub async fn ai_runtime_status() -> Json<ResidentStatus> {
 pub async fn ai_runtime(
     Json(payload): Json<ResidentRequest>,
 ) -> (StatusCode, Json<ResidentResponse>) {
-    crate::bounded::run_blocking(move || ai_runtime_blocking(payload)).await
+    crate::bounded::run_blocking(move || ai_runtime_blocking(payload))
+        .await
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ResidentResponse {
+                    text: crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                }),
+            )
+        })
 }
 
 fn ai_runtime_blocking(payload: ResidentRequest) -> (StatusCode, Json<ResidentResponse>) {
@@ -175,20 +282,24 @@ fn ai_runtime_blocking(payload: ResidentRequest) -> (StatusCode, Json<ResidentRe
     }
 
     let status = build_resident_status();
-    let Some(relay) = resident_relay() else {
-        audit_ai_action("ask-goblins", Some("launcher"), AiActionOutcome::Blocked);
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ResidentResponse {
-                text: format!(
-                    "Goblins AI is {}, but model access is not ready. Open Models to configure local or cloud model access.",
-                    resident_process_label(&status.process.state)
-                ),
-            }),
-        );
+    let route = match resolve_resident_route() {
+        Ok(route) => route,
+        Err(reason) => {
+            audit_ai_action("ask-goblins", Some("launcher"), AiActionOutcome::Blocked);
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ResidentResponse {
+                    text: format!(
+                        "Goblins AI is {}. {} Open Models to review the selected engine.",
+                        resident_process_label(&status.process.state),
+                        route_unavailable_detail(reason)
+                    ),
+                }),
+            );
+        }
     };
 
-    match forward_resident_message(&relay, message) {
+    match forward_resident_message(&route.relay, message) {
         Ok(text) => {
             audit_ai_action("ask-goblins", Some("launcher"), AiActionOutcome::Succeeded);
             (StatusCode::OK, Json(ResidentResponse { text }))
@@ -217,22 +328,39 @@ pub(crate) fn build_resident_status() -> ResidentStatus {
         (None, _) => ResidentProcessState::Waiting,
     };
 
-    // Core owns the answer path, so core's status must report what would ACTUALLY
-    // run — never the resident's looser env-presence guess. Derive both engine
-    // booleans (and the selected engine) from the same authoritative gate
-    // `resident_relay()` uses, so the status can never advertise cloud-ready while
-    // offline/private mode or a non-HTTPS relay URL means a turn would be refused.
-    let (cloud_configured, local_configured) = relay_eligibility();
+    // Status and execution consume the same authoritative route resolution. A
+    // selected local engine can therefore never be labelled ready through a cloud
+    // fallback, and a hosted route cannot look local in the client contract.
+    let selection = crate::openai_key::selected_engine();
+    let route = resolve_resident_route().ok();
+    let ready = route.is_some();
+    let locality = route.as_ref().map(|route| route.kind.locality());
+    let cloud_configured = locality == Some(EngineLocality::Cloud);
+    let local_configured = locality == Some(EngineLocality::OnDevice);
+    let provider = route
+        .as_ref()
+        .map(|route| route.kind.provider())
+        .unwrap_or("not-ready");
+    let relay_contract = route
+        .as_ref()
+        .map(|route| route.kind.contract_detail())
+        .unwrap_or("The selected engine is not ready.");
 
     let (pid, mode, mut engine, mut capabilities) = match stored {
         Some(stored) => (
             Some(stored.pid),
             stored.mode,
             ResidentEngine {
-                selected: stored.engine.selected,
-                cloud_relay_configured: stored.engine.cloud_relay_configured,
-                local_relay_configured: stored.engine.local_relay_configured,
-                relay_contract: stored.engine.relay_contract,
+                selected: selection.as_id().to_string(),
+                ready,
+                provider: provider.to_string(),
+                locality: locality
+                    .map(EngineLocality::as_id)
+                    .unwrap_or("unavailable")
+                    .to_string(),
+                cloud_relay_configured: cloud_configured,
+                local_relay_configured: local_configured,
+                relay_contract: relay_contract.to_string(),
             },
             stored.capabilities,
         ),
@@ -240,20 +368,33 @@ pub(crate) fn build_resident_status() -> ResidentStatus {
             None,
             "persistent".to_string(),
             ResidentEngine {
-                selected: selected_engine(cloud_configured, local_configured).to_string(),
+                selected: selection.as_id().to_string(),
+                ready,
+                provider: provider.to_string(),
+                locality: locality
+                    .map(EngineLocality::as_id)
+                    .unwrap_or("unavailable")
+                    .to_string(),
                 cloud_relay_configured: cloud_configured,
                 local_relay_configured: local_configured,
-                relay_contract: "POST JSON {message:string} -> {text:string}; secrets remain server-side or OS-owned".to_string(),
+                relay_contract: relay_contract.to_string(),
             },
-            default_capabilities(),
+            default_capabilities(ready),
         ),
     };
 
-    // Overwrite the engine eligibility (including a stored heartbeat's possibly stale
-    // or env-derived booleans) with core's authoritative view.
+    // Overwrite all route fields from core's resolver; resident heartbeat state is
+    // useful only for process health and can never choose or relabel model access.
+    engine.selected = selection.as_id().to_string();
+    engine.ready = ready;
+    engine.provider = provider.to_string();
+    engine.locality = locality
+        .map(EngineLocality::as_id)
+        .unwrap_or("unavailable")
+        .to_string();
     engine.cloud_relay_configured = cloud_configured;
     engine.local_relay_configured = local_configured;
-    engine.selected = selected_engine(cloud_configured, local_configured).to_string();
+    engine.relay_contract = relay_contract.to_string();
 
     // The conversation capability must match: Ready only if a relay would truly answer.
     let conversation_ready = if cloud_configured || local_configured {
@@ -284,6 +425,10 @@ pub(crate) fn build_resident_status() -> ResidentStatus {
 }
 
 fn forward_resident_message(relay: &ResidentRelay, message: &str) -> Result<String, &'static str> {
+    if relay.locality() == EngineLocality::Cloud && !hosted_execution_allowed() {
+        return Err("hosted model access is blocked by Private mode or OS policy");
+    }
+
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(resident_read_timeout_secs()))
@@ -291,13 +436,9 @@ fn forward_resident_message(relay: &ResidentRelay, message: &str) -> Result<Stri
         .build();
 
     match relay {
-        ResidentRelay::Contract { url, authorization } => {
-            let request = agent.post(url);
-            let request = match authorization {
-                Some(authorization) => request.set("Authorization", authorization),
-                None => request,
-            };
-            let response = request
+        ResidentRelay::LocalContract { url } => {
+            let response = agent
+                .post(url)
                 .send_json(serde_json::json!({ "message": message }))
                 .map_err(|_| "model access request was rejected")?;
             let relay_response: RelayResponse = response
@@ -305,7 +446,7 @@ fn forward_resident_message(relay: &ResidentRelay, message: &str) -> Result<Stri
                 .map_err(|_| "model access response was not understood")?;
             finalize_reply(&relay_response.text)
         }
-        ResidentRelay::Ollama { url, model } => {
+        ResidentRelay::LocalRuntime { url, model } => {
             let endpoint = format!("{}/api/generate", url.trim_end_matches('/'));
             let response = agent
                 .post(&endpoint)
@@ -325,11 +466,7 @@ fn forward_resident_message(relay: &ResidentRelay, message: &str) -> Result<Stri
             let response = agent
                 .post(&endpoint)
                 .set("Authorization", &format!("Bearer {key}"))
-                .send_json(serde_json::json!({
-                    "model": model,
-                    "input": message,
-                    "store": false,
-                }))
+                .send_json(openai_responses_payload(model, message))
                 .map_err(|_| "OpenAI API request was rejected")?;
             let reply: OpenAiResponsesReply = response
                 .into_json()
@@ -341,6 +478,44 @@ fn forward_resident_message(relay: &ResidentRelay, message: &str) -> Result<Stri
             // is involved here — the OS shells out and reads the final message.
             let reply = crate::codex::run_codex(message)?;
             finalize_reply(&reply)
+        }
+        ResidentRelay::ManagedCloud { url, authorization } => {
+            let response = agent
+                .post(url)
+                .set("Authorization", authorization)
+                .send_json(serde_json::json!({ "message": message }))
+                .map_err(|_| "managed model access request was rejected")?;
+            let relay_response: RelayResponse = response
+                .into_json()
+                .map_err(|_| "managed model access response was not understood")?;
+            finalize_reply(&relay_response.text)
+        }
+    }
+}
+
+fn openai_responses_payload(model: &str, message: &str) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "model": model,
+        "input": message,
+        "store": false,
+    });
+    // GPT-5.6 defaults to medium, but naming the balanced reasoning contract
+    // explicitly keeps a future API default change from silently changing the
+    // latency/quality profile of the Goblins resident. Older/custom models do
+    // not receive a parameter they may not support.
+    if model == "gpt-5.6" || model.starts_with("gpt-5.6-") {
+        payload["reasoning"] = serde_json::json!({ "effort": "medium" });
+    }
+    payload
+}
+
+impl ResidentRelay {
+    const fn locality(&self) -> EngineLocality {
+        match self {
+            Self::LocalContract { .. } | Self::LocalRuntime { .. } => EngineLocality::OnDevice,
+            Self::OpenAiApi { .. } | Self::Codex | Self::ManagedCloud { .. } => {
+                EngineLocality::Cloud
+            }
         }
     }
 }
@@ -422,24 +597,22 @@ fn ollama_generate_payload(
 
 fn local_model_runtime_rejection(error: ureq::Error) -> &'static str {
     match error {
-        ureq::Error::Status(status, response) => {
-            let body = response.into_string().unwrap_or_default();
-            eprintln!(
-                "GOBLINS_OS_LOCAL_MODEL_RUNTIME_REJECTED status={status} body_tail={}",
-                log_tail(&body, 600)
-            );
+        ureq::Error::Status(status, _) => {
+            // Runtime bodies can echo prompts or other user context. Log only the
+            // HTTP status; response content is never diagnostics-safe.
+            eprintln!("GOBLINS_OS_LOCAL_MODEL_RUNTIME_REJECTED status={status}");
         }
         other => {
-            eprintln!("GOBLINS_OS_LOCAL_MODEL_RUNTIME_REJECTED error={other}");
+            eprintln!(
+                "GOBLINS_OS_LOCAL_MODEL_RUNTIME_REJECTED transport={}",
+                match other {
+                    ureq::Error::Transport(_) => "transport",
+                    ureq::Error::Status(_, _) => "status",
+                }
+            );
         }
     }
     "local model runtime request was rejected"
-}
-
-fn log_tail(value: &str, max_chars: usize) -> String {
-    let mut tail: String = value.chars().rev().take(max_chars).collect();
-    tail = tail.chars().rev().collect();
-    tail.replace(['\n', '\r'], " ")
 }
 
 /// Pure timeout policy (testable without touching the process environment): keep the
@@ -450,120 +623,188 @@ fn clamp_resident_timeout(parsed: Option<u64>) -> u64 {
     goblins_os_ai::resident_timeout::clamp_secs(parsed)
 }
 
-/// Generate text through whatever resident engine is active (GPT-OSS by default,
-/// or the user's OpenAI key if they selected it). Used by the app builder so the
-/// OS can turn intent into apps with the same brain that powers conversation.
-/// The engine that would actually answer right now, after the relay's priority and
-/// the offline gate — what the Studio shows as the active brain for a turn.
+/// The exact engine that would answer now. Selection is authoritative: an
+/// unavailable local route returns `none` instead of falling through to cloud.
 pub(crate) fn active_engine_label() -> &'static str {
-    match resident_relay() {
-        Some(ResidentRelay::OpenAiApi { .. }) => "openai-api",
-        Some(ResidentRelay::Codex) => "codex",
-        Some(ResidentRelay::Ollama { .. } | ResidentRelay::Contract { .. }) => "local-gpt-oss",
-        None => "none",
-    }
+    resolve_resident_route()
+        .map(|route| route.kind.engine_label())
+        .unwrap_or("none")
+}
+
+pub(crate) fn active_engine_locality() -> Option<EngineLocality> {
+    resolve_resident_route()
+        .ok()
+        .map(|route| route.kind.locality())
 }
 
 pub(crate) fn resident_engine_ready() -> bool {
-    resident_relay().is_some()
+    resolve_resident_route().is_ok()
 }
 
 pub(crate) fn resident_generate(prompt: &str) -> Result<String, &'static str> {
-    let relay = resident_relay()
-        .ok_or("no model engine is configured (set up GPT-OSS locally or add an OpenAI API key)")?;
-    forward_resident_message(&relay, prompt)
+    resident_generate_with_engine(prompt).map(|(text, _)| text)
 }
 
-fn resident_relay() -> Option<ResidentRelay> {
-    // Offline / private mode is the authoritative egress gate: when it is on, only
-    // on-device, loopback relays are eligible — hosted OpenAI and any server relay
-    // are skipped entirely so the AI never reaches the network.
-    let offline = crate::privacy::offline_enabled();
+pub(crate) fn resident_generate_with_engine(
+    prompt: &str,
+) -> Result<(String, &'static str), &'static str> {
+    let route = resolve_resident_route().map_err(route_unavailable_detail)?;
+    let engine = route.kind.engine_label();
+    forward_resident_message(&route.relay, prompt).map(|text| (text, engine))
+}
 
-    // 0. The user explicitly chose hosted OpenAI over the local GPT-OSS heart,
-    //    and supplied their own OS-owned API key. (GPT-OSS remains the default.)
-    //    Hosted models reach the internet, so they are never used while offline.
-    if !offline && crate::openai_key::openai_engine_selected() {
-        if let Some(key) = crate::openai_key::stored_api_key() {
-            return Some(ResidentRelay::OpenAiApi {
-                key,
-                model: crate::openai_key::configured_model(),
-                base: openai_api_base(),
-            });
+/// True only when a hosted request is permitted at the moment it executes.
+/// Codex calls this too because Studio invokes Codex directly for workspace turns.
+pub(crate) fn hosted_execution_allowed() -> bool {
+    !crate::privacy::offline_enabled()
+        && policy_state_for_control("cloud-openai") == PolicyControlState::Allowed
+}
+
+fn resolve_route_kind(inputs: RouteInputs) -> Result<ResidentRouteKind, RouteUnavailable> {
+    match inputs.selection {
+        EngineSelection::LocalGptOss => {
+            if inputs.local_contract_ready {
+                Ok(ResidentRouteKind::LocalContract)
+            } else if inputs.local_runtime_ready {
+                Ok(ResidentRouteKind::LocalRuntime)
+            } else {
+                Err(RouteUnavailable::LocalNotReady)
+            }
+        }
+        selection => {
+            if inputs.private_mode {
+                return Err(RouteUnavailable::PrivateMode);
+            }
+            if !inputs.cloud_allowed {
+                return Err(RouteUnavailable::CloudPolicyBlocked);
+            }
+            match selection {
+                EngineSelection::Codex if inputs.codex_ready => Ok(ResidentRouteKind::Codex),
+                EngineSelection::Codex => Err(RouteUnavailable::CodexNotReady),
+                EngineSelection::OpenAiApi if !inputs.openai_key_ready => {
+                    Err(RouteUnavailable::OpenAiKeyMissing)
+                }
+                EngineSelection::OpenAiApi if !inputs.openai_base_https => {
+                    Err(RouteUnavailable::OpenAiBaseInvalid)
+                }
+                EngineSelection::OpenAiApi => Ok(ResidentRouteKind::OpenAiApi),
+                EngineSelection::ManagedCloud if inputs.managed_cloud_ready => {
+                    Ok(ResidentRouteKind::ManagedCloud)
+                }
+                EngineSelection::ManagedCloud => Err(RouteUnavailable::ManagedCloudNotReady),
+                EngineSelection::LocalGptOss => unreachable!("local selection handled above"),
+            }
         }
     }
+}
 
-    // 0b. The user chose their OpenAI account via Codex CLI (Sign in with ChatGPT)
-    //     and is signed in. Codex reaches the internet, so it is offline-gated too.
-    if !offline && crate::openai_key::codex_engine_selected() && crate::codex::codex_available() {
-        return Some(ResidentRelay::Codex);
-    }
+fn resolve_resident_route() -> Result<ResolvedResidentRoute, RouteUnavailable> {
+    let selection = crate::openai_key::selected_engine();
+    let local_contract = local_contract_url();
+    let local_runtime = local_runtime_config();
+    let openai_key = crate::openai_key::stored_api_key();
+    let openai_base = validated_openai_api_base();
+    let managed_cloud = managed_cloud_config();
+    let inputs = RouteInputs {
+        selection,
+        private_mode: crate::privacy::offline_enabled(),
+        cloud_allowed: policy_state_for_control("cloud-openai") == PolicyControlState::Allowed,
+        local_contract_ready: local_contract.is_some(),
+        local_runtime_ready: local_runtime.is_some(),
+        codex_ready: crate::codex::codex_available(),
+        openai_key_ready: openai_key.is_some(),
+        openai_base_https: openai_base.is_some(),
+        managed_cloud_ready: managed_cloud.is_some(),
+    };
+    let kind = resolve_route_kind(inputs)?;
+    let relay = match kind {
+        ResidentRouteKind::LocalContract => ResidentRelay::LocalContract {
+            url: local_contract.expect("route kind requires local contract"),
+        },
+        ResidentRouteKind::LocalRuntime => {
+            let (url, model) = local_runtime.expect("route kind requires local runtime");
+            ResidentRelay::LocalRuntime { url, model }
+        }
+        ResidentRouteKind::Codex => ResidentRelay::Codex,
+        ResidentRouteKind::OpenAiApi => ResidentRelay::OpenAiApi {
+            key: openai_key.expect("route kind requires OpenAI key"),
+            model: crate::openai_key::configured_model(),
+            base: openai_base.expect("route kind requires HTTPS OpenAI base"),
+        },
+        ResidentRouteKind::ManagedCloud => {
+            let (url, authorization) =
+                managed_cloud.expect("route kind requires managed cloud configuration");
+            ResidentRelay::ManagedCloud { url, authorization }
+        }
+    };
+    Ok(ResolvedResidentRoute { kind, relay })
+}
 
-    // 1. An explicit OS-owned local contract relay (loopback only) — offline-safe.
-    if let Some(url) = env_var_with_compat(LOCAL_MODEL_RELAY_ENV, LOCAL_MODEL_RELAY_LEGACY_ENV) {
-        if local_http_url(&url) {
-            return Some(ResidentRelay::Contract {
-                url,
-                authorization: None,
-            });
+fn route_unavailable_detail(reason: RouteUnavailable) -> &'static str {
+    match reason {
+        RouteUnavailable::PrivateMode => "Private mode blocks the selected cloud engine.",
+        RouteUnavailable::CloudPolicyBlocked => {
+            "The active policy blocks the selected cloud engine."
+        }
+        RouteUnavailable::LocalNotReady => "On-device GPT-OSS is not ready.",
+        RouteUnavailable::CodexNotReady => "Codex is not installed and signed in.",
+        RouteUnavailable::OpenAiKeyMissing => "Your OpenAI API key is not configured.",
+        RouteUnavailable::OpenAiBaseInvalid => {
+            "The configured OpenAI API address is not a valid HTTPS address."
+        }
+        RouteUnavailable::ManagedCloudNotReady => {
+            "The selected managed OpenAI service is not configured."
         }
     }
+}
 
-    // 2. A locally-detected open-weight runtime spoken to natively (loopback only)
-    //    — the GPT-OSS heart, and the only engine that runs fully offline.
-    if let (Ok(url), Ok(model)) = (
-        env::var("GOBLINS_OS_LOCAL_RUNTIME_URL"),
-        env::var("GOBLINS_OS_LOCAL_MODEL"),
-    ) {
-        if local_http_url(&url) && !model.trim().is_empty() {
-            return Some(ResidentRelay::Ollama {
-                url,
-                model: model.trim().to_string(),
-            });
-        }
-    }
+fn local_contract_url() -> Option<String> {
+    openai_credential_with_compat(LOCAL_MODEL_RELAY_ENV, LOCAL_MODEL_RELAY_LEGACY_ENV)
+        .filter(|url| local_http_url(url))
+}
 
-    // 3. A server-side OpenAI relay (HTTPS) — network egress, so never offline.
-    if offline {
-        return None;
+fn local_runtime_config() -> Option<(String, String)> {
+    let url = env::var("GOBLINS_OS_LOCAL_RUNTIME_URL").ok()?;
+    let model = env::var("GOBLINS_OS_LOCAL_MODEL").ok()?;
+    let model = model.trim();
+    if local_http_url(&url) && !model.is_empty() {
+        Some((url, model.to_string()))
+    } else {
+        None
     }
-    let url = env_var_with_compat(RESIDENT_RELAY_ENV, RESIDENT_RELAY_LEGACY_ENV)?;
+}
+
+fn managed_cloud_config() -> Option<(String, String)> {
+    let url = openai_credential_with_compat(RESIDENT_RELAY_ENV, RESIDENT_RELAY_LEGACY_ENV)?;
     if !server_https_url(&url) {
         return None;
     }
-    let key = env::var("AI_GATEWAY_API_KEY").ok()?;
-    Some(ResidentRelay::Contract {
-        url,
-        authorization: Some(format!("Bearer {key}")),
-    })
+    let key = openai_credential("AI_GATEWAY_API_KEY")?;
+    (!key.trim().is_empty()).then(|| (url, format!("Bearer {key}")))
 }
 
-/// The authoritative relay eligibility, derived from the SAME gate `resident_relay()`
-/// uses to actually answer a turn (offline/private mode + the HTTPS / loopback URL
-/// checks). The status the daemon serves must report exactly what would run, so it can
-/// never claim cloud-ready while `resident_relay()` would return `None` (e.g. offline
-/// mode is on or the server relay URL is not HTTPS). `cloud` is true only when a real
-/// hosted engine (HTTPS server relay, the user's OpenAI key/account) would be selected;
-/// `local` only when a real loopback engine (local contract relay or local runtime)
-/// would be selected.
-fn relay_eligibility() -> (bool, bool) {
-    classify_relay(resident_relay().as_ref())
+pub(crate) fn local_model_route_configured() -> bool {
+    local_contract_url().is_some() || local_runtime_config().is_some()
 }
 
-/// Map an eligible relay (the one `resident_relay()` would actually use, already past
-/// the offline gate and the HTTPS / loopback URL checks) to `(cloud, local)`. `None`
-/// — including when offline mode or a non-HTTPS server relay made every cloud branch
-/// ineligible — yields `(false, false)`.
-fn classify_relay(relay: Option<&ResidentRelay>) -> (bool, bool) {
-    match relay {
-        Some(ResidentRelay::OpenAiApi { .. } | ResidentRelay::Codex) => (true, false),
-        // A contract relay is either an offline-safe loopback relay (local) or an
-        // HTTPS server relay (cloud); distinguish by the URL the gate accepted.
-        Some(ResidentRelay::Contract { url, .. }) if local_http_url(url) => (false, true),
-        Some(ResidentRelay::Contract { .. }) => (true, false),
-        Some(ResidentRelay::Ollama { .. }) => (false, true),
-        None => (false, false),
-    }
+pub(crate) fn managed_cloud_route_configured() -> bool {
+    managed_cloud_config().is_some()
+}
+
+fn validated_openai_api_base_from(value: Option<&str>) -> Option<String> {
+    let base = value.unwrap_or(DEFAULT_OPENAI_API_BASE).trim();
+    let uri = base.parse::<Uri>().ok()?;
+    (server_https_url(base) && uri.query().is_none())
+        .then(|| base.trim_end_matches('/').to_string())
+}
+
+fn validated_openai_api_base() -> Option<String> {
+    let configured = env::var("GOBLINS_OS_OPENAI_API_BASE").ok();
+    validated_openai_api_base_from(configured.as_deref())
+}
+
+pub(crate) fn openai_api_base_is_valid() -> bool {
+    validated_openai_api_base().is_some()
 }
 
 fn read_resident_state(path: &Path) -> Option<StoredResidentState> {
@@ -603,14 +844,12 @@ fn resident_process_label(state: &ResidentProcessState) -> &'static str {
     }
 }
 
-fn default_capabilities() -> Vec<ResidentCapability> {
-    let cloud = cloud_relay_configured_from_env();
-    let local = local_relay_configured_from_env();
+fn default_capabilities(ready: bool) -> Vec<ResidentCapability> {
     vec![
         ResidentCapability {
             id: "conversation".to_string(),
             label: "Conversation".to_string(),
-            state: if cloud || local {
+            state: if ready {
                 CapabilityState::Ready
             } else {
                 CapabilityState::Waiting
@@ -626,41 +865,16 @@ fn default_capabilities() -> Vec<ResidentCapability> {
     ]
 }
 
-fn selected_engine(cloud_relay: bool, local_relay: bool) -> &'static str {
-    if local_relay {
-        "local-gpt-oss"
-    } else if cloud_relay {
-        "cloud-openai"
-    } else {
-        "not-configured"
-    }
-}
-
-fn cloud_relay_configured_from_env() -> bool {
-    env_var_os_with_compat(RESIDENT_RELAY_ENV, RESIDENT_RELAY_LEGACY_ENV)
-        && env::var_os("AI_GATEWAY_API_KEY").is_some()
-}
-
-fn local_relay_configured_from_env() -> bool {
-    env_var_os_with_compat(LOCAL_MODEL_RELAY_ENV, LOCAL_MODEL_RELAY_LEGACY_ENV)
-        || (env::var_os("GOBLINS_OS_LOCAL_RUNTIME_URL").is_some()
-            && env::var_os("GOBLINS_OS_LOCAL_MODEL").is_some())
-}
-
-fn env_var_with_compat(primary: &str, legacy: &str) -> Option<String> {
-    env::var(primary).or_else(|_| env::var(legacy)).ok()
-}
-
-fn env_var_os_with_compat(primary: &str, legacy: &str) -> bool {
-    env::var_os(primary).is_some() || env::var_os(legacy).is_some()
-}
-
-fn openai_api_base() -> String {
-    env::var("GOBLINS_OS_OPENAI_API_BASE").unwrap_or_else(|_| "https://api.openai.com".to_string())
-}
-
 fn server_https_url(value: &str) -> bool {
-    value.starts_with("https://") && https_host(value).is_some()
+    let Ok(uri) = value.parse::<Uri>() else {
+        return false;
+    };
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    uri.scheme_str() == Some("https")
+        && !authority.host().is_empty()
+        && !authority.as_str().contains('@')
 }
 
 fn local_http_url(value: &str) -> bool {
@@ -669,10 +883,6 @@ fn local_http_url(value: &str) -> bool {
     };
 
     matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1")
-}
-
-fn https_host(value: &str) -> Option<String> {
-    host_after_scheme(value, "https://")
 }
 
 fn http_host(value: &str) -> Option<String> {
@@ -704,12 +914,14 @@ fn host_after_scheme(value: &str, scheme: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_resident_status, clamp_resident_timeout, classify_relay,
-        extract_openai_response_text, forward_resident_message, local_http_url, log_tail,
-        ollama_generate_payload, resident_process_detail, selected_engine, server_https_url,
-        CapabilityState, OpenAiResponseContent, OpenAiResponseOutput, OpenAiResponsesReply,
-        ResidentProcessState, ResidentRelay,
+        build_resident_status, clamp_resident_timeout, extract_openai_response_text,
+        forward_resident_message, local_http_url, ollama_generate_payload,
+        openai_responses_payload, resident_process_detail, resolve_route_kind, server_https_url,
+        validated_openai_api_base_from, CapabilityState, EngineLocality, OpenAiResponseContent,
+        OpenAiResponseOutput, OpenAiResponsesReply, ResidentProcessState, ResidentRelay,
+        ResidentRouteKind, RouteInputs, RouteUnavailable,
     };
+    use crate::openai_key::EngineSelection;
 
     #[test]
     fn resident_timeout_defaults_and_clamps() {
@@ -770,10 +982,7 @@ mod tests {
     #[test]
     fn relay_round_trip_returns_real_reply() {
         let url = serve_relay_once(r#"{"text":"Hello from the local model relay."}"#.to_string());
-        let relay = ResidentRelay::Contract {
-            url,
-            authorization: None,
-        };
+        let relay = ResidentRelay::LocalContract { url };
         let reply = forward_resident_message(&relay, "ping from the Goblins OS resident")
             .expect("resident conversation should round-trip through the local relay");
         assert_eq!(reply, "Hello from the local model relay.");
@@ -782,33 +991,11 @@ mod tests {
     #[test]
     fn relay_rejects_empty_reply() {
         let url = serve_relay_once(r#"{"text":""}"#.to_string());
-        let relay = ResidentRelay::Contract {
-            url,
-            authorization: None,
-        };
+        let relay = ResidentRelay::LocalContract { url };
         assert!(
             forward_resident_message(&relay, "ping").is_err(),
             "an empty relay reply must be rejected, never surfaced as a conversation turn"
         );
-    }
-
-    #[test]
-    fn byo_openai_key_round_trips_in_responses_protocol() {
-        // The bring-your-own-key engine speaks OpenAI's current Responses API
-        // shape; verify it parses output_text from a real socket.
-        let base = serve_relay_once(
-            r#"{"id":"resp_test","object":"response","output_text":"Hosted OpenAI reply."}"#
-                .to_string(),
-        );
-        let base = base.trim_end_matches("/v1/resident").to_string();
-        let relay = ResidentRelay::OpenAiApi {
-            key: "sk-proj-test".to_string(),
-            model: "gpt-5.5".to_string(),
-            base,
-        };
-        let reply = forward_resident_message(&relay, "ping")
-            .expect("bring-your-own-key conversation should round-trip");
-        assert_eq!(reply, "Hosted OpenAI reply.");
     }
 
     #[test]
@@ -827,6 +1014,24 @@ mod tests {
             extract_openai_response_text(reply).unwrap(),
             "Nested hosted OpenAI reply."
         );
+    }
+
+    #[test]
+    fn gpt_5_6_responses_payload_is_private_and_explicitly_balanced() {
+        for model in ["gpt-5.6", "gpt-5.6-sol"] {
+            let payload = openai_responses_payload(model, "Build a private note.");
+            assert_eq!(payload["model"], model);
+            assert_eq!(payload["input"], "Build a private note.");
+            assert_eq!(payload["store"], false);
+            assert_eq!(payload["reasoning"]["effort"], "medium");
+        }
+    }
+
+    #[test]
+    fn responses_payload_does_not_send_unsupported_reasoning_to_other_models() {
+        let payload = openai_responses_payload("operator-approved-model", "ping");
+        assert_eq!(payload["store"], false);
+        assert!(payload.get("reasoning").is_none());
     }
 
     #[test]
@@ -853,7 +1058,7 @@ mod tests {
         // serve_relay_once returns "http://host:port/v1/resident"; the Ollama relay
         // appends /api/generate to the base, so trim the test path back to the root.
         let url = base.trim_end_matches("/v1/resident").to_string();
-        let relay = ResidentRelay::Ollama {
+        let relay = ResidentRelay::LocalRuntime {
             url,
             model: "gpt-oss-20b".to_string(),
         };
@@ -872,12 +1077,6 @@ mod tests {
 
         let without_keepalive = ollama_generate_payload("gpt-oss-20b", "ping", None);
         assert!(without_keepalive.get("keep_alive").is_none());
-    }
-
-    #[test]
-    fn runtime_error_log_tail_is_bounded_and_single_line() {
-        assert_eq!(log_tail("a\nb\rc", 10), "a b c");
-        assert_eq!(log_tail("abcdef", 3), "def");
     }
 
     #[test]
@@ -926,13 +1125,6 @@ mod tests {
     }
 
     #[test]
-    fn local_engine_has_priority() {
-        assert_eq!(selected_engine(true, true), "local-gpt-oss");
-        assert_eq!(selected_engine(true, false), "cloud-openai");
-        assert_eq!(selected_engine(false, false), "not-configured");
-    }
-
-    #[test]
     fn relay_urls_are_strictly_scoped() {
         assert!(local_http_url("http://127.0.0.1:11434/v1/resident"));
         assert!(local_http_url("http://[::1]:11434/v1/resident"));
@@ -940,48 +1132,136 @@ mod tests {
         assert!(server_https_url("https://relay.example.com/goblins-os"));
         assert!(!server_https_url("http://relay.example.com/goblins-os"));
         assert!(!server_https_url("https://user@example.com/goblins-os"));
+        assert!(!server_https_url("https://exa mple.com/goblins-os"));
     }
 
     #[test]
-    fn status_reports_only_actual_relay_eligibility() {
-        // A hosted engine that would actually run reports cloud, never local.
+    fn custom_openai_api_base_must_be_https() {
         assert_eq!(
-            classify_relay(Some(&ResidentRelay::OpenAiApi {
-                key: "sk-test".to_string(),
-                model: "gpt-5.5".to_string(),
-                base: "https://api.openai.com".to_string(),
-            })),
-            (true, false)
-        );
-        assert_eq!(classify_relay(Some(&ResidentRelay::Codex)), (true, false));
-        // An HTTPS server relay is cloud; a loopback contract relay is local.
-        assert_eq!(
-            classify_relay(Some(&ResidentRelay::Contract {
-                url: "https://relay.example.com/goblins-os".to_string(),
-                authorization: Some("Bearer test".to_string()),
-            })),
-            (true, false)
+            validated_openai_api_base_from(None).as_deref(),
+            Some("https://api.openai.com")
         );
         assert_eq!(
-            classify_relay(Some(&ResidentRelay::Contract {
+            validated_openai_api_base_from(Some("https://gateway.example.com/openai/")).as_deref(),
+            Some("https://gateway.example.com/openai")
+        );
+        assert!(validated_openai_api_base_from(Some("http://gateway.example.com")).is_none());
+        assert!(validated_openai_api_base_from(Some("https://user@gateway.example.com")).is_none());
+        assert!(validated_openai_api_base_from(Some("https://exa mple.com")).is_none());
+        assert!(
+            validated_openai_api_base_from(Some("https://gateway.example.com?token=x")).is_none()
+        );
+        assert!(validated_openai_api_base_from(Some("gateway.example.com")).is_none());
+    }
+
+    fn expected_route(inputs: RouteInputs) -> Result<ResidentRouteKind, RouteUnavailable> {
+        match inputs.selection {
+            EngineSelection::LocalGptOss if inputs.local_contract_ready => {
+                Ok(ResidentRouteKind::LocalContract)
+            }
+            EngineSelection::LocalGptOss if inputs.local_runtime_ready => {
+                Ok(ResidentRouteKind::LocalRuntime)
+            }
+            EngineSelection::LocalGptOss => Err(RouteUnavailable::LocalNotReady),
+            _ if inputs.private_mode => Err(RouteUnavailable::PrivateMode),
+            _ if !inputs.cloud_allowed => Err(RouteUnavailable::CloudPolicyBlocked),
+            EngineSelection::Codex if inputs.codex_ready => Ok(ResidentRouteKind::Codex),
+            EngineSelection::Codex => Err(RouteUnavailable::CodexNotReady),
+            EngineSelection::OpenAiApi if !inputs.openai_key_ready => {
+                Err(RouteUnavailable::OpenAiKeyMissing)
+            }
+            EngineSelection::OpenAiApi if !inputs.openai_base_https => {
+                Err(RouteUnavailable::OpenAiBaseInvalid)
+            }
+            EngineSelection::OpenAiApi => Ok(ResidentRouteKind::OpenAiApi),
+            EngineSelection::ManagedCloud if inputs.managed_cloud_ready => {
+                Ok(ResidentRouteKind::ManagedCloud)
+            }
+            EngineSelection::ManagedCloud => Err(RouteUnavailable::ManagedCloudNotReady),
+        }
+    }
+
+    #[test]
+    fn route_matrix_is_exhaustive_and_never_crosses_provider_or_locality() {
+        let selections = [
+            EngineSelection::LocalGptOss,
+            EngineSelection::Codex,
+            EngineSelection::OpenAiApi,
+            EngineSelection::ManagedCloud,
+        ];
+
+        // Exhaust every combination of privacy, policy, and the six concrete
+        // route-readiness inputs for every selection: 4 * 2^8 = 1024 cases.
+        for selection in selections {
+            for bits in 0_u16..=u8::MAX as u16 {
+                let enabled = |bit: u8| bits & (1_u16 << bit) != 0;
+                let inputs = RouteInputs {
+                    selection,
+                    private_mode: enabled(0),
+                    cloud_allowed: enabled(1),
+                    local_contract_ready: enabled(2),
+                    local_runtime_ready: enabled(3),
+                    codex_ready: enabled(4),
+                    openai_key_ready: enabled(5),
+                    openai_base_https: enabled(6),
+                    managed_cloud_ready: enabled(7),
+                };
+                assert_eq!(
+                    resolve_route_kind(inputs),
+                    expected_route(inputs),
+                    "route mismatch for {inputs:?}"
+                );
+                if let Ok(route) = resolve_route_kind(inputs) {
+                    assert_eq!(route.engine_label(), selection.as_id());
+                    assert_eq!(
+                        route.locality() == EngineLocality::Cloud,
+                        selection.is_hosted(),
+                        "route crossed locality for {inputs:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn route_contracts_report_their_real_locality_and_provider() {
+        assert_eq!(
+            ResidentRouteKind::LocalContract.locality(),
+            EngineLocality::OnDevice
+        );
+        assert_eq!(
+            ResidentRouteKind::LocalRuntime.locality(),
+            EngineLocality::OnDevice
+        );
+        assert_eq!(
+            ResidentRouteKind::ManagedCloud.locality(),
+            EngineLocality::Cloud
+        );
+        assert_ne!(
+            ResidentRouteKind::LocalContract.provider(),
+            ResidentRouteKind::ManagedCloud.provider()
+        );
+        assert!(ResidentRouteKind::LocalContract
+            .contract_detail()
+            .contains("loopback"));
+        assert!(ResidentRouteKind::ManagedCloud
+            .contract_detail()
+            .contains("HTTPS"));
+        assert_eq!(
+            ResidentRelay::LocalContract {
                 url: "http://127.0.0.1:11434/v1/resident".to_string(),
-                authorization: None,
-            })),
-            (false, true)
+            }
+            .locality(),
+            EngineLocality::OnDevice
         );
         assert_eq!(
-            classify_relay(Some(&ResidentRelay::Ollama {
-                url: "http://127.0.0.1:11434".to_string(),
-                model: "gpt-oss-20b".to_string(),
-            })),
-            (false, true)
+            ResidentRelay::ManagedCloud {
+                url: "https://relay.example.com/resident".to_string(),
+                authorization: "redacted-test-value".to_string(),
+            }
+            .locality(),
+            EngineLocality::Cloud
         );
-        // When no relay is eligible — e.g. offline/private mode disqualifies every
-        // cloud branch, or the server relay URL is not HTTPS — cloud must read
-        // not-configured, never Ready, so the status can't claim cloud while
-        // `resident_relay()` returns None.
-        assert_eq!(classify_relay(None), (false, false));
-        assert_eq!(selected_engine(false, false), "not-configured");
     }
 
     #[test]

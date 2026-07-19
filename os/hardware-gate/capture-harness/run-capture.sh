@@ -15,11 +15,215 @@
 # macOS/hvf. KVM is required for x86_64 at usable speed; aarch64 also runs on hvf.
 set -euo pipefail
 
+normalize_semantic_screenshot_frame() {
+  local source_file="$1"
+  local output_file="$2"
+  local width height crop_width crop_height crop_file
+
+  if command -v magick >/dev/null 2>&1; then
+    magick "$source_file" -gravity Center -crop '1200x800+0+0' +repage \
+      -resize 32x24! -background white -alpha remove -alpha off \
+      "BMP3:$output_file" >/dev/null 2>&1
+  elif command -v convert >/dev/null 2>&1; then
+    convert "$source_file" -gravity Center -crop '1200x800+0+0' +repage \
+      -resize 32x24! -background white -alpha remove -alpha off \
+      "BMP3:$output_file" >/dev/null 2>&1
+  elif command -v sips >/dev/null 2>&1; then
+    width="$(sips -g pixelWidth "$source_file" 2>/dev/null | awk '/pixelWidth:/{print $2; exit}')"
+    height="$(sips -g pixelHeight "$source_file" 2>/dev/null | awk '/pixelHeight:/{print $2; exit}')"
+    [ -n "$width" ] && [ -n "$height" ] && [ "$width" -gt 0 ] && [ "$height" -gt 0 ] || return 1
+    if [ "$width" -lt 1200 ]; then crop_width="$width"; else crop_width=1200; fi
+    if [ "$height" -lt 800 ]; then crop_height="$height"; else crop_height=800; fi
+    crop_file="$output_file.crop.png"
+    sips --cropToHeightWidth "$crop_height" "$crop_width" \
+      "$source_file" --out "$crop_file" >/dev/null 2>&1 \
+      && sips --resampleHeightWidth 24 32 -s format bmp \
+        "$crop_file" --out "$output_file" >/dev/null 2>&1
+  else
+    echo "[semantic-frame][FAIL] normalization requires ImageMagick or macOS sips" >&2
+    return 1
+  fi
+  [ -s "$output_file" ]
+}
+
+semantic_screenshot_frames_are_distinct() {
+  local screenshot_dir="$1"
+  local output_mode="${2:-verbose}"
+  local scratch_dir frame_spec frame_name frame_file checker_rc
+
+  # Normalize a fixed central application crop, not the whole framebuffer. This
+  # excludes the shell clock and most pointer travel. A tolerant coarse-grid
+  # comparison then requires a substantive multi-cell change, so a clock glyph
+  # or pointer cannot turn one reused application state into distinct proof.
+  scratch_dir="$(mktemp -d "${TMPDIR:-/tmp}/goblins-semantic-frame.XXXXXX")"
+  for frame_spec in \
+    "login|03-login.png" \
+    "home|07-home.png" \
+    "studio-before|13-studio-before.png" \
+    "studio-running|14-studio-running.png" \
+    "studio-result-app-detail|15-studio-app-detail.png" \
+    "studio-built-open|16-built-app-open.png"; do
+    frame_name="${frame_spec%%|*}"
+    frame_file="${frame_spec#*|}"
+    if ! normalize_semantic_screenshot_frame \
+      "$screenshot_dir/$frame_file" "$scratch_dir/$frame_name.bmp"; then
+      echo "[semantic-frame][FAIL] could not normalize $screenshot_dir/$frame_file" >&2
+      rm -rf "$scratch_dir"
+      return 1
+    fi
+  done
+
+  if python3 - "$output_mode" \
+    "$scratch_dir/login.bmp" \
+    "$scratch_dir/home.bmp" \
+    "$scratch_dir/studio-before.bmp" \
+    "$scratch_dir/studio-running.bmp" \
+    "$scratch_dir/studio-result-app-detail.bmp" \
+    "$scratch_dir/studio-built-open.bmp" <<'PY'
+import struct
+import sys
+from pathlib import Path
+
+QUIET = sys.argv[1] == "quiet"
+FRAME_NAMES = (
+    "login",
+    "home",
+    "studio-before",
+    "studio-running",
+    "studio-result-app-detail",
+    "studio-built-open",
+)
+MIN_DISTANCE_PPM = 2500
+MIN_CHANGED_CELLS = 8
+
+
+def read_normalized_bmp(path):
+    encoded = Path(path).read_bytes()
+    if len(encoded) < 54 or encoded[:2] != b"BM":
+        raise ValueError(f"{path} is not a BMP")
+    pixel_offset = struct.unpack_from("<I", encoded, 10)[0]
+    dib_size = struct.unpack_from("<I", encoded, 14)[0]
+    if dib_size < 40:
+        raise ValueError(f"{path} has an unsupported BMP header")
+    width, stored_height = struct.unpack_from("<ii", encoded, 18)
+    planes, bits_per_pixel = struct.unpack_from("<HH", encoded, 26)
+    compression = struct.unpack_from("<I", encoded, 30)[0]
+    if width != 32 or abs(stored_height) != 24:
+        raise ValueError(f"{path} is not the expected 32x24 normalized frame")
+    if planes != 1 or bits_per_pixel not in (24, 32) or compression != 0:
+        raise ValueError(f"{path} has unsupported BMP pixel data")
+
+    height = abs(stored_height)
+    row_stride = ((width * bits_per_pixel + 31) // 32) * 4
+    required_size = pixel_offset + row_stride * height
+    if len(encoded) < required_size:
+        raise ValueError(f"{path} has truncated BMP pixel data")
+
+    top_down = stored_height < 0
+    pixels = []
+    bytes_per_pixel = bits_per_pixel // 8
+    for y in range(height):
+        stored_y = y if top_down else height - y - 1
+        row_start = pixel_offset + stored_y * row_stride
+        for x in range(width):
+            index = row_start + x * bytes_per_pixel
+            blue, green, red = encoded[index : index + 3]
+            pixels.append((red, green, blue))
+    return pixels
+
+
+def frame_distance(left, right):
+    absolute_difference = 0
+    changed_cells = 0
+    for left_pixel, right_pixel in zip(left, right):
+        channel_difference = [
+            abs(left_pixel[channel] - right_pixel[channel]) for channel in range(3)
+        ]
+        absolute_difference += sum(channel_difference)
+        if sum(channel_difference) // 3 >= 8:
+            changed_cells += 1
+    denominator = len(left) * 3 * 255
+    return (absolute_difference * 1_000_000) // denominator, changed_cells
+
+
+pairs = (
+    ("login vs Home", "login", "home"),
+    ("Studio before vs running", "studio-before", "studio-running"),
+    (
+        "Studio before vs result/app-detail",
+        "studio-before",
+        "studio-result-app-detail",
+    ),
+    ("Studio before vs built-open", "studio-before", "studio-built-open"),
+    (
+        "Studio running vs result/app-detail",
+        "studio-running",
+        "studio-result-app-detail",
+    ),
+    ("Studio running vs built-open", "studio-running", "studio-built-open"),
+    (
+        "Studio result/app-detail vs built-open",
+        "studio-result-app-detail",
+        "studio-built-open",
+    ),
+)
+
+try:
+    frames = {
+        name: read_normalized_bmp(path)
+        for name, path in zip(FRAME_NAMES, sys.argv[2:])
+    }
+except (OSError, ValueError, struct.error) as error:
+    print(f"[semantic-frame][FAIL] could not read normalized screenshot: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+failed = False
+for label, left_name, right_name in pairs:
+    distance_ppm, changed_cells = frame_distance(frames[left_name], frames[right_name])
+    detail = f"distance_ppm={distance_ppm} changed_cells={changed_cells}"
+    if distance_ppm < MIN_DISTANCE_PPM or changed_cells < MIN_CHANGED_CELLS:
+        print(
+            f"[semantic-frame][FAIL] {label} reused the same central application state ({detail})",
+            file=sys.stderr,
+        )
+        failed = True
+    elif not QUIET:
+        print(f"[semantic-frame][PASS] {label} is distinct ({detail})")
+
+if failed:
+    raise SystemExit(1)
+PY
+  then
+    checker_rc=0
+  else
+    checker_rc=$?
+  fi
+  rm -rf "$scratch_dir"
+  return "$checker_rc"
+}
+
+if [ "${1:-}" = "--check-semantic-screenshots" ]; then
+  if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+    echo "usage: $0 --check-semantic-screenshots <screenshot-dir> [quiet]" >&2
+    exit 2
+  fi
+  semantic_screenshot_frames_are_distinct "$2" "${3:-verbose}"
+  exit $?
+fi
+
 ARCH="${GOBLINS_OS_ARCH:-$(uname -m)}"
 case "$ARCH" in arm64|aarch64) ARCH=aarch64; QEMU=qemu-system-aarch64;; x86_64|amd64) ARCH=x86_64; QEMU=qemu-system-x86_64;; *) echo "unsupported arch $ARCH"; exit 2;; esac
+CANDIDATE_COMMIT="${GOBLINS_OS_CANDIDATE_COMMIT:-}"
+if [[ ! "$CANDIDATE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  echo "GOBLINS_OS_CANDIDATE_COMMIT must name the exact 40-hex source commit used for the verification ISO." >&2
+  exit 2
+fi
+CANDIDATE_COMMIT="$(printf '%s' "$CANDIDATE_COMMIT" | tr '[:upper:]' '[:lower:]')"
+export GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT"
 REPO="${REPO_ROOT:-$(pwd)}"
 ISO="${GOBLINS_OS_CAPTURE_ISO:-$REPO/os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso}"
 SHA_FILE="${GOBLINS_OS_CAPTURE_ISO_SHA256:-$ISO.sha256}"
+ISO_MANIFEST="${GOBLINS_OS_CAPTURE_ISO_MANIFEST:-$(dirname "$(dirname "$ISO")")/manifest-goblins-os-$ARCH.json}"
 BASE_WORK="${WORK_DIR:-/tmp/gos-hwgate-$ARCH}"
 WORK="$BASE_WORK"
 PORT="${HTTP_PORT:-8099}"
@@ -82,6 +286,12 @@ trap cleanup EXIT
 
 [ -f "$ISO" ] || { echo "missing ISO $ISO"; exit 1; }
 [ -f "$SHA_FILE" ] || { echo "missing ISO SHA256 file $SHA_FILE"; exit 1; }
+[ -f "$ISO_MANIFEST" ] || { echo "missing ISO manifest $ISO_MANIFEST"; exit 1; }
+if ! grep -Fq '"architecture": "'"$ARCH"'"' "$ISO_MANIFEST" \
+  || ! grep -Fq '"candidate_commit": "'"$CANDIDATE_COMMIT"'"' "$ISO_MANIFEST"; then
+  echo "ISO manifest must bind architecture $ARCH to candidate commit $CANDIDATE_COMMIT: $ISO_MANIFEST" >&2
+  exit 1
+fi
 
 require_verification_iso() {
   local missing=0
@@ -259,9 +469,10 @@ run_driver() {
 # Serve first-boot helper and receive capture signals. The orchestrator is
 # published by drive-capture.py only after the host has recorded the post-unlock
 # log offset, so early /ready signals cannot race ahead of the screenshot tailer.
-rm -f "$WORK/orchestrator.sh"
+rm -f "$WORK/orchestrator.sh" "$WORK/core-proof-operation.sh"
 ( cd "$WORK" \
     && sed "s/@GOS_PORT@/$PORT/g" "$HERE/firstboot-unlock.sh" > firstboot-unlock.sh \
+    && install -m 0644 "$HERE/core-proof-operation.sh" core-proof-operation.sh \
     && python3 -m http.server "$PORT" --bind 0.0.0.0 >"$WORK/httpd.log" 2>&1 ) &
 HTTPD=$!
 
@@ -615,11 +826,9 @@ fi
 # distinct. GNOME 42+ returns AccessDenied to scripted screenshots (org.gnome.
 # Shell.Screenshot), so the only automation path is the host QMP framebuffer
 # screendump, which collapses some surfaces to byte-identical duplicates when a
-# window doesn't foreground in time. close-signoff.sh only checks PNG validity,
-# not distinctness — so without this guard, duplicates would falsely read as
-# distinct proof and the shipping gate would go green on a lie. A human operator
-# (the gate's by-design path) visually confirms each surface; an unattended agent
-# cannot. Fail loudly rather than commit a dishonest run.
+# window doesn't foreground in time. The capture, close-signoff, and shipping
+# status paths all enforce these guards so copied proof cannot bypass them later.
+# Fail loudly rather than commit a dishonest run.
 md5cmd() { command -v md5sum >/dev/null && md5sum "$@" || md5 -r "$@"; }
 _required_pngs=()
 while IFS= read -r -d '' png; do
@@ -707,14 +916,20 @@ if [ "${_stable_distinct:-0}" -lt 8 ]; then
   exit 3
 fi
 
+if ! semantic_screenshot_frames_are_distinct "$RUN_DIR"; then
+  echo "HONESTY GUARD: named login/Home or Studio semantic states reused the same central application crop." >&2
+  echo "Clock, top-bar, and pointer-only changes do not count as distinct application proof." >&2
+  exit 3
+fi
+
 # Write the proof manifest + run close-signoff. The manifest records the
 # repo-relative ISO path: close-signoff and verify-shipping-status both match
 # the exact string "os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso", and the
 # committed manifest must not leak runner-absolute paths.
-python3 - "$RUN_DIR" "${RUN_DIR#"$REPO/"}" "$ARCH" "${ISO#"$REPO/"}" "$ISO_SHA" "$DATE" <<'PY'
+python3 - "$RUN_DIR" "${RUN_DIR#"$REPO/"}" "$ARCH" "${ISO#"$REPO/"}" "$ISO_SHA" "$DATE" "$CANDIDATE_COMMIT" <<'PY'
 import json,sys
-run_dir,rel_run_dir,arch,iso,sha,date=sys.argv[1:7]
-json.dump({"architecture":arch,"iso":iso,"iso_sha256":sha,
+run_dir,rel_run_dir,arch,iso,sha,date,candidate_commit=sys.argv[1:8]
+json.dump({"architecture":arch,"candidate_commit":candidate_commit,"iso":iso,"iso_sha256":sha,
           "captured_at":date+"T00:00:00Z","screenshot_run_dir":rel_run_dir,
           "firewall_live_toggle_proof":"firewall-live-toggle-proof.json",
           "text_shortcuts_session_enable_proof":"text-shortcuts-session-enable-proof.json",

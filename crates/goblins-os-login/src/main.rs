@@ -1,24 +1,23 @@
 use std::{
     env,
     error::Error,
-    fmt,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    thread,
+    fmt, thread,
     time::{Duration, Instant},
 };
 
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+use goblins_os_core_client::Response;
+use goblins_os_core_client::{initialize, ClientKind, CoreClient};
 use serde::Deserialize;
 
-const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
 const DEFAULT_CORE_WAIT_SECS: u64 = 60;
-const MAX_CORE_BODY_BYTES: usize = 1024 * 1024;
+const CORE_READ_TIMEOUT: Duration = Duration::from_millis(1200);
 
 type LoginResult<T> = Result<T, Box<dyn Error>>;
 
 #[derive(Clone)]
 struct LoginConfig {
-    core_url: String,
+    core: CoreClient,
     core_wait: Duration,
 }
 
@@ -58,21 +57,9 @@ struct SessionLock {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct HttpEndpoint {
-    host: String,
-    port: u16,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct HttpResponse {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
 enum CoreFetchError {
     Status(u16),
+    #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
     Malformed,
     Transport,
     Decode,
@@ -82,6 +69,7 @@ impl fmt::Display for CoreFetchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Status(status) => write!(formatter, "core returned HTTP {status}"),
+            #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
             Self::Malformed => formatter.write_str("core response was malformed"),
             Self::Transport => formatter.write_str("core connection failed"),
             Self::Decode => formatter.write_str("core response JSON did not match the OS contract"),
@@ -90,12 +78,13 @@ impl fmt::Display for CoreFetchError {
 }
 
 fn main() -> LoginResult<()> {
-    let config = LoginConfig::from_env();
-    let core_ready = wait_for_core(&config.core_url, config.core_wait);
+    let core = initialize(ClientKind::Login)?;
+    let config = LoginConfig::from_env(core);
+    let core_ready = wait_for_core(&config.core, config.core_wait);
     let state = load_login_state(&config, core_ready);
 
     println!("Goblins OS native login started");
-    println!("core={}", config.core_url);
+    println!("core=capability-scoped");
     println!("{}", login_state_summary(&state));
 
     if state.gate.as_ref().is_some_and(|gate| gate.unlocked) {
@@ -112,11 +101,9 @@ fn main() -> LoginResult<()> {
 }
 
 impl LoginConfig {
-    fn from_env() -> Self {
+    fn from_env(core: CoreClient) -> Self {
         Self {
-            core_url: env::var("GOBLINS_OS_CORE_URL")
-                .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
-                .unwrap_or_else(|_| DEFAULT_CORE_URL.into()),
+            core,
             core_wait: Duration::from_secs(env_u64(
                 "GOBLINS_OS_LOGIN_CORE_WAIT_SECS",
                 DEFAULT_CORE_WAIT_SECS,
@@ -136,8 +123,8 @@ fn load_login_state(config: &LoginConfig, core_ready: bool) -> LoginState {
 
     LoginState {
         core_ready,
-        auth: get_core_json(&config.core_url, "/v1/auth/openai/status").ok(),
-        gate: get_core_json(&config.core_url, "/v1/session/gate").ok(),
+        auth: get_core_json(&config.core, "/v1/auth/openai/status").ok(),
+        gate: get_core_json(&config.core, "/v1/session/gate").ok(),
     }
 }
 
@@ -337,9 +324,9 @@ fn build_login(
     let sign_in_built = auth_configured && !auth_authenticated;
     if sign_in_built {
         let sign_in = button("Sign in with OpenAI", &["gos-primary-action"]);
-        let core_url = config.core_url.clone();
+        let core = config.core.clone();
         let feedback = feedback.clone();
-        sign_in.connect_clicked(move |_| match openai_login_destination(&core_url) {
+        sign_in.connect_clicked(move |_| match openai_login_destination(&core) {
             Ok(destination) => {
                 feedback.set_text("Opening the configured OpenAI account provider.");
                 if let Err(error) = gtk::gio::AppInfo::launch_default_for_uri(
@@ -385,9 +372,9 @@ fn build_login(
     unlock_openai.set_sensitive(auth_authenticated);
     if auth_authenticated {
         let app_handle = app.clone();
-        let core_url = config.core_url.clone();
+        let core = config.core.clone();
         let feedback = feedback.clone();
-        unlock_openai.connect_clicked(move |_| match unlock_session(&core_url, "cloud-openai") {
+        unlock_openai.connect_clicked(move |_| match unlock_session(&core, "cloud-openai") {
             Ok(()) => app_handle.quit(),
             Err(error) => {
                 feedback.set_text("Goblins OS desktop unlock was rejected by local OS services.");
@@ -411,9 +398,9 @@ fn build_login(
     unlock_local.set_sensitive(local_available);
     if local_available {
         let app_handle = app.clone();
-        let core_url = config.core_url.clone();
+        let core = config.core.clone();
         let feedback = feedback.clone();
-        unlock_local.connect_clicked(move |_| match unlock_session(&core_url, "local-gpt-oss") {
+        unlock_local.connect_clicked(move |_| match unlock_session(&core, "local-gpt-oss") {
             Ok(()) => app_handle.quit(),
             Err(error) => {
                 feedback.set_text("Local-only unlock was rejected by local OS services.");
@@ -455,7 +442,7 @@ fn build_login(
             let (tx, rx) = std::sync::mpsc::channel::<LoginState>();
             let worker_config = config.clone();
             thread::spawn(move || {
-                let core_ready = wait_for_core(&worker_config.core_url, worker_config.core_wait);
+                let core_ready = wait_for_core(&worker_config.core, worker_config.core_wait);
                 let _ = tx.send(load_login_state(&worker_config, core_ready));
             });
 
@@ -613,53 +600,29 @@ fn run_native_login(_config: LoginConfig, _state: LoginState) -> LoginResult<()>
     Ok(())
 }
 
-fn wait_for_core(core_url: &str, timeout: Duration) -> bool {
+fn wait_for_core(core: &CoreClient, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
-        if matches!(http_status(core_url, "/health"), Some(200)) {
-            return true;
+        match core.get("/health", CORE_READ_TIMEOUT) {
+            Ok(response) if response.status == 200 => return true,
+            Ok(_) => thread::sleep(Duration::from_millis(750)),
+            // A transport failure consumes the one-time capability connection;
+            // the shared client intentionally cannot reconnect in-process.
+            Err(_) => return false,
         }
-
-        thread::sleep(Duration::from_millis(750));
     }
 
     false
 }
 
-fn http_status(base_url: &str, path: &str) -> Option<u16> {
-    let endpoint = parse_http_endpoint(base_url)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .ok()?
-        .next()?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(600)).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(900)))
-        .ok()?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(900)))
-        .ok()?;
-
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        endpoint.host
-    );
-    stream.write_all(request.as_bytes()).ok()?;
-
-    let mut buffer = [0_u8; 128];
-    let read = stream.read(&mut buffer).ok()?;
-    let response = std::str::from_utf8(&buffer[..read]).ok()?;
-    let status = response.split_whitespace().nth(1)?;
-
-    status.parse().ok()
-}
-
-fn get_core_json<T>(base_url: &str, path: &str) -> Result<T, CoreFetchError>
+fn get_core_json<T>(core: &CoreClient, path: &str) -> Result<T, CoreFetchError>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let response = http_request(base_url, "GET", path, None)?;
+    let response = core
+        .get(path, CORE_READ_TIMEOUT)
+        .map_err(|_| CoreFetchError::Transport)?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
@@ -669,21 +632,22 @@ where
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn openai_login_destination(core_url: &str) -> Result<String, CoreFetchError> {
-    let response = http_request(core_url, "GET", "/v1/auth/openai/start", None)?;
+fn openai_login_destination(core: &CoreClient) -> Result<String, CoreFetchError> {
+    let response = core
+        .get("/v1/auth/openai/start", CORE_READ_TIMEOUT)
+        .map_err(|_| CoreFetchError::Transport)?;
     openai_login_destination_from_response(&response)
 }
 
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
-fn openai_login_destination_from_response(
-    response: &HttpResponse,
-) -> Result<String, CoreFetchError> {
+fn openai_login_destination_from_response(response: &Response) -> Result<String, CoreFetchError> {
     if !(300..=399).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
     }
 
-    let destination =
-        header_value(&response.headers, "location").ok_or(CoreFetchError::Malformed)?;
+    let destination = response
+        .header("location")
+        .ok_or(CoreFetchError::Malformed)?;
     // The account handoff must be HTTPS: never hand a file://, plain http://, or
     // custom-scheme Location to the desktop's default URI handler.
     let scheme = destination
@@ -698,121 +662,17 @@ fn openai_login_destination_from_response(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn unlock_session(core_url: &str, mode: &str) -> Result<(), CoreFetchError> {
+fn unlock_session(core: &CoreClient, mode: &str) -> Result<(), CoreFetchError> {
     let body = format!(r#"{{"mode":"{mode}"}}"#);
-    let response = http_request(
-        core_url,
-        "POST",
-        "/v1/session/unlock",
-        Some(body.as_bytes()),
-    )?;
+    let response = core
+        .post_json("/v1/session/unlock", body.as_bytes(), CORE_READ_TIMEOUT)
+        .map_err(|_| CoreFetchError::Transport)?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
     }
 
     Ok(())
-}
-
-fn http_request(
-    base_url: &str,
-    method: &str,
-    path: &str,
-    body: Option<&[u8]>,
-) -> Result<HttpResponse, CoreFetchError> {
-    let endpoint = parse_http_endpoint(base_url).ok_or(CoreFetchError::Malformed)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .map_err(|_| CoreFetchError::Transport)?
-        .next()
-        .ok_or(CoreFetchError::Transport)?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(700))
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    stream
-        .set_read_timeout(Some(Duration::from_millis(1200)))
-        .map_err(|_| CoreFetchError::Transport)?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(900)))
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    let body = body.unwrap_or_default();
-    let content_headers = if body.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "Content-Type: application/json\r\nContent-Length: {}\r\n",
-            body.len()
-        )
-    };
-    let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\n{}Connection: close\r\n\r\n",
-        endpoint.host, content_headers
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|_| CoreFetchError::Transport)?;
-    if !body.is_empty() {
-        stream
-            .write_all(body)
-            .map_err(|_| CoreFetchError::Transport)?;
-    }
-
-    let mut response = Vec::new();
-    stream
-        .take(MAX_CORE_BODY_BYTES as u64)
-        .read_to_end(&mut response)
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    parse_http_response(&response)
-}
-
-fn parse_http_response(response: &[u8]) -> Result<HttpResponse, CoreFetchError> {
-    let header_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or(CoreFetchError::Malformed)?;
-    let headers =
-        std::str::from_utf8(&response[..header_end]).map_err(|_| CoreFetchError::Malformed)?;
-    let mut lines = headers.lines();
-    let status = lines
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|status| status.parse::<u16>().ok())
-        .ok_or(CoreFetchError::Malformed)?;
-    let headers = lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
-        .collect();
-
-    Ok(HttpResponse {
-        status,
-        headers,
-        body: response[(header_end + 4)..].to_vec(),
-    })
-}
-
-fn parse_http_endpoint(url: &str) -> Option<HttpEndpoint> {
-    let rest = url.strip_prefix("http://")?;
-    let authority = rest.split('/').next()?.trim();
-
-    if authority.is_empty() {
-        return None;
-    }
-
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) => (host, port.parse().ok()?),
-        None => (authority, 80),
-    };
-
-    if host.is_empty() {
-        return None;
-    }
-
-    Some(HttpEndpoint {
-        host: host.to_string(),
-        port,
-    })
 }
 
 fn env_u64(key: &str, fallback: u64) -> u64 {
@@ -822,58 +682,28 @@ fn env_u64(key: &str, fallback: u64) -> u64 {
         .unwrap_or(fallback)
 }
 
-#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
-fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    headers
-        .iter()
-        .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.as_str())
-}
-
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 const GOBLINS_OS_LOGIN_CSS: &str = "";
 
 #[cfg(test)]
 mod tests {
+    use goblins_os_core_client::{Header, Response};
+
     use super::{
         first_boot_setup_pending, local_unlock_available, openai_login_destination_from_response,
-        parse_http_endpoint, parse_http_response, session_gate_summary, CoreFetchError,
-        HttpEndpoint, HttpResponse, LoginState, SessionGateStatus, SessionLock,
+        session_gate_summary, CoreFetchError, LoginState, SessionGateStatus, SessionLock,
     };
 
     #[test]
-    fn parses_local_core_endpoint() {
-        assert_eq!(
-            parse_http_endpoint("http://127.0.0.1:8787"),
-            Some(HttpEndpoint {
-                host: "127.0.0.1".to_string(),
-                port: 8787,
-            })
-        );
-    }
-
-    #[test]
-    fn rejects_non_http_endpoint() {
-        assert_eq!(parse_http_endpoint("https://127.0.0.1:8787"), None);
-    }
-
-    #[test]
-    fn parses_core_http_response() {
-        let response = parse_http_response(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}",
-        )
-        .unwrap();
-
-        assert_eq!(response.status, 200);
-        assert_eq!(response.body, br#"{"ok":true}"#);
-    }
-
-    #[test]
     fn parses_openai_login_redirect() {
-        let response = parse_http_response(
-            b"HTTP/1.1 302 Found\r\nLocation: https://auth.openai.example/start\r\n\r\n",
-        )
-        .unwrap();
+        let response = Response {
+            status: 302,
+            headers: vec![Header {
+                name: "location".to_string(),
+                value: "https://auth.openai.example/start".to_string(),
+            }],
+            body: Vec::new(),
+        };
 
         assert_eq!(
             openai_login_destination_from_response(&response),
@@ -884,9 +714,12 @@ mod tests {
     #[test]
     fn rejects_non_https_login_redirect() {
         for location in ["http://evil.example/start", "file:///etc/passwd"] {
-            let response = HttpResponse {
+            let response = Response {
                 status: 302,
-                headers: vec![("location".to_string(), location.to_string())],
+                headers: vec![Header {
+                    name: "location".to_string(),
+                    value: location.to_string(),
+                }],
                 body: Vec::new(),
             };
 
@@ -900,7 +733,7 @@ mod tests {
 
     #[test]
     fn rejects_login_start_without_location() {
-        let response = HttpResponse {
+        let response = Response {
             status: 302,
             headers: Vec::new(),
             body: Vec::new(),

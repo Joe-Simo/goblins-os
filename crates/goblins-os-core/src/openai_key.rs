@@ -1,11 +1,9 @@
-//! Optional bring-your-own OpenAI API key.
+//! Optional operator-provisioned OpenAI API key.
 //!
-//! Goblins OS is centered on the local GPT-OSS model; this module lets a user
-//! who *also* wants OpenAI's hosted models supply their own API key. The key is
-//! the user's own (billed to their own API account), is written only to OS-owned
-//! secret storage (0600), is never returned to any client, and is used only
-//! server-side by the core. This is the sanctioned alternative to GPT-OSS — not
-//! a baked-in secret and not a fake login.
+//! Goblins OS is centered on the local GPT-OSS model. An administrator can also
+//! provision an OpenAI API key through the core service's protected systemd
+//! credential. The key is never accepted from, returned to, or stored by a
+//! desktop process; only the server-side core can read and use it.
 
 use axum::{
     http::StatusCode,
@@ -15,14 +13,18 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
 
+use crate::credentials::openai_credential;
 use crate::http_error::error_response;
+use crate::policy::{policy_state_for_control, PolicyControlState};
 
-const DEFAULT_KEY_PATH: &str = "/var/lib/goblins-os/secrets/openai/api-key";
-const DEFAULT_ENGINE_PATH: &str = "/var/lib/goblins-os/resident/engine";
-const DEFAULT_OPENAI_MODEL: &str = "gpt-5.5";
+const DEFAULT_ENGINE_PATH: &str = "/var/lib/goblins-os/ai/engine";
+const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6";
+const PRIVATE_STORAGE_LABEL: &str = "protected system credential";
 
 /// The default engine: the on-device GPT-OSS heart of Goblins OS.
 const ENGINE_LOCAL: &str = "local-gpt-oss";
@@ -30,11 +32,41 @@ const ENGINE_LOCAL: &str = "local-gpt-oss";
 const ENGINE_CODEX: &str = "codex";
 /// The optional engine: OpenAI's hosted models via the user's own API key.
 const ENGINE_OPENAI: &str = "openai-api";
+/// An operator-managed HTTPS relay. This is a cloud engine and is never a
+/// fallback for the on-device selection; it must be selected explicitly.
+const ENGINE_MANAGED_CLOUD: &str = "cloud-openai";
 
-#[derive(Deserialize)]
-pub struct SetOpenAiKeyRequest {
-    api_key: String,
-    consent: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EngineSelection {
+    LocalGptOss,
+    Codex,
+    OpenAiApi,
+    ManagedCloud,
+}
+
+impl EngineSelection {
+    pub(crate) fn from_id(value: &str) -> Option<Self> {
+        match value.trim() {
+            ENGINE_LOCAL => Some(Self::LocalGptOss),
+            ENGINE_CODEX => Some(Self::Codex),
+            ENGINE_OPENAI => Some(Self::OpenAiApi),
+            ENGINE_MANAGED_CLOUD => Some(Self::ManagedCloud),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn as_id(self) -> &'static str {
+        match self {
+            Self::LocalGptOss => ENGINE_LOCAL,
+            Self::Codex => ENGINE_CODEX,
+            Self::OpenAiApi => ENGINE_OPENAI,
+            Self::ManagedCloud => ENGINE_MANAGED_CLOUD,
+        }
+    }
+
+    pub(crate) const fn is_hosted(self) -> bool {
+        !matches!(self, Self::LocalGptOss)
+    }
 }
 
 #[derive(Deserialize)]
@@ -46,72 +78,94 @@ pub struct SetEngineRequest {
 pub struct OpenAiKeyStatus {
     configured: bool,
     model: String,
-    /// True when the active engine is hosted OpenAI rather than local GPT-OSS.
+    /// True only when the user's BYO OpenAI API engine is selected.
     engine_selected: bool,
-    /// The effective engine label: `local-gpt-oss` (default) or `openai-api`.
+    /// The explicit effective engine label.
     engine: String,
-    storage: String,
+    /// Compatibility field for existing clients. This is deliberately a label,
+    /// never the raw path of the OS-owned secret.
+    storage: &'static str,
 }
 
 pub async fn openai_key_status() -> Json<OpenAiKeyStatus> {
     Json(build_status())
 }
 
-pub async fn set_openai_key(Json(request): Json<SetOpenAiKeyRequest>) -> Response {
-    if !request.consent {
-        return error_response(
-            StatusCode::PRECONDITION_REQUIRED,
-            "Storing an OpenAI API key requires explicit consent.",
-        );
+/// Preserve a valid resident route before Codex removes its credentials. This
+/// is kept inside the engine-state module so the logout path does not duplicate
+/// the authoritative persistence location or engine identifiers.
+pub(crate) fn fail_safe_from_codex_to_local() -> std::io::Result<()> {
+    fail_safe_selection_to_local(selected_engine(), EngineSelection::Codex, &engine_path())
+}
+
+fn fail_safe_selection_to_local(
+    current: EngineSelection,
+    removed: EngineSelection,
+    path: &Path,
+) -> std::io::Result<()> {
+    if current == removed {
+        write_engine_to(path, ENGINE_LOCAL)
+    } else {
+        Ok(())
     }
-    let key = request.api_key.trim();
-    if !is_plausible_key(key) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "That does not look like an OpenAI API key (expected an 'sk-' secret).",
-        );
-    }
-    if write_key_to(&key_path(), key).is_err() {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "OpenAI API key could not be written to OS-owned secret storage.",
-        );
-    }
-    Json(build_status()).into_response()
 }
 
 /// Select which engine powers the resident (and the app builder): the on-device
 /// GPT-OSS heart, or OpenAI's hosted models. Hosted models can only be selected
-/// once a personal key is stored — Goblins OS never offers a switch it cannot
-/// honor. The choice is persisted in OS-owned state and read by the relay.
+/// once the protected service credential is ready — Goblins OS never offers a
+/// switch it cannot honor. The choice is persisted in OS-owned state and read
+/// by the relay.
 pub async fn set_resident_engine(Json(request): Json<SetEngineRequest>) -> Response {
-    let engine = request.engine.trim();
-    if engine != ENGINE_LOCAL && engine != ENGINE_CODEX && engine != ENGINE_OPENAI {
+    let Some(selection) = EngineSelection::from_id(&request.engine) else {
         return error_response(
             StatusCode::BAD_REQUEST,
-            "Unknown engine. Choose GPT-OSS, your OpenAI account (Codex), or the hosted OpenAI API.",
+            "Unknown engine. Choose GPT-OSS, your OpenAI account (Codex), your OpenAI API key, or the managed OpenAI service.",
         );
-    }
-    // Both hosted paths reach the internet, so neither is selectable while offline.
-    if (engine == ENGINE_OPENAI || engine == ENGINE_CODEX) && crate::privacy::offline_enabled() {
+    };
+
+    // Every hosted route is gated here before the preference is persisted, and
+    // again by the authoritative resolver immediately before execution.
+    if selection.is_hosted() && crate::privacy::offline_enabled() {
         return error_response(
             StatusCode::PRECONDITION_REQUIRED,
             "That engine needs the internet. Turn off Private mode first to use it.",
         );
     }
-    if engine == ENGINE_CODEX && !crate::codex::codex_available() {
+    if selection.is_hosted()
+        && policy_state_for_control("cloud-openai") != PolicyControlState::Allowed
+    {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "OpenAI cloud services are blocked by the active Goblins OS policy.",
+        );
+    }
+    if selection == EngineSelection::Codex && !crate::codex::codex_available() {
         return error_response(
             StatusCode::PRECONDITION_REQUIRED,
             "Sign in to Codex with your OpenAI account before selecting it.",
         );
     }
-    if engine == ENGINE_OPENAI && stored_api_key().is_none() {
+    if selection == EngineSelection::OpenAiApi && stored_api_key().is_none() {
         return error_response(
             StatusCode::PRECONDITION_REQUIRED,
-            "Add an OpenAI API key before selecting OpenAI's hosted models.",
+            "A device administrator must install an OpenAI API key before you can select OpenAI's hosted models.",
         );
     }
-    if write_engine_to(&engine_path(), engine).is_err() {
+    if selection == EngineSelection::OpenAiApi && !crate::resident::openai_api_base_is_valid() {
+        return error_response(
+            StatusCode::PRECONDITION_REQUIRED,
+            "The configured OpenAI service address must use HTTPS before this engine can be selected.",
+        );
+    }
+    if selection == EngineSelection::ManagedCloud
+        && !crate::resident::managed_cloud_route_configured()
+    {
+        return error_response(
+            StatusCode::PRECONDITION_REQUIRED,
+            "The managed OpenAI service is not configured with a valid HTTPS route.",
+        );
+    }
+    if write_engine_to(&engine_path(), selection.as_id()).is_err() {
         return error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "The engine selection could not be saved to OS-owned state.",
@@ -120,39 +174,32 @@ pub async fn set_resident_engine(Json(request): Json<SetEngineRequest>) -> Respo
     Json(build_status()).into_response()
 }
 
-/// The stored key, for server-side use by the core only. The relay refuses to use
-/// it while offline, so a stored key never causes egress in private mode.
+/// The provisioned key, for server-side use by the core only. It is loaded on
+/// demand from systemd's protected credential directory and never enters the
+/// process environment or a desktop process. The relay still refuses to use it
+/// while offline, so its presence never causes egress in Private mode.
 pub fn stored_api_key() -> Option<String> {
-    read_key_from(&key_path())
+    openai_credential("OPENAI_API_KEY")
+        .map(|key| key.trim().to_string())
+        .filter(|key| is_plausible_key(key))
 }
 
 pub(crate) fn configured_model() -> String {
     env::var("GOBLINS_OS_OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string())
 }
 
-/// True when the active engine is the hosted-OpenAI (BYO key) engine rather than
-/// the default local GPT-OSS heart. A persisted OS-owned preference (set from the
-/// Settings GUI) is authoritative; absent one, an ops env override is honored.
-pub(crate) fn openai_engine_selected() -> bool {
-    selected_engine() == ENGINE_OPENAI
-}
-
-/// True when the active engine is the user's OpenAI account via Codex CLI.
-pub(crate) fn codex_engine_selected() -> bool {
-    selected_engine() == ENGINE_CODEX
-}
-
 /// The effective engine label, resolving the persisted preference first and
 /// falling back to the env override, then to the local GPT-OSS default.
-fn selected_engine() -> String {
+pub(crate) fn selected_engine() -> EngineSelection {
     if let Some(preference) = engine_preference() {
-        return preference;
+        if let Some(selection) = EngineSelection::from_id(&preference) {
+            return selection;
+        }
     }
-    match env::var("GOBLINS_OS_RESIDENT_ENGINE").ok().as_deref() {
-        Some(ENGINE_OPENAI) => ENGINE_OPENAI.to_string(),
-        Some(ENGINE_CODEX) => ENGINE_CODEX.to_string(),
-        _ => ENGINE_LOCAL.to_string(),
-    }
+    env::var("GOBLINS_OS_RESIDENT_ENGINE")
+        .ok()
+        .and_then(|value| EngineSelection::from_id(&value))
+        .unwrap_or(EngineSelection::LocalGptOss)
 }
 
 fn build_status() -> OpenAiKeyStatus {
@@ -160,9 +207,9 @@ fn build_status() -> OpenAiKeyStatus {
     OpenAiKeyStatus {
         configured: stored_api_key().is_some(),
         model: configured_model(),
-        engine_selected: engine == ENGINE_OPENAI,
-        engine,
-        storage: key_path().display().to_string(),
+        engine_selected: engine == EngineSelection::OpenAiApi,
+        engine: engine.as_id().to_string(),
+        storage: PRIVATE_STORAGE_LABEL,
     }
 }
 
@@ -170,16 +217,12 @@ fn is_plausible_key(key: &str) -> bool {
     key.starts_with("sk-") && key.len() >= 20 && key.chars().all(|ch| !ch.is_whitespace())
 }
 
-fn key_path() -> PathBuf {
-    env::var("GOBLINS_OS_OPENAI_KEY_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| Path::new(DEFAULT_KEY_PATH).to_path_buf())
-}
-
 fn engine_path() -> PathBuf {
-    env::var("GOBLINS_OS_RESIDENT_ENGINE_PATH")
+    env::var_os("GOBLINS_OS_AI_ENGINE_PATH")
+        .or_else(|| env::var_os("GOBLINS_OS_RESIDENT_ENGINE_PATH"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| Path::new(DEFAULT_ENGINE_PATH).to_path_buf())
+        .or_else(|| env::var_os("GOBLINS_OS_AI_STATE").map(|dir| PathBuf::from(dir).join("engine")))
+        .unwrap_or_else(|| Path::new(DEFAULT_ENGINE_PATH).to_path_buf())
 }
 
 /// The persisted engine preference, if the user has made an explicit choice.
@@ -190,6 +233,10 @@ fn engine_preference() -> Option<String> {
 }
 
 fn read_engine_from(path: &Path) -> Option<String> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 {
+        return None;
+    }
     let value = fs::read_to_string(path).ok()?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -200,61 +247,42 @@ fn read_engine_from(path: &Path) -> Option<String> {
 }
 
 fn write_engine_to(path: &Path, engine: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, engine.as_bytes())?;
-    fs::rename(tmp, path)
-}
-
-fn read_key_from(path: &Path) -> Option<String> {
-    let value = fs::read_to_string(path).ok()?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn write_key_to(path: &Path, key: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+    let Some(parent) = path.parent() else {
+        return Err(std::io::Error::other("engine state path has no parent"));
+    };
+    fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(
+        ".engine-{}-{:016x}.tmp",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let write_result = (|| {
         let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
             .write(true)
+            .create_new(true)
             .mode(0o600)
-            .open(path)?;
-        file.write_all(key.as_bytes())?;
-        file.sync_all()
+            .open(&tmp)?;
+        file.write_all(engine.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&tmp, path)
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-
-    #[cfg(not(unix))]
-    {
-        fs::write(path, key)
-    }
+    write_result?;
+    fs::File::open(parent)?.sync_all()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        is_plausible_key, read_engine_from, read_key_from, write_engine_to, write_key_to,
-        ENGINE_LOCAL, ENGINE_OPENAI,
+        fail_safe_selection_to_local, is_plausible_key, read_engine_from, write_engine_to,
+        EngineSelection, ENGINE_LOCAL, ENGINE_MANAGED_CLOUD, ENGINE_OPENAI,
     };
-    use std::path::PathBuf;
+    use std::{
+        os::unix::fs::{symlink, PermissionsExt},
+        path::PathBuf,
+    };
 
     fn unique_tmp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("{name}-{}", std::process::id()))
@@ -270,30 +298,18 @@ mod tests {
     }
 
     #[test]
-    fn key_round_trips_through_os_owned_storage_and_is_never_in_status_shape() {
-        let dir = unique_tmp("goblins-os-key");
-        let path = dir.join("api-key");
-        let _ = std::fs::remove_dir_all(&dir);
-
-        assert_eq!(read_key_from(&path), None);
-        write_key_to(&path, "sk-proj-secretvalue1234567890").expect("write key");
-        assert_eq!(
-            read_key_from(&path).as_deref(),
-            Some("sk-proj-secretvalue1234567890")
-        );
-
-        // The status struct exposes only booleans/model/path — never the key field.
+    fn key_status_shape_never_has_a_secret_or_private_path() {
         let status_json = serde_json::to_string(&super::OpenAiKeyStatus {
             configured: true,
-            model: "gpt-5.5".to_string(),
+            model: "gpt-5.6".to_string(),
             engine_selected: false,
             engine: ENGINE_LOCAL.to_string(),
-            storage: path.display().to_string(),
+            storage: super::PRIVATE_STORAGE_LABEL,
         })
         .unwrap();
         assert!(!status_json.contains("sk-proj-secretvalue"));
-
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!status_json.contains("/var/lib/goblins-os"));
+        assert!(status_json.contains("protected system credential"));
     }
 
     #[test]
@@ -307,6 +323,15 @@ mod tests {
 
         write_engine_to(&path, ENGINE_OPENAI).expect("write engine preference");
         assert_eq!(read_engine_from(&path).as_deref(), Some(ENGINE_OPENAI));
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(std::fs::read_dir(&dir).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")));
 
         // Re-selecting overwrites in place — the OS holds a single active engine.
         write_engine_to(&path, ENGINE_LOCAL).expect("re-select engine");
@@ -315,19 +340,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[cfg(unix)]
     #[test]
-    fn stored_key_file_is_owner_only() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = unique_tmp("goblins-os-key-mode");
-        let path = dir.join("api-key");
+    fn engine_preference_reader_rejects_symlinks_and_oversized_state() {
+        let dir = unique_tmp("goblins-os-engine-invalid");
+        let path = dir.join("engine");
+        let target = dir.join("target");
         let _ = std::fs::remove_dir_all(&dir);
-        write_key_to(&path, "sk-proj-secretvalue1234567890").expect("write key");
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&target, ENGINE_LOCAL).unwrap();
+        symlink(&target, &path).unwrap();
+        assert_eq!(read_engine_from(&path), None);
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "x".repeat(65)).unwrap();
+        assert_eq!(read_engine_from(&path), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_the_selected_codex_route_fails_safe_to_local_first() {
+        let dir = unique_tmp("goblins-os-codex-engine-fail-safe");
+        let path = dir.join("engine");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        fail_safe_selection_to_local(EngineSelection::Codex, EngineSelection::Codex, &path)
+            .expect("switch selected Codex route to local");
+        assert_eq!(read_engine_from(&path).as_deref(), Some(ENGINE_LOCAL));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        fail_safe_selection_to_local(EngineSelection::LocalGptOss, EngineSelection::Codex, &path)
+            .expect("leave an unrelated route unchanged");
+        assert_eq!(read_engine_from(&path), None);
+    }
+
+    #[test]
+    fn engine_selection_is_typed_and_never_accepts_unknown_fallbacks() {
         assert_eq!(
-            mode, 0o600,
-            "the API key must be readable only by its owner"
+            EngineSelection::from_id(ENGINE_LOCAL),
+            Some(EngineSelection::LocalGptOss)
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            EngineSelection::from_id(ENGINE_MANAGED_CLOUD),
+            Some(EngineSelection::ManagedCloud)
+        );
+        assert!(EngineSelection::ManagedCloud.is_hosted());
+        assert!(!EngineSelection::LocalGptOss.is_hosted());
+        assert_eq!(EngineSelection::from_id("automatic"), None);
+        assert_eq!(EngineSelection::from_id(""), None);
     }
 }

@@ -1,6 +1,6 @@
 use axum::{
     extract::Query,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
     response::{IntoResponse, Response},
     Json,
 };
@@ -14,13 +14,53 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock},
     time::{Duration, Instant, SystemTime},
 };
 
-use crate::http_error::error_response;
+use crate::{credentials::openai_credential, http_error::error_response};
 
 const PENDING_AUTH_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// Serializes the complete local OAuth lifecycle. Every external exchange
+/// captures the current generation before it starts and may commit a session
+/// only while that generation is still current. Sign-out advances the
+/// generation and clears both pending-flow stores under the same lock, so a
+/// callback, device poll, or refresh that was already in flight cannot restore
+/// the session after the person signed out.
+#[derive(Default)]
+struct AuthLifecycle {
+    generation: u64,
+    pending_auths: HashMap<String, PendingAuth>,
+    device_auths: HashMap<String, DevicePending>,
+}
+
+impl AuthLifecycle {
+    fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.pending_auths.clear();
+        self.device_auths.clear();
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation == generation
+    }
+}
+
+fn auth_lifecycle() -> &'static Mutex<AuthLifecycle> {
+    static AUTH_LIFECYCLE: OnceLock<Mutex<AuthLifecycle>> = OnceLock::new();
+    AUTH_LIFECYCLE.get_or_init(|| Mutex::new(AuthLifecycle::default()))
+}
+
+fn lock_auth_lifecycle() -> MutexGuard<'static, AuthLifecycle> {
+    auth_lifecycle()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn current_auth_generation() -> u64 {
+    lock_auth_lifecycle().generation
+}
 
 #[derive(Serialize)]
 pub struct OpenAIAuthStatus {
@@ -34,7 +74,6 @@ pub struct OpenAIAuthStatus {
 pub async fn openai_auth_status() -> Json<OpenAIAuthStatus> {
     let configured = openai_auth_provider_configured();
     let authenticated = openai_account_authenticated();
-    let session_path = auth_session_path();
 
     Json(OpenAIAuthStatus {
         configured,
@@ -44,7 +83,7 @@ pub async fn openai_auth_status() -> Json<OpenAIAuthStatus> {
         } else {
             "unconfigured"
         },
-        session_storage: session_path.display().to_string(),
+        session_storage: "OS-owned private storage".to_string(),
         message: if configured {
             if authenticated {
                 "OpenAI account session is stored privately on this device.".to_string()
@@ -57,36 +96,116 @@ pub async fn openai_auth_status() -> Json<OpenAIAuthStatus> {
     })
 }
 
+#[derive(Serialize)]
+pub struct ForgetOpenAIAuthResponse {
+    ok: bool,
+    authenticated: bool,
+    text: &'static str,
+}
+
+/// Remove this device's OpenAI OAuth session without claiming to revoke remote
+/// account sessions. Pending browser/device flows are discarded at the same
+/// boundary. A cloud-identity desktop immediately becomes locked because the
+/// session gate always re-checks `openai_account_authenticated`.
+pub async fn forget_openai_auth_session() -> Response {
+    let removal = {
+        let mut lifecycle = lock_auth_lifecycle();
+        lifecycle.invalidate();
+        remove_secret_file(&auth_session_path())
+    };
+    if let Err(error) = removal {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("OpenAI account session could not be removed from this device: {error}."),
+        );
+    }
+
+    Json(ForgetOpenAIAuthResponse {
+        ok: true,
+        authenticated: false,
+        text: "OpenAI account session removed from this device. This does not revoke other OpenAI sessions.",
+    })
+    .into_response()
+}
+
 pub fn openai_auth_provider_configured() -> bool {
-    auth_config().is_some()
+    auth_config()
+        .as_ref()
+        .is_some_and(|config| validate_auth_config(config).is_ok())
 }
 
 /// Re-authenticate this many seconds before the token's nominal expiry so the
 /// session re-locks slightly early rather than mid-request.
 const SESSION_CLOCK_SKEW_SECS: u64 = 60;
+const SESSION_REFRESH_WINDOW_SECS: u64 = 5 * 60;
+const SESSION_REFRESH_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+const SESSION_REFRESH_MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StoredSessionState {
+    Active,
+    Refreshable,
+    Invalid,
+}
 
 pub fn openai_account_authenticated() -> bool {
+    let _lifecycle = lock_auth_lifecycle();
     let path = auth_session_path();
     let Ok(bytes) = fs::read(&path) else {
         return false;
     };
-    // A present session whose stored shape we cannot parse stays authoritative by
-    // presence (e.g. a legacy file); only a parseable, definitively-expired token
-    // re-locks the desktop.
-    match serde_json::from_slice::<StoredAuthSessionRead>(&bytes) {
-        Ok(stored) => session_is_active(
-            stored.created_at_unix,
-            stored.token.expires_in,
-            now_unix(),
-            SESSION_CLOCK_SKEW_SECS,
-        ),
-        Err(_) => true,
+    match stored_session_state(&bytes, now_unix()) {
+        StoredSessionState::Active => true,
+        StoredSessionState::Refreshable => false,
+        StoredSessionState::Invalid => {
+            // Malformed, incomplete, and non-refreshable expired sessions are
+            // never credentials. Keep an expired session only when it carries
+            // a valid refresh token, so the OS-owned background lifecycle can
+            // renew it without asking the person to sign in again.
+            let _ = fs::remove_file(path);
+            false
+        }
     }
 }
 
-/// A session is active when its token has no advertised lifetime, when its
-/// creation time is unknown (presence is then authoritative), or when the
-/// lifetime (minus a small skew) has not yet elapsed.
+#[cfg(test)]
+fn stored_session_is_authenticated(bytes: &[u8], now: u64) -> bool {
+    stored_session_state(bytes, now) == StoredSessionState::Active
+}
+
+fn stored_session_state(bytes: &[u8], now: u64) -> StoredSessionState {
+    let Ok(stored) = serde_json::from_slice::<StoredAuthSessionRead>(bytes) else {
+        return StoredSessionState::Invalid;
+    };
+    if stored.provider != "openai-oidc"
+        || stored.created_at_unix == 0
+        || stored.token.access_token.trim().is_empty()
+    {
+        return StoredSessionState::Invalid;
+    }
+    if session_is_active(
+        stored.created_at_unix,
+        stored.token.expires_in,
+        now,
+        SESSION_CLOCK_SKEW_SECS,
+    ) {
+        return StoredSessionState::Active;
+    }
+    if stored
+        .token
+        .refresh_token
+        .as_deref()
+        .is_some_and(|token| !token.trim().is_empty())
+    {
+        StoredSessionState::Refreshable
+    } else {
+        StoredSessionState::Invalid
+    }
+}
+
+/// A session is active when its required creation time is valid and either its
+/// token has no advertised lifetime or the lifetime (minus a small skew) has
+/// not elapsed. Unknown creation time fails closed.
 fn session_is_active(
     created_at_unix: u64,
     expires_in: Option<u64>,
@@ -94,7 +213,7 @@ fn session_is_active(
     skew_secs: u64,
 ) -> bool {
     if created_at_unix == 0 {
-        return true;
+        return false;
     }
     match expires_in {
         Some(ttl) => now_unix.saturating_add(skew_secs) < created_at_unix.saturating_add(ttl),
@@ -111,7 +230,7 @@ fn now_unix() -> u64 {
 
 #[derive(Deserialize)]
 struct StoredAuthSessionRead {
-    #[serde(default)]
+    provider: String,
     created_at_unix: u64,
     token: TokenResponse,
 }
@@ -181,6 +300,12 @@ pub async fn openai_auth_callback(
     if let Err(text) = validate_auth_config(&config) {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, text);
     }
+    if !callback_host_matches_redirect(&headers, &config.redirect_uri) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Authorization callback host did not match the configured Goblins OS loopback address.",
+        );
+    }
     if query.error.is_some() {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -221,11 +346,20 @@ pub async fn openai_auth_callback(
         }
     };
 
-    if persist_auth_session(&token_response).is_err() {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "OpenAI account session could not be written to OS-owned secret storage.",
-        );
+    match persist_auth_session_if_current(pending.generation, &token_response) {
+        Ok(true) => {}
+        Ok(false) => {
+            return error_response(
+                StatusCode::CONFLICT,
+                "OpenAI account sign-in was cancelled on this device.",
+            )
+        }
+        Err(_) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "OpenAI account session could not be written to OS-owned secret storage.",
+            )
+        }
     }
 
     Json(AuthCallbackSuccess {
@@ -254,6 +388,7 @@ struct AuthCallbackSuccess {
 struct PendingAuth {
     verifier: String,
     created_at: Instant,
+    generation: u64,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
@@ -279,31 +414,71 @@ struct AuthConfig {
 
 fn auth_config() -> Option<AuthConfig> {
     Some(AuthConfig {
-        auth_url: std::env::var("OPENAI_ACCOUNT_AUTH_URL").ok()?,
-        token_url: std::env::var("OPENAI_ACCOUNT_TOKEN_URL").ok()?,
-        client_id: std::env::var("OPENAI_ACCOUNT_CLIENT_ID").ok()?,
-        client_secret: std::env::var("OPENAI_ACCOUNT_CLIENT_SECRET").ok(),
-        redirect_uri: std::env::var("OPENAI_ACCOUNT_REDIRECT_URI").ok()?,
-        scope: std::env::var("OPENAI_ACCOUNT_SCOPE")
-            .unwrap_or_else(|_| "openid profile email".to_string()),
-        device_auth_url: std::env::var("OPENAI_ACCOUNT_DEVICE_AUTH_URL").ok(),
+        auth_url: openai_credential("OPENAI_ACCOUNT_AUTH_URL")?,
+        token_url: openai_credential("OPENAI_ACCOUNT_TOKEN_URL")?,
+        client_id: openai_credential("OPENAI_ACCOUNT_CLIENT_ID")?,
+        client_secret: openai_credential("OPENAI_ACCOUNT_CLIENT_SECRET")
+            .filter(|secret| !secret.trim().is_empty()),
+        redirect_uri: openai_credential("OPENAI_ACCOUNT_REDIRECT_URI")?,
+        scope: openai_credential("OPENAI_ACCOUNT_SCOPE")
+            .unwrap_or_else(|| "openid profile email".to_string()),
+        device_auth_url: openai_credential("OPENAI_ACCOUNT_DEVICE_AUTH_URL")
+            .filter(|url| !url.trim().is_empty()),
     })
 }
 
 fn validate_auth_config(config: &AuthConfig) -> Result<(), &'static str> {
-    if !config.auth_url.starts_with("https://") {
+    if !valid_https_provider_url(&config.auth_url) {
         return Err("Configured OpenAI account auth URL must use HTTPS.");
     }
-    if !config.token_url.starts_with("https://") {
+    if !valid_https_provider_url(&config.token_url) {
         return Err("Configured OpenAI account token URL must use HTTPS.");
     }
+    if config.client_id.trim().is_empty() {
+        return Err("Configured OpenAI account client ID must not be empty.");
+    }
+    if config.scope.trim().is_empty() {
+        return Err("Configured OpenAI account scope must not be empty.");
+    }
+    if !valid_loopback_redirect(&config.redirect_uri) {
+        return Err(
+            "Configured OpenAI account redirect URI must use the Goblins OS loopback callback.",
+        );
+    }
     if let Some(device_auth_url) = &config.device_auth_url {
-        if !device_auth_url.starts_with("https://") {
+        if !valid_https_provider_url(device_auth_url) {
             return Err("Configured OpenAI account device auth URL must use HTTPS.");
         }
     }
 
     Ok(())
+}
+
+fn valid_https_provider_url(value: &str) -> bool {
+    let Ok(uri) = value.parse::<Uri>() else {
+        return false;
+    };
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    uri.scheme_str() == Some("https")
+        && !authority.host().is_empty()
+        && !authority.as_str().contains('@')
+}
+
+fn valid_loopback_redirect(value: &str) -> bool {
+    let Ok(uri) = value.parse::<Uri>() else {
+        return false;
+    };
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    let host = authority.host().trim_matches(['[', ']']);
+    uri.scheme_str() == Some("http")
+        && matches!(host, "127.0.0.1" | "::1" | "localhost")
+        && !authority.as_str().contains('@')
+        && uri.path() == "/v1/auth/openai/callback"
+        && uri.query().is_none()
 }
 
 async fn exchange_code_for_tokens(
@@ -364,6 +539,12 @@ fn exchange_code_for_tokens_blocking(
 }
 
 fn persist_auth_session(token_response: &TokenResponse) -> std::io::Result<()> {
+    if token_response.access_token.trim().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "OpenAI token response did not contain an access token",
+        ));
+    }
     let path = auth_session_path();
     let Some(parent) = path.parent() else {
         return Err(std::io::Error::other("auth session path has no parent"));
@@ -379,47 +560,55 @@ fn persist_auth_session(token_response: &TokenResponse) -> std::io::Result<()> {
     write_secret_file(&path, &body)
 }
 
+fn persist_auth_session_if_current(
+    generation: u64,
+    token_response: &TokenResponse,
+) -> std::io::Result<bool> {
+    let lifecycle = lock_auth_lifecycle();
+    if !lifecycle.is_current(generation) {
+        return Ok(false);
+    }
+    persist_auth_session(token_response)?;
+    Ok(true)
+}
+
 // ── Refresh-token rotation ───────────────────────────────────────────────────
 // Completes the session lifecycle: an OS-owned refresh keeps the desktop
 // authenticated without re-login, and a failed refresh leaves the (possibly
 // expired) session to re-lock via `session_is_active`. The refresh exchange runs
 // entirely inside the core; the refresh token never leaves OS-owned storage.
 pub async fn openai_auth_refresh() -> Response {
-    let Some(config) = auth_config() else {
-        return error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            "OpenAI account login is not configured.",
-        );
-    };
-    if let Err(text) = validate_auth_config(&config) {
-        return error_response(StatusCode::INTERNAL_SERVER_ERROR, text);
-    }
-    let Some(refresh_token) = stored_refresh_token() else {
-        return error_response(
-            StatusCode::CONFLICT,
-            "No refreshable OpenAI session is stored.",
-        );
-    };
-
-    let token = match tokio::task::spawn_blocking(move || {
-        refresh_session_blocking(&config, &refresh_token)
-    })
-    .await
-    {
-        Ok(Ok(token)) => token,
-        _ => {
-            return error_response(
+    if let Err(error) = refresh_openai_auth_session().await {
+        let (status, text) = match error {
+            RefreshSessionError::Unconfigured => (
+                StatusCode::NOT_IMPLEMENTED,
+                "OpenAI account login is not configured.",
+            ),
+            RefreshSessionError::InvalidConfig(text) => {
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, text)
+            }
+            RefreshSessionError::NoSession => (
+                StatusCode::CONFLICT,
+                "No refreshable OpenAI session is stored.",
+            ),
+            RefreshSessionError::Busy => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "OpenAI account session refresh is already in progress.",
+            ),
+            RefreshSessionError::Exchange => (
                 StatusCode::BAD_GATEWAY,
                 "OpenAI account session refresh failed inside Goblins OS.",
-            )
-        }
-    };
-
-    if persist_auth_session(&token).is_err() {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Refreshed OpenAI session could not be written to OS-owned secret storage.",
-        );
+            ),
+            RefreshSessionError::Cancelled => (
+                StatusCode::CONFLICT,
+                "OpenAI account session was removed while refresh was in progress.",
+            ),
+            RefreshSessionError::Storage => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Refreshed OpenAI session could not be written to OS-owned secret storage.",
+            ),
+        };
+        return error_response(status, text);
     }
 
     Json(AuthCallbackSuccess {
@@ -430,10 +619,136 @@ pub async fn openai_auth_refresh() -> Response {
     .into_response()
 }
 
-fn stored_refresh_token() -> Option<String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RefreshSessionError {
+    Unconfigured,
+    InvalidConfig(&'static str),
+    NoSession,
+    Busy,
+    Exchange,
+    Cancelled,
+    Storage,
+}
+
+fn auth_refresh_lock() -> &'static tokio::sync::Mutex<()> {
+    static AUTH_REFRESH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    AUTH_REFRESH_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+async fn refresh_openai_auth_session() -> Result<(), RefreshSessionError> {
+    let _refresh = auth_refresh_lock()
+        .try_lock()
+        .map_err(|_| RefreshSessionError::Busy)?;
+    let config = auth_config().ok_or(RefreshSessionError::Unconfigured)?;
+    validate_auth_config(&config).map_err(RefreshSessionError::InvalidConfig)?;
+    let (refresh_token, generation) =
+        stored_refresh_token().ok_or(RefreshSessionError::NoSession)?;
+
+    let request_refresh_token = refresh_token.clone();
+    let mut token = tokio::task::spawn_blocking(move || {
+        refresh_session_blocking(&config, &request_refresh_token)
+    })
+    .await
+    .map_err(|_| RefreshSessionError::Exchange)?
+    .map_err(|_| RefreshSessionError::Exchange)?;
+
+    preserve_refresh_token(&mut token, refresh_token);
+    match persist_auth_session_if_current(generation, &token) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(RefreshSessionError::Cancelled),
+        Err(_) => Err(RefreshSessionError::Storage),
+    }
+}
+
+/// Maintain an OS-owned account session without involving a desktop client.
+/// The first check runs immediately at core startup; later checks use a calm
+/// cadence and bounded exponential backoff after provider/network failures.
+pub async fn maintain_openai_auth_session() {
+    let mut delay = Duration::ZERO;
+    let mut failure_backoff = SESSION_REFRESH_CHECK_INTERVAL;
+    loop {
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        delay = SESSION_REFRESH_CHECK_INTERVAL;
+
+        if !auth_session_needs_refresh() {
+            failure_backoff = SESSION_REFRESH_CHECK_INTERVAL;
+            continue;
+        }
+        match refresh_openai_auth_session().await {
+            Ok(()) => failure_backoff = SESSION_REFRESH_CHECK_INTERVAL,
+            Err(RefreshSessionError::Busy) => {}
+            Err(_) => {
+                tracing::warn!(
+                    "OpenAI account session refresh will retry without exposing credentials"
+                );
+                failure_backoff = failure_backoff
+                    .saturating_mul(2)
+                    .min(SESSION_REFRESH_MAX_BACKOFF);
+                delay = failure_backoff;
+            }
+        }
+    }
+}
+
+fn auth_session_needs_refresh() -> bool {
+    let _lifecycle = lock_auth_lifecycle();
+    let Ok(bytes) = fs::read(auth_session_path()) else {
+        return false;
+    };
+    stored_session_needs_refresh(&bytes, now_unix())
+}
+
+fn stored_session_needs_refresh(bytes: &[u8], now: u64) -> bool {
+    let Ok(stored) = serde_json::from_slice::<StoredAuthSessionRead>(bytes) else {
+        return false;
+    };
+    if stored.provider != "openai-oidc"
+        || stored.created_at_unix == 0
+        || stored.token.access_token.trim().is_empty()
+        || stored
+            .token
+            .refresh_token
+            .as_deref()
+            .is_none_or(|token| token.trim().is_empty())
+    {
+        return false;
+    }
+    stored.token.expires_in.is_some_and(|ttl| {
+        now.saturating_add(SESSION_REFRESH_WINDOW_SECS)
+            >= stored.created_at_unix.saturating_add(ttl)
+    })
+}
+
+fn stored_refresh_token() -> Option<(String, u64)> {
+    let lifecycle = lock_auth_lifecycle();
     let bytes = fs::read(auth_session_path()).ok()?;
     let stored: StoredAuthSessionRead = serde_json::from_slice(&bytes).ok()?;
-    stored.token.refresh_token
+    if stored.provider != "openai-oidc"
+        || stored.created_at_unix == 0
+        || stored.token.access_token.trim().is_empty()
+    {
+        return None;
+    }
+    let refresh_token = stored
+        .token
+        .refresh_token
+        .filter(|token| !token.trim().is_empty())?;
+    Some((refresh_token, lifecycle.generation))
+}
+
+/// OAuth providers commonly rotate refresh tokens but are allowed to omit a
+/// replacement. Preserve the last valid token in that case so a successful
+/// refresh does not silently make the next refresh impossible.
+fn preserve_refresh_token(token: &mut TokenResponse, previous: String) {
+    if token
+        .refresh_token
+        .as_deref()
+        .is_none_or(|refresh| refresh.trim().is_empty())
+    {
+        token.refresh_token = Some(previous);
+    }
 }
 
 fn refresh_session_blocking(
@@ -515,6 +830,7 @@ enum DevicePollOutcome {
 struct DevicePending {
     device_code: String,
     created_at: Instant,
+    generation: u64,
 }
 
 pub async fn openai_auth_device_start() -> Response {
@@ -530,10 +846,11 @@ pub async fn openai_auth_device_start() -> Response {
     if config.device_auth_url.is_none() {
         return error_response(
             StatusCode::NOT_IMPLEMENTED,
-            "OpenAI device login is not configured (no device authorization endpoint).",
+            "OpenAI device login is not configured for this device.",
         );
     }
 
+    let generation = current_auth_generation();
     let device =
         match tokio::task::spawn_blocking(move || request_device_authorization_blocking(&config))
             .await
@@ -548,7 +865,12 @@ pub async fn openai_auth_device_start() -> Response {
         };
 
     let handle = random_url_token(24);
-    remember_device_auth(handle.clone(), device.device_code);
+    if !remember_device_auth(handle.clone(), device.device_code, generation) {
+        return error_response(
+            StatusCode::CONFLICT,
+            "OpenAI device sign-in was cancelled on this device.",
+        );
+    }
 
     Json(DeviceStartResponse {
         handle,
@@ -568,7 +890,7 @@ pub async fn openai_auth_device_poll(Json(request): Json<DevicePollRequest>) -> 
             "OpenAI account login is not configured.",
         );
     };
-    let Some(device_code) = device_code_for(&request.handle) else {
+    let Some((device_code, generation)) = device_code_for(&request.handle) else {
         return device_status(StatusCode::GONE, "expired");
     };
 
@@ -581,25 +903,32 @@ pub async fn openai_auth_device_poll(Json(request): Json<DevicePollRequest>) -> 
         Err(_) => return error_response(StatusCode::BAD_GATEWAY, "Device token poll failed."),
     };
 
+    if !device_auth_is_current(&request.handle, generation) {
+        return device_status(StatusCode::GONE, "expired");
+    }
+
     match outcome {
         DevicePollOutcome::Authorized(token) => {
-            forget_device_auth(&request.handle);
-            if persist_auth_session(&token).is_err() {
-                return error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "OpenAI account session could not be written to OS-owned secret storage.",
-                );
+            match persist_device_auth_if_current(&request.handle, generation, &token) {
+                Ok(true) => {}
+                Ok(false) => return device_status(StatusCode::GONE, "expired"),
+                Err(_) => {
+                    return error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "OpenAI account session could not be written to OS-owned secret storage.",
+                    )
+                }
             }
             device_status(StatusCode::OK, "authorized")
         }
         DevicePollOutcome::Pending => device_status(StatusCode::ACCEPTED, "authorization-pending"),
         DevicePollOutcome::SlowDown => device_status(StatusCode::ACCEPTED, "slow-down"),
         DevicePollOutcome::AccessDenied => {
-            forget_device_auth(&request.handle);
+            forget_device_auth(&request.handle, generation);
             device_status(StatusCode::FORBIDDEN, "access-denied")
         }
         DevicePollOutcome::Expired => {
-            forget_device_auth(&request.handle);
+            forget_device_auth(&request.handle, generation);
             device_status(StatusCode::GONE, "expired")
         }
         DevicePollOutcome::Failed => device_status(StatusCode::BAD_GATEWAY, "failed"),
@@ -680,38 +1009,69 @@ fn classify_device_poll(status: u16, body: &serde_json::Value) -> DevicePollOutc
     }
 }
 
-fn device_auths() -> &'static Mutex<HashMap<String, DevicePending>> {
-    static DEVICE_AUTHS: OnceLock<Mutex<HashMap<String, DevicePending>>> = OnceLock::new();
-    DEVICE_AUTHS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn remember_device_auth(handle: String, device_code: String) {
-    let mut store = device_auths()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    prune_device_auths(&mut store);
-    store.insert(
+fn remember_device_auth(handle: String, device_code: String, generation: u64) -> bool {
+    let mut lifecycle = lock_auth_lifecycle();
+    if !lifecycle.is_current(generation) {
+        return false;
+    }
+    prune_device_auths(&mut lifecycle.device_auths);
+    lifecycle.device_auths.insert(
         handle,
         DevicePending {
             device_code,
             created_at: Instant::now(),
+            generation,
         },
     );
+    true
 }
 
-fn device_code_for(handle: &str) -> Option<String> {
-    let mut store = device_auths()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    prune_device_auths(&mut store);
-    store.get(handle).map(|entry| entry.device_code.clone())
+fn device_code_for(handle: &str) -> Option<(String, u64)> {
+    let mut lifecycle = lock_auth_lifecycle();
+    prune_device_auths(&mut lifecycle.device_auths);
+    lifecycle
+        .device_auths
+        .get(handle)
+        .map(|entry| (entry.device_code.clone(), entry.generation))
 }
 
-fn forget_device_auth(handle: &str) {
-    let mut store = device_auths()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    store.remove(handle);
+fn device_auth_is_current(handle: &str, generation: u64) -> bool {
+    let lifecycle = lock_auth_lifecycle();
+    lifecycle.is_current(generation)
+        && lifecycle
+            .device_auths
+            .get(handle)
+            .is_some_and(|entry| entry.generation == generation)
+}
+
+fn persist_device_auth_if_current(
+    handle: &str,
+    generation: u64,
+    token: &TokenResponse,
+) -> std::io::Result<bool> {
+    let mut lifecycle = lock_auth_lifecycle();
+    if !lifecycle.is_current(generation)
+        || lifecycle
+            .device_auths
+            .get(handle)
+            .is_none_or(|entry| entry.generation != generation)
+    {
+        return Ok(false);
+    }
+    persist_auth_session(token)?;
+    lifecycle.device_auths.remove(handle);
+    Ok(true)
+}
+
+fn forget_device_auth(handle: &str, generation: u64) {
+    let mut lifecycle = lock_auth_lifecycle();
+    if lifecycle
+        .device_auths
+        .get(handle)
+        .is_some_and(|entry| entry.generation == generation)
+    {
+        lifecycle.device_auths.remove(handle);
+    }
 }
 
 fn prune_device_auths(store: &mut HashMap<String, DevicePending>) {
@@ -746,54 +1106,75 @@ fn create_secret_dir(path: &Path) -> std::io::Result<()> {
 }
 
 fn write_secret_file(path: &Path, body: &[u8]) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(std::io::Error::other("secret file path has no parent"));
+    };
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("secret");
+    let tmp = parent.join(format!(".{file_name}.{}.tmp", random_url_token(8)));
+
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
 
         OpenOptions::new()
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .write(true)
             .mode(0o600)
-            .open(path)?
+            .open(&tmp)?
     };
 
     #[cfg(not(unix))]
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(path)?;
+    let mut file = OpenOptions::new().create_new(true).write(true).open(&tmp)?;
 
-    file.write_all(body)?;
-    file.sync_all()
+    let result = (|| {
+        file.write_all(body)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, path)?;
+        #[cfg(unix)]
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
-fn pending_auths() -> &'static Mutex<HashMap<String, PendingAuth>> {
-    static PENDING_AUTHS: OnceLock<Mutex<HashMap<String, PendingAuth>>> = OnceLock::new();
-    PENDING_AUTHS.get_or_init(|| Mutex::new(HashMap::new()))
+fn remove_secret_file(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
 }
 
 fn remember_pending_auth(state: String, verifier: String) {
-    let mut pending = pending_auths()
-        .lock()
-        .expect("pending auth store should not be poisoned");
-    prune_pending_auths(&mut pending);
-    pending.insert(
+    let mut lifecycle = lock_auth_lifecycle();
+    prune_pending_auths(&mut lifecycle.pending_auths);
+    let generation = lifecycle.generation;
+    lifecycle.pending_auths.insert(
         state,
         PendingAuth {
             verifier,
             created_at: Instant::now(),
+            generation,
         },
     );
 }
 
 fn take_pending_auth(state: &str) -> Option<PendingAuth> {
-    let mut pending = pending_auths()
-        .lock()
-        .expect("pending auth store should not be poisoned");
-    prune_pending_auths(&mut pending);
-    pending.remove(state)
+    let mut lifecycle = lock_auth_lifecycle();
+    prune_pending_auths(&mut lifecycle.pending_auths);
+    lifecycle.pending_auths.remove(state)
 }
 
 fn prune_pending_auths(pending: &mut HashMap<String, PendingAuth>) {
@@ -826,6 +1207,21 @@ fn auth_state_cookie_mismatches(headers: &HeaderMap, state: &str) -> bool {
     }
 }
 
+/// Refuse DNS-rebinding and alternate-Host requests at the one unauthenticated
+/// browser-facing route. The Host header must name the exact loopback authority
+/// registered as the OAuth redirect, including its port.
+fn callback_host_matches_redirect(headers: &HeaderMap, redirect_uri: &str) -> bool {
+    let expected = redirect_uri.parse::<Uri>().ok().and_then(|uri| {
+        uri.authority()
+            .map(|authority| authority.as_str().to_ascii_lowercase())
+    });
+    let actual = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_ascii_lowercase());
+    matches!((actual, expected), (Some(actual), Some(expected)) if actual == expected)
+}
+
 fn cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
     cookie_header
         .split(';')
@@ -854,11 +1250,44 @@ fn with_query_params(base_url: &str, params: &[(&str, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        auth_state_cookie_mismatches, classify_device_poll, cookie_value, random_url_token,
-        refresh_form, remember_pending_auth, session_is_active, take_pending_auth,
-        validate_auth_config, with_query_params, AuthConfig, DevicePollOutcome,
+        auth_state_cookie_mismatches, callback_host_matches_redirect, classify_device_poll,
+        cookie_value, persist_auth_session, preserve_refresh_token, random_url_token, refresh_form,
+        remember_pending_auth, remove_secret_file, session_is_active,
+        stored_session_is_authenticated, stored_session_needs_refresh, stored_session_state,
+        take_pending_auth, validate_auth_config, with_query_params, write_secret_file, AuthConfig,
+        AuthLifecycle, DevicePending, DevicePollOutcome, PendingAuth, StoredSessionState,
+        TokenResponse,
     };
     use axum::http::{header, HeaderMap, HeaderValue};
+    use std::time::Instant;
+
+    #[test]
+    fn sign_out_generation_cancels_every_in_flight_auth_flow() {
+        let mut lifecycle = AuthLifecycle::default();
+        let generation = lifecycle.generation;
+        lifecycle.pending_auths.insert(
+            "browser".to_string(),
+            PendingAuth {
+                verifier: "verifier".to_string(),
+                created_at: Instant::now(),
+                generation,
+            },
+        );
+        lifecycle.device_auths.insert(
+            "device".to_string(),
+            DevicePending {
+                device_code: "device-code".to_string(),
+                created_at: Instant::now(),
+                generation,
+            },
+        );
+
+        lifecycle.invalidate();
+
+        assert!(!lifecycle.is_current(generation));
+        assert!(lifecycle.pending_auths.is_empty());
+        assert!(lifecycle.device_auths.is_empty());
+    }
 
     #[test]
     fn refresh_form_uses_the_refresh_grant() {
@@ -866,6 +1295,27 @@ mod tests {
         assert!(form.contains(&("grant_type", "refresh_token")));
         assert!(form.contains(&("client_id", "client-x")));
         assert!(form.contains(&("refresh_token", "rt-123")));
+    }
+
+    #[test]
+    fn refresh_preserves_or_rotates_the_refresh_token() {
+        let mut omitted = TokenResponse {
+            access_token: "new-access".to_string(),
+            token_type: Some("Bearer".to_string()),
+            expires_in: Some(3600),
+            refresh_token: None,
+            id_token: None,
+            scope: None,
+        };
+        preserve_refresh_token(&mut omitted, "old-refresh".to_string());
+        assert_eq!(omitted.refresh_token.as_deref(), Some("old-refresh"));
+
+        let mut rotated = TokenResponse {
+            refresh_token: Some("new-refresh".to_string()),
+            ..omitted
+        };
+        preserve_refresh_token(&mut rotated, "old-refresh".to_string());
+        assert_eq!(rotated.refresh_token.as_deref(), Some("new-refresh"));
     }
 
     #[test]
@@ -903,6 +1353,20 @@ mod tests {
     }
 
     #[test]
+    fn empty_access_tokens_are_never_persisted_as_sessions() {
+        let token = TokenResponse {
+            access_token: "  ".to_string(),
+            token_type: Some("Bearer".to_string()),
+            expires_in: Some(3600),
+            refresh_token: None,
+            id_token: None,
+            scope: None,
+        };
+        let error = persist_auth_session(&token).expect_err("empty token must fail closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
     fn cookie_value_parses_named_cookie_among_others() {
         let header = "theme=dark; goblins_os_auth_state=abc123; locale=en";
         assert_eq!(
@@ -934,7 +1398,27 @@ mod tests {
     }
 
     #[test]
-    fn session_expiry_re_locks_only_a_definitively_expired_token() {
+    fn oauth_callback_host_must_match_the_registered_loopback_authority() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8787"));
+        assert!(callback_host_matches_redirect(
+            &headers,
+            "http://127.0.0.1:8787/v1/auth/openai/callback"
+        ));
+
+        headers.insert(header::HOST, HeaderValue::from_static("attacker.invalid"));
+        assert!(!callback_host_matches_redirect(
+            &headers,
+            "http://127.0.0.1:8787/v1/auth/openai/callback"
+        ));
+        assert!(!callback_host_matches_redirect(
+            &HeaderMap::new(),
+            "http://127.0.0.1:8787/v1/auth/openai/callback"
+        ));
+    }
+
+    #[test]
+    fn session_expiry_and_incomplete_state_fail_closed() {
         // Active: created at t=1000, 3600s lifetime, now well inside the window.
         assert!(session_is_active(1_000, Some(3_600), 2_000, 60));
         // Expired: now past creation + lifetime.
@@ -943,8 +1427,79 @@ mod tests {
         assert!(!session_is_active(1_000, Some(3_600), 4_580, 60));
         // No advertised lifetime → presence is authoritative.
         assert!(session_is_active(1_000, None, 9_999_999, 60));
-        // Unknown creation time (legacy session) → presence is authoritative.
-        assert!(session_is_active(0, Some(1), u64::MAX, 60));
+        // Unknown creation time cannot establish authentication.
+        assert!(!session_is_active(0, Some(1), u64::MAX, 60));
+
+        for invalid in [
+            b"".as_slice(),
+            b"{".as_slice(),
+            br#"{"provider":"openai-oidc","created_at_unix":1000,"token":{}}"#,
+            br#"{"provider":"openai-oidc","created_at_unix":1000,"token":{"access_token":"","token_type":"Bearer","expires_in":3600,"refresh_token":null,"id_token":null,"scope":null}}"#,
+            br#"{"provider":"other","created_at_unix":1000,"token":{"access_token":"secret","token_type":"Bearer","expires_in":3600,"refresh_token":null,"id_token":null,"scope":null}}"#,
+        ] {
+            assert!(!stored_session_is_authenticated(invalid, 2_000));
+        }
+
+        let valid = br#"{"provider":"openai-oidc","created_at_unix":1000,"token":{"access_token":"secret","token_type":"Bearer","expires_in":3600,"refresh_token":null,"id_token":null,"scope":null}}"#;
+        assert!(stored_session_is_authenticated(valid, 2_000));
+    }
+
+    #[test]
+    fn expired_refreshable_sessions_are_preserved_for_os_owned_renewal() {
+        let refreshable = br#"{"provider":"openai-oidc","created_at_unix":1000,"token":{"access_token":"access","token_type":"Bearer","expires_in":3600,"refresh_token":"refresh","id_token":null,"scope":null}}"#;
+        assert_eq!(
+            stored_session_state(refreshable, 5_000),
+            StoredSessionState::Refreshable
+        );
+        assert!(stored_session_needs_refresh(refreshable, 5_000));
+        assert!(!stored_session_is_authenticated(refreshable, 5_000));
+
+        let non_refreshable = br#"{"provider":"openai-oidc","created_at_unix":1000,"token":{"access_token":"access","token_type":"Bearer","expires_in":3600,"refresh_token":null,"id_token":null,"scope":null}}"#;
+        assert_eq!(
+            stored_session_state(non_refreshable, 5_000),
+            StoredSessionState::Invalid
+        );
+        assert!(!stored_session_needs_refresh(non_refreshable, 5_000));
+    }
+
+    #[test]
+    fn auth_session_writes_are_owner_only_and_atomic() {
+        let dir = std::env::temp_dir().join(format!(
+            "goblins-auth-write-{}-{}",
+            std::process::id(),
+            random_url_token(6)
+        ));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("session.json");
+        write_secret_file(&path, br#"{"ok":true}"#).expect("write secret atomically");
+        assert_eq!(
+            std::fs::read(&path).expect("read secret"),
+            br#"{"ok":true}"#
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir)
+                .expect("list test dir")
+                .filter_map(Result::ok)
+                .count(),
+            1,
+            "no sibling temp file remains"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path)
+                    .expect("secret metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        remove_secret_file(&path).expect("remove secret");
+        assert!(!path.exists());
+        remove_secret_file(&path).expect("removal is idempotent");
+        std::fs::remove_dir_all(dir).expect("remove test dir");
     }
 
     #[test]
@@ -998,6 +1553,67 @@ mod tests {
         assert_eq!(
             validate_auth_config(&config),
             Err("Configured OpenAI account device auth URL must use HTTPS.")
+        );
+    }
+
+    #[test]
+    fn auth_config_rejects_empty_identity_fields_and_non_loopback_redirects() {
+        let valid = AuthConfig {
+            auth_url: "https://auth.openai.com/authorize".to_string(),
+            token_url: "https://auth.openai.com/token".to_string(),
+            client_id: "client".to_string(),
+            client_secret: None,
+            redirect_uri: "http://127.0.0.1:8787/v1/auth/openai/callback".to_string(),
+            scope: "openid profile email".to_string(),
+            device_auth_url: None,
+        };
+
+        let mut config = valid.clone();
+        config.client_id = "  ".to_string();
+        assert_eq!(
+            validate_auth_config(&config),
+            Err("Configured OpenAI account client ID must not be empty.")
+        );
+
+        let mut config = valid.clone();
+        config.scope.clear();
+        assert_eq!(
+            validate_auth_config(&config),
+            Err("Configured OpenAI account scope must not be empty.")
+        );
+
+        for redirect in [
+            "https://example.com/v1/auth/openai/callback",
+            "http://example.com/v1/auth/openai/callback",
+            "http://127.0.0.1:8787/wrong-path",
+            "http://127.0.0.1:8787/v1/auth/openai/callback?next=elsewhere",
+        ] {
+            let mut config = valid.clone();
+            config.redirect_uri = redirect.to_string();
+            assert_eq!(
+                validate_auth_config(&config),
+                Err(
+                    "Configured OpenAI account redirect URI must use the Goblins OS loopback callback."
+                ),
+                "accepted redirect {redirect}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_config_rejects_provider_urls_with_userinfo() {
+        let config = AuthConfig {
+            auth_url: "https://trusted.example@attacker.invalid/authorize".to_string(),
+            token_url: "https://auth.openai.com/token".to_string(),
+            client_id: "client".to_string(),
+            client_secret: None,
+            redirect_uri: "http://localhost:8787/v1/auth/openai/callback".to_string(),
+            scope: "openid profile email".to_string(),
+            device_auth_url: None,
+        };
+        assert_eq!(
+            validate_auth_config(&config),
+            Err("Configured OpenAI account auth URL must use HTTPS.")
         );
     }
 

@@ -1,19 +1,15 @@
 use std::{
-    env, fs,
-    io::{self, Read, Write},
-    net::TcpStream,
+    env, fs, io,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use ashpd::desktop::screenshot::Screenshot;
+use goblins_os_core_client::{initialize, ClientKind, CoreClient};
 
-/// The on-device core's loopback address (also where voice/AI handoffs talk).
-const CORE_HOST: &str = "127.0.0.1:8787";
-/// Cap on the OCR response we read back (recognized text can be large, but not
-/// unbounded) and on how long capture will wait on the core before moving on.
-const OCR_MAX_BODY: u64 = 1_048_576;
+/// Bound how long capture waits for the capability-scoped OCR request before
+/// moving on to the text-only fallback.
 const OCR_TIMEOUT: Duration = Duration::from_secs(30);
 
 const LAUNCHER_BIN: &str = "/usr/libexec/goblins-os/goblins-os-launcher";
@@ -28,6 +24,14 @@ const SCREENSHOT_PATH_ENV: &str = "GOBLINS_OS_SCREENSHOT_CONTEXT_PATH";
 const PORTAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn main() {
+    let core = match initialize(ClientKind::ScreenshotContext) {
+        Ok(core) => core,
+        Err(error) => {
+            eprintln!("goblins-os-screenshot-context: {error}");
+            return;
+        }
+    };
+
     let mut launcher = Command::new(LAUNCHER_BIN);
     launcher.arg("--visual-context");
 
@@ -36,7 +40,7 @@ fn main() {
             // Live Text: recognize text on-device so the model receives the real
             // words instead of asking the user to retype them. Best-effort — a
             // missing/declined OCR runtime just falls back to the plain summary.
-            let recognized = recognized_text(&path);
+            let recognized = recognized_text(&core, &path);
             launcher.env(SOURCE_ENV, source_value());
             launcher.env(SCREENSHOT_PATH_ENV, path.as_os_str());
             launcher.env(
@@ -210,39 +214,23 @@ fn source_value() -> String {
 /// Recognize text in the captured image via the local core's on-device OCR. Pure
 /// best-effort: any failure (core down, no Tesseract, declined) returns None and
 /// the caller keeps the plain summary — OCR never blocks the handoff.
-fn recognized_text(image_path: &Path) -> Option<String> {
+fn recognized_text(core: &CoreClient, image_path: &Path) -> Option<String> {
     let body = serde_json::json!({ "image_path": image_path.to_string_lossy() }).to_string();
-    let response = http_post_local("/v1/ocr/recognize", &body)?;
+    let response = core
+        .post_json("/v1/ocr/recognize", body.as_bytes(), OCR_TIMEOUT)
+        .ok()?;
+    if !response.is_success() {
+        return None;
+    }
 
     #[derive(serde::Deserialize)]
     struct OcrResponse {
         ok: bool,
         text: String,
     }
-    let parsed: OcrResponse = serde_json::from_str(&response).ok()?;
+    let parsed: OcrResponse = serde_json::from_slice(&response.body).ok()?;
     let text = parsed.text.trim();
     (parsed.ok && !text.is_empty()).then(|| text.to_string())
-}
-
-/// Minimal loopback HTTP POST to the core (no HTTP-client dep). `Connection:
-/// close` lets us read the whole body to EOF; the read is capped and time-bounded.
-fn http_post_local(path: &str, body: &str) -> Option<String> {
-    let mut stream = TcpStream::connect(CORE_HOST).ok()?;
-    stream.set_read_timeout(Some(OCR_TIMEOUT)).ok()?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(10)))
-        .ok()?;
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(request.as_bytes()).ok()?;
-    let mut raw = Vec::new();
-    stream.take(OCR_MAX_BODY).read_to_end(&mut raw).ok()?;
-    let text = String::from_utf8_lossy(&raw);
-    let body_start = text.find("\r\n\r\n")? + 4;
-    Some(text[body_start..].to_string())
 }
 
 /// The text-only handoff summary the launcher passes to the model. When on-device

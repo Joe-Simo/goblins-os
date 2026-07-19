@@ -8,15 +8,44 @@
 //! observed before every raw `Command` call was routed through here.
 
 use std::{
+    env,
     io::Read,
     process::{Command, Output, Stdio},
+    sync::{Arc, OnceLock},
     thread,
     time::{Duration, Instant},
 };
+use tokio::sync::Semaphore;
 
 pub(crate) const PROBE_TIMEOUT_MS_DEFAULT: u64 = 4_000;
 pub(crate) const PROBE_TIMEOUT_MS_MIN: u64 = 250;
 pub(crate) const PROBE_TIMEOUT_MS_MAX: u64 = 120_000;
+
+const CHILD_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const BASE_ENV_ALLOWLIST: &[&str] = &["LANG", "LC_ALL", "LC_CTYPE"];
+const SESSION_ENV_ALLOWLIST: &[&str] = &[
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DISPLAY",
+    "PIPEWIRE_REMOTE",
+    "PULSE_SERVER",
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+];
+
+/// Keep genuinely long model, OCR, and voice bodies from multiplying across
+/// the blocking pool. Two operations are useful on ordinary hardware (for
+/// example, OCR alongside a model turn), while a single-core target stays at
+/// one. Admission is fail-fast: excess requests never become an unbounded
+/// in-memory queue of 120-600 second jobs.
+const MAX_CONCURRENT_LONG_OPERATIONS: usize = 2;
+
+pub(crate) const LONG_OPERATION_BUSY_MESSAGE: &str =
+    "Goblins OS is finishing other AI or media work. Try again in a moment.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AdmissionError {
+    Busy,
+}
 
 pub(crate) enum BoundedCommandError {
     Missing,
@@ -46,13 +75,42 @@ pub(crate) fn clamp_probe_timeout_ms(parsed: Option<u64>) -> u64 {
 /// minutes on small machines. A panic inside the body is resumed on the
 /// calling task, so axum's panic-to-500 behavior is unchanged. Fast status
 /// probes stay inline — this is only for the minutes-long operations.
-pub(crate) async fn run_blocking<T, F>(task: F) -> T
+pub(crate) async fn run_blocking<T, F>(task: F) -> Result<T, AdmissionError>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    match tokio::task::spawn_blocking(task).await {
-        Ok(value) => value,
+    run_blocking_with_limiter(long_operation_limiter(), task).await
+}
+
+fn long_operation_limiter() -> Arc<Semaphore> {
+    static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    Arc::clone(LIMITER.get_or_init(|| {
+        let capacity = std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get().min(MAX_CONCURRENT_LONG_OPERATIONS))
+            .unwrap_or(1);
+        Arc::new(Semaphore::new(capacity))
+    }))
+}
+
+async fn run_blocking_with_limiter<T, F>(
+    limiter: Arc<Semaphore>,
+    task: F,
+) -> Result<T, AdmissionError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let permit = limiter
+        .try_acquire_owned()
+        .map_err(|_| AdmissionError::Busy)?;
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        task()
+    })
+    .await
+    {
+        Ok(value) => Ok(value),
         Err(error) => std::panic::resume_unwind(error.into_panic()),
     }
 }
@@ -62,9 +120,46 @@ pub(crate) fn bounded_command_output(
     args: &[&str],
     timeout: Duration,
 ) -> Result<Output, BoundedCommandError> {
-    let mut command = Command::new(binary);
+    let mut command = isolated_command(binary);
     command.args(args);
     bounded_output_of(&mut command, timeout)
+}
+
+/// Run a command that must connect to the active desktop/audio session. This is
+/// a narrow opt-in: it receives only the base environment plus known non-secret
+/// session addresses, never the core's OpenAI/OAuth credential material.
+pub(crate) fn bounded_session_command_output(
+    binary: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output, BoundedCommandError> {
+    let mut command = isolated_session_command(binary);
+    command.args(args);
+    bounded_output_of(&mut command, timeout)
+}
+
+/// Construct a child with a closed environment suitable for ordinary probes
+/// and control tools such as nmcli, bluetoothctl, firewall-cmd, and bootc.
+pub(crate) fn isolated_command(binary: &str) -> Command {
+    isolated_command_with(binary, &[])
+}
+
+/// Construct a child with the minimal extra environment required to reach the
+/// active D-Bus, display, PipeWire, or PulseAudio session.
+pub(crate) fn isolated_session_command(binary: &str) -> Command {
+    isolated_command_with(binary, SESSION_ENV_ALLOWLIST)
+}
+
+fn isolated_command_with(binary: &str, extra_allowlist: &[&str]) -> Command {
+    let mut command = Command::new(binary);
+    command.env_clear();
+    command.env("PATH", CHILD_PATH);
+    for name in BASE_ENV_ALLOWLIST.iter().chain(extra_allowlist) {
+        if let Some(value) = env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command
 }
 
 /// Same bound for a pre-configured `Command` (environment, working directory).
@@ -150,10 +245,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_command_output, clamp_probe_timeout_ms, BoundedCommandError,
-        PROBE_TIMEOUT_MS_DEFAULT, PROBE_TIMEOUT_MS_MAX, PROBE_TIMEOUT_MS_MIN,
+        bounded_command_output, bounded_session_command_output, clamp_probe_timeout_ms,
+        run_blocking_with_limiter, AdmissionError, BoundedCommandError, PROBE_TIMEOUT_MS_DEFAULT,
+        PROBE_TIMEOUT_MS_MAX, PROBE_TIMEOUT_MS_MIN,
     };
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
+    use tokio::sync::Semaphore;
 
     #[test]
     fn clamps_probe_timeout_into_safe_bounds() {
@@ -195,9 +293,68 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
+    #[test]
+    fn generic_child_environment_excludes_daemon_secrets() {
+        const SECRET_NAME: &str = "GOBLINS_OS_BOUNDED_TEST_OPENAI_SECRET";
+        let previous = std::env::var_os(SECRET_NAME);
+        std::env::set_var(SECRET_NAME, "must-not-reach-child");
+
+        let output = bounded_command_output("env", &[], Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("isolated environment probe must run"));
+
+        match previous {
+            Some(value) => std::env::set_var(SECRET_NAME, value),
+            None => std::env::remove_var(SECRET_NAME),
+        }
+        let environment = String::from_utf8(output.stdout).expect("environment is UTF-8");
+        assert!(environment.contains("PATH="));
+        assert!(!environment.contains(SECRET_NAME));
+        assert!(!environment.contains("must-not-reach-child"));
+    }
+
+    #[test]
+    fn session_child_receives_only_narrow_runtime_opt_ins() {
+        const SESSION_NAME: &str = "DBUS_SESSION_BUS_ADDRESS";
+        const SESSION_VALUE: &str = "unix:path=/tmp/goblins-os-bounded-test-bus";
+        const SECRET_NAME: &str = "OPENAI_ACCOUNT_CLIENT_SECRET";
+        let previous_session = std::env::var_os(SESSION_NAME);
+        let previous_secret = std::env::var_os(SECRET_NAME);
+        std::env::set_var(SESSION_NAME, SESSION_VALUE);
+        std::env::set_var(SECRET_NAME, "must-not-reach-session-child");
+
+        let output = bounded_session_command_output("env", &[], Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("isolated session environment probe must run"));
+
+        match previous_session {
+            Some(value) => std::env::set_var(SESSION_NAME, value),
+            None => std::env::remove_var(SESSION_NAME),
+        }
+        match previous_secret {
+            Some(value) => std::env::set_var(SECRET_NAME, value),
+            None => std::env::remove_var(SECRET_NAME),
+        }
+        let environment = String::from_utf8(output.stdout).expect("environment is UTF-8");
+        assert!(environment.contains(&format!("{SESSION_NAME}={SESSION_VALUE}")));
+        assert!(!environment.contains(SECRET_NAME));
+        assert!(!environment.contains("must-not-reach-session-child"));
+    }
+
     #[tokio::test]
     async fn run_blocking_returns_the_body_value() {
-        assert_eq!(super::run_blocking(|| 21 * 2).await, 42);
+        assert_eq!(super::run_blocking(|| 21 * 2).await, Ok(42));
+    }
+
+    #[tokio::test]
+    async fn long_operation_admission_fails_fast_without_queueing() {
+        let limiter = Arc::new(Semaphore::new(1));
+        let held = Arc::clone(&limiter)
+            .try_acquire_owned()
+            .expect("test permit");
+
+        let result = run_blocking_with_limiter(limiter, || 42).await;
+
+        assert_eq!(result, Err(AdmissionError::Busy));
+        drop(held);
     }
 
     #[tokio::test]

@@ -1,15 +1,12 @@
 # Goblins OS — non-secret system configuration, shared by the OS services and the
-# desktop session. Every value here is safe to expose: ports, loopback URLs,
-# on-disk paths, and modes. This file is world-readable and is sourced into the
+# desktop session. Every value here is safe to expose: ports, on-disk paths,
+# and modes. This file is world-readable and is sourced into the
 # GUI session, so it MUST NEVER hold credentials (OAuth client secrets, API keys,
 # relay tokens). Operator secrets belong only in /etc/goblins-os/openai-secrets.env
-# (mode 0600 root:root, loaded by systemd before services drop privileges, never the session) or a
-# per-service systemd drop-in. See that file for the provisioning template.
+# (mode 0600 root:root, mounted by systemd as a private service credential, never
+# exported or sourced into the session) or an encrypted per-service credential
+# drop-in. See that file for the provisioning template.
 GOBLINS_OS_CORE_PORT=8787
-GOBLINS_OS_CORE_URL=http://127.0.0.1:8787
-# Older external launchers can still pass legacy core aliases into the service
-# binaries, but the shipping image and GUI session publish only Goblins-native
-# names.
 GOBLINS_OS_BOOTC_IMAGE=localhost/goblins-os:dev
 GOBLINS_OS_SESSION=gnome-native-desktop
 GOBLINS_OS_GUI_PLATFORM=gnome-session

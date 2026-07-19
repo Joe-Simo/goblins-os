@@ -1,8 +1,10 @@
-use axum::Json;
+use axum::{http::Uri, Json};
 use serde::Serialize;
-use std::env;
 
-use crate::policy::{policy_state_for_control, PolicyControlState};
+use crate::{
+    credentials::{openai_credential, openai_credential_with_compat},
+    policy::{policy_state_for_control, PolicyControlState},
+};
 
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -76,23 +78,12 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
             role: "The OS app model: create applications from intent instead of installing them",
             launch: "local://goblins-os/apps/build",
             policy_control: "app-builder",
-            status: configured_service_status(
-                "app-builder",
-                crate::resident::resident_engine_ready() || agents_sdk_relay_configured(),
-                ServiceStatus::ServerGated,
-            ),
+            status: build_studio_status(),
             api_surface: "resident-generate",
-            sdk: "Official OpenAI Agents SDK relay when configured; Codex when the account engine is selected; Responses API when your own OpenAI key is selected; local GPT-OSS otherwise",
-            os_boundary: "Rust Build Studio owns policy, storage, and approvals; configured Agents SDK relays own tools, handoffs, guardrails, tracing, and sandbox execution server-side.",
-            secret_boundary: "Build Studio never receives raw API keys, account tokens, SDK relay credentials, or tool credentials.",
-            readiness: if agents_sdk_relay_configured() {
-                "Ready through the server-side official OpenAI Agents SDK relay.".to_string()
-            } else if crate::resident::resident_engine_ready() {
-                "Ready through the active Goblins AI engine.".to_string()
-            } else {
-                "Waiting for GPT-OSS, Codex sign-in, your own OpenAI key, or an OS-owned SDK relay."
-                    .to_string()
-            },
+            sdk: "Codex when the account engine is selected; Responses API when your own OpenAI key is selected; the managed OpenAI service when explicitly selected; local GPT-OSS otherwise",
+            os_boundary: "Rust Build Studio owns policy and storage and always uses the explicitly selected Goblins AI engine.",
+            secret_boundary: "Build Studio never receives raw API keys, account tokens, or tool credentials.",
+            readiness: build_studio_readiness(),
         },
         ServiceCatalogEntry {
             id: "platform",
@@ -121,12 +112,12 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
             ),
             api_surface: "/v1/responses",
             sdk: "Official OpenAI API surface called from Rust over the server-side core",
-            os_boundary: "The Rust core owns HTTPS calls; clients call only Goblins OS localhost routes.",
-            secret_boundary: "Your own API keys stay in OS-owned 0600 storage or behind a server-side relay.",
+            os_boundary: "Goblins OS makes hosted requests inside its protected system service; apps use only approved Goblins OS actions.",
+            secret_boundary: "Your OpenAI key stays in protected system storage or a managed organization service.",
             readiness: if responses_api_configured() {
                 "Configured for server-side Responses API calls.".to_string()
             } else {
-                "Add your own OpenAI key or configure a server-side OpenAI relay.".to_string()
+                "Ask a device administrator to install an OpenAI key or configure the managed organization service.".to_string()
             },
         },
         ServiceCatalogEntry {
@@ -141,13 +132,13 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
                 ServiceStatus::ServerGated,
             ),
             api_surface: "Realtime API",
-            sdk: "Official OpenAI Realtime/WebRTC or relay SDK path, server-side only",
-            os_boundary: "Goblins voice keeps local wake/STT/TTS available and uses OpenAI Realtime only through a configured OS relay.",
-            secret_boundary: "Realtime session secrets are minted by OS services or a server relay, never by desktop clients.",
+            sdk: "Official OpenAI Realtime/WebRTC support inside protected system services",
+            os_boundary: "Goblins voice keeps wake, transcription, and speech on-device unless OpenAI Realtime is explicitly enabled.",
+            secret_boundary: "Realtime session secrets stay in protected system services and never enter desktop apps.",
             readiness: relay_readiness(
                 "GOBLINS_OS_REALTIME_RELAY_URL",
                 "OPENAI_OS_REALTIME_RELAY_URL",
-                "Realtime relay",
+                "OpenAI Realtime",
             ),
         },
         ServiceCatalogEntry {
@@ -162,13 +153,13 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
                 ServiceStatus::ServerGated,
             ),
             api_surface: "Images API",
-            sdk: "Official OpenAI Images API via OS-owned relay",
+            sdk: "Official OpenAI Images API inside protected system services",
             os_boundary: "Image requests route through local OS services before any hosted call.",
-            secret_boundary: "Image API credentials stay in OS services or a server-side relay.",
+            secret_boundary: "Image credentials stay in protected system services and never enter desktop apps.",
             readiness: relay_readiness(
                 "GOBLINS_OS_IMAGES_RELAY_URL",
                 "OPENAI_OS_IMAGES_RELAY_URL",
-                "Images relay",
+                "OpenAI Images",
             ),
         },
         ServiceCatalogEntry {
@@ -186,13 +177,13 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
                 ServiceStatus::ServerGated,
             ),
             api_surface: "Agents SDK",
-            sdk: "Official OpenAI Agents SDK for Python/TypeScript behind an OS-owned server relay",
+            sdk: "Official OpenAI Agents SDK for Python/TypeScript inside protected system services",
             os_boundary: "Rust policy and permission gates stay in Goblins OS; the SDK runner owns tools, handoffs, guardrails, tracing, and sandbox execution server-side.",
-            secret_boundary: "Agent API keys and tool credentials stay in the SDK relay, never in GUI clients.",
+            secret_boundary: "Agent API keys and tool credentials stay in protected system services and never enter desktop apps.",
             readiness: relay_readiness(
                 "GOBLINS_OS_AGENTS_SDK_RELAY_URL",
                 "OPENAI_OS_AGENTS_SDK_RELAY_URL",
-                "Agents SDK relay",
+                "OpenAI Agents SDK",
             ),
         },
         ServiceCatalogEntry {
@@ -207,13 +198,13 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
                 ServiceStatus::ServerGated,
             ),
             api_surface: "ChatKit",
-            sdk: "Official OpenAI ChatKit through an OS-owned relay",
-            os_boundary: "Native Goblins OS surfaces remain GTK/Rust; web ChatKit is available only through an explicit relay-backed surface.",
+            sdk: "Official OpenAI ChatKit through protected system services",
+            os_boundary: "Native Goblins OS surfaces remain GTK/Rust; web ChatKit appears only when an administrator explicitly enables it.",
             secret_boundary: "ChatKit client sessions are brokered by OS services, not embedded with static secrets.",
             readiness: relay_readiness(
                 "GOBLINS_OS_CHATKIT_RELAY_URL",
                 "OPENAI_OS_CHATKIT_RELAY_URL",
-                "ChatKit relay",
+                "OpenAI ChatKit",
             ),
         },
         ServiceCatalogEntry {
@@ -265,7 +256,7 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
             api_surface: "local-settings",
             sdk: "Rust/GTK Settings over Goblins OS core APIs",
             os_boundary: "Settings reads local status and writes only explicit user choices.",
-            secret_boundary: "Settings receives booleans and paths, never API keys or account tokens.",
+            secret_boundary: "Settings receives readiness booleans and plain-language status, never secret paths, API keys, or account tokens.",
             readiness: "Ready as a native Goblins OS control surface.".to_string(),
         },
         ServiceCatalogEntry {
@@ -329,34 +320,68 @@ fn codex_readiness() -> String {
     }
 }
 
+fn build_studio_status() -> ServiceStatus {
+    match policy_state_for_control("app-builder") {
+        PolicyControlState::Denied => ServiceStatus::PolicyBlocked,
+        PolicyControlState::PermissionGated => ServiceStatus::PermissionGated,
+        PolicyControlState::Allowed => match crate::resident::active_engine_locality() {
+            Some(crate::resident::EngineLocality::OnDevice) => ServiceStatus::Local,
+            Some(crate::resident::EngineLocality::Cloud) => ServiceStatus::ServerGated,
+            None => ServiceStatus::NotConfigured,
+        },
+    }
+}
+
+fn build_studio_readiness() -> String {
+    match policy_state_for_control("app-builder") {
+        PolicyControlState::Denied => {
+            return "Build Studio is blocked by the active Goblins OS policy.".to_string();
+        }
+        PolicyControlState::PermissionGated => {
+            return "Build Studio requires an explicit Goblins OS permission review.".to_string();
+        }
+        PolicyControlState::Allowed => {}
+    }
+
+    match crate::resident::active_engine_locality() {
+        Some(crate::resident::EngineLocality::OnDevice) => {
+            "Ready through the selected on-device Goblins AI engine.".to_string()
+        }
+        Some(crate::resident::EngineLocality::Cloud) => {
+            "Ready through the explicitly selected cloud Goblins AI engine.".to_string()
+        }
+        None => "The selected Goblins AI engine is not ready.".to_string(),
+    }
+}
+
 fn responses_api_configured() -> bool {
-    crate::openai_key::stored_api_key().is_some() || cloud_relay_configured()
-}
-
-fn cloud_relay_configured() -> bool {
-    relay_configured(
-        "GOBLINS_OS_RESIDENT_RELAY_URL",
-        "OPENAI_OS_RESIDENT_RELAY_URL",
-    )
-}
-
-fn agents_sdk_relay_configured() -> bool {
-    relay_configured(
-        "GOBLINS_OS_AGENTS_SDK_RELAY_URL",
-        "OPENAI_OS_AGENTS_SDK_RELAY_URL",
-    )
+    (crate::openai_key::stored_api_key().is_some() && crate::resident::openai_api_base_is_valid())
+        || crate::resident::managed_cloud_route_configured()
 }
 
 fn relay_configured(primary_url_var: &str, legacy_url_var: &str) -> bool {
-    (env::var_os(primary_url_var).is_some() || env::var_os(legacy_url_var).is_some())
-        && env::var_os("AI_GATEWAY_API_KEY").is_some()
+    let url = openai_credential_with_compat(primary_url_var, legacy_url_var);
+    url.as_deref().is_some_and(server_https_url)
+        && openai_credential("AI_GATEWAY_API_KEY").is_some_and(|key| !key.trim().is_empty())
+}
+
+fn server_https_url(value: &str) -> bool {
+    let Ok(uri) = value.parse::<Uri>() else {
+        return false;
+    };
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    uri.scheme_str() == Some("https")
+        && !authority.host().is_empty()
+        && !authority.as_str().contains('@')
 }
 
 fn relay_readiness(primary_url_var: &str, legacy_url_var: &str, label: &str) -> String {
     if relay_configured(primary_url_var, legacy_url_var) {
-        format!("{label} is configured through OS-owned secret storage.")
+        format!("{label} is ready through protected system credentials.")
     } else {
-        format!("{label} is not configured; add a server-side relay before enabling it.")
+        format!("{label} is not ready yet. Ask a device administrator to configure the protected service before turning it on.")
     }
 }
 
@@ -415,7 +440,9 @@ mod tests {
             .expect("responses service");
         assert_eq!(responses.api_surface, "/v1/responses");
         assert!(responses.sdk.contains("Rust"));
-        assert!(responses.secret_boundary.contains("0600"));
+        assert!(responses
+            .secret_boundary
+            .contains("protected system storage"));
 
         let agents = services
             .iter()
@@ -423,17 +450,22 @@ mod tests {
             .expect("agents service");
         assert!(agents.sdk.contains("Official OpenAI Agents SDK"));
         assert!(agents.os_boundary.contains("Rust policy"));
-        assert!(agents.secret_boundary.contains("never in GUI clients"));
+        assert!(agents.secret_boundary.contains("never enter desktop apps"));
 
         let build_studio = services
             .iter()
             .find(|service| service.id == "build-studio")
             .expect("build studio service");
-        assert!(build_studio.sdk.contains("Official OpenAI Agents SDK"));
         assert!(build_studio.sdk.contains("Codex"));
         assert!(build_studio.sdk.contains("Responses API"));
-        assert!(build_studio.os_boundary.contains("approvals"));
-        assert!(build_studio.os_boundary.contains("sandbox execution"));
+        assert!(build_studio.sdk.contains("explicitly selected"));
+        assert!(build_studio.os_boundary.contains("always uses"));
+        assert!(!build_studio.sdk.contains("Agents SDK"));
+
+        assert_ne!(
+            agents.launch, build_studio.launch,
+            "the Agents SDK remains a separate service and is never an invisible Build Studio route"
+        );
 
         assert!(
             services.iter().any(|service| service.id == "chatkit"),

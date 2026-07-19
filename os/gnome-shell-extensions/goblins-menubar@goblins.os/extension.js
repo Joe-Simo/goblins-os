@@ -151,6 +151,8 @@ export default class GoblinsMenuBar extends Extension {
         // — no half-styled mix, no regression.
         this._lightChromeFile = Gio.File.new_for_path(LIGHT_CHROME_CSS);
         this._lightChromeLoaded = false;
+        this._lightChromeTheme = null;
+        this._applyingSchemeChrome = false;
         this._schemeChangedId = this._interfaceSettings.connect(
             'changed::color-scheme',
             () => this._applySchemeChrome()
@@ -160,17 +162,28 @@ export default class GoblinsMenuBar extends Extension {
         // drops our overlay with the old theme, so reset and re-apply on every swap.
         this._themeContext = St.ThemeContext.get_for_stage(global.stage);
         this._themeChangedId = this._themeContext.connect('changed', () => {
-            this._lightChromeLoaded = false;
+            const currentTheme = this._themeContext?.get_theme();
+            if (currentTheme !== this._lightChromeTheme) {
+                this._lightChromeTheme = currentTheme;
+                this._lightChromeLoaded = false;
+            }
             this._applySchemeChrome();
         });
         this._applySchemeChrome();
     }
 
     _applySchemeChrome() {
+        if (this._applyingSchemeChrome)
+            return;
+        this._applyingSchemeChrome = true;
         try {
             const theme = this._themeContext?.get_theme();
             if (!theme)
                 return;
+            if (theme !== this._lightChromeTheme) {
+                this._lightChromeTheme = theme;
+                this._lightChromeLoaded = false;
+            }
             const isLight =
                 this._interfaceSettings.get_string('color-scheme') !== 'prefer-dark';
             // The mark is non-symbolic, so swap the gicon by scheme: ink on the
@@ -179,14 +192,21 @@ export default class GoblinsMenuBar extends Extension {
                 Gio.icon_new_for_string(isLight ? MARK_LIGHT : MARK_DARK)
             );
             if (isLight && !this._lightChromeLoaded && this._lightChromeFile.query_exists(null)) {
-                theme.load_stylesheet(this._lightChromeFile);
                 this._lightChromeLoaded = true;
+                try {
+                    theme.load_stylesheet(this._lightChromeFile);
+                } catch (error) {
+                    this._lightChromeLoaded = false;
+                    throw error;
+                }
             } else if (!isLight && this._lightChromeLoaded) {
-                theme.unload_stylesheet(this._lightChromeFile);
                 this._lightChromeLoaded = false;
+                theme.unload_stylesheet(this._lightChromeFile);
             }
         } catch (error) {
             logError(error, 'goblins-menubar: failed to apply adaptive chrome stylesheet');
+        } finally {
+            this._applyingSchemeChrome = false;
         }
     }
 
@@ -663,6 +683,8 @@ export default class GoblinsMenuBar extends Extension {
             this._lightChromeLoaded = false;
         }
         this._themeContext = null;
+        this._lightChromeTheme = null;
+        this._applyingSchemeChrome = false;
         this._interfaceSettings = null;
         this._inputSourceSettings = null;
         this._focusSettings = null;

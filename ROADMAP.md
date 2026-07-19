@@ -11,10 +11,11 @@ signoff files, not in this overview.
 - Current release: `v0.1.0-alpha.20260703`.
 - ISO media: published as split GitHub release assets for `x86_64` and
   `aarch64`.
-- Container images: built by the release workflow; public pull depends on GHCR
-  package visibility.
-- Stable release status: still alpha; the current release gate passes, and a
-  stable tag waits on public container pulls and post-alpha hardening.
+- Container images: public anonymous pulls are available from GHCR for both
+  `x86_64` and `aarch64`.
+- Stable release status: still alpha. Stable promotion requires one exact
+  candidate commit tied to fresh dual-architecture release media, display-backed
+  proof, coherent signoff hashes, and the stable website data.
 
 ## Shipped Foundation
 
@@ -33,10 +34,11 @@ signoff files, not in this overview.
 
 ## Active Release Work
 
-- Make the GHCR container package public so Docker and Podman users can pull
-  without authentication.
-- Keep display-backed signoff current for every release candidate.
-- Publish a stable tag after GHCR visibility and post-alpha hardening are done.
+- Reconcile the `aarch64` verification-ISO proof-manifest SHA with its signoff
+  row; the recorded values currently identify different media.
+- Select an exact stable candidate and capture fresh per-architecture release
+  and display-backed proof for that same commit and media.
+- Publish a stable tag only after the exact-candidate gates and signoff close.
 - Keep the website release data synchronized with the published artifacts.
 
 ## Product Work

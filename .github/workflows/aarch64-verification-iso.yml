@@ -17,6 +17,9 @@ concurrency:
   group: aarch64-verification-iso-${{ github.ref }}-${{ inputs.run_date }}
   cancel-in-progress: true
 
+env:
+  GOBLINS_OS_CANDIDATE_COMMIT: ${{ github.sha }}
+
 permissions:
   contents: write
   packages: write
@@ -99,7 +102,8 @@ jobs:
             /usr/libexec/goblins-os/goblins-os-verify \
             --source-root /workspace \
             --release-evidence /out \
-            --arch aarch64
+            --arch aarch64 \
+            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT"
           docker run --rm \
             -v "$PWD/os/signoff-proofs/sbom/aarch64:/out" \
             -w /out \

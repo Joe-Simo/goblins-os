@@ -32,7 +32,8 @@ pub async fn readiness() -> Json<ReadinessResponse> {
 }
 
 pub fn build_readiness() -> ReadinessResponse {
-    let gateway_ready = env::var("AI_GATEWAY_API_KEY").is_ok() || local_model_relay_configured();
+    let gateway_ready = crate::resident::managed_cloud_route_configured()
+        || crate::resident::local_model_route_configured();
     let build_sandbox_ready = env::var("GOBLINS_OS_BUILD_SANDBOX").is_ok();
     let bootc_image_ready = env::var("GOBLINS_OS_BOOTC_IMAGE").is_ok();
     let model_dir_ready = env::var("GOBLINS_OS_MODEL_DIR").is_ok();
@@ -203,17 +204,12 @@ pub fn build_readiness() -> ReadinessResponse {
                     ReadinessState::Ready
                 },
                 detail: if public_secret_leak {
-                    "Sensitive-looking public environment variables were detected.".to_string()
-                } else {
-                    "No sensitive key names are exposed through public environment variables."
+                    "Sensitive configuration names were detected in the desktop session."
                         .to_string()
+                } else {
+                    "No sensitive key names are exposed to desktop applications.".to_string()
                 },
             },
         ],
     }
-}
-
-fn local_model_relay_configured() -> bool {
-    env::var_os("GOBLINS_OS_LOCAL_MODEL_RELAY").is_some()
-        || env::var_os("OPENAI_OS_LOCAL_MODEL_RELAY").is_some()
 }

@@ -4,7 +4,8 @@
 //! gate first, asks the xdg-desktop-portal Screenshot picker for an interactive
 //! region, copies the image into a private runtime directory, POSTs the path to
 //! `/v1/ai/visual-lookup`, removes the temporary file, and renders an honest
-//! branded identification card. Pixels go only to the loopback core/runtime path.
+//! branded identification card. Pixels go only to the capability-scoped local
+//! core/runtime path.
 
 #![cfg_attr(
     not(all(target_os = "linux", feature = "native-desktop")),
@@ -13,20 +14,16 @@
 
 use std::{
     env, fs,
-    io::{self, Read, Write},
-    net::TcpStream,
+    io::{self, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use ashpd::desktop::screenshot::Screenshot;
+use goblins_os_core_client::{initialize, ClientKind, CoreClient};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_CORE_HOST: &str = "127.0.0.1:8787";
-const CORE_URL_ENV: &str = "GOBLINS_OS_CORE_URL";
-const LEGACY_CORE_URL_ENV: &str = "OPENAI_OS_CORE_URL";
-const HTTP_MAX_BODY: u64 = 1_048_576;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(95);
 const PORTAL_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -34,18 +31,7 @@ type VisualResult<T> = Result<T, String>;
 
 #[derive(Clone)]
 struct VisualLookupConfig {
-    core_host: String,
-}
-
-impl VisualLookupConfig {
-    fn from_env() -> Self {
-        let core_host = env::var(CORE_URL_ENV)
-            .or_else(|_| env::var(LEGACY_CORE_URL_ENV))
-            .ok()
-            .and_then(|url| loopback_http_host(&url))
-            .unwrap_or_else(|| DEFAULT_CORE_HOST.to_string());
-        Self { core_host }
-    }
+    core: CoreClient,
 }
 
 #[derive(Clone, Deserialize)]
@@ -83,14 +69,22 @@ struct VisualLookupCard {
 }
 
 fn main() {
-    if let Err(detail) = run_visual_lookup(VisualLookupConfig::from_env()) {
+    let core = match initialize(ClientKind::VisualLookup) {
+        Ok(core) => core,
+        Err(error) => {
+            eprintln!("goblins-os-visual-lookup: {error}");
+            return;
+        }
+    };
+
+    if let Err(detail) = run_visual_lookup(VisualLookupConfig { core }) {
         eprintln!("goblins-os-visual-lookup: {detail}");
     }
 }
 
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
 fn run_visual_lookup(config: VisualLookupConfig) -> VisualResult<()> {
-    let _ = config.core_host.as_str();
+    let _ = config.core;
     println!("goblins_os_visual_lookup=unavailable");
     println!("visual_lookup_reason=build_requires_linux_native_desktop_feature");
     Ok(())
@@ -104,7 +98,7 @@ fn run_visual_lookup(config: VisualLookupConfig) -> VisualResult<()> {
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn visual_lookup_card(config: &VisualLookupConfig) -> VisualLookupCard {
-    match vision_status(&config.core_host) {
+    match vision_status(&config.core) {
         Ok(status) if !status.runtime_configured => VisualLookupCard {
             title: "Visual Look Up".to_string(),
             category: "Vision model required".to_string(),
@@ -115,7 +109,7 @@ fn visual_lookup_card(config: &VisualLookupConfig) -> VisualLookupCard {
         },
         Ok(_) => match capture_region() {
             Ok(path) => {
-                let outcome = identify_image(&config.core_host, &path);
+                let outcome = identify_image(&config.core, &path);
                 let _ = fs::remove_file(&path);
                 match outcome {
                     Ok(outcome) => card_from_outcome(outcome),
@@ -137,19 +131,36 @@ fn visual_lookup_card(config: &VisualLookupConfig) -> VisualLookupCard {
     }
 }
 
-fn vision_status(core_host: &str) -> VisualResult<VisionStatus> {
-    let body = http_request_local(core_host, "GET", "/v1/vision/status", None)?;
-    serde_json::from_str(&body).map_err(|_| "Goblins OS returned unreadable vision status.".into())
+fn vision_status(core: &CoreClient) -> VisualResult<VisionStatus> {
+    let response = core
+        .get("/v1/vision/status", HTTP_TIMEOUT)
+        .map_err(|_| "Goblins OS core is not ready for Visual Look Up.".to_string())?;
+    if !response.is_success() {
+        return Err(format!(
+            "Goblins OS could not read Visual Look Up readiness (HTTP {}).",
+            response.status
+        ));
+    }
+    serde_json::from_slice(&response.body)
+        .map_err(|_| "Goblins OS returned unreadable vision status.".into())
 }
 
-fn identify_image(core_host: &str, image_path: &Path) -> VisualResult<VisualLookupOutcome> {
+fn identify_image(core: &CoreClient, image_path: &Path) -> VisualResult<VisualLookupOutcome> {
     let body = serde_json::json!({
         "image_path": image_path.to_string_lossy(),
         "hint": "User-invoked Visual Look Up region capture"
     })
     .to_string();
-    let reply = http_request_local(core_host, "POST", "/v1/ai/visual-lookup", Some(&body))?;
-    serde_json::from_str(&reply)
+    let response = core
+        .post_json("/v1/ai/visual-lookup", body.as_bytes(), HTTP_TIMEOUT)
+        .map_err(|_| "Goblins OS core did not finish the Visual Look Up response.".to_string())?;
+    if !response.is_success() {
+        return Err(format!(
+            "Goblins OS could not complete Visual Look Up (HTTP {}).",
+            response.status
+        ));
+    }
+    serde_json::from_slice(&response.body)
         .map_err(|_| "Goblins OS returned an unreadable Visual Look Up response.".into())
 }
 
@@ -373,66 +384,6 @@ fn decode_uri_path(encoded: &str) -> PathBuf {
     PathBuf::from(decoded.as_ref())
 }
 
-fn http_request_local(
-    core_host: &str,
-    method: &str,
-    path: &str,
-    body: Option<&str>,
-) -> VisualResult<String> {
-    let mut stream = TcpStream::connect(core_host)
-        .map_err(|_| "Goblins OS core is not ready for Visual Look Up.".to_string())?;
-    stream.set_read_timeout(Some(HTTP_TIMEOUT)).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
-
-    let body = body.unwrap_or("");
-    let request = if method == "POST" {
-        format!(
-            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
-    } else {
-        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-    };
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|_| "Goblins OS core did not accept the Visual Look Up request.".to_string())?;
-    let mut raw = Vec::new();
-    stream
-        .take(HTTP_MAX_BODY)
-        .read_to_end(&mut raw)
-        .map_err(|_| "Goblins OS core did not finish the Visual Look Up response.".to_string())?;
-    let text = String::from_utf8_lossy(&raw);
-    let body_start = text
-        .find("\r\n\r\n")
-        .ok_or_else(|| "Goblins OS core returned an invalid HTTP response.".to_string())?
-        + 4;
-    Ok(text[body_start..].to_string())
-}
-
-fn loopback_http_host(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("http://")?;
-    let host_port = if let Some(after_bracket) = rest.strip_prefix('[') {
-        let (host, tail) = after_bracket.split_once(']')?;
-        let port = tail.strip_prefix(':')?.split('/').next()?;
-        (host.to_string(), port.to_string())
-    } else {
-        let before_path = rest.split('/').next().unwrap_or("");
-        let (host, port) = before_path.split_once(':')?;
-        (host.to_string(), port.to_string())
-    };
-    let (host, port) = host_port;
-    let loopback = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
-    let numeric_port = port.parse::<u16>().ok()?;
-    loopback.then(|| {
-        if host == "::1" {
-            format!("[::1]:{numeric_port}")
-        } else {
-            format!("{host}:{numeric_port}")
-        }
-    })
-}
-
 fn sanitize_context_value(value: &str, max_chars: usize) -> String {
     value
         .replace(['\r', '\n', '\t'], " ")
@@ -639,25 +590,6 @@ fn search_web(query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn loopback_core_url_extracts_only_local_hosts() {
-        assert_eq!(
-            loopback_http_host("http://127.0.0.1:8787").as_deref(),
-            Some("127.0.0.1:8787")
-        );
-        assert_eq!(
-            loopback_http_host("http://localhost:8787/v1").as_deref(),
-            Some("localhost:8787")
-        );
-        assert_eq!(
-            loopback_http_host("http://[::1]:8787").as_deref(),
-            Some("[::1]:8787")
-        );
-        assert!(loopback_http_host("http://10.0.0.2:8787").is_none());
-        assert!(loopback_http_host("https://example.com:443").is_none());
-        assert!(loopback_http_host("http://localhost").is_none());
-    }
 
     #[test]
     fn low_confidence_card_uses_best_guess_copy() {

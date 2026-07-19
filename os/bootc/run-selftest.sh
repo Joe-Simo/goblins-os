@@ -9,7 +9,18 @@ SOCK=/run/goblins-os/resident.sock
 export GOBLINS_OS_RESIDENT_SOCKET="$SOCK"
 export GOBLINS_OS_RESIDENT_STATE=/var/lib/goblins-os/resident
 export GOBLINS_OS_APPS_DIR=/tmp/goblins-os-selftest-apps
+export GOBLINS_OS_INSTALLER_STATE=/tmp/goblins-os-selftest-state/installer
+export GOBLINS_OS_SESSION_STATE=/tmp/goblins-os-selftest-state/session
+export GOBLINS_OS_POLICY_STATE=/tmp/goblins-os-selftest-state/policy
+export GOBLINS_OS_AI_STATE=/tmp/goblins-os-selftest-state/ai
+export GOBLINS_OS_MODEL_DIR=/tmp/goblins-os-selftest-state/models
+CORE_PROOF_SOCKET=/run/goblins-os-core/release-proof/control.sock
+CORE_PROOF_URL=http://localhost
 fail=0
+
+core_proof_curl() {
+  curl --connect-timeout 2 --max-time 45 --unix-socket "$CORE_PROOF_SOCKET" "$@"
+}
 
 echo "═══════════════════════════════════════════════════════════════════"
 echo " Goblins OS self-test — real image rootfs ($(. /etc/os-release; echo "$PRETTY_NAME"))"
@@ -35,20 +46,46 @@ done
 
 echo
 echo "── 3. OS core daemon starts and serves its API ──"
-rm -rf "$GOBLINS_OS_APPS_DIR"
-/usr/libexec/goblins-os/goblins-os-core &
+rm -rf "$GOBLINS_OS_APPS_DIR" /tmp/goblins-os-selftest-state
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/goblins-os-core.conf
+install -d -m 0750 -o goblins-os -g goblins-os \
+  "$GOBLINS_OS_APPS_DIR" \
+  "$GOBLINS_OS_INSTALLER_STATE" \
+  "$GOBLINS_OS_SESSION_STATE" \
+  "$GOBLINS_OS_POLICY_STATE" \
+  "$GOBLINS_OS_AI_STATE" \
+  "$GOBLINS_OS_MODEL_DIR"
+setpriv --reuid=goblins-os --regid=goblins-os --init-groups -- \
+  /usr/libexec/goblins-os/goblins-os-core &
 core_pid=$!
-for _ in $(seq 1 60); do curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1 && break; sleep 0.2; done
+for _ in $(seq 1 60); do core_proof_curl -sf "$CORE_PROOF_URL/health" >/dev/null 2>&1 && break; sleep 0.2; done
 for ep in /health /v1/readiness /v1/ai/actions /v1/ai/action-history /v1/system/hardware /v1/local-models \
           /v1/policy/status /v1/ai/runtime/status /v1/codex/resident/status /v1/auth/openai/status \
           /v1/system/services /v1/installer/install-targets /v1/firewall/status /v1/preview/status \
-          /v1/apps/build-catalog /v1/apps; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8787$ep")
+          /v1/apps/build-catalog /v1/apps /v1/models/openai-key; do
+  code=$(core_proof_curl -s -o /dev/null -w '%{http_code}' "$CORE_PROOF_URL$ep")
   echo "  GET $ep -> HTTP $code"
   [ "$code" = "200" ] || fail=1
 done
-preview_status_code=$(curl -s -o /tmp/goblins-os-preview-status.json -w '%{http_code}' \
-  http://127.0.0.1:8787/v1/preview/status)
+engine_response=/tmp/goblins-os-engine-selection.json
+engine_file="$GOBLINS_OS_AI_STATE/engine"
+engine_code=$(core_proof_curl -s -o "$engine_response" -w '%{http_code}' \
+  -X POST -H 'Content-Type: application/json' \
+  -d '{"engine":"local-gpt-oss"}' \
+  "$CORE_PROOF_URL/v1/models/engine")
+engine_selected=$(jq -r '.engine // empty' "$engine_response" 2>/dev/null || true)
+engine_content=$(cat "$engine_file" 2>/dev/null || true)
+engine_owner_mode=$(stat -c '%U:%G:%a' "$engine_file" 2>/dev/null || true)
+echo "  POST /v1/models/engine -> HTTP $engine_code selected=$engine_selected persisted=$engine_content owner_mode=$engine_owner_mode"
+[ "$engine_code" = "200" ] \
+  && [ "$engine_selected" = "local-gpt-oss" ] \
+  && [ -f "$engine_file" ] \
+  && [ ! -L "$engine_file" ] \
+  && [ "$engine_content" = "local-gpt-oss" ] \
+  && [ "$engine_owner_mode" = "goblins-os:goblins-os:600" ] \
+  || fail=1
+preview_status_code=$(core_proof_curl -s -o /tmp/goblins-os-preview-status.json -w '%{http_code}' \
+  "$CORE_PROOF_URL/v1/preview/status")
 preview_available=$(jq -r '.available // false' /tmp/goblins-os-preview-status.json 2>/dev/null || true)
 preview_xdg_open=$(jq -r '.xdg_open_available // false' /tmp/goblins-os-preview-status.json 2>/dev/null || true)
 preview_papers=$(jq -r '.papers_available // false' /tmp/goblins-os-preview-status.json 2>/dev/null || true)
@@ -67,34 +104,34 @@ preview_txt=/tmp/goblins-os-preview-selftest.txt
 printf '%%PDF-1.4\n%% Goblins OS Preview self-test\n%%%%EOF\n' > "$preview_pdf"
 printf 'Goblins OS Preview image self-test placeholder\n' > "$preview_png"
 printf 'Goblins OS Preview unsupported self-test placeholder\n' > "$preview_txt"
-preview_pdf_code=$(curl -s -o /tmp/goblins-os-preview-open-pdf.json -w '%{http_code}' \
+preview_pdf_code=$(core_proof_curl -s -o /tmp/goblins-os-preview-open-pdf.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d "$(jq -cn --arg path "$preview_pdf" '{path:$path}')" \
-  http://127.0.0.1:8787/v1/preview/open)
+  "$CORE_PROOF_URL/v1/preview/open")
 preview_pdf_ok=$(jq -r '.ok // empty' /tmp/goblins-os-preview-open-pdf.json 2>/dev/null || true)
 preview_pdf_kind=$(jq -r '.kind // empty' /tmp/goblins-os-preview-open-pdf.json 2>/dev/null || true)
 echo "  POST /v1/preview/open PDF -> HTTP $preview_pdf_code ok=$preview_pdf_ok kind=$preview_pdf_kind"
 [ "$preview_pdf_code" = "200" ] && [ "$preview_pdf_ok" = "true" ] && [ "$preview_pdf_kind" = "pdf" ] || fail=1
-preview_image_code=$(curl -s -o /tmp/goblins-os-preview-open-image.json -w '%{http_code}' \
+preview_image_code=$(core_proof_curl -s -o /tmp/goblins-os-preview-open-image.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d "$(jq -cn --arg path "$preview_png" '{path:$path}')" \
-  http://127.0.0.1:8787/v1/preview/open)
+  "$CORE_PROOF_URL/v1/preview/open")
 preview_image_ok=$(jq -r '.ok // empty' /tmp/goblins-os-preview-open-image.json 2>/dev/null || true)
 preview_image_kind=$(jq -r '.kind // empty' /tmp/goblins-os-preview-open-image.json 2>/dev/null || true)
 echo "  POST /v1/preview/open image -> HTTP $preview_image_code ok=$preview_image_ok kind=$preview_image_kind"
 [ "$preview_image_code" = "200" ] && [ "$preview_image_ok" = "true" ] && [ "$preview_image_kind" = "image" ] || fail=1
-preview_unsupported_code=$(curl -s -o /tmp/goblins-os-preview-open-unsupported.json -w '%{http_code}' \
+preview_unsupported_code=$(core_proof_curl -s -o /tmp/goblins-os-preview-open-unsupported.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d "$(jq -cn --arg path "$preview_txt" '{path:$path}')" \
-  http://127.0.0.1:8787/v1/preview/open)
+  "$CORE_PROOF_URL/v1/preview/open")
 preview_unsupported_ok=$(jq -r '.ok // empty' /tmp/goblins-os-preview-open-unsupported.json 2>/dev/null || true)
 preview_unsupported_text=$(jq -r '.text // empty' /tmp/goblins-os-preview-open-unsupported.json 2>/dev/null || true)
 echo "  POST /v1/preview/open unsupported -> HTTP $preview_unsupported_code ok=$preview_unsupported_ok"
 [ "$preview_unsupported_code" = "400" ] && [ "$preview_unsupported_ok" != "true" ] && [ -n "$preview_unsupported_text" ] || fail=1
-firewall_toggle_code=$(curl -s -o /tmp/goblins-os-firewall-toggle.json -w '%{http_code}' \
+firewall_toggle_code=$(core_proof_curl -s -o /tmp/goblins-os-firewall-toggle.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"enabled":true}' \
-  http://127.0.0.1:8787/v1/firewall/enabled)
+  "$CORE_PROOF_URL/v1/firewall/enabled")
 firewall_toggle_ok=$(jq -r '.ok // empty' /tmp/goblins-os-firewall-toggle.json 2>/dev/null || true)
 firewall_toggle_text=$(jq -r '.text // empty' /tmp/goblins-os-firewall-toggle.json 2>/dev/null || true)
 firewall_toggle_error=$(jq -r '.error // empty' /tmp/goblins-os-firewall-toggle.json 2>/dev/null || true)
@@ -105,57 +142,59 @@ case "$firewall_toggle_code" in
   502|503) [ "$firewall_toggle_ok" != "true" ] && { [ -n "$firewall_toggle_text" ] || [ -n "$firewall_toggle_error" ] || [ -n "$firewall_toggle_body" ]; } || fail=1 ;;
   *) fail=1 ;;
 esac
-app_build_code=$(curl -s -o /tmp/goblins-os-app-build.json -w '%{http_code}' \
+app_build_code=$(core_proof_curl -s -o /tmp/goblins-os-app-build.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"intent":"Self-test app-builder route check. Create a tiny notes app plan only."}' \
-  http://127.0.0.1:8787/v1/apps/builds)
+  "$CORE_PROOF_URL/v1/apps/builds")
 echo "  POST /v1/apps/builds -> HTTP $app_build_code"
 case "$app_build_code" in 200|403|503) ;; *) fail=1 ;; esac
-settings_ai_code=$(curl -s -o /tmp/goblins-os-settings-ai.json -w '%{http_code}' \
+settings_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-settings-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"panel":"network","topic":"Network","question":"Why is the network offline?","status_summary":"Self-test route check only; no user content."}' \
-  http://127.0.0.1:8787/v1/ai/settings-context)
+  "$CORE_PROOF_URL/v1/ai/settings-context")
 echo "  POST /v1/ai/settings-context -> HTTP $settings_ai_code"
 case "$settings_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
-open_settings_ai_code=$(curl -s -o /tmp/goblins-os-open-settings-ai.json -w '%{http_code}' \
+open_settings_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-open-settings-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"query":"open wifi settings","source_panel":"self-test"}' \
-  http://127.0.0.1:8787/v1/ai/open-settings-panel)
+  "$CORE_PROOF_URL/v1/ai/open-settings-panel")
 echo "  POST /v1/ai/open-settings-panel -> HTTP $open_settings_ai_code"
 case "$open_settings_ai_code" in 200|403) ;; *) fail=1 ;; esac
-system_status_ai_code=$(curl -s -o /tmp/goblins-os-system-status-ai.json -w '%{http_code}' \
+system_status_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-system-status-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"focus":"storage","question":"Summarize current system state.","status_summary":"Self-test route check only; no user content."}' \
-  http://127.0.0.1:8787/v1/ai/system-status)
+  "$CORE_PROOF_URL/v1/ai/system-status")
 echo "  POST /v1/ai/system-status -> HTTP $system_status_ai_code"
 case "$system_status_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
-selected_text_ai_code=$(curl -s -o /tmp/goblins-os-selected-text-ai.json -w '%{http_code}' \
+selected_text_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-selected-text-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"text":"Self-test selected text route check.","app":"Self Test","window_title":"Installed OS self-test","question":"Summarize this selected text."}' \
-  http://127.0.0.1:8787/v1/ai/selected-text-context)
+  "$CORE_PROOF_URL/v1/ai/selected-text-context")
 echo "  POST /v1/ai/selected-text-context -> HTTP $selected_text_ai_code"
 case "$selected_text_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
-writing_ai_code=$(curl -s -o /tmp/goblins-os-writing-ai.json -w '%{http_code}' \
+writing_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-writing-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"text":"Self-test writing tools route check.","app":"Self Test","window_title":"Installed OS self-test","question":"Proofread this text."}' \
-  http://127.0.0.1:8787/v1/ai/write-selected-text)
+  "$CORE_PROOF_URL/v1/ai/write-selected-text")
 echo "  POST /v1/ai/write-selected-text -> HTTP $writing_ai_code"
 case "$writing_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
-screen_ai_code=$(curl -s -o /tmp/goblins-os-screen-ai.json -w '%{http_code}' \
+screen_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-screen-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"source":"self-test","app":"Self Test","window_title":"Installed OS self-test","visible_text":"Self-test screen context route check.","visual_summary":"No screenshot pixels are sent in self-test.","question":"Summarize this visible context."}' \
-  http://127.0.0.1:8787/v1/ai/screen-context)
+  "$CORE_PROOF_URL/v1/ai/screen-context")
 echo "  POST /v1/ai/screen-context -> HTTP $screen_ai_code"
 case "$screen_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
 echo "  hardware scan:"
-curl -s http://127.0.0.1:8787/v1/system/hardware | jq -c '{os:.platform.os, ram_gb:.memory.total_gb, accelerators:(.accelerators|length), storage:(.storage|length), runtimes:.runtimes}'
+core_proof_curl -s "$CORE_PROOF_URL/v1/system/hardware" | jq -c '{os:.platform.os, ram_gb:.memory.total_gb, accelerators:(.accelerators|length), storage:(.storage|length), runtimes:.runtimes}'
 echo "  model eligibility:"
-curl -s http://127.0.0.1:8787/v1/local-models | jq -c '.models[] | {id, state, min_ram_gb:.minimum_ram_gb, min_vram_gb:.minimum_gpu_vram_gb, min_storage_gb:.minimum_free_storage_gb}'
+core_proof_curl -s "$CORE_PROOF_URL/v1/local-models" | jq -c '.models[] | {id, state, min_ram_gb:.minimum_ram_gb, min_vram_gb:.minimum_gpu_vram_gb, min_storage_gb:.minimum_free_storage_gb}'
 
 echo
 echo "── 4. Persistent Goblins AI runtime IPC (always-available OS process) ──"
-mkdir -p "$(dirname "$SOCK")"
-/usr/libexec/goblins-os/goblins-os-resident &
+install -d -m 0750 -o goblins-resident -g goblins-core-resident \
+  "$(dirname "$SOCK")" "$GOBLINS_OS_RESIDENT_STATE"
+setpriv --reuid=goblins-resident --regid=goblins-core-resident --init-groups -- \
+  /usr/libexec/goblins-os/goblins-os-resident &
 resident_pid=$!
 for _ in $(seq 1 60); do [ -S "$SOCK" ] && break; sleep 0.2; done
 if [ -S "$SOCK" ]; then

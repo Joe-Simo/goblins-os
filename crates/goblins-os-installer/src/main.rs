@@ -1,10 +1,7 @@
 use std::{
     env,
     error::Error,
-    fmt,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    thread,
+    fmt, thread,
     time::{Duration, Instant},
 };
 
@@ -12,20 +9,33 @@ use std::{
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 use std::{cell::RefCell, rc::Rc};
 
+use goblins_os_core_client::{initialize, ClientKind, CoreClient, Method, Response};
 use serde::Deserialize;
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 use goblins_os_ui::status_pill;
 
-const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
 const DEFAULT_CORE_WAIT_SECS: u64 = 60;
-const MAX_CORE_BODY_BYTES: usize = 1024 * 1024;
+// App builds may wait on a local model for 3600 seconds. This fixed ceiling
+// leaves bounded finalization time and matches the capability-client maximum.
+const LONG_CORE_JOB_TIMEOUT: Duration = Duration::from_secs(65 * 60);
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+const INSTALLER_TRANSITION_MS: u32 = 220;
 
 type InstallerResult<T> = Result<T, Box<dyn Error>>;
 
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn installer_transition_duration(animations_enabled: bool) -> u32 {
+    if animations_enabled {
+        INSTALLER_TRANSITION_MS
+    } else {
+        0
+    }
+}
+
 #[derive(Clone)]
 struct InstallerConfig {
-    core_url: String,
+    core: CoreClient,
     core_wait: Duration,
 }
 
@@ -38,6 +48,8 @@ struct BootState {
 struct InstallerState {
     boot: BootState,
     auth: Option<AuthStatus>,
+    codex: Option<CodexStatus>,
+    policy: Option<PolicyStatus>,
     network: Option<NetworkStatus>,
     readiness: Option<InstallerReadiness>,
     install_targets: Option<InstallTargetStatus>,
@@ -52,6 +64,68 @@ struct AuthStatus {
     provider: String,
     session_storage: String,
     message: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct CodexStatus {
+    installed: bool,
+    authenticated: bool,
+    detail: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct PolicyStatus {
+    profile: String,
+    locked: bool,
+    controls: Vec<PolicyControl>,
+}
+
+#[derive(Clone, Deserialize)]
+struct PolicyControl {
+    id: String,
+    state: String,
+    profile_state: String,
+    grant: Option<serde_json::Value>,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Deserialize)]
+struct CodexLoginStart {
+    #[serde(default)]
+    started: bool,
+    #[serde(default)]
+    authenticated: bool,
+    #[serde(default)]
+    already_running: bool,
+    #[allow(dead_code)]
+    detail: String,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Deserialize)]
+struct CodexLoginUrl {
+    #[serde(default)]
+    authenticated: bool,
+    #[serde(default)]
+    auth_url: Option<String>,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Debug, PartialEq, Eq)]
+enum CodexSetupOutcome {
+    Ready,
+    AlreadyRunning,
+    OpenUrl(String),
+    Started,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FirstAppFailureStage {
+    Permission,
+    Build,
+    FinishSetup,
+    Worker,
 }
 
 /// Connectivity as reported by the OS core (NetworkManager-backed). The installer
@@ -461,12 +535,6 @@ struct InstallProgress {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct HttpEndpoint {
-    host: String,
-    port: u16,
-}
-
-#[derive(Debug, PartialEq, Eq)]
 struct HttpResponse {
     status: u16,
     headers: Vec<(String, String)>,
@@ -476,6 +544,7 @@ struct HttpResponse {
 #[derive(Debug, PartialEq, Eq)]
 enum CoreFetchError {
     Status(u16),
+    #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
     Malformed,
     Transport,
     Decode,
@@ -485,6 +554,7 @@ impl fmt::Display for CoreFetchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Status(status) => write!(formatter, "core returned HTTP {status}"),
+            #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
             Self::Malformed => formatter.write_str("core response was malformed"),
             Self::Transport => formatter.write_str("core connection failed"),
             Self::Decode => formatter.write_str("core response JSON did not match the OS contract"),
@@ -493,12 +563,13 @@ impl fmt::Display for CoreFetchError {
 }
 
 fn main() -> InstallerResult<()> {
-    let config = InstallerConfig::from_env();
+    let core = initialize(ClientKind::Installer)?;
+    let config = InstallerConfig::from_env(core);
     let boot = inspect_boot_state(&config);
     let state = load_installer_state(&config, boot);
 
     println!("Goblins OS native first-boot installer started");
-    println!("core={}", config.core_url);
+    println!("core=capability-socket");
     println!("installer_mode=native-desktop");
     println!("{}", installer_state_summary(&state));
 
@@ -523,11 +594,9 @@ fn should_exit_after_first_boot(first_boot_completed: bool, page_override_reques
 }
 
 impl InstallerConfig {
-    fn from_env() -> Self {
+    fn from_env(core: CoreClient) -> Self {
         Self {
-            core_url: env::var("GOBLINS_OS_CORE_URL")
-                .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
-                .unwrap_or_else(|_| DEFAULT_CORE_URL.into()),
+            core,
             core_wait: Duration::from_secs(env_u64(
                 "GOBLINS_OS_INSTALLER_CORE_WAIT_SECS",
                 DEFAULT_CORE_WAIT_SECS,
@@ -538,7 +607,7 @@ impl InstallerConfig {
 
 fn inspect_boot_state(config: &InstallerConfig) -> BootState {
     BootState {
-        core_ready: wait_for_core(&config.core_url, config.core_wait),
+        core_ready: wait_for_core(&config.core, config.core_wait),
     }
 }
 
@@ -547,6 +616,8 @@ fn load_installer_state(config: &InstallerConfig, boot: BootState) -> InstallerS
         return InstallerState {
             boot,
             auth: None,
+            codex: None,
+            policy: None,
             network: None,
             readiness: None,
             install_targets: None,
@@ -555,22 +626,24 @@ fn load_installer_state(config: &InstallerConfig, boot: BootState) -> InstallerS
         };
     }
 
-    let auth = get_core_json::<AuthStatus>(&config.core_url, "/v1/auth/openai/status").ok();
-    let network = get_core_json::<NetworkStatus>(&config.core_url, "/v1/network/status").ok();
+    let auth = get_core_json::<AuthStatus>(&config.core, "/v1/auth/openai/status").ok();
+    let codex = get_core_json::<CodexStatus>(&config.core, "/v1/codex/status").ok();
+    let policy = get_core_json::<PolicyStatus>(&config.core, "/v1/policy/status").ok();
+    let network = get_core_json::<NetworkStatus>(&config.core, "/v1/network/status").ok();
     let readiness =
-        get_core_json::<InstallerReadiness>(&config.core_url, "/v1/installer/readiness").ok();
+        get_core_json::<InstallerReadiness>(&config.core, "/v1/installer/readiness").ok();
     let install_targets =
-        get_core_json::<InstallTargetStatus>(&config.core_url, "/v1/installer/install-targets")
-            .ok();
-    let local_models =
-        get_core_json::<LocalModelCatalog>(&config.core_url, "/v1/local-models").ok();
-    let services = get_core_json::<ServiceCatalog>(&config.core_url, "/v1/services")
+        get_core_json::<InstallTargetStatus>(&config.core, "/v1/installer/install-targets").ok();
+    let local_models = get_core_json::<LocalModelCatalog>(&config.core, "/v1/local-models").ok();
+    let services = get_core_json::<ServiceCatalog>(&config.core, "/v1/services")
         .map(|catalog| catalog.services)
         .unwrap_or_default();
 
     InstallerState {
         boot,
         auth,
+        codex,
+        policy,
         network,
         readiness,
         install_targets,
@@ -596,6 +669,41 @@ fn installer_state_summary(state: &InstallerState) -> String {
                 },
                 auth.session_storage,
                 auth.message
+            )
+        })
+        .unwrap_or_else(|| "unavailable".to_string());
+
+    let codex = state
+        .codex
+        .as_ref()
+        .map(|status| {
+            format!(
+                "installed={} authenticated={} detail={}",
+                status.installed, status.authenticated, status.detail
+            )
+        })
+        .unwrap_or_else(|| "unavailable".to_string());
+
+    let policy = state
+        .policy
+        .as_ref()
+        .map(|policy| {
+            let app_builder = policy
+                .controls
+                .iter()
+                .find(|control| control.id == "app-builder")
+                .map(|control| {
+                    format!(
+                        "{}:{}:granted={}",
+                        control.profile_state,
+                        control.state,
+                        control.grant.is_some()
+                    )
+                })
+                .unwrap_or_else(|| "missing".to_string());
+            format!(
+                "profile={} locked={} app-builder={}",
+                policy.profile, policy.locked, app_builder
             )
         })
         .unwrap_or_else(|| "unavailable".to_string());
@@ -741,13 +849,15 @@ fn installer_state_summary(state: &InstallerState) -> String {
         .unwrap_or_else(|| "unavailable".to_string());
 
     format!(
-        "installer_state=core:{} auth=[{}] network=[{}] readiness=[{}] install_targets=[{}] local_models=[{}] services={} first_service=[{}]",
+        "installer_state=core:{} auth=[{}] codex=[{}] policy=[{}] network=[{}] readiness=[{}] install_targets=[{}] local_models=[{}] services={} first_service=[{}]",
         if state.boot.core_ready {
             "ready"
         } else {
             "waiting"
         },
         auth,
+        codex,
+        policy,
         network,
         readiness,
         install_targets,
@@ -1174,7 +1284,10 @@ fn build_installer(
 
     let stack = gtk::Stack::new();
     stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-    stack.set_transition_duration(220);
+    stack.set_transition_duration(installer_transition_duration(interface_bool(
+        "enable-animations",
+        true,
+    )));
     stack.set_vexpand(true);
     stack.set_hexpand(true);
 
@@ -1195,7 +1308,7 @@ fn build_installer(
     let welcome = build_welcome_page(app, config, state, &stack);
     let appearance = build_appearance_page(&stack);
     let accessibility = build_accessibility_page(&stack);
-    let first_app = build_first_app_page(app, config, &stack);
+    let first_app = build_first_app_page(app, config, state, &stack);
     let network = build_network_page(config, state, &stack);
     let details = build_details_page(app, config, state, &stack);
     stack.add_named(&welcome, Some("welcome"));
@@ -1210,10 +1323,10 @@ fn build_installer(
     stack.add_named(&pages.progress, Some("install-progress"));
     stack.add_named(&pages.done, Some("install-done"));
 
-    let core_url = config.core_url.clone();
+    let core = config.core.clone();
     // The disk page is built from the loaded scan (held in `flow.state`); the
     // later install pages are rebuilt on navigation from the chosen disk.
-    populate_install_disk(&pages, &stack, &flow, &core_url);
+    populate_install_disk(&pages, &stack, &flow, &core);
 
     // Onboarding opens on Welcome; an explicit page may be requested (used by the
     // packaging-time render harness to prove each first-boot screen).
@@ -1251,10 +1364,10 @@ fn build_installer(
             }
         }
         match initial {
-            "install-review" => populate_install_review(&pages, &stack, &flow, &core_url),
-            "install-confirm" => populate_install_confirm(&pages, &stack, &flow, &core_url),
-            "install-progress" => populate_install_progress(&pages, &stack, &flow, &core_url),
-            "install-done" => populate_install_done(&pages, &stack, &flow, &core_url),
+            "install-review" => populate_install_review(&pages, &stack, &flow, &core),
+            "install-confirm" => populate_install_confirm(&pages, &stack, &flow, &core),
+            "install-progress" => populate_install_progress(&pages, &stack, &flow, &core),
+            "install-done" => populate_install_done(&pages, &stack, &flow, &core),
             _ => {}
         }
     }
@@ -1281,6 +1394,65 @@ fn centered_label(text: &str, class: &str, wrap: bool) -> gtk4::Label {
     label
 }
 
+/// Run a core control request without ever holding the GTK main loop hostage.
+///
+/// Only plain `Send` data crosses the worker boundary. The completion closure and
+/// every widget it owns stay on GTK's thread, where a short GLib poll delivers the
+/// result. A vanished worker is surfaced as the same fail-closed transport error a
+/// dropped core connection would produce.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn run_installer_core_action<T, Work, Complete>(work: Work, complete: Complete)
+where
+    T: Send + 'static,
+    Work: FnOnce() -> Result<T, CoreFetchError> + Send + 'static,
+    Complete: FnOnce(Result<T, CoreFetchError>) + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+
+    let mut complete = Some(complete);
+    let _poll = gtk4::glib::timeout_add_local(Duration::from_millis(90), move || {
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                return gtk4::glib::ControlFlow::Continue;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(CoreFetchError::Transport),
+        };
+
+        if let Some(complete) = complete.take() {
+            complete(result);
+        }
+        gtk4::glib::ControlFlow::Break
+    });
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+type PendingControlGroup = Rc<RefCell<Vec<(gtk4::Button, bool)>>>;
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn register_pending_control(group: &PendingControlGroup, button: &gtk4::Button) {
+    use gtk4::prelude::WidgetExt;
+
+    group
+        .borrow_mut()
+        .push((button.clone(), button.is_sensitive()));
+}
+
+/// Prevent two first-boot route mutations from racing. Restoring a group uses
+/// each control's original sensitivity, so an offline Codex action remains
+/// unavailable after another request finishes.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_pending_controls(group: &PendingControlGroup, pending: bool) {
+    use gtk4::prelude::WidgetExt;
+
+    for (button, initially_sensitive) in group.borrow().iter() {
+        button.set_sensitive(!pending && *initially_sensitive);
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn build_welcome_page(
     app: &gtk4::Application,
@@ -1290,9 +1462,6 @@ fn build_welcome_page(
 ) -> gtk4::Box {
     use gtk::prelude::*;
     use gtk4 as gtk;
-
-    let auth_configured = state.auth.as_ref().is_some_and(|auth| auth.configured);
-    let auth_authenticated = state.auth.as_ref().is_some_and(|auth| auth.authenticated);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gos-onboarding-root");
@@ -1323,18 +1492,170 @@ fn build_welcome_page(
         false,
     ));
     column.append(&centered_label(
-        "Build what you need — on-device with GPT-OSS, or with your OpenAI account through Codex. No apps, no store: you build it.",
+        "Build what you need with GPT-OSS on this device or your OpenAI account through Codex. You can switch engines later in Settings.",
         "gos-onboarding-subtitle",
         true,
     ));
 
-    let primary = button("Start guided setup", &["gos-onboarding-primary"]);
+    let route_feedback = centered_label(
+        "Choose where Goblins AI works. Hosted engines clearly disclose when requests leave this device.",
+        "gos-onboarding-footnote",
+        true,
+    );
+    let route_controls: PendingControlGroup = Rc::new(RefCell::new(Vec::new()));
+
+    let primary = button(
+        "Start with GPT-OSS on this device",
+        &["gos-onboarding-primary"],
+    );
     primary.set_halign(gtk::Align::Center);
+    register_pending_control(&route_controls, &primary);
     {
         let stack = stack.clone();
-        primary.connect_clicked(move |_| stack.set_visible_child_name("appearance"));
+        let feedback = route_feedback.clone();
+        let core = config.core.clone();
+        let controls = route_controls.clone();
+        primary.connect_clicked(move |_| {
+            set_pending_controls(&controls, true);
+            feedback.set_text("Selecting GPT-OSS on this device…");
+
+            let request_url = core.clone();
+            let stack = stack.clone();
+            let feedback = feedback.clone();
+            let controls = controls.clone();
+            run_installer_core_action(
+                move || set_engine(&request_url, "local-gpt-oss"),
+                move |result| match result {
+                    Ok(()) => {
+                        set_pending_controls(&controls, false);
+                        stack.set_visible_child_name("appearance");
+                    }
+                    Err(error) => {
+                        feedback.set_text(
+                            "Goblins OS could not select the on-device engine. Try again or open Advanced setup.",
+                        );
+                        eprintln!("installer_engine_select_error={error}");
+                        set_pending_controls(&controls, false);
+                    }
+                },
+            );
+        });
     }
     column.append(&primary);
+
+    let codex_installed = state.codex.as_ref().is_some_and(|codex| codex.installed);
+    let codex_authenticated = state
+        .codex
+        .as_ref()
+        .is_some_and(|codex| codex.authenticated);
+    let codex_detail = state
+        .codex
+        .as_ref()
+        .map(|codex| codex.detail.as_str())
+        .unwrap_or("Codex account status is not available yet.");
+    let online = state.network.as_ref().is_some_and(|network| network.online);
+    if codex_installed {
+        if !online && !codex_authenticated {
+            route_feedback.set_text(
+                "Codex sign-in is unavailable while this computer is offline. Connect to the internet, or continue with GPT-OSS on this device.",
+            );
+        }
+        let codex = button(
+            if codex_authenticated {
+                "Continue with OpenAI account · Codex"
+            } else {
+                "Connect OpenAI account · Codex…"
+            },
+            &["gos-onboarding-secondary"],
+        );
+        codex.set_halign(gtk::Align::Center);
+        codex.set_sensitive(online || codex_authenticated);
+        codex.set_tooltip_text(Some(if online || codex_authenticated {
+            codex_detail
+        } else {
+            "Connect to the internet before signing in to Codex."
+        }));
+        codex.update_property(&[
+            gtk::accessible::Property::Label("Use OpenAI account through Codex"),
+            gtk::accessible::Property::Description(if online || codex_authenticated {
+                "Sign in to Codex and select it as the Goblins AI engine. Requests leave this device for OpenAI."
+            } else {
+                "Unavailable while this computer is offline. Connect to the internet, or continue with GPT-OSS on this device."
+            }),
+        ]);
+        register_pending_control(&route_controls, &codex);
+        {
+            let stack = stack.clone();
+            let feedback = route_feedback.clone();
+            let core = config.core.clone();
+            let controls = route_controls.clone();
+            codex.connect_clicked(move |_| {
+                set_pending_controls(&controls, true);
+                feedback.set_text(if codex_authenticated {
+                    "Selecting your OpenAI account through Codex…"
+                } else {
+                    "Starting secure Codex sign-in…"
+                });
+
+                let request_url = core.clone();
+                let stack = stack.clone();
+                let feedback = feedback.clone();
+                let controls = controls.clone();
+                run_installer_core_action(
+                    move || {
+                        let outcome = begin_codex_setup(&request_url)?;
+                        if outcome == CodexSetupOutcome::Ready {
+                            set_engine(&request_url, "codex")?;
+                        }
+                        Ok(outcome)
+                    },
+                    move |result| match result {
+                        Ok(CodexSetupOutcome::Ready) => {
+                            set_pending_controls(&controls, false);
+                            stack.set_visible_child_name("appearance");
+                        }
+                        Ok(CodexSetupOutcome::OpenUrl(url)) => {
+                            if gtk::gio::AppInfo::launch_default_for_uri(
+                                &url,
+                                None::<&gtk::gio::AppLaunchContext>,
+                            )
+                            .is_ok()
+                            {
+                                feedback.set_text(
+                                    "Finish signing in with OpenAI in the browser, then choose Codex here once more.",
+                                );
+                            } else {
+                                feedback.set_text(
+                                    "Codex sign-in is ready. Open the sign-in link in your browser, then choose Codex here once more.",
+                                );
+                            }
+                            set_pending_controls(&controls, false);
+                        }
+                        Ok(CodexSetupOutcome::Started) => {
+                            feedback.set_text(
+                                "Codex sign-in started. Finish in the browser, then choose Codex here once more.",
+                            );
+                            set_pending_controls(&controls, false);
+                        }
+                        Ok(CodexSetupOutcome::AlreadyRunning) => {
+                            feedback.set_text(
+                                "Codex sign-in is already in progress. Finish in the browser, then choose Codex here once more.",
+                            );
+                            set_pending_controls(&controls, false);
+                        }
+                        Err(error) => {
+                            feedback.set_text(
+                                "Goblins OS could not finish Codex setup or select it. Check the connection and Private mode, then try again.",
+                            );
+                            eprintln!("installer_codex_setup_error={error}");
+                            set_pending_controls(&controls, false);
+                        }
+                    },
+                );
+            });
+        }
+        column.append(&codex);
+    }
 
     // Privacy-first path: enter the OS in offline / private mode. GPT-OSS runs the
     // same on-device, but the AI is held to this machine — no internet egress.
@@ -1343,15 +1664,37 @@ fn build_welcome_page(
         &["gos-onboarding-secondary"],
     );
     private.set_halign(gtk::Align::Center);
+    register_pending_control(&route_controls, &private);
     {
         let app_handle = app.clone();
-        let core_url = config.core_url.clone();
-        private.connect_clicked(move |_| match set_privacy_mode(&core_url, true) {
-            Ok(()) => match complete_and_unlock_first_boot(&core_url, "local-gpt-oss") {
-                Ok(()) => app_handle.quit(),
-                Err(error) => eprintln!("installer_complete_private_error={error}"),
-            },
-            Err(error) => eprintln!("installer_privacy_mode_error={error}"),
+        let feedback = route_feedback.clone();
+        let core = config.core.clone();
+        let controls = route_controls.clone();
+        private.connect_clicked(move |_| {
+            set_pending_controls(&controls, true);
+            feedback.set_text("Turning on Private mode and preparing the desktop…");
+
+            let request_url = core.clone();
+            let app_handle = app_handle.clone();
+            let feedback = feedback.clone();
+            let controls = controls.clone();
+            run_installer_core_action(
+                move || {
+                    set_privacy_mode(&request_url, true)?;
+                    set_engine(&request_url, "local-gpt-oss")?;
+                    complete_and_unlock_first_boot(&request_url, "local-gpt-oss")
+                },
+                move |result| match result {
+                    Ok(()) => app_handle.quit(),
+                    Err(error) => {
+                        feedback.set_text(
+                            "Goblins OS could not finish Private setup. Review the connection and try again.",
+                        );
+                        eprintln!("installer_complete_private_error={error}");
+                        set_pending_controls(&controls, false);
+                    }
+                },
+            );
         });
     }
     column.append(&private);
@@ -1382,39 +1725,6 @@ fn build_welcome_page(
         ));
     }
 
-    // Only offer "sign in with your OpenAI account" when a real OpenAI account
-    // provider is actually provisioned (enterprise/MDM, or a future "Sign in with
-    // ChatGPT" client). Otherwise we never show an account button we can’t honor —
-    // the honest way to use OpenAI's hosted models is your own API key (below).
-    if auth_configured {
-        let openai = button(
-            if auth_authenticated {
-                "Enter with your OpenAI account"
-            } else {
-                "Sign in with your OpenAI account"
-            },
-            &["gos-onboarding-secondary"],
-        );
-        openai.set_halign(gtk::Align::Center);
-        {
-            let app_handle = app.clone();
-            let core_url = config.core_url.clone();
-            openai.connect_clicked(move |_| {
-                if auth_authenticated {
-                    if complete_and_unlock_first_boot(&core_url, "cloud-openai").is_ok() {
-                        app_handle.quit();
-                    }
-                } else if let Ok(destination) = openai_login_destination(&core_url) {
-                    let _ = gtk::gio::AppInfo::launch_default_for_uri(
-                        &destination,
-                        None::<&gtk::gio::AppLaunchContext>,
-                    );
-                }
-            });
-        }
-        column.append(&openai);
-    }
-
     let customize = button("Advanced setup", &["gos-onboarding-quiet"]);
     customize.set_halign(gtk::Align::Center);
     {
@@ -1427,7 +1737,6 @@ fn build_welcome_page(
 
     // A quiet, optional route to connect — connecting downloads GPT-OSS and lets
     // the AI build/fetch, but it never gates "Continue with GPT-OSS" above.
-    let online = state.network.as_ref().is_some_and(|network| network.online);
     if online {
         let connected = state
             .network
@@ -1460,10 +1769,11 @@ fn build_welcome_page(
     }
 
     column.append(&centered_label(
-        "Want OpenAI's hosted models? Add your own OpenAI API key in Settings.",
+        "Want OpenAI's hosted models? Sign in through Codex, or ask an administrator to provision access.",
         "gos-onboarding-footnote",
         true,
     ));
+    column.append(&route_feedback);
 
     center.append(&column);
     root.append(&center);
@@ -1649,15 +1959,19 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
     let motion_group = Rc::new([standard_motion.clone(), reduce_motion.clone()]);
     {
         let motion_group = motion_group.clone();
+        let stack = stack.clone();
         standard_motion.connect_clicked(move |chosen| {
             let _ = set_interface_bool("enable-animations", true);
+            stack.set_transition_duration(installer_transition_duration(true));
             select_one(chosen, motion_group.as_slice());
         });
     }
     {
         let motion_group = motion_group.clone();
+        let stack = stack.clone();
         reduce_motion.connect_clicked(move |chosen| {
             let _ = set_interface_bool("enable-animations", false);
+            stack.set_transition_duration(installer_transition_duration(false));
             select_one(chosen, motion_group.as_slice());
         });
     }
@@ -1719,10 +2033,33 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
 fn build_first_app_page(
     app: &gtk4::Application,
     config: &InstallerConfig,
+    state: &InstallerState,
     stack: &gtk4::Stack,
 ) -> gtk4::Box {
     use gtk::prelude::*;
     use gtk4 as gtk;
+
+    let app_builder_control = state.policy.as_ref().and_then(|policy| {
+        policy
+            .controls
+            .iter()
+            .find(|control| control.id == "app-builder")
+            .map(|control| (policy, control))
+    });
+    let app_builder_blocked = app_builder_control.is_some_and(|(policy, control)| {
+        control.state == "denied" || (policy.locked && control.state != "allowed")
+    });
+    let app_builder_needs_grant = app_builder_control.is_some_and(|(policy, control)| {
+        !policy.locked
+            && control.profile_state == "permission-gated"
+            && control.state == "permission-gated"
+            && control.grant.is_none()
+    });
+    let grant_profile = state
+        .policy
+        .as_ref()
+        .filter(|_| app_builder_needs_grant)
+        .map(|policy| policy.profile.clone());
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gos-onboarding-root");
@@ -1782,7 +2119,13 @@ fn build_first_app_page(
     panel.append(&entry);
 
     let feedback = label(
-        "You can skip this and build from the launcher at any time.",
+        if app_builder_blocked {
+            "App creation is blocked by the active policy. You can continue and review Policy in Settings later."
+        } else if app_builder_needs_grant {
+            "Building grants Goblins AI permission to create this app and saves the result in private OS storage."
+        } else {
+            "You can skip this and build from the launcher at any time."
+        },
         &["gos-net-helper"],
     );
     feedback.set_xalign(0.0);
@@ -1798,15 +2141,34 @@ fn build_first_app_page(
     let actions = gtk::Box::new(gtk::Orientation::Vertical, 10);
     actions.set_halign(gtk::Align::Center);
     actions.set_margin_top(24);
-    let build = button("Build first app", &["gos-onboarding-primary"]);
+    let build = button(
+        if app_builder_needs_grant {
+            "Allow and build first app"
+        } else {
+            "Build first app"
+        },
+        &["gos-onboarding-primary"],
+    );
     build.set_halign(gtk::Align::Center);
+    build.update_property(&[
+        gtk::accessible::Property::Label(if app_builder_needs_grant {
+            "Allow app creation and build first app"
+        } else {
+            "Build first app"
+        }),
+        gtk::accessible::Property::Description(if app_builder_needs_grant {
+            "Grant the active Goblins OS profile permission to create apps, then build the app described above."
+        } else {
+            "Build the app described above with the selected Goblins AI engine."
+        }),
+    ]);
     // The primary reads as a live CTA only once there is a real intent to build.
     // While the field is empty it stays disabled (and GTK dims it through :disabled),
     // so a saturated solid-blue primary never sits over an empty field promising an
     // action it has nothing to act on — the always-available "Enter Goblins OS" skip
     // below carries the empty-field path instead. The entry's `changed` signal flips
     // this the moment any non-whitespace text is typed.
-    build.set_sensitive(!entry.text().trim().is_empty());
+    build.set_sensitive(!app_builder_blocked && !entry.text().trim().is_empty());
     let skip = button("Enter Goblins OS", &["gos-onboarding-quiet"]);
     skip.set_halign(gtk::Align::Center);
     actions.append(&build);
@@ -1816,43 +2178,117 @@ fn build_first_app_page(
     {
         let build = build.clone();
         entry.connect_changed(move |entry| {
-            build.set_sensitive(!entry.text().trim().is_empty());
+            build.set_sensitive(!app_builder_blocked && !entry.text().trim().is_empty());
         });
     }
 
     {
         let app_handle = app.clone();
-        let core_url = config.core_url.clone();
+        let core = config.core.clone();
         let entry = entry.clone();
         let feedback = feedback.clone();
-        build.connect_clicked(move |_| {
+        let skip = skip.clone();
+        build.connect_clicked(move |button| {
             let intent = entry.text().trim().to_string();
-            // The button is only sensitive when the field has content, so this is a
-            // safety net rather than a routine path — never a silent placeholder build.
-            let intent = if intent.is_empty() {
-                "A focus timer that logs writing sessions".to_string()
-            } else {
-                intent
-            };
-            match submit_setup_build(&core_url, &intent)
-                .and_then(|_| complete_and_unlock_first_boot(&core_url, "local-gpt-oss"))
-            {
-                Ok(()) => app_handle.quit(),
-                Err(error) => {
-                    feedback.set_text(first_app_build_failure_copy());
-                    eprintln!("installer_first_app_error={error}");
-                }
+            if intent.is_empty() {
+                return;
             }
+
+            button.set_sensitive(false);
+            entry.set_sensitive(false);
+            skip.set_sensitive(false);
+            feedback.set_text(if grant_profile.is_some() {
+                "Granting app-creation permission and building with the selected engine…"
+            } else {
+                "Building with the selected engine…"
+            });
+
+            let request_url = core.clone();
+            let request_profile = grant_profile.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result: Result<(), (FirstAppFailureStage, CoreFetchError)> = (|| {
+                    if let Some(profile) = request_profile {
+                        grant_setup_app_builder_permission(&request_url, &profile)
+                            .map_err(|error| (FirstAppFailureStage::Permission, error))?;
+                    }
+                    submit_setup_build(&request_url, &intent)
+                        .map_err(|error| (FirstAppFailureStage::Build, error))?;
+                    complete_and_unlock_first_boot(&request_url, "local-gpt-oss")
+                        .map_err(|error| (FirstAppFailureStage::FinishSetup, error))
+                })(
+                );
+                let _ = tx.send(result);
+            });
+
+            let button = button.clone();
+            let entry = entry.clone();
+            let feedback = feedback.clone();
+            let app_handle = app_handle.clone();
+            let skip = skip.clone();
+            let _poll = gtk::glib::timeout_add_local(Duration::from_millis(90), move || {
+                match rx.try_recv() {
+                    Ok(Ok(())) => {
+                        app_handle.quit();
+                        gtk::glib::ControlFlow::Break
+                    }
+                    Ok(Err((stage, error))) => {
+                        feedback.set_text(first_app_failure_copy(stage));
+                        eprintln!("installer_first_app_error stage={stage:?} error={error}");
+                        entry.set_sensitive(true);
+                        button
+                            .set_sensitive(!app_builder_blocked && !entry.text().trim().is_empty());
+                        skip.set_sensitive(true);
+                        gtk::glib::ControlFlow::Break
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        feedback.set_text(first_app_failure_copy(FirstAppFailureStage::Worker));
+                        entry.set_sensitive(true);
+                        button
+                            .set_sensitive(!app_builder_blocked && !entry.text().trim().is_empty());
+                        skip.set_sensitive(true);
+                        gtk::glib::ControlFlow::Break
+                    }
+                }
+            });
         });
     }
     {
         let app_handle = app.clone();
-        let core_url = config.core_url.clone();
-        skip.connect_clicked(move |_| {
-            match complete_and_unlock_first_boot(&core_url, "local-gpt-oss") {
-                Ok(()) => app_handle.quit(),
-                Err(error) => eprintln!("installer_complete_guided_skip_error={error}"),
-            }
+        let core = config.core.clone();
+        let build = build.clone();
+        let entry = entry.clone();
+        let feedback = feedback.clone();
+        skip.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            build.set_sensitive(false);
+            entry.set_sensitive(false);
+            feedback.set_text("Preparing the Goblins OS desktop…");
+
+            let request_url = core.clone();
+            let button = button.clone();
+            let build = build.clone();
+            let entry = entry.clone();
+            let feedback = feedback.clone();
+            let app_handle = app_handle.clone();
+            run_installer_core_action(
+                move || complete_and_unlock_first_boot(&request_url, "local-gpt-oss"),
+                move |result| match result {
+                    Ok(()) => app_handle.quit(),
+                    Err(error) => {
+                        feedback.set_text(
+                            "Goblins OS could not enter the desktop yet. Check the system connection and try again.",
+                        );
+                        eprintln!("installer_complete_guided_skip_error={error}");
+                        entry.set_sensitive(true);
+                        build.set_sensitive(
+                            !app_builder_blocked && !entry.text().trim().is_empty(),
+                        );
+                        button.set_sensitive(true);
+                    }
+                },
+            );
         });
     }
 
@@ -1890,6 +2326,10 @@ fn setup_choice(title: &str, detail: &str) -> gtk4::Button {
     // select_one finds the checkmark by walking the body's sibling, so keep the
     // check as the row's last child.
     button.set_child(Some(&row));
+    button.update_property(&[
+        gtk4::accessible::Property::Label(title),
+        gtk4::accessible::Property::Description(detail),
+    ]);
     button
 }
 
@@ -1981,7 +2421,7 @@ fn interface_double(key: &str, default: f64) -> f64 {
 /// way; the Appearance and Accessibility steps reuse this for every group.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn select_one(chosen: &gtk4::Button, group: &[gtk4::Button]) {
-    use gtk4::prelude::WidgetExt;
+    use gtk4::prelude::{AccessibleExtManual, WidgetExt};
 
     for card in group {
         let is_chosen = card == chosen;
@@ -1996,6 +2436,7 @@ fn select_one(chosen: &gtk4::Button, group: &[gtk4::Button]) {
         if let Some(check) = setup_choice_check(card) {
             check.set_visible(is_chosen);
         }
+        card.update_state(&[gtk4::accessible::State::Selected(Some(is_chosen))]);
     }
 }
 
@@ -2149,14 +2590,14 @@ fn build_network_page(
         );
     } else {
         let scan = button("Scan for Wi-Fi", &["gos-local-action"]);
-        let core_url = config.core_url.clone();
+        let core = config.core.clone();
         let body_c = body.clone();
         let status_c = status.clone();
         let dot_c = dot.clone();
         let cont_c = cont.clone();
         let rescan_c = rescan.clone();
         scan.connect_clicked(move |_| {
-            net_render_list(&core_url, &body_c, &status_c, &dot_c, &cont_c);
+            net_render_list(&core, &body_c, &status_c, &dot_c, &cont_c);
             rescan_c.set_visible(true);
         });
         body.append(&scan);
@@ -2164,13 +2605,13 @@ fn build_network_page(
 
     // Rescan re-runs the Wi-Fi scan and repaints the list.
     {
-        let core_url = config.core_url.clone();
+        let core = config.core.clone();
         let body_c = body.clone();
         let status_c = status.clone();
         let dot_c = dot.clone();
         let cont_c = cont.clone();
         rescan.connect_clicked(move |_| {
-            net_render_list(&core_url, &body_c, &status_c, &dot_c, &cont_c);
+            net_render_list(&core, &body_c, &status_c, &dot_c, &cont_c);
         });
     }
 
@@ -2226,7 +2667,7 @@ fn net_row(body: &gtk4::Box, text: &str, blocked: bool) {
 /// Scan for Wi-Fi and paint the network list into the card body.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn net_render_list(
-    core_url: &str,
+    core: &CoreClient,
     body: &gtk4::Box,
     status: &gtk4::Label,
     dot: &gtk4::Box,
@@ -2238,7 +2679,7 @@ fn net_render_list(
     net_clear(body);
     status.set_text("Choose a network");
 
-    let scan = fetch_wifi_scan(core_url);
+    let scan = fetch_wifi_scan(core);
     let Some(scan) = scan else {
         net_row(
             body,
@@ -2278,7 +2719,7 @@ fn net_render_list(
         line.append(&label(&net_meta(network), &["gos-net-meta"]));
         row.set_child(Some(&line));
 
-        let core_url = core_url.to_string();
+        let core = core.clone();
         let ssid = network.ssid.clone();
         let secured = !network.security.trim().is_empty();
         let body_c = body.clone();
@@ -2287,9 +2728,9 @@ fn net_render_list(
         let cont_c = cont.clone();
         row.connect_clicked(move |_| {
             if secured {
-                net_render_join(&core_url, &ssid, None, &body_c, &status_c, &dot_c, &cont_c);
+                net_render_join(&core, &ssid, None, &body_c, &status_c, &dot_c, &cont_c);
             } else {
-                net_try_connect(&core_url, &ssid, "", &body_c, &status_c, &dot_c, &cont_c);
+                net_try_connect(&core, &ssid, "", &body_c, &status_c, &dot_c, &cont_c);
             }
         });
         body.append(&row);
@@ -2321,7 +2762,7 @@ fn net_meta(network: &WifiNetwork) -> String {
 /// Paint the focused "join this network" view: password field + Join.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn net_render_join(
-    core_url: &str,
+    core: &CoreClient,
     ssid: &str,
     error: Option<&str>,
     body: &gtk4::Box,
@@ -2366,7 +2807,7 @@ fn net_render_join(
     body.append(&actions);
 
     let connect = {
-        let core_url = core_url.to_string();
+        let core = core.clone();
         let ssid = ssid.to_string();
         let entry = entry.clone();
         let body_c = body.clone();
@@ -2376,7 +2817,7 @@ fn net_render_join(
         move || {
             let password = entry.text().to_string();
             net_try_connect(
-                &core_url,
+                &core,
                 &ssid,
                 password.trim(),
                 &body_c,
@@ -2395,13 +2836,13 @@ fn net_render_join(
         entry.connect_activate(move |_| connect());
     }
     {
-        let core_url = core_url.to_string();
+        let core = core.clone();
         let body_c = body.clone();
         let status_c = status.clone();
         let dot_c = dot.clone();
         let cont_c = cont.clone();
         cancel.connect_clicked(move |_| {
-            net_render_list(&core_url, &body_c, &status_c, &dot_c, &cont_c);
+            net_render_list(&core, &body_c, &status_c, &dot_c, &cont_c);
         });
     }
 }
@@ -2410,7 +2851,7 @@ fn net_render_join(
 /// confirmed connection on success, or the password view + error on failure.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn net_try_connect(
-    core_url: &str,
+    core: &CoreClient,
     ssid: &str,
     password: &str,
     body: &gtk4::Box,
@@ -2425,7 +2866,7 @@ fn net_try_connect(
     dot.remove_css_class("is-blocked");
     dot.add_css_class("is-connecting");
 
-    match connect_wifi(core_url, ssid, password) {
+    match connect_wifi(core, ssid, password) {
         Ok(message) => {
             status.set_text("Connected");
             dot.remove_css_class("is-connecting");
@@ -2436,22 +2877,22 @@ fn net_try_connect(
         Err(detail) => {
             status.set_text("Couldn't connect");
             dot.remove_css_class("is-connecting");
-            net_render_join(core_url, ssid, Some(&detail), body, status, dot, cont);
+            net_render_join(core, ssid, Some(&detail), body, status, dot, cont);
         }
     }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn fetch_wifi_scan(core_url: &str) -> Option<WifiScan> {
-    get_core_json::<WifiScan>(core_url, "/v1/network/wifi/scan").ok()
+fn fetch_wifi_scan(core: &CoreClient) -> Option<WifiScan> {
+    get_core_json::<WifiScan>(core, "/v1/network/wifi/scan").ok()
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn connect_wifi(core_url: &str, ssid: &str, password: &str) -> Result<String, String> {
+fn connect_wifi(core: &CoreClient, ssid: &str, password: &str) -> Result<String, String> {
     let body = serde_json::json!({ "ssid": ssid, "password": password }).to_string();
     let response = http_request(
-        core_url,
-        "POST",
+        core,
+        Method::Post,
         "/v1/network/wifi/connect",
         Some(body.as_bytes()),
     )
@@ -2513,7 +2954,13 @@ fn build_details_page(
     // ready/waiting hue), so the top bar stays as monochrome as the mark beside it.
     for chip in [
         status_pill("OS", state.boot.core_ready),
-        status_pill("OpenAI", auth_authenticated),
+        status_pill(
+            "Codex",
+            state
+                .codex
+                .as_ref()
+                .is_some_and(|codex| codex.authenticated),
+        ),
         status_pill("Local", state.local_models.is_some()),
     ] {
         chip.add_css_class("gos-readiness-chip");
@@ -2540,87 +2987,125 @@ fn build_details_page(
     hero.add_css_class("gos-hero-panel");
     hero.set_hexpand(true);
     hero.append(&label("Goblins-native desktop", &["gos-kicker"]));
-    hero.append(&label("Set up Goblins OS", &["gos-hero-title"]));
+    hero.append(&label("Finish setup", &["gos-hero-title"]));
     hero.append(&label(
-        state
-            .auth
-            .as_ref()
-            .map(|auth| auth.message.as_str())
-            .unwrap_or("Waiting for local OS services."),
+        "Desktop sign-in is optional and separate from Goblins AI. Choose the AI engine on Welcome or later in Settings.",
         &["gos-hero-copy"],
     ));
+    let action_feedback = label(
+        "Setup is ready. Desktop sign-in remains optional.",
+        &["gos-hero-copy"],
+    );
+    action_feedback.set_xalign(0.0);
+    let enter_local = button("Enter Goblins OS", &["gos-primary-action"]);
+    let mut sign_in_control = None;
 
-    // A state ("OpenAI sign-in is not set up yet" / "OpenAI account ready") is a status line,
-    // never button chrome — only a real action gets a button.
+    // Generic identity-provider auth is a desktop sign-in, not a model route.
+    // Name that boundary literally so it can never masquerade as Codex or select
+    // an OpenAI engine behind the user's back.
     if auth_configured && !auth_authenticated {
-        let sign_in = button("Sign in with OpenAI", &["gos-primary-action"]);
-        let core_url = config.core_url.clone();
-        sign_in.connect_clicked(move |_| match openai_login_destination(&core_url) {
-            Ok(destination) => {
-                if let Err(error) = gtk::gio::AppInfo::launch_default_for_uri(
-                    &destination,
-                    None::<&gtk::gio::AppLaunchContext>,
-                ) {
-                    eprintln!("installer_openai_login_launch_error={error}");
-                }
-            }
-            Err(error) => eprintln!("installer_openai_login_start_error={error}"),
+        let sign_in = button("Connect desktop sign-in…", &["gos-secondary-action"]);
+        sign_in.update_property(&[
+            gtk::accessible::Property::Label("Connect desktop sign-in"),
+            gtk::accessible::Property::Description(
+                "Open the configured desktop identity provider. This does not change the Goblins AI engine.",
+            ),
+        ]);
+        let core = config.core.clone();
+        let feedback = action_feedback.clone();
+        let enter = enter_local.clone();
+        sign_in.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            enter.set_sensitive(false);
+            feedback.set_text("Starting desktop sign-in…");
+
+            let request_url = core.clone();
+            let button = button.clone();
+            let enter = enter.clone();
+            let feedback = feedback.clone();
+            run_installer_core_action(
+                move || openai_login_destination(&request_url),
+                move |result| {
+                    button.set_sensitive(true);
+                    enter.set_sensitive(true);
+                    match result {
+                        Ok(destination) => {
+                            match gtk::gio::AppInfo::launch_default_for_uri(
+                                &destination,
+                                None::<&gtk::gio::AppLaunchContext>,
+                            ) {
+                                Ok(()) => feedback.set_text(
+                                    "Desktop sign-in opened in the browser. The Goblins AI engine is unchanged.",
+                                ),
+                                Err(error) => {
+                                    feedback.set_text(
+                                        "Desktop sign-in is ready, but Goblins OS could not open the browser. Try again after checking the default browser.",
+                                    );
+                                    eprintln!("installer_openai_login_launch_error={error}");
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            feedback.set_text(
+                                "Goblins OS could not start desktop sign-in. Check the connection and try again.",
+                            );
+                            eprintln!("installer_openai_login_start_error={error}");
+                        }
+                    }
+                },
+            );
         });
+        sign_in_control = Some(sign_in.clone());
         hero.append(&sign_in);
-    } else {
+    }
+    if auth_authenticated {
         hero.append(&label(
-            if auth_authenticated {
-                "OpenAI account ready."
-            } else {
-                "OpenAI sign-in is not set up yet. You can continue locally and set it up later in Settings."
-            },
+            "Desktop sign-in is connected. Your current Goblins AI engine is unchanged.",
+            &["gos-hero-copy"],
+        ));
+    } else if !auth_configured {
+        hero.append(&label(
+            "No desktop identity provider is configured. You can continue without one.",
             &["gos-hero-copy"],
         ));
     }
+    hero.append(&action_feedback);
 
-    // Exactly one filled lead action on the hero, so the next step is unmistakable.
-    // When the OpenAI account is ready, entering the desktop with it is the headline
-    // path, so it takes the filled lead and local setup recedes to the secondary
-    // ghost. Until then the cloud button is a true disabled silhouette (the
-    // hero-scoped .gos-disabled-action: dimmed label, transparent fill, half-strength
-    // hairline — clearly inert, never an empty input) and the live local path takes
-    // the filled lead instead. No two near-identical fills competing for the eye.
-    let enter_cloud = button(
-        "Enter Goblins OS desktop",
-        if auth_authenticated {
-            &["gos-primary-action"]
-        } else {
-            &["gos-disabled-action"]
-        },
-    );
-    if auth_authenticated {
-        let app_handle = app.clone();
-        let core_url = config.core_url.clone();
-        enter_cloud.connect_clicked(move |_| {
-            match complete_and_unlock_first_boot(&core_url, "cloud-openai") {
-                Ok(()) => app_handle.quit(),
-                Err(error) => eprintln!("installer_complete_cloud_error={error}"),
-            }
-        });
-    }
-    hero.append(&enter_cloud);
-
-    let enter_local = button(
-        "Continue local setup",
-        if auth_authenticated {
-            &["gos-secondary-action"]
-        } else {
-            &["gos-primary-action"]
-        },
-    );
+    // One clear completion action. The selected AI engine is already persisted
+    // independently; completing the local desktop session must not change it.
     {
         let app_handle = app.clone();
-        let core_url = config.core_url.clone();
-        enter_local.connect_clicked(move |_| {
-            match complete_and_unlock_first_boot(&core_url, "local-gpt-oss") {
-                Ok(()) => app_handle.quit(),
-                Err(error) => eprintln!("installer_complete_local_error={error}"),
+        let core = config.core.clone();
+        let feedback = action_feedback.clone();
+        let sign_in = sign_in_control.clone();
+        enter_local.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            if let Some(sign_in) = &sign_in {
+                sign_in.set_sensitive(false);
             }
+            feedback.set_text("Finishing setup and preparing the desktop…");
+
+            let request_url = core.clone();
+            let button = button.clone();
+            let feedback = feedback.clone();
+            let app_handle = app_handle.clone();
+            let sign_in = sign_in.clone();
+            run_installer_core_action(
+                move || complete_and_unlock_first_boot(&request_url, "local-gpt-oss"),
+                move |result| match result {
+                    Ok(()) => app_handle.quit(),
+                    Err(error) => {
+                        feedback.set_text(
+                            "Goblins OS could not enter the desktop yet. Check the system connection and try again.",
+                        );
+                        eprintln!("installer_complete_local_error={error}");
+                        button.set_sensitive(true);
+                        if let Some(sign_in) = &sign_in {
+                            sign_in.set_sensitive(true);
+                        }
+                    }
+                },
+            );
         });
     }
     hero.append(&enter_local);
@@ -2746,11 +3231,11 @@ fn build_details_page(
                         &format!("Prepare install for {}", target.path),
                         &["gos-local-action"],
                     );
-                    let core_url = config.core_url.clone();
+                    let core = config.core.clone();
                     let target_path = target.path.clone();
                     let feedback = install_feedback.clone();
                     prepare.connect_clicked(move |_| {
-                        match prepare_install_command(&core_url, &target_path) {
+                        match prepare_install_command(&core, &target_path) {
                             Ok(detail) => feedback.set_text(&detail),
                             Err(error) => {
                                 feedback.set_text("Goblins OS could not prepare the install plan. No disk was changed.");
@@ -2812,11 +3297,11 @@ fn build_details_page(
                         &format!("Download {} with consent", model.name),
                         &["gos-local-action"],
                     );
-                    let core_url = config.core_url.clone();
+                    let core = config.core.clone();
                     let model_id = model.id.clone();
                     let feedback = download_feedback.clone();
                     action.connect_clicked(move |_| {
-                        match request_model_install(&core_url, &model_id) {
+                        match request_model_install(&core, &model_id) {
                             Ok(detail) => feedback.set_text(&detail),
                             Err(error) => {
                                 feedback.set_text(
@@ -4012,7 +4497,7 @@ fn populate_install_disk(
     pages: &InstallPages,
     stack: &gtk4::Stack,
     flow: &InstallFlow,
-    core_url: &str,
+    core: &CoreClient,
 ) {
     use gtk::prelude::*;
     use gtk4 as gtk;
@@ -4331,9 +4816,9 @@ fn populate_install_disk(
         let pages_c = pages.clone();
         let stack_c = stack.clone();
         let flow_c = flow.clone();
-        let core_url_c = core_url.to_string();
+        let core_c = core.clone();
         cont.connect_clicked(move |_| {
-            populate_install_review(&pages_c, &stack_c, &flow_c, &core_url_c);
+            populate_install_review(&pages_c, &stack_c, &flow_c, &core_c);
             stack_c.set_visible_child_name("install-review");
         });
     }
@@ -4364,7 +4849,7 @@ fn populate_install_review(
     pages: &InstallPages,
     stack: &gtk4::Stack,
     flow: &InstallFlow,
-    core_url: &str,
+    core: &CoreClient,
 ) {
     use gtk::prelude::*;
     use gtk4 as gtk;
@@ -4530,9 +5015,9 @@ fn populate_install_review(
         let pages_c = pages.clone();
         let stack_c = stack.clone();
         let flow_c = flow.clone();
-        let core_url_c = core_url.to_string();
+        let core_c = core.clone();
         cont.connect_clicked(move |_| {
-            populate_install_confirm(&pages_c, &stack_c, &flow_c, &core_url_c);
+            populate_install_confirm(&pages_c, &stack_c, &flow_c, &core_c);
             stack_c.set_visible_child_name("install-confirm");
         });
     }
@@ -4553,7 +5038,7 @@ fn populate_install_confirm(
     pages: &InstallPages,
     stack: &gtk4::Stack,
     flow: &InstallFlow,
-    core_url: &str,
+    core: &CoreClient,
 ) {
     use gtk::prelude::*;
     use gtk4 as gtk;
@@ -4714,7 +5199,7 @@ fn populate_install_confirm(
         let pages_c = pages.clone();
         let stack_c = stack.clone();
         let flow_c = flow.clone();
-        let core_url_c = core_url.to_string();
+        let core_c = core.clone();
         let device_c = device.clone();
         let entry_c = entry.clone();
         let feedback_c = feedback.clone();
@@ -4723,7 +5208,7 @@ fn populate_install_confirm(
                 &pages_c,
                 &stack_c,
                 &flow_c,
-                &core_url_c,
+                &core_c,
                 &device_c,
                 entry_c.text().trim(),
                 &feedback_c,
@@ -4734,7 +5219,7 @@ fn populate_install_confirm(
         let pages_c = pages.clone();
         let stack_c = stack.clone();
         let flow_c = flow.clone();
-        let core_url_c = core_url.to_string();
+        let core_c = core.clone();
         let device_c = device.clone();
         let feedback_c = feedback.clone();
         let install_c = install.clone();
@@ -4744,7 +5229,7 @@ fn populate_install_confirm(
                     &pages_c,
                     &stack_c,
                     &flow_c,
-                    &core_url_c,
+                    &core_c,
                     &device_c,
                     entry.text().trim(),
                     &feedback_c,
@@ -4851,7 +5336,7 @@ fn start_install(
     pages: &InstallPages,
     stack: &gtk4::Stack,
     flow: &InstallFlow,
-    core_url: &str,
+    core: &CoreClient,
     device: &str,
     acknowledgement: &str,
     feedback: &gtk4::Label,
@@ -4863,19 +5348,19 @@ fn start_install(
         return;
     }
 
-    match execute_install(core_url, device, acknowledgement) {
+    match execute_install(core, device, acknowledgement) {
         // Only show "installing" when the core actually reports it started — a
         // 202 whose body says `started`. Any other 2xx (e.g. a 200 dry-run state)
         // is NOT a running install and must not show the progress screen.
         Ok((202, state, _)) if state == "started" => {
-            populate_install_progress(pages, stack, flow, core_url);
+            populate_install_progress(pages, stack, flow, core);
             stack.set_visible_child_name("install-progress");
         }
         Ok((500, _, detail)) => {
             // The install service failed before disk writes; keep the user on a
             // no-disk-changed path and show the service detail.
             *flow.last_error.borrow_mut() = Some(detail);
-            populate_install_done(pages, stack, flow, core_url);
+            populate_install_done(pages, stack, flow, core);
             stack.set_visible_child_name("install-done");
         }
         Ok((_, _, detail)) => {
@@ -4900,7 +5385,7 @@ fn populate_install_progress(
     pages: &InstallPages,
     stack: &gtk4::Stack,
     flow: &InstallFlow,
-    core_url: &str,
+    core: &CoreClient,
 ) {
     use gtk::prelude::*;
     use gtk4 as gtk;
@@ -4946,6 +5431,10 @@ fn populate_install_progress(
         dot.set_size_request(9, 9);
         let offset = f64::from(index) * (1.1 / 3.0);
         let _animation = dot.add_tick_callback(move |dot, clock| {
+            if !interface_bool("enable-animations", true) {
+                dot.set_opacity(0.72);
+                return gtk::glib::ControlFlow::Continue;
+            }
             let seconds = clock.frame_time() as f64 / 1_000_000.0;
             let omega = std::f64::consts::TAU / 1.1;
             let phase = (((seconds + offset) * omega).sin() * 0.5) + 0.5;
@@ -4972,7 +5461,7 @@ fn populate_install_progress(
     // keeps polling without ever inventing a phase.
     //
     // The fetch is blocking HTTP, so it runs on a worker thread (only a cloned
-    // `core_url` String and the mpsc Sender cross the boundary — both Send; every
+    // `core` String and the mpsc Sender cross the boundary — both Send; every
     // Rc/RefCell/GTK handle stays on this main thread). The main-thread tick drains
     // the channel and re-arms the next fetch only after the prior result lands, so
     // blocking calls never overlap.
@@ -4980,12 +5469,12 @@ fn populate_install_progress(
         use std::sync::mpsc;
 
         let (tx, rx) = mpsc::channel::<Result<InstallProgress, CoreFetchError>>();
-        let core_url_owned = core_url.to_string();
+        let core_owned = core.clone();
         let spawn_fetch = move |tx: mpsc::Sender<Result<InstallProgress, CoreFetchError>>| {
-            let core_url_c = core_url_owned.clone();
+            let core_c = core_owned.clone();
             thread::spawn(move || {
                 let result = get_core_json::<InstallProgress>(
-                    &core_url_c,
+                    &core_c,
                     "/v1/installer/install-targets/progress",
                 );
                 // Receiver gone means the page advanced; nothing to do.
@@ -4995,7 +5484,7 @@ fn populate_install_progress(
 
         spawn_fetch(tx.clone());
 
-        let core_url_done = core_url.to_string();
+        let core_done = core.clone();
         let phase_c = phase.clone();
         let pages_c = pages.clone();
         let stack_c = stack.clone();
@@ -5014,7 +5503,7 @@ fn populate_install_progress(
                 Ok(Ok(progress)) => match progress.state.as_str() {
                     "succeeded" => {
                         *flow_c.last_error.borrow_mut() = None;
-                        populate_install_done(&pages_c, &stack_c, &flow_c, &core_url_done);
+                        populate_install_done(&pages_c, &stack_c, &flow_c, &core_done);
                         stack_c.set_visible_child_name("install-done");
                         gtk::glib::ControlFlow::Break
                     }
@@ -5025,7 +5514,7 @@ fn populate_install_progress(
                             progress.phase.clone()
                         };
                         *flow_c.last_error.borrow_mut() = Some(detail);
-                        populate_install_done(&pages_c, &stack_c, &flow_c, &core_url_done);
+                        populate_install_done(&pages_c, &stack_c, &flow_c, &core_done);
                         stack_c.set_visible_child_name("install-done");
                         gtk::glib::ControlFlow::Break
                     }
@@ -5065,7 +5554,7 @@ fn populate_install_done(
     pages: &InstallPages,
     stack: &gtk4::Stack,
     flow: &InstallFlow,
-    core_url: &str,
+    core: &CoreClient,
 ) {
     use gtk::prelude::*;
     use gtk4 as gtk;
@@ -5121,11 +5610,11 @@ fn populate_install_done(
             let pages_c = pages.clone();
             let stack_c = stack.clone();
             let flow_c = flow.clone();
-            let core_url_c = core_url.to_string();
+            let core_c = core.clone();
             retry.connect_clicked(move |_| {
                 *flow_c.selected.borrow_mut() = None;
                 *flow_c.last_error.borrow_mut() = None;
-                populate_install_disk(&pages_c, &stack_c, &flow_c, &core_url_c);
+                populate_install_disk(&pages_c, &stack_c, &flow_c, &core_c);
                 stack_c.set_visible_child_name("install-disk");
             });
         }
@@ -5237,7 +5726,7 @@ fn reboot_system() {
 /// reports it started.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn execute_install(
-    core_url: &str,
+    core: &CoreClient,
     target_path: &str,
     acknowledgement: &str,
 ) -> Result<(u16, String, String), CoreFetchError> {
@@ -5251,8 +5740,8 @@ fn execute_install(
     })
     .to_string();
     let response = http_request(
-        core_url,
-        "POST",
+        core,
+        Method::Post,
         "/v1/installer/install-targets/prepare",
         Some(body.as_bytes()),
     )?;
@@ -5270,12 +5759,25 @@ fn execute_install(
 
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
 fn first_app_onboarding_subtitle() -> &'static str {
-    "Describe a small, useful app. Goblins OS builds it locally with the selected engine, and you can revisit it from the launcher later."
+    "Describe a small, useful app. Goblins OS builds it with your selected engine, clearly showing whether it works here or through OpenAI, and keeps it in the launcher."
 }
 
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
-fn first_app_build_failure_copy() -> &'static str {
-    "Goblins OS could not build the first app yet. You can enter the desktop now and try again from the launcher."
+fn first_app_failure_copy(stage: FirstAppFailureStage) -> &'static str {
+    match stage {
+        FirstAppFailureStage::Permission => {
+            "Goblins OS could not grant app-creation permission. Review Policy, or enter the desktop and try again later."
+        }
+        FirstAppFailureStage::Build => {
+            "Goblins OS could not build the first app yet. You can enter the desktop now and try again from the launcher."
+        }
+        FirstAppFailureStage::FinishSetup => {
+            "Your first app was built, but Goblins OS could not enter the desktop yet. Choose Enter Goblins OS to try setup again without rebuilding it."
+        }
+        FirstAppFailureStage::Worker => {
+            "The first-app setup stopped unexpectedly. You can enter the desktop now and try again from the launcher."
+        }
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -5348,11 +5850,11 @@ fn run_native_installer(_config: InstallerConfig, _state: InstallerState) -> Ins
     Ok(())
 }
 
-fn wait_for_core(core_url: &str, timeout: Duration) -> bool {
+fn wait_for_core(core: &CoreClient, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
-        if matches!(http_status(core_url, "/health"), Some(200)) {
+        if matches!(http_status(core, "/health"), Some(200)) {
             return true;
         }
 
@@ -5362,39 +5864,17 @@ fn wait_for_core(core_url: &str, timeout: Duration) -> bool {
     false
 }
 
-fn http_status(base_url: &str, path: &str) -> Option<u16> {
-    let endpoint = parse_http_endpoint(base_url)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .ok()?
-        .next()?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(600)).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(900)))
-        .ok()?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(900)))
-        .ok()?;
-
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        endpoint.host
-    );
-    stream.write_all(request.as_bytes()).ok()?;
-
-    let mut buffer = [0_u8; 128];
-    let read = stream.read(&mut buffer).ok()?;
-    let response = std::str::from_utf8(&buffer[..read]).ok()?;
-    let status = response.split_whitespace().nth(1)?;
-
-    status.parse().ok()
+fn http_status(core: &CoreClient, path: &str) -> Option<u16> {
+    core.get(path, Duration::from_millis(900))
+        .ok()
+        .map(|response| response.status)
 }
 
-fn get_core_json<T>(base_url: &str, path: &str) -> Result<T, CoreFetchError>
+fn get_core_json<T>(core: &CoreClient, path: &str) -> Result<T, CoreFetchError>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let response = http_request(base_url, "GET", path, None)?;
+    let response = http_request(core, Method::Get, path, None)?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
@@ -5404,9 +5884,70 @@ where
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn openai_login_destination(core_url: &str) -> Result<String, CoreFetchError> {
-    let response = http_request(core_url, "GET", "/v1/auth/openai/start", None)?;
+fn openai_login_destination(core: &CoreClient) -> Result<String, CoreFetchError> {
+    let response = http_request(core, Method::Get, "/v1/auth/openai/start", None)?;
     openai_login_destination_from_response(&response)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn begin_codex_setup(core: &CoreClient) -> Result<CodexSetupOutcome, CoreFetchError> {
+    let response = http_request(core, Method::Post, "/v1/codex/login", Some(b"{}"))?;
+    let start = codex_setup_outcome_from_response(&response)?;
+    if start == CodexSetupOutcome::Ready {
+        return Ok(start);
+    }
+
+    for _ in 0..8 {
+        let status = get_core_json::<CodexLoginUrl>(core, "/v1/codex/login/url")?;
+        if status.authenticated {
+            return Ok(CodexSetupOutcome::Ready);
+        }
+        if let Some(url) = status.auth_url {
+            return Ok(CodexSetupOutcome::OpenUrl(url));
+        }
+        std::thread::sleep(Duration::from_millis(350));
+    }
+
+    Ok(start)
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn codex_setup_outcome_from_response(
+    response: &HttpResponse,
+) -> Result<CodexSetupOutcome, CoreFetchError> {
+    if !(200..=299).contains(&response.status) {
+        return Err(CoreFetchError::Status(response.status));
+    }
+    let body: CodexLoginStart =
+        serde_json::from_slice(&response.body).map_err(|_| CoreFetchError::Decode)?;
+    match response.status {
+        200 if body.authenticated && !body.started && !body.already_running => {
+            Ok(CodexSetupOutcome::Ready)
+        }
+        200 if body.already_running && !body.started && !body.authenticated => {
+            Ok(CodexSetupOutcome::AlreadyRunning)
+        }
+        202 if body.started && !body.authenticated && !body.already_running => {
+            Ok(CodexSetupOutcome::Started)
+        }
+        _ => Err(CoreFetchError::Decode),
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_engine(core: &CoreClient, engine: &str) -> Result<(), CoreFetchError> {
+    let body = serde_json::json!({ "engine": engine }).to_string();
+    let response = http_request(
+        core,
+        Method::Post,
+        "/v1/models/engine",
+        Some(body.as_bytes()),
+    )?;
+    if (200..=299).contains(&response.status) {
+        Ok(())
+    } else {
+        Err(CoreFetchError::Status(response.status))
+    }
 }
 
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
@@ -5423,13 +5964,37 @@ fn openai_login_destination_from_response(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn complete_and_unlock_first_boot(core_url: &str, mode: &str) -> Result<(), CoreFetchError> {
-    complete_first_boot(core_url, mode)?;
-    unlock_session(core_url, mode)
+fn complete_and_unlock_first_boot(core: &CoreClient, mode: &str) -> Result<(), CoreFetchError> {
+    complete_first_boot(core, mode)?;
+    unlock_session(core, mode)
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn submit_setup_build(core_url: &str, intent: &str) -> Result<(), CoreFetchError> {
+fn grant_setup_app_builder_permission(
+    core: &CoreClient,
+    profile: &str,
+) -> Result<(), CoreFetchError> {
+    let acknowledgement = format!("GRANT GOBLINS OS PERMISSION app-builder FOR {profile}");
+    let body = serde_json::json!({
+        "control_id": "app-builder",
+        "acknowledgement": acknowledgement,
+    })
+    .to_string();
+    let response = http_request(
+        core,
+        Method::Post,
+        "/v1/policy/permissions/grant",
+        Some(body.as_bytes()),
+    )?;
+    if (200..=299).contains(&response.status) {
+        Ok(())
+    } else {
+        Err(CoreFetchError::Status(response.status))
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn submit_setup_build(core: &CoreClient, intent: &str) -> Result<(), CoreFetchError> {
     #[derive(Deserialize)]
     struct BuildOutcome {
         ok: bool,
@@ -5438,7 +6003,7 @@ fn submit_setup_build(core_url: &str, intent: &str) -> Result<(), CoreFetchError
     }
 
     let body = serde_json::json!({ "intent": intent }).to_string();
-    let response = http_request(core_url, "POST", "/v1/apps/builds", Some(body.as_bytes()))?;
+    let response = http_request(core, Method::Post, "/v1/apps/builds", Some(body.as_bytes()))?;
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
     }
@@ -5455,11 +6020,11 @@ fn submit_setup_build(core_url: &str, intent: &str) -> Result<(), CoreFetchError
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn complete_first_boot(core_url: &str, mode: &str) -> Result<(), CoreFetchError> {
+fn complete_first_boot(core: &CoreClient, mode: &str) -> Result<(), CoreFetchError> {
     let body = serde_json::json!({ "mode": mode }).to_string();
     let response = http_request(
-        core_url,
-        "POST",
+        core,
+        Method::Post,
         "/v1/installer/complete",
         Some(body.as_bytes()),
     )?;
@@ -5472,11 +6037,11 @@ fn complete_first_boot(core_url: &str, mode: &str) -> Result<(), CoreFetchError>
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn unlock_session(core_url: &str, mode: &str) -> Result<(), CoreFetchError> {
+fn unlock_session(core: &CoreClient, mode: &str) -> Result<(), CoreFetchError> {
     let body = serde_json::json!({ "mode": mode }).to_string();
     let response = http_request(
-        core_url,
-        "POST",
+        core,
+        Method::Post,
         "/v1/session/unlock",
         Some(body.as_bytes()),
     )?;
@@ -5492,9 +6057,9 @@ fn unlock_session(core_url: &str, mode: &str) -> Result<(), CoreFetchError> {
 /// relay refuses every hosted and server path, so the AI never reaches the
 /// network — the privacy guarantee is enforced server-side, not in the GUI.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_privacy_mode(core_url: &str, offline: bool) -> Result<(), CoreFetchError> {
+fn set_privacy_mode(core: &CoreClient, offline: bool) -> Result<(), CoreFetchError> {
     let body = serde_json::json!({ "offline": offline }).to_string();
-    let response = http_request(core_url, "POST", "/v1/privacy", Some(body.as_bytes()))?;
+    let response = http_request(core, Method::Post, "/v1/privacy", Some(body.as_bytes()))?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
@@ -5504,11 +6069,11 @@ fn set_privacy_mode(core_url: &str, offline: bool) -> Result<(), CoreFetchError>
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn request_model_install(core_url: &str, model_id: &str) -> Result<String, CoreFetchError> {
+fn request_model_install(core: &CoreClient, model_id: &str) -> Result<String, CoreFetchError> {
     let body = serde_json::json!({ "model_id": model_id, "consent": true }).to_string();
     let response = http_request(
-        core_url,
-        "POST",
+        core,
+        Method::Post,
         "/v1/local-models/install",
         Some(body.as_bytes()),
     )?;
@@ -5522,7 +6087,7 @@ fn request_model_install(core_url: &str, model_id: &str) -> Result<String, CoreF
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn prepare_install_command(core_url: &str, target_path: &str) -> Result<String, CoreFetchError> {
+fn prepare_install_command(core: &CoreClient, target_path: &str) -> Result<String, CoreFetchError> {
     let body = serde_json::json!({
         "target_path": target_path,
         "filesystem": "xfs",
@@ -5532,8 +6097,8 @@ fn prepare_install_command(core_url: &str, target_path: &str) -> Result<String, 
     })
     .to_string();
     let response = http_request(
-        core_url,
-        "POST",
+        core,
+        Method::Post,
         "/v1/installer/install-targets/prepare",
         Some(body.as_bytes()),
     )?;
@@ -5570,104 +6135,35 @@ fn install_command_target(command: &[String]) -> Option<&str> {
 }
 
 fn http_request(
-    base_url: &str,
-    method: &str,
+    core: &CoreClient,
+    method: Method,
     path: &str,
     body: Option<&[u8]>,
 ) -> Result<HttpResponse, CoreFetchError> {
-    let endpoint = parse_http_endpoint(base_url).ok_or(CoreFetchError::Malformed)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .map_err(|_| CoreFetchError::Transport)?
-        .next()
-        .ok_or(CoreFetchError::Transport)?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(700))
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    stream
-        .set_read_timeout(Some(Duration::from_millis(1200)))
-        .map_err(|_| CoreFetchError::Transport)?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(900)))
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    let body = body.unwrap_or_default();
-    let content_headers = if body.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "Content-Type: application/json\r\nContent-Length: {}\r\n",
-            body.len()
-        )
-    };
-    let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\n{}Connection: close\r\n\r\n",
-        endpoint.host, content_headers
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|_| CoreFetchError::Transport)?;
-    if !body.is_empty() {
-        stream
-            .write_all(body)
-            .map_err(|_| CoreFetchError::Transport)?;
-    }
-
-    let mut response = Vec::new();
-    stream
-        .take(MAX_CORE_BODY_BYTES as u64)
-        .read_to_end(&mut response)
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    parse_http_response(&response)
+    core.request(method, path, body, installer_request_timeout(path))
+        .map(core_response)
+        .map_err(|_| CoreFetchError::Transport)
 }
 
-fn parse_http_response(response: &[u8]) -> Result<HttpResponse, CoreFetchError> {
-    let header_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or(CoreFetchError::Malformed)?;
-    let headers =
-        std::str::from_utf8(&response[..header_end]).map_err(|_| CoreFetchError::Malformed)?;
-    let mut lines = headers.lines();
-    let status = lines
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|status| status.parse::<u16>().ok())
-        .ok_or(CoreFetchError::Malformed)?;
-    let headers = lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
-        .collect();
+fn installer_request_timeout(path: &str) -> Duration {
+    match path {
+        "/v1/apps/builds" => LONG_CORE_JOB_TIMEOUT,
+        "/v1/installer/install-targets/prepare" => Duration::from_secs(60),
+        "/v1/network/wifi/connect" | "/v1/local-models/install" => Duration::from_secs(30),
+        _ => Duration::from_secs(5),
+    }
+}
 
-    Ok(HttpResponse {
-        status,
+fn core_response(response: Response) -> HttpResponse {
+    let headers = response
+        .header("location")
+        .map(|value| vec![("location".to_string(), value.to_string())])
+        .unwrap_or_default();
+    HttpResponse {
+        status: response.status,
         headers,
-        body: response[(header_end + 4)..].to_vec(),
-    })
-}
-
-fn parse_http_endpoint(url: &str) -> Option<HttpEndpoint> {
-    let rest = url.strip_prefix("http://")?;
-    let authority = rest.split('/').next()?.trim();
-
-    if authority.is_empty() {
-        return None;
+        body: response.body,
     }
-
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) => (host, port.parse().ok()?),
-        None => (authority, 80),
-    };
-
-    if host.is_empty() {
-        return None;
-    }
-
-    Some(HttpEndpoint {
-        host: host.to_string(),
-        port,
-    })
 }
 
 fn env_u64(key: &str, fallback: u64) -> u64 {
@@ -5791,45 +6287,95 @@ const GOBLINS_OS_INSTALLER_CSS: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::{
-        first_app_build_failure_copy, first_app_onboarding_subtitle, install_prepare_summary,
-        openai_login_destination_from_response, parse_http_endpoint, parse_http_response,
-        review_detail_lines, should_exit_after_first_boot, CoreFetchError, HttpEndpoint,
-        HttpResponse,
+        codex_setup_outcome_from_response, first_app_failure_copy, first_app_onboarding_subtitle,
+        install_prepare_summary, installer_request_timeout, installer_transition_duration,
+        openai_login_destination_from_response, review_detail_lines, should_exit_after_first_boot,
+        CodexSetupOutcome, CoreFetchError, FirstAppFailureStage, HttpResponse,
+        LONG_CORE_JOB_TIMEOUT,
     };
 
     #[test]
-    fn parses_local_core_endpoint() {
+    fn app_build_timeout_covers_model_bounds_without_widening_device_operations() {
         assert_eq!(
-            parse_http_endpoint("http://127.0.0.1:8787"),
-            Some(HttpEndpoint {
-                host: "127.0.0.1".to_string(),
-                port: 8787,
-            })
+            installer_request_timeout("/v1/apps/builds"),
+            LONG_CORE_JOB_TIMEOUT
+        );
+        assert_eq!(LONG_CORE_JOB_TIMEOUT, std::time::Duration::from_secs(3900));
+        assert!(LONG_CORE_JOB_TIMEOUT <= goblins_os_core_client::MAX_READ_TIMEOUT);
+        assert_eq!(
+            installer_request_timeout("/v1/installer/install-targets/prepare"),
+            std::time::Duration::from_secs(60)
+        );
+        assert_eq!(
+            installer_request_timeout("/v1/network/wifi/connect"),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(
+            installer_request_timeout("/v1/models/engine"),
+            std::time::Duration::from_secs(5)
         );
     }
 
     #[test]
-    fn rejects_non_http_endpoint() {
-        assert_eq!(parse_http_endpoint("https://127.0.0.1:8787"), None);
-    }
+    fn codex_setup_requires_a_truthful_success_body() {
+        let response = |status, body: &str| HttpResponse {
+            status,
+            headers: Vec::new(),
+            body: body.as_bytes().to_vec(),
+        };
 
-    #[test]
-    fn parses_core_json_body() {
-        let response = parse_http_response(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}",
-        )
-        .unwrap();
+        assert_eq!(
+            codex_setup_outcome_from_response(&response(
+                202,
+                r#"{"started":true,"authenticated":false,"already_running":false,"detail":"started"}"#,
+            )),
+            Ok(CodexSetupOutcome::Started)
+        );
+        assert_eq!(
+            codex_setup_outcome_from_response(&response(
+                200,
+                r#"{"started":false,"authenticated":true,"already_running":false,"detail":"ready"}"#,
+            )),
+            Ok(CodexSetupOutcome::Ready)
+        );
+        assert_eq!(
+            codex_setup_outcome_from_response(&response(
+                200,
+                r#"{"started":false,"authenticated":false,"already_running":true,"detail":"running"}"#,
+            )),
+            Ok(CodexSetupOutcome::AlreadyRunning)
+        );
 
-        assert_eq!(response.status, 200);
-        assert_eq!(response.body, br#"{"ok":true}"#);
+        assert_eq!(
+            codex_setup_outcome_from_response(&response(
+                200,
+                r#"{"started":false,"authenticated":false,"already_running":false,"detail":"unavailable"}"#,
+            )),
+            Err(CoreFetchError::Decode)
+        );
+        assert_eq!(
+            codex_setup_outcome_from_response(&response(
+                403,
+                r#"{"started":false,"authenticated":false,"already_running":false,"detail":"denied"}"#,
+            )),
+            Err(CoreFetchError::Status(403))
+        );
+        assert!(matches!(
+            CodexSetupOutcome::OpenUrl("https://auth.openai.example/codex".to_string()),
+            CodexSetupOutcome::OpenUrl(_)
+        ));
     }
 
     #[test]
     fn parses_openai_login_redirect() {
-        let response = parse_http_response(
-            b"HTTP/1.1 302 Found\r\nLocation: https://auth.openai.example/start\r\n\r\n",
-        )
-        .unwrap();
+        let response = HttpResponse {
+            status: 302,
+            headers: vec![(
+                "location".to_string(),
+                "https://auth.openai.example/start".to_string(),
+            )],
+            body: Vec::new(),
+        };
 
         assert_eq!(
             openai_login_destination_from_response(&response),
@@ -5906,29 +6452,65 @@ mod tests {
     }
 
     #[test]
-    fn first_app_build_failure_copy_is_user_facing() {
-        let copy = first_app_build_failure_copy();
+    fn first_app_failure_copy_is_stage_specific_and_user_facing() {
+        let permission = first_app_failure_copy(FirstAppFailureStage::Permission);
+        let build = first_app_failure_copy(FirstAppFailureStage::Build);
+        let finish = first_app_failure_copy(FirstAppFailureStage::FinishSetup);
+        let worker = first_app_failure_copy(FirstAppFailureStage::Worker);
 
-        assert!(copy.contains("could not build the first app yet"));
-        assert!(copy.contains("try again from the launcher"));
-        assert!(!copy.contains('{'));
-        assert!(!copy.contains("error"));
-        assert!(!copy.contains("127.0.0.1"));
-        assert!(!copy.contains("/var/lib"));
-        assert!(!copy.contains("state file"));
+        assert!(permission.contains("could not grant app-creation permission"));
+        assert!(build.contains("could not build the first app yet"));
+        assert!(build.contains("try again from the launcher"));
+        assert!(finish.contains("first app was built"));
+        assert!(finish.contains("without rebuilding it"));
+        assert!(worker.contains("stopped unexpectedly"));
+        for copy in [permission, build, finish, worker] {
+            assert!(!copy.contains('{'));
+            assert!(!copy.contains("127.0.0.1"));
+            assert!(!copy.contains("/var/lib"));
+            assert!(!copy.contains("state file"));
+        }
     }
 
     #[test]
     fn first_app_onboarding_copy_hides_backend_plumbing() {
         let copy = first_app_onboarding_subtitle();
 
-        assert!(copy.contains("builds it locally"));
+        assert!(copy.contains("builds it with your selected engine"));
         assert!(copy.contains("selected engine"));
-        assert!(copy.contains("launcher later"));
+        assert!(copy.contains("through OpenAI"));
+        assert!(copy.contains("launcher"));
         assert!(!copy.contains("daemon"));
         assert!(!copy.contains("loopback"));
         assert!(!copy.contains("127.0.0.1"));
         assert!(!copy.contains("service"));
+    }
+
+    #[test]
+    fn first_boot_separates_ai_engine_choice_from_desktop_identity() {
+        let source = include_str!("main.rs");
+        for required in [
+            "Start with GPT-OSS on this device",
+            "Connect OpenAI account · Codex…",
+            "Requests leave this device for OpenAI",
+            "Sign in through Codex, or ask an administrator to provision access.",
+            "Desktop sign-in is optional and separate from Goblins AI",
+            "This does not change the Goblins AI engine",
+            "Allow and build first app",
+            "grant_setup_app_builder_permission",
+            "Building with the selected engine…",
+        ] {
+            assert!(
+                source.contains(required),
+                "missing first-boot boundary: {required}"
+            );
+        }
+        let generic_openai_identity_cta = ["Sign in with ", "OpenAI", "\""].concat();
+        assert!(!source.contains(&generic_openai_identity_cta));
+        let client_side_key_cta = ["Add your own OpenAI ", "API key"].concat();
+        assert!(!source.contains(&client_side_key_cta));
+        assert!(!source.contains(&["complete_cloud_", "error"].concat()));
+        assert!(!source.contains(&["let intent = if intent.", "is_empty()"].concat()));
     }
 
     #[test]
@@ -5961,5 +6543,15 @@ mod tests {
         assert!(should_exit_after_first_boot(true, false));
         assert!(!should_exit_after_first_boot(true, true));
         assert!(!should_exit_after_first_boot(false, false));
+    }
+
+    #[test]
+    fn reduced_motion_removes_installer_transitions_and_pulses() {
+        assert_eq!(installer_transition_duration(true), 220);
+        assert_eq!(installer_transition_duration(false), 0);
+
+        let source = include_str!("main.rs");
+        assert!(source.contains("if !interface_bool(\"enable-animations\", true)"));
+        assert!(source.contains("dot.set_opacity(0.72)"));
     }
 }

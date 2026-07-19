@@ -16,7 +16,7 @@
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_session_command_output, probe_timeout};
 use crate::session_bridge::{self, SessionBridgeResult};
 
 const PERMISSION_STORE_DEST: &str = "org.freedesktop.impl.portal.PermissionStore";
@@ -186,7 +186,7 @@ fn revoke_app_permission_outcome(
 }
 
 fn list_table(table: &str) -> Option<Vec<String>> {
-    let output = bounded_command_output(
+    let output = bounded_session_command_output(
         "gdbus",
         &[
             "call",
@@ -215,7 +215,7 @@ fn delete_permission(table: &str, id: &str, app: &str) -> Result<(), String> {
         SessionBridgeResult::Unavailable => {}
     }
 
-    let output = bounded_command_output(
+    let output = bounded_session_command_output(
         "gdbus",
         &[
             "call",

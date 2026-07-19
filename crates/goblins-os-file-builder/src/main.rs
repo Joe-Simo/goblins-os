@@ -2,17 +2,15 @@ use std::{
     env,
     error::Error,
     fmt,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
 };
 
+use goblins_os_core_client::{initialize, ClientKind, CoreClient};
 use serde::Deserialize;
 
-const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
-const MAX_BODY_BYTES: u64 = 1024 * 1024;
+const CORE_READ_TIMEOUT: Duration = Duration::from_secs(180);
 const SHELL_BIN: &str = "/usr/libexec/goblins-os/goblins-os-shell";
 
 type BuilderResult<T> = Result<T, BuilderError>;
@@ -20,7 +18,6 @@ type BuilderResult<T> = Result<T, BuilderError>;
 #[derive(Debug, PartialEq, Eq)]
 enum BuilderError {
     Usage,
-    InvalidCoreUrl(String),
     NoFileSelected,
     CoreUnavailable,
     BuildRejected(String),
@@ -55,7 +52,15 @@ struct FileQuestionOutcome {
 }
 
 fn main() {
-    match run() {
+    let core = match initialize(ClientKind::FileBuilder) {
+        Ok(core) => core,
+        Err(error) => {
+            eprintln!("goblins-os-file-builder: {error}");
+            std::process::exit(69);
+        }
+    };
+
+    match run(&core) {
         Ok(message) => println!("{message}"),
         Err(error) => {
             eprintln!("goblins-os-file-builder: {error}");
@@ -64,22 +69,17 @@ fn main() {
     }
 }
 
-fn run() -> BuilderResult<String> {
-    let core_url = validate_core_url(
-        &env::var("GOBLINS_OS_CORE_URL")
-            .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
-            .unwrap_or_else(|_| DEFAULT_CORE_URL.to_string()),
-    )?;
+fn run(core: &CoreClient) -> BuilderResult<String> {
     let (action, path) = selected_file_from_env_or_args()?;
     match action {
-        FileAction::BuildApp => build_file_app(&core_url, &path),
-        FileAction::AskGoblins => ask_about_file(&core_url, &path),
+        FileAction::BuildApp => build_file_app(core, &path),
+        FileAction::AskGoblins => ask_about_file(core, &path),
     }
 }
 
-fn build_file_app(core_url: &str, path: &Path) -> BuilderResult<String> {
+fn build_file_app(core: &CoreClient, path: &Path) -> BuilderResult<String> {
     let intent = file_build_intent(path);
-    let app = submit_build(core_url, &intent)?;
+    let app = submit_build(core, &intent)?;
 
     Command::new(SHELL_BIN)
         .args(["--open-app", app.name.as_str()])
@@ -92,8 +92,8 @@ fn build_file_app(core_url: &str, path: &Path) -> BuilderResult<String> {
     ))
 }
 
-fn ask_about_file(core_url: &str, path: &Path) -> BuilderResult<String> {
-    let answer = submit_file_question(core_url, path)?;
+fn ask_about_file(core: &CoreClient, path: &Path) -> BuilderResult<String> {
+    let answer = submit_file_question(core, path)?;
     Ok(format!(
         "Goblins AI about {}:\n{answer}",
         display_file(path)
@@ -164,14 +164,15 @@ fn display_file(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn submit_build(core_url: &str, intent: &str) -> BuilderResult<BuiltApp> {
+fn submit_build(core: &CoreClient, intent: &str) -> BuilderResult<BuiltApp> {
     let body = serde_json::json!({ "intent": intent }).to_string();
-    let (status, response) = http_request(core_url, "POST", "/v1/apps/builds", Some(&body))
+    let response = core
+        .post_json("/v1/apps/builds", body.as_bytes(), CORE_READ_TIMEOUT)
         .map_err(|_| BuilderError::CoreUnavailable)?;
     let outcome: BuildOutcome =
-        serde_json::from_slice(&response).map_err(|_| BuilderError::Decode)?;
+        serde_json::from_slice(&response.body).map_err(|_| BuilderError::Decode)?;
 
-    if (200..=299).contains(&status) && outcome.ok {
+    if response.is_success() && outcome.ok {
         outcome
             .app
             .ok_or_else(|| BuilderError::BuildRejected("The build returned no app record.".into()))
@@ -184,14 +185,15 @@ fn submit_build(core_url: &str, intent: &str) -> BuilderResult<BuiltApp> {
     }
 }
 
-fn submit_file_question(core_url: &str, path: &Path) -> BuilderResult<String> {
+fn submit_file_question(core: &CoreClient, path: &Path) -> BuilderResult<String> {
     let body = serde_json::json!({ "path": path.display().to_string() }).to_string();
-    let (status, response) = http_request(core_url, "POST", "/v1/ai/file-context", Some(&body))
+    let response = core
+        .post_json("/v1/ai/file-context", body.as_bytes(), CORE_READ_TIMEOUT)
         .map_err(|_| BuilderError::CoreUnavailable)?;
     let outcome: FileQuestionOutcome =
-        serde_json::from_slice(&response).map_err(|_| BuilderError::Decode)?;
+        serde_json::from_slice(&response.body).map_err(|_| BuilderError::Decode)?;
 
-    if (200..=299).contains(&status) && outcome.ok {
+    if response.is_success() && outcome.ok {
         if outcome.text.trim().is_empty() {
             Err(BuilderError::BuildRejected(
                 "Goblins AI returned an empty answer for the selected item.".into(),
@@ -208,98 +210,10 @@ fn submit_file_question(core_url: &str, path: &Path) -> BuilderResult<String> {
     }
 }
 
-fn validate_core_url(value: &str) -> BuilderResult<String> {
-    let trimmed = value.trim_end_matches('/');
-    let rest = trimmed
-        .strip_prefix("http://")
-        .ok_or_else(|| BuilderError::InvalidCoreUrl(value.to_string()))?;
-    let authority = rest.split('/').next().unwrap_or_default();
-    let host = if let Some(after_bracket) = authority.strip_prefix('[') {
-        match after_bracket.split_once(']') {
-            Some((host, _)) => host,
-            None => return Err(BuilderError::InvalidCoreUrl(value.to_string())),
-        }
-    } else {
-        authority
-            .rsplit_once(':')
-            .map(|(host, _)| host)
-            .unwrap_or(authority)
-    };
-    if matches!(host, "127.0.0.1" | "localhost" | "::1") {
-        Ok(trimmed.to_string())
-    } else {
-        Err(BuilderError::InvalidCoreUrl(value.to_string()))
-    }
-}
-
-fn http_request(
-    core_url: &str,
-    method: &str,
-    path: &str,
-    body: Option<&str>,
-) -> Result<(u16, Vec<u8>), ()> {
-    let rest = core_url.strip_prefix("http://").ok_or(())?;
-    let authority = rest.split('/').next().ok_or(())?;
-    let (host, port) = if let Some(after_bracket) = authority.strip_prefix('[') {
-        let (host, suffix) = after_bracket.split_once(']').ok_or(())?;
-        let port = match suffix.strip_prefix(':') {
-            Some(port) => port.parse::<u16>().map_err(|_| ())?,
-            None if suffix.is_empty() => 80,
-            None => return Err(()),
-        };
-        (host, port)
-    } else {
-        match authority.rsplit_once(':') {
-            Some((host, port)) => (host, port.parse::<u16>().map_err(|_| ())?),
-            None => (authority, 80),
-        }
-    };
-    let address = (host, port)
-        .to_socket_addrs()
-        .map_err(|_| ())?
-        .next()
-        .ok_or(())?;
-    let mut stream =
-        TcpStream::connect_timeout(&address, Duration::from_millis(700)).map_err(|_| ())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(180)))
-        .map_err(|_| ())?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(2000)))
-        .map_err(|_| ())?;
-
-    let request = match body {
-        Some(payload) => format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-            payload.len()
-        ),
-        None => format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
-        ),
-    };
-    stream.write_all(request.as_bytes()).map_err(|_| ())?;
-
-    let mut raw = Vec::new();
-    stream
-        .take(MAX_BODY_BYTES)
-        .read_to_end(&mut raw)
-        .map_err(|_| ())?;
-    let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or(())?;
-    let head = std::str::from_utf8(&raw[..header_end]).map_err(|_| ())?;
-    let status = head
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or(())?;
-    Ok((status, raw[header_end + 4..].to_vec()))
-}
-
 impl BuilderError {
     fn exit_code(&self) -> i32 {
         match self {
             Self::Usage => 64,
-            Self::InvalidCoreUrl(_) => 65,
             Self::NoFileSelected => 66,
             Self::CoreUnavailable | Self::Decode => 69,
             Self::BuildRejected(_) => 77,
@@ -313,12 +227,6 @@ impl fmt::Display for BuilderError {
         match self {
             Self::Usage => {
                 formatter.write_str("usage: goblins-os-file-builder [--ask] <selected-file>")
-            }
-            Self::InvalidCoreUrl(url) => {
-                write!(
-                    formatter,
-                    "Goblins OS build service address is invalid: {url}"
-                )
             }
             Self::NoFileSelected => formatter.write_str("no file was selected"),
             Self::CoreUnavailable => formatter.write_str("Goblins OS build service is not ready"),
@@ -335,25 +243,7 @@ impl Error for BuilderError {}
 mod tests {
     use std::path::Path;
 
-    use super::{file_build_intent, sanitize_prompt_value, validate_core_url, BuilderError};
-
-    #[test]
-    fn accepts_only_loopback_core_urls() {
-        assert_eq!(
-            validate_core_url("http://127.0.0.1:8787").unwrap(),
-            "http://127.0.0.1:8787"
-        );
-        assert_eq!(
-            validate_core_url("http://localhost:8787/").unwrap(),
-            "http://localhost:8787"
-        );
-        assert_eq!(
-            validate_core_url("http://[::1]:8787").unwrap(),
-            "http://[::1]:8787"
-        );
-        assert!(validate_core_url("https://127.0.0.1:8787").is_err());
-        assert!(validate_core_url("http://example.com:8787").is_err());
-    }
+    use super::{file_build_intent, sanitize_prompt_value, BuilderError};
 
     #[test]
     fn file_intent_mentions_name_extension_and_locality() {
@@ -377,7 +267,6 @@ mod tests {
     #[test]
     fn errors_hide_backend_plumbing() {
         let errors = [
-            BuilderError::InvalidCoreUrl("http://example.com:8787".to_string()).to_string(),
             BuilderError::CoreUnavailable.to_string(),
             BuilderError::Decode.to_string(),
             BuilderError::BuildRejected(
@@ -390,6 +279,5 @@ mod tests {
         assert!(errors.contains("Goblins OS"));
         assert!(!errors.contains("daemon"));
         assert!(!errors.contains("loopback"));
-        assert!(!errors.contains("OPENAI_OS_CORE_URL"));
     }
 }

@@ -18,6 +18,7 @@ ashpd = { version = "0.13", default-features = false, features = [
   "screenshot",
   "tokio",
 ] }
+goblins-os-core-client = { path = "../goblins-os-core-client" }
 goblins-os-ui = { path = "../goblins-os-ui" }
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }

@@ -11,9 +11,26 @@
 
 use std::{env, error::Error};
 
-const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
+use goblins_os_core_client::{initialize, ClientKind, CoreClient};
+
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
 const VISUAL_CONTEXT_SUBTITLE: &str = "Capture the screen, then ask with local-only visual context";
+// Every assistant/context/build route can reach the resident's 3600-second
+// local-model bound, so keep the read open through the shared 65-minute ceiling.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+const LONG_CORE_JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(65 * 60);
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn launcher_request_timeout(path: &str) -> std::time::Duration {
+    match path {
+        "/v1/apps/builds"
+        | "/v1/ai/runtime"
+        | "/v1/ai/selected-text-context"
+        | "/v1/ai/write-selected-text"
+        | "/v1/ai/screen-context" => LONG_CORE_JOB_TIMEOUT,
+        _ => std::time::Duration::from_secs(2),
+    }
+}
 
 type LauncherResult<T> = Result<T, Box<dyn Error>>;
 
@@ -53,18 +70,16 @@ fn bounded_context_value(value: &str, max_chars: usize) -> Option<String> {
 
 #[derive(Clone)]
 struct LauncherConfig {
-    core_url: String,
+    core: CoreClient,
     mode: LauncherMode,
     super_space_handoff: bool,
 }
 
 impl LauncherConfig {
-    fn from_env() -> Self {
+    fn from_env(core: CoreClient) -> Self {
         let args = env::args().skip(1).collect::<Vec<_>>();
         Self {
-            core_url: env::var("GOBLINS_OS_CORE_URL")
-                .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
-                .unwrap_or_else(|_| DEFAULT_CORE_URL.into()),
+            core,
             mode: LauncherMode::from_args_and_env(&args),
             super_space_handoff: super_space_handoff_from_args(&args),
         }
@@ -124,7 +139,8 @@ impl LauncherMode {
 }
 
 fn main() -> LauncherResult<()> {
-    let config = LauncherConfig::from_env();
+    let core = initialize(ClientKind::Launcher)?;
+    let config = LauncherConfig::from_env(core);
     run_launcher(config)
 }
 
@@ -636,7 +652,7 @@ fn rank_file_hits(query: &str, hits: &[FileHit], limit: usize) -> Vec<FileHit> {
 
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
 fn run_launcher(config: LauncherConfig) -> LauncherResult<()> {
-    let _ = config.core_url.as_str();
+    let _ = &config.core;
     let _ = config.mode;
     let _ = config.super_space_handoff;
     println!("goblins_os_launcher=unavailable");
@@ -649,16 +665,7 @@ use native::run_launcher;
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 mod native {
-    use std::{
-        cell::RefCell,
-        io::{Read, Write},
-        net::{TcpStream, ToSocketAddrs},
-        process::Command,
-        rc::Rc,
-        sync::mpsc,
-        thread,
-        time::Duration,
-    };
+    use std::{cell::RefCell, process::Command, rc::Rc, sync::mpsc, thread, time::Duration};
 
     use gtk::gdk;
     use gtk::glib;
@@ -667,11 +674,11 @@ mod native {
     use serde::Deserialize;
 
     use super::{
-        bounded_context_value, convert_units, eval_math, fuzzy_score, rank_file_hits, FileHit,
-        LauncherConfig, LauncherMode, LauncherResult, VISUAL_CONTEXT_SUBTITLE,
+        bounded_context_value, convert_units, eval_math, fuzzy_score, launcher_request_timeout,
+        rank_file_hits, CoreClient, FileHit, LauncherConfig, LauncherMode, LauncherResult,
+        VISUAL_CONTEXT_SUBTITLE,
     };
 
-    const MAX_BODY_BYTES: u64 = 1024 * 1024;
     const APP_ID: &str = "org.goblins.OS.Launcher";
     const SELECTED_TEXT_CONTEXT_ENV: &str = "GOBLINS_OS_SELECTED_TEXT_CONTEXT";
     const SCREEN_CONTEXT_TEXT_ENV: &str = "GOBLINS_OS_SCREEN_CONTEXT_TEXT";
@@ -905,15 +912,15 @@ mod native {
     pub fn run_launcher(config: LauncherConfig) -> LauncherResult<()> {
         if config.super_space_handoff
             && matches!(config.mode, LauncherMode::Normal)
-            && try_super_space_input_source_handoff(&config.core_url)
+            && try_super_space_input_source_handoff(&config.core)
         {
             return Ok(());
         }
 
-        let apps = Rc::new(fetch_apps(&config.core_url));
+        let apps = Rc::new(fetch_apps(&config.core));
         // One-shot file scan, cached for the launcher's lifetime (like apps).
         let files = Rc::new(scan_user_files());
-        let ai_actions = Rc::new(fetch_ai_actions(&config.core_url));
+        let ai_actions = Rc::new(fetch_ai_actions(&config.core));
         let app = gtk::Application::builder().application_id(APP_ID).build();
         app.connect_activate(move |app| {
             goblins_os_ui::init_theming("");
@@ -992,7 +999,7 @@ mod native {
         window.set_child(Some(&backdrop));
 
         let ui = Rc::new(LauncherUi {
-            core_url: config.core_url.clone(),
+            core: config.core.clone(),
             window: window.clone(),
             entry: entry.clone(),
             list,
@@ -1064,7 +1071,7 @@ mod native {
     }
 
     struct LauncherUi {
-        core_url: String,
+        core: CoreClient,
         window: gtk::ApplicationWindow,
         entry: gtk::Entry,
         list: gtk::Box,
@@ -1410,10 +1417,10 @@ mod native {
         ui.list.append(&working);
 
         let (tx, rx) = mpsc::channel::<Result<String, String>>();
-        let core_url = ui.core_url.clone();
+        let core = ui.core.clone();
         let intent = query.clone();
         thread::spawn(move || {
-            let _ = tx.send(submit_build(&core_url, &intent));
+            let _ = tx.send(submit_build(&core, &intent));
         });
 
         let ui = ui.clone();
@@ -1467,10 +1474,10 @@ mod native {
         ui.list.append(&working);
 
         let (tx, rx) = mpsc::channel::<Result<String, String>>();
-        let core_url = ui.core_url.clone();
+        let core = ui.core.clone();
         let question = query.clone();
         thread::spawn(move || {
-            let _ = tx.send(submit_question(&core_url, &question));
+            let _ = tx.send(submit_question(&core, &question));
         });
 
         let ui = ui.clone();
@@ -1552,7 +1559,7 @@ mod native {
         ui: &Rc<LauncherUi>,
         context: &str,
         working_label: &'static str,
-        submit: fn(&str, &str) -> Result<String, String>,
+        submit: fn(&CoreClient, &str) -> Result<String, String>,
     ) {
         let context = context.trim().to_string();
         if context.is_empty() {
@@ -1571,9 +1578,9 @@ mod native {
         ui.list.append(&working);
 
         let (tx, rx) = mpsc::channel::<Result<String, String>>();
-        let core_url = ui.core_url.clone();
+        let core = ui.core.clone();
         thread::spawn(move || {
-            let _ = tx.send(submit(&core_url, &context));
+            let _ = tx.send(submit(&core, &context));
         });
 
         let ui = ui.clone();
@@ -2230,7 +2237,7 @@ mod native {
         match source {
             "local-gpt-oss" | "gpt-oss" | "local" => "Built on-device · GPT-OSS",
             "codex" => "Built with Build Studio",
-            "openai-api" | "openai" => "Built with your OpenAI key",
+            "openai-api" | "openai" => "Built with a protected OpenAI service credential",
             _ => "Built app",
         }
     }
@@ -2239,17 +2246,17 @@ mod native {
     // The same compact, dependency-free TCP client the shell uses; the launcher
     // only needs to read the app list and post a build.
 
-    fn fetch_apps(core_url: &str) -> Vec<BuiltApp> {
-        get_json::<AppList>(core_url, "/v1/apps")
+    fn fetch_apps(core: &CoreClient) -> Vec<BuiltApp> {
+        get_json::<AppList>(core, "/v1/apps")
             .map(|list| list.apps)
             .unwrap_or_default()
     }
 
-    fn fetch_ai_actions(core_url: &str) -> AiActions {
+    fn fetch_ai_actions(core: &CoreClient) -> AiActions {
         let fallback =
-            "Goblins AI setup is not ready. Open Models to configure GPT-OSS or your OpenAI key."
+            "Goblins AI setup is not ready. Open Models to configure GPT-OSS, Codex, or a protected OpenAI service credential."
                 .to_string();
-        let Some(catalog) = get_json::<AiActionCatalog>(core_url, "/v1/ai/actions") else {
+        let Some(catalog) = get_json::<AiActionCatalog>(core, "/v1/ai/actions") else {
             return AiActions {
                 ask: AiActionAvailability {
                     enabled: false,
@@ -2308,16 +2315,15 @@ mod native {
         text: String,
     }
 
-    fn try_super_space_input_source_handoff(core_url: &str) -> bool {
-        let Ok((status, body)) =
-            http_request(core_url, "POST", "/v1/input/switch-next", Some("{}"))
-        else {
+    fn try_super_space_input_source_handoff(core: &CoreClient) -> bool {
+        let path = "/v1/input/switch-next";
+        let Ok(response) = core.post_json(path, b"{}", launcher_request_timeout(path)) else {
             return false;
         };
-        if !(200..=299).contains(&status) {
+        if !response.is_success() {
             return false;
         }
-        let Ok(outcome) = serde_json::from_slice::<SwitchInputSourceOutcome>(&body) else {
+        let Ok(outcome) = serde_json::from_slice::<SwitchInputSourceOutcome>(&response.body) else {
             return false;
         };
         if outcome.ok && outcome.switched {
@@ -2379,9 +2385,11 @@ mod native {
         )
     }
 
-    fn submit_build(core_url: &str, intent: &str) -> Result<String, String> {
+    fn submit_build(core: &CoreClient, intent: &str) -> Result<String, String> {
         let body = serde_json::json!({ "intent": intent }).to_string();
-        let response = http_request(core_url, "POST", "/v1/apps/builds", Some(&body))
+        let path = "/v1/apps/builds";
+        let response = core
+            .post_json(path, body.as_bytes(), launcher_request_timeout(path))
             .map_err(|_| "Goblins OS could not reach the on-device builder.".to_string())?;
         #[derive(Deserialize)]
         struct BuildOutcome {
@@ -2390,9 +2398,9 @@ mod native {
             text: String,
             app: Option<BuiltApp>,
         }
-        let outcome: BuildOutcome = serde_json::from_slice(&response.1)
+        let outcome: BuildOutcome = serde_json::from_slice(&response.body)
             .map_err(|_| "Goblins OS could not read the build result.".to_string())?;
-        if (200..=299).contains(&response.0) && outcome.ok {
+        if response.is_success() && outcome.ok {
             outcome
                 .app
                 .map(|app| app.name)
@@ -2404,24 +2412,29 @@ mod native {
         }
     }
 
-    fn submit_question(core_url: &str, question: &str) -> Result<String, String> {
+    fn submit_question(core: &CoreClient, question: &str) -> Result<String, String> {
         let body = serde_json::json!({ "message": question }).to_string();
-        let response = http_request(core_url, "POST", "/v1/ai/runtime", Some(&body))
+        let path = "/v1/ai/runtime";
+        let response = core
+            .post_json(path, body.as_bytes(), launcher_request_timeout(path))
             .map_err(|_| "Goblins OS could not reach Goblins AI.".to_string())?;
         #[derive(Deserialize)]
         struct ResidentOutcome {
             text: String,
         }
-        let outcome: ResidentOutcome = serde_json::from_slice(&response.1)
+        let outcome: ResidentOutcome = serde_json::from_slice(&response.body)
             .map_err(|_| "Goblins OS could not read the assistant response.".to_string())?;
-        if (200..=299).contains(&response.0) {
+        if response.is_success() {
             Ok(outcome.text)
         } else {
             Err(outcome.text)
         }
     }
 
-    fn submit_selected_text_context(core_url: &str, selected_text: &str) -> Result<String, String> {
+    fn submit_selected_text_context(
+        core: &CoreClient,
+        selected_text: &str,
+    ) -> Result<String, String> {
         let app = context_app_name("Goblins OS Launcher");
         let window_title = context_window_title("Selected text context");
         let body = serde_json::json!({
@@ -2432,7 +2445,7 @@ mod native {
         })
         .to_string();
         submit_ai_context(
-            core_url,
+            core,
             "/v1/ai/selected-text-context",
             &body,
             "Goblins OS could not reach selected-text context.",
@@ -2440,7 +2453,10 @@ mod native {
         )
     }
 
-    fn submit_writing_tools_context(core_url: &str, selected_text: &str) -> Result<String, String> {
+    fn submit_writing_tools_context(
+        core: &CoreClient,
+        selected_text: &str,
+    ) -> Result<String, String> {
         let app = context_app_name("Goblins OS Launcher");
         let window_title = context_window_title("Writing tools");
         let body = serde_json::json!({
@@ -2451,7 +2467,7 @@ mod native {
         })
         .to_string();
         submit_ai_context(
-            core_url,
+            core,
             "/v1/ai/write-selected-text",
             &body,
             "Goblins OS could not reach writing tools.",
@@ -2459,7 +2475,7 @@ mod native {
         )
     }
 
-    fn submit_screen_context(core_url: &str, visible_context: &str) -> Result<String, String> {
+    fn submit_screen_context(core: &CoreClient, visible_context: &str) -> Result<String, String> {
         let source = env_context_value_or(
             SCREEN_CONTEXT_SOURCE_ENV,
             "launcher-screen-context",
@@ -2476,7 +2492,7 @@ mod native {
         })
         .to_string();
         submit_ai_context(
-            core_url,
+            core,
             "/v1/ai/screen-context",
             &body,
             "Goblins OS could not reach screen context.",
@@ -2484,7 +2500,7 @@ mod native {
         )
     }
 
-    fn submit_visual_context(core_url: &str, visual_summary: &str) -> Result<String, String> {
+    fn submit_visual_context(core: &CoreClient, visual_summary: &str) -> Result<String, String> {
         let source = env_context_value_or(
             SCREEN_CONTEXT_SOURCE_ENV,
             "launcher-visual-context",
@@ -2501,7 +2517,7 @@ mod native {
         })
         .to_string();
         submit_ai_context(
-            core_url,
+            core,
             "/v1/ai/screen-context",
             &body,
             "Goblins OS could not reach screenshot context.",
@@ -2510,98 +2526,63 @@ mod native {
     }
 
     fn submit_ai_context(
-        core_url: &str,
+        core: &CoreClient,
         path: &str,
         body: &str,
         reach_error: &str,
         parse_error: &str,
     ) -> Result<String, String> {
-        let response = http_request(core_url, "POST", path, Some(body))
+        let response = core
+            .post_json(path, body.as_bytes(), launcher_request_timeout(path))
             .map_err(|_| reach_error.to_string())?;
         #[derive(Deserialize)]
         struct ContextOutcome {
             text: String,
         }
         let outcome: ContextOutcome =
-            serde_json::from_slice(&response.1).map_err(|_| parse_error.to_string())?;
-        if (200..=299).contains(&response.0) {
+            serde_json::from_slice(&response.body).map_err(|_| parse_error.to_string())?;
+        if response.is_success() {
             Ok(outcome.text)
         } else {
             Err(outcome.text)
         }
     }
 
-    fn get_json<T: for<'de> Deserialize<'de>>(core_url: &str, path: &str) -> Option<T> {
-        let (status, body) = http_request(core_url, "GET", path, None).ok()?;
-        if !(200..=299).contains(&status) {
+    fn get_json<T: for<'de> Deserialize<'de>>(core: &CoreClient, path: &str) -> Option<T> {
+        let response = core.get(path, launcher_request_timeout(path)).ok()?;
+        if !response.is_success() {
             return None;
         }
-        serde_json::from_slice(&body).ok()
-    }
-
-    /// One blocking request to the loopback core. Returns (status, body). A long
-    /// read window: a build runs the Goblins AI runtime and legitimately takes seconds.
-    fn http_request(
-        core_url: &str,
-        method: &str,
-        path: &str,
-        body: Option<&str>,
-    ) -> Result<(u16, Vec<u8>), ()> {
-        let rest = core_url.strip_prefix("http://").ok_or(())?;
-        let authority = rest.split('/').next().ok_or(())?;
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((h, p)) => (h, p.parse::<u16>().map_err(|_| ())?),
-            None => (authority, 80),
-        };
-        let address = (host, port)
-            .to_socket_addrs()
-            .map_err(|_| ())?
-            .next()
-            .ok_or(())?;
-        let mut stream =
-            TcpStream::connect_timeout(&address, Duration::from_millis(700)).map_err(|_| ())?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(180)))
-            .map_err(|_| ())?;
-        stream
-            .set_write_timeout(Some(Duration::from_millis(2000)))
-            .map_err(|_| ())?;
-
-        let request = match body {
-            Some(payload) => format!(
-                "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-                payload.len()
-            ),
-            None => format!(
-                "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
-            ),
-        };
-        stream.write_all(request.as_bytes()).map_err(|_| ())?;
-
-        let mut raw = Vec::new();
-        stream
-            .take(MAX_BODY_BYTES)
-            .read_to_end(&mut raw)
-            .map_err(|_| ())?;
-        let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or(())?;
-        let head = std::str::from_utf8(&raw[..header_end]).map_err(|_| ())?;
-        let status = head
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|code| code.parse::<u16>().ok())
-            .ok_or(())?;
-        Ok((status, raw[header_end + 4..].to_vec()))
+        serde_json::from_slice(&response.body).ok()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_context_value, convert_units, eval_math, fuzzy_score, looks_like_math,
-        rank_file_hits, super_space_handoff_from_args, FileHit, LauncherMode,
-        VISUAL_CONTEXT_SUBTITLE,
+        bounded_context_value, convert_units, eval_math, fuzzy_score, launcher_request_timeout,
+        looks_like_math, rank_file_hits, super_space_handoff_from_args, FileHit, LauncherMode,
+        LONG_CORE_JOB_TIMEOUT, VISUAL_CONTEXT_SUBTITLE,
     };
+
+    #[test]
+    fn long_ai_routes_keep_the_capability_channel_open_through_core_bounds() {
+        for path in [
+            "/v1/apps/builds",
+            "/v1/ai/runtime",
+            "/v1/ai/selected-text-context",
+            "/v1/ai/write-selected-text",
+            "/v1/ai/screen-context",
+        ] {
+            assert_eq!(launcher_request_timeout(path), LONG_CORE_JOB_TIMEOUT);
+        }
+        assert_eq!(LONG_CORE_JOB_TIMEOUT, std::time::Duration::from_secs(3900));
+        assert!(LONG_CORE_JOB_TIMEOUT <= goblins_os_core_client::MAX_READ_TIMEOUT);
+        assert_eq!(
+            launcher_request_timeout("/v1/input/switch-next"),
+            std::time::Duration::from_secs(2)
+        );
+    }
 
     fn hit(name: &str, mtime: u64) -> FileHit {
         FileHit {

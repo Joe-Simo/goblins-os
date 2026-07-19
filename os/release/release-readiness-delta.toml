@@ -6,7 +6,7 @@
 name = "goblins-os-release-readiness-delta"
 version = 1
 status = "partial"
-reason = "The source package is materialized and locally verifiable, but native per-architecture release artifacts and display-backed signoff evidence are not complete in this workspace."
+reason = "The public alpha media and anonymous GHCR pulls exist, but stable readiness is not established: no exact stable candidate is tied to fresh dual-architecture release and display proof, and the aarch64 proof-manifest and signoff ISO hashes disagree."
 
 [source_package]
 root = "."
@@ -104,15 +104,15 @@ package_status = "release/build artifacts; regenerate per architecture"
 name = "x86_64_iso"
 path = "goblins-os-x86_64.iso"
 required = true
-status = "not-produced-in-current-workspace"
-verification = "SHA256 file, manifest proving x86_64 payload, goblins-os-verify blocked=0, self-test, screenshots, and signoff notes."
+status = "published-alpha-not-stable-candidate"
+verification = "The published alpha has x86_64 media and evidence; stable promotion requires fresh media, checksums, manifests, runtime proof, screenshots, and signoff tied to the exact stable candidate."
 
 [[release_artifacts]]
 name = "aarch64_iso"
 path = "goblins-os-aarch64.iso"
 required = true
-status = "not-produced-in-current-workspace"
-verification = "SHA256 file, manifest proving aarch64 payload, goblins-os-verify blocked=0, self-test, screenshots, and signoff notes."
+status = "published-alpha-not-stable-candidate"
+verification = "The published alpha has aarch64 media and evidence; stable promotion requires fresh media, checksums, manifests, runtime proof, screenshots, and coherent signoff tied to the exact stable candidate."
 
 [[sensitive_paths]]
 path = "os/etc/goblins-os/openai-secrets.env"
@@ -152,36 +152,45 @@ purpose = "User-visible install path for Lutris through GNOME Software or Flathu
 
 [[current_evidence]]
 name = "rust_source_gates_available"
-evidence = "Rust toolchain is available locally; cargo fmt, cargo test, cargo clippy with native-desktop features, cargo build --release, and goblins-os-verify source mode have been run successfully from this workspace."
+evidence = "The canonical Rust source gates are defined. This entry does not attest that the current worktree or an exact stable candidate has passed them."
 
 [[current_evidence]]
 name = "source_package_materialized"
-evidence = "Cargo workspace, OS source tree, release manifests, hardware gate scripts, ISO config, runbook, and verifier sources are readable in the current workspace."
+evidence = "The tracked source package and release-governance paths are present; current worktree cleanliness and exact-candidate proof are not established here."
 
 [[current_evidence]]
 name = "x86_64_rpm_sbom_present"
-evidence = "os/signoff-proofs/sbom/x86_64/rpm-packages.tsv is present with x86_64/noarch package rows; shipping status verifies RPM SBOM architecture per release arch."
+evidence = "The published alpha evidence includes x86_64 RPM package data. It is historical alpha evidence, not proof for an exact stable candidate."
 
 [[current_evidence]]
 name = "dual_arch_rpm_sbom_present"
-evidence = "Both os/signoff-proofs/sbom/aarch64/rpm-packages.tsv and os/signoff-proofs/sbom/x86_64/rpm-packages.tsv are present with only matching-architecture or noarch rows; the remaining release blockers are ISO provenance, display-backed screenshots, runtime proof, and signoff rows."
+evidence = "The published alpha evidence includes package data for both architectures. Stable promotion still requires regenerated evidence tied to the exact candidate."
+
+[[current_evidence]]
+name = "ghcr_public_pull_verified"
+evidence = "The goblins-os package is public and anonymous manifest requests for the x86_64 and aarch64 tags succeed."
 
 [[current_blockers]]
 name = "native_linux_release_runner_required"
-evidence = "The current development host can run Docker artifact tests, but it is not the native Linux release runner required for display-backed KVM install proof for both architectures."
-next_required_action = "Run os/hardware-gate/run-external-gate.sh on native aarch64 and x86_64 Linux hosts with Docker, QEMU/KVM, bootc-image-builder access, and at least 120 GiB free on repo and VM scratch filesystems."
+evidence = "An exact stable candidate still requires native per-architecture release construction and x86_64 Linux/KVM display proof; the current macOS host cannot supply those authoritative results."
+next_required_action = "After selecting the stable candidate, run the canonical native architecture release and display-proof routes with the required Linux, Docker, QEMU/KVM, bootc-image-builder, and storage capacity."
 
 [[current_blockers]]
 name = "shippable_release_iso_artifacts_incomplete"
-evidence = "A Docker-local aarch64 artifact can exist for artifact proof, but final release media still requires both architecture ISO tracks built with a nonlocal bootc-image-builder source ref, SHA256 files, ISO manifests, and BIB manifests that do not track a local Docker registry."
-next_required_action = "Push the bootc image for each architecture to the real release registry, then build each native ISO with GOBLINS_OS_SHIPPABLE_RELEASE=1 and GOBLINS_OS_BIB_SOURCE_IMAGE set to that real pullable release ref."
+evidence = "Shippable alpha ISOs are published, but no fresh x86_64 and aarch64 media set is tied to an exact stable candidate."
+next_required_action = "Build both stable-candidate ISO tracks from immutable release image references and record their checksums, manifests, and package evidence."
 
 [[current_blockers]]
 name = "display_backed_architecture_proofs_missing"
-evidence = "The aarch64 hardware-gate root has an empty dated run directory at os/screenshots/hardware-gate/aarch64/2026-06-23, while the x86_64 hardware-gate root is absent. Legacy/non-shipping screenshot roots under os/screenshots/hardware-gate that are not nested under <arch>/<YYYY-MM-DD> are preserved as migration history and ignored by the architecture proof gate. Neither architecture has the required PNG screenshots plus proof-manifest.json tied to the ISO and SHA."
-next_required_action = "Boot each native ISO in a display-backed QEMU/KVM or hardware run, capture the required 01-installer.png through 28-bootloader-efi-summary.png screenshots in the matching architecture directory, add proof-manifest.json, and validate with close-signoff.sh. Do not copy or re-date legacy root-level screenshots into an architecture proof root."
+evidence = "Historical architecture runs exist, but neither is proof for an exact stable candidate. The aarch64 proof manifest records ISO SHA 3c73a77335b8be7b1fdaeb73e7992bacf6ec253cb0755f030484a673b0c293dc while its latest signoff row records 539fe24454f5cf1b0bb3ac00c9b8a838614ada85a310511fb9605afa978686a7."
+next_required_action = "Capture fresh display-backed proof for both architectures from the exact stable candidate, and require each proof manifest and signoff row to identify the same verification ISO SHA."
 
 [[current_blockers]]
 name = "complete_signoff_rows_missing"
-evidence = "No complete per-architecture signoff row currently proves runner/device, ISO hash, goblins-os-verify blocked=0, self-test, SBOM, runtime engine, gaming, motion, install-storage, and built-artifact evidence."
-next_required_action = "After artifact, screenshot, runtime-engine, and built-app proof exists for each architecture, run close-signoff.sh with GOBLINS_OS_ARCH, SCREENSHOT_RUN_DIR, RUNTIME_ENGINE_MODE, RUNTIME_ENGINE_SOURCE, RUNTIME_ENGINE_CONFIG, and BUILT_ARTIFACT_PATH_URL."
+evidence = "Historical signoff rows exist, but coherent rows for one exact stable candidate do not. The aarch64 row is not coherent with its proof-manifest ISO SHA."
+next_required_action = "After exact-candidate artifacts, screenshots, runtime, and built-app proof exist, generate new per-architecture signoff rows and verify their media linkage before promotion."
+
+[[current_blockers]]
+name = "stable_tag_and_site_promotion_pending"
+evidence = "Only the public alpha tag and alpha website release data are present."
+next_required_action = "Create the stable tag and update, check, deploy, and verify stable website data only after the exact-candidate release gates close."

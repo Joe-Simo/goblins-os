@@ -17,6 +17,9 @@ concurrency:
   group: hardware-gate-${{ github.ref }}-${{ inputs.run_date }}
   cancel-in-progress: true
 
+env:
+  GOBLINS_OS_CANDIDATE_COMMIT: ${{ github.sha }}
+
 jobs:
   capture:
     # x86_64 only: GitHub's ubuntu-24.04-arm runners have no /dev/kvm (no nested
@@ -100,7 +103,8 @@ jobs:
             /usr/libexec/goblins-os/goblins-os-verify \
             --source-root /workspace \
             --release-evidence /out \
-            --arch ${{ matrix.arch }}
+            --arch ${{ matrix.arch }} \
+            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT"
           docker run --rm \
             -v "$PWD/os/signoff-proofs/sbom/${{ matrix.arch }}:/out" \
             -w /out \

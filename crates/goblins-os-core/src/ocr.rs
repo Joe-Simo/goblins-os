@@ -67,7 +67,19 @@ pub async fn ocr_status() -> Json<OcrStatus> {
 /// Recognition shells out for up to two 60s Tesseract passes, so the body runs
 /// on the blocking pool instead of pinning an async runtime worker.
 pub async fn ocr_recognize(Json(request): Json<OcrRequest>) -> (StatusCode, Json<OcrOutcome>) {
-    crate::bounded::run_blocking(move || ocr_recognize_blocking(request)).await
+    crate::bounded::run_blocking(move || ocr_recognize_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(OcrOutcome {
+                    ok: false,
+                    text: String::new(),
+                    lines: Vec::new(),
+                    detail: crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                }),
+            )
+        })
 }
 
 fn ocr_recognize_blocking(request: OcrRequest) -> (StatusCode, Json<OcrOutcome>) {

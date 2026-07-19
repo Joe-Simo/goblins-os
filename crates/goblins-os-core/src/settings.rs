@@ -34,7 +34,6 @@ pub struct SessionSettings {
     desktop: String,
     gui_platform: String,
     shell_mode: String,
-    core_url: String,
 }
 
 #[derive(Serialize)]
@@ -106,11 +105,6 @@ fn build_settings_system_status() -> SettingsSystemStatus {
             desktop: env_string("GOBLINS_OS_SESSION", "unconfigured"),
             gui_platform: env_string("GOBLINS_OS_GUI_PLATFORM", "unconfigured"),
             shell_mode: env_string("GOBLINS_OS_SHELL_MODE", "unconfigured"),
-            core_url: env_string_with_compat(
-                "GOBLINS_OS_CORE_URL",
-                "OPENAI_OS_CORE_URL",
-                "http://127.0.0.1:8787",
-            ),
         },
         identity: IdentitySettings {
             provider_configured: openai_auth_provider_configured(),
@@ -453,12 +447,6 @@ fn path_check(
 
 fn env_string(key: &str, fallback: &str) -> String {
     env::var(key).unwrap_or_else(|_| fallback.to_string())
-}
-
-fn env_string_with_compat(primary: &str, compatibility: &str, fallback: &str) -> String {
-    env::var(primary)
-        .or_else(|_| env::var(compatibility))
-        .unwrap_or_else(|_| fallback.to_string())
 }
 
 fn executable_exists(binary: &str) -> bool {

@@ -12,6 +12,7 @@ Set:
 ```sh
 REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 cd "$REPO_ROOT"
+export GOBLINS_OS_CANDIDATE_COMMIT="$(git rev-parse HEAD)"
 ```
 
 ## 0) Preflight
@@ -24,6 +25,8 @@ cd "$REPO_ROOT"
   - at least 120 GiB free on both the repo filesystem and VM scratch filesystem before building release media; override `MIN_HOST_FREE_GB` only on runners with separately provisioned image/cache capacity.
   - `docker info` returns promptly before starting the build; restart Docker or free host resources if it hangs.
 - Confirm repo at `$REPO_ROOT` and you are in that directory.
+- Select one exact 40-hex source commit in `GOBLINS_OS_CANDIDATE_COMMIT`. Use
+  that same value for the aarch64 and x86_64 artifact, capture, and signoff runs.
 - Choose a native architecture: `ARCH=x86_64` or `ARCH=aarch64`.
 - Choose the real pullable release bootc image ref for that architecture:
   `RELEASE_IMAGE=<registry>/<namespace>/goblins-os:$ARCH`. The Docker-local
@@ -68,8 +71,10 @@ keep verification ISO artifacts inside Actions.
 ```sh
 RUN_DATE=<YYYY-MM-DD> \
 GOBLINS_OS_ARCH=aarch64 \
+GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT" \
 GOBLINS_OS_CAPTURE_ISO=/tmp/goblins-os-aarch64-verification-iso/bootiso/goblins-os-aarch64.iso \
 GOBLINS_OS_CAPTURE_ISO_SHA256=/tmp/goblins-os-aarch64-verification-iso/bootiso/goblins-os-aarch64.iso.sha256 \
+GOBLINS_OS_CAPTURE_ISO_MANIFEST=/tmp/goblins-os-aarch64-verification-iso/manifest-goblins-os-aarch64.json \
 REPO_ROOT="$REPO_ROOT" \
 os/hardware-gate/capture-harness/run-capture.sh
 ```
@@ -97,6 +102,7 @@ try a non-native artifact build with emulation:
 
 ```sh
 GOBLINS_OS_ARCH=x86_64 \
+GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT" \
 RUN_QEMU=0 \
 GOBLINS_OS_ALLOW_EMULATED_DOCKER=1 \
 MIN_HOST_FREE_GB=120 \
@@ -119,6 +125,7 @@ docker build -f os/bootc/Containerfile -t "localhost/goblins-os:$ARCH" .
 GOBLINS_OS_CONTAINER_RUNTIME=docker \
 GOBLINS_OS_ARCH="$ARCH" \
 GOBLINS_OS_IMAGE="localhost/goblins-os:$ARCH" \
+GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT" \
 GOBLINS_OS_BIB_SOURCE_IMAGE="$RELEASE_IMAGE" \
 GOBLINS_OS_SHIPPABLE_RELEASE=1 \
 os/iso/build-iso.sh
@@ -129,8 +136,9 @@ Expected outputs:
 - `os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso.sha256`
 - `os/iso/output/$ARCH/manifest-goblins-os-$ARCH.json`
 
-The generated ISO manifest must record `"installer_payload_source_local_only": false`
-and `"shippable_release": true`. If it records a Docker-local registry, discard
+The generated ISO manifest must record `"installer_payload_source_local_only": false`,
+`"shippable_release": true`, and `"candidate_commit"` equal to the exact
+selected commit. If any field differs, discard
 that ISO for release signoff and rebuild with `GOBLINS_OS_BIB_SOURCE_IMAGE`
 pointing at the real release image.
 
@@ -207,6 +215,7 @@ the release media that was booted:
 ```json
 {
   "architecture": "<arch>",
+  "candidate_commit": "<same selected 40-hex source commit>",
   "iso": "os/iso/output/<arch>/bootiso/goblins-os-<arch>.iso",
   "iso_sha256": "<64-char sha256 from the matching .sha256 file>",
   "captured_at": "<UTC timestamp>",
@@ -525,7 +534,9 @@ Then validate the local proof set programmatically:
 ```sh
 ARCH=x86_64 # or aarch64
 SCREENSHOT_RUN_DIR="os/screenshots/hardware-gate/$ARCH/<YYYY-MM-DD>"
-GOBLINS_OS_ARCH="$ARCH" SCREENSHOT_RUN_DIR="$SCREENSHOT_RUN_DIR" ./os/hardware-gate/close-signoff.sh
+GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT" \
+GOBLINS_OS_ARCH="$ARCH" SCREENSHOT_RUN_DIR="$SCREENSHOT_RUN_DIR" \
+  ./os/hardware-gate/close-signoff.sh
 ```
 
 The helper generates source release evidence with `goblins-os-verify
@@ -537,6 +548,8 @@ built image to create `rpm-packages.tsv`. The final shipping gate still fails if
 manifest must also record `asset_provenance`, `third_party_notices`,
 `trademark_posture`, and `source_tree_manifest` paths so release reviewers can
 trace each architecture artifact back to the source-package diligence files.
+It must also record the same `candidate_commit` as the ISO, screenshot proof,
+and signoff row. Missing or mismatched commit fields fail closed.
 The helper and final shipping gate also run the artifact/evidence secret scan
 over generated release evidence, signoff notes, ISO manifests, SHA files,
 release tables, and command files. Binary ISO/image payloads and historical
@@ -561,13 +574,15 @@ Document the exact engine and result in [os/signoff-notes.md](os/signoff-notes.m
 Use this quick evidence audit first:
 
 ```sh
-./os/hardware-gate/verify-shipping-status.sh
+GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT" \
+  ./os/hardware-gate/verify-shipping-status.sh
 ```
 
 Use this helper first to validate local workflow expectations and run installed-root checks:
 
 ```sh
-./os/hardware-gate/close-signoff.sh
+GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT" \
+  ./os/hardware-gate/close-signoff.sh
 ```
 
 It appends a scaffold run entry into `os/signoff-notes.md` and reports:

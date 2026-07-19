@@ -2421,7 +2421,7 @@ mod tests {
             &mut runtime,
             r#"{"type":"key","keyval":111,"unicode":"om","pressed":true,"command_modifier_active":false}"#,
         );
-        assert_eq!(response.handled, false);
+        assert!(!response.handled);
         assert!(response.operations.is_empty());
         assert!(response
             .error

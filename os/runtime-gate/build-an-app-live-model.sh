@@ -23,10 +23,15 @@
 #   (copy this script to /tmp/gos-e2e first, or bind the repo and point at os/runtime-gate/)
 set -uo pipefail
 CORE=/usr/libexec/goblins-os/goblins-os-core
-B=http://127.0.0.1:8787
+CORE_PROOF_SOCKET=/run/goblins-os-core/release-proof/control.sock
+B=http://localhost
 INTENT="${INTENT:-A calm pomodoro focus timer that logs each finished session and shows a weekly streak.}"
 BUILD_RESPONSE_PATH="${BUILD_RESPONSE_PATH:-/work/build-response.json}"
 PROOF_PATH="${PROOF_PATH:-/work/runtime-build-proof.json}"
+
+core_proof_curl() {
+  curl --unix-socket "$CORE_PROOF_SOCKET" "$@"
+}
 
 write_runtime_build_proof() {
   local http_status="$1"
@@ -110,7 +115,7 @@ grant_app_builder_permission() {
   local grant_path="${2:-/tmp/goblins-os-app-builder-grant.json}"
   local profile acknowledgement payload grant_http grant_ok
 
-  curl -s -o "$status_path" "$B/v1/policy/status" || true
+  core_proof_curl -s -o "$status_path" "$B/v1/policy/status" || true
   profile="$(python3 - "$status_path" <<'PY'
 import json
 import sys
@@ -135,7 +140,7 @@ import sys
 print(json.dumps({"control_id": "app-builder", "acknowledgement": sys.argv[1]}))
 PY
 )"
-  grant_http="$(curl -s -o "$grant_path" -w '%{http_code}' -X POST "$B/v1/policy/permissions/grant" -H 'content-type: application/json' -d "$payload" || true)"
+  grant_http="$(core_proof_curl -s -o "$grant_path" -w '%{http_code}' -X POST "$B/v1/policy/permissions/grant" -H 'content-type: application/json' -d "$payload" || true)"
   grant_ok="$(python3 - "$grant_path" <<'PY'
 import json
 import sys
@@ -151,11 +156,15 @@ PY
 }
 
 echo "==> engine: $GOBLINS_OS_LOCAL_MODEL @ $GOBLINS_OS_LOCAL_RUNTIME_URL"
-"$CORE" >/work/core.log 2>&1 & CORE_PID=$!
-n=0; until curl -sf "$B/health" >/dev/null 2>&1 || [ $n -ge 30 ]; do n=$((n+1)); sleep 1; done
-echo "==> core /health: $(curl -s "$B/health")"
-echo "==> codex installed (expect false): $(curl -s "$B/v1/codex/status" | grep -o '"installed":[a-z]*')"
-echo "==> app-builder before grant: $(curl -s "$B/v1/apps/build-catalog" | grep -o '"builder":"[a-z-]*"')"
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/goblins-os-core.conf
+install -d -m 0750 -o goblins-os -g goblins-os \
+  "$GOBLINS_OS_APPS_DIR" "$GOBLINS_OS_POLICY_STATE" "$GOBLINS_OS_RESIDENT_STATE"
+setpriv --reuid=goblins-os --regid=goblins-os --init-groups -- \
+  "$CORE" >/work/core.log 2>&1 & CORE_PID=$!
+n=0; until core_proof_curl -sf "$B/health" >/dev/null 2>&1 || [ $n -ge 30 ]; do n=$((n+1)); sleep 1; done
+echo "==> core /health: $(core_proof_curl -s "$B/health")"
+echo "==> codex installed (expect false): $(core_proof_curl -s "$B/v1/codex/status" | grep -o '"installed":[a-z]*')"
+echo "==> app-builder before grant: $(core_proof_curl -s "$B/v1/apps/build-catalog" | grep -o '"builder":"[a-z-]*"')"
 grant_app_builder_permission /tmp/goblins-os-policy-status.json /tmp/goblins-os-app-builder-grant.json || true
 echo "==> building app from intent (live inference): $INTENT"
 build_payload="$(INTENT="$INTENT" python3 - <<'PY'
@@ -165,12 +174,12 @@ import os
 print(json.dumps({"intent": os.environ["INTENT"]}))
 PY
 )"
-build_http="$(curl -s -o "$BUILD_RESPONSE_PATH" -w '%{http_code}' -X POST "$B/v1/apps/builds" -H 'content-type: application/json' \
+build_http="$(core_proof_curl -s -o "$BUILD_RESPONSE_PATH" -w '%{http_code}' -X POST "$B/v1/apps/builds" -H 'content-type: application/json' \
   -d "$build_payload")"
 write_runtime_build_proof "$build_http"
 grep -o '"ok":[a-z]*\|"text":"[^"]*"' "$BUILD_RESPONSE_PATH" | sed 's/^/==> /'
 echo "==> runtime build proof: $PROOF_PATH"
-echo "==> built app count: $(curl -s "$B/v1/apps" | grep -o '"count":[0-9]*')"
+echo "==> built app count: $(core_proof_curl -s "$B/v1/apps" | grep -o '"count":[0-9]*')"
 echo "==> persisted artifact:"; ls -la "$GOBLINS_OS_APPS_DIR"
 kill $CORE_PID 2>/dev/null
 echo "==> done"

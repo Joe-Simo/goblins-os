@@ -8,7 +8,7 @@ use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_session_command_output, probe_timeout};
 
 const INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
 const A11Y_APPS_SCHEMA: &str = "org.gnome.desktop.a11y.applications";
@@ -884,7 +884,7 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
         }
         crate::session_bridge::SessionBridgeResult::Unavailable => {}
     }
-    match bounded_command_output("gsettings", args, probe_timeout()) {
+    match bounded_session_command_output("gsettings", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }

@@ -385,13 +385,18 @@ export default class GoblinsWindowManagement extends Extension {
     }
 
     showSnapAssistDemo() {
-        const entries = this._windowEntries();
+        const entries = this._mappedWindowEntries();
         if (entries.length < 2) {
-            this._showSnapPreviewForFocused('right');
-            return;
+            this._clearSnapAssist();
+            return false;
         }
         const [snapped, ...candidates] = entries;
         this._showSnapAssist(candidates.map(entry => entry.window), 'right', snapped.window);
+        return Boolean(this._snapAssist);
+    }
+
+    renderWindowCount() {
+        return this._mappedWindowEntries().length;
     }
 
     showHudDemo() {
@@ -976,6 +981,10 @@ export default class GoblinsWindowManagement extends Extension {
             return a.title.localeCompare(b.title);
         });
         return entries;
+    }
+
+    _mappedWindowEntries() {
+        return this._windowEntries().filter(entry => entry.actor.is_mapped());
     }
 
     _isUsableWindow(win) {

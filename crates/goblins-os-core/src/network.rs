@@ -14,7 +14,9 @@ use std::time::Duration;
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
+use crate::bounded::{
+    bounded_command_output, bounded_session_command_output, probe_timeout, BoundedCommandError,
+};
 use crate::policy::{policy_state_for_control, PolicyControlState};
 
 const PROXY_SCHEMA: &str = "org.gnome.system.proxy";
@@ -541,7 +543,7 @@ fn proxy_detail(
 fn proxy_mode_detail(mode: &str) -> &'static str {
     match normalize_proxy_mode(mode) {
         "auto" => "Automatic proxy configuration is active.",
-        "manual" => "Manual proxy endpoints are active.",
+        "manual" => "Manual proxy addresses are active.",
         _ => "Direct network connections are active; no desktop proxy is configured.",
     }
 }
@@ -600,7 +602,7 @@ fn parse_gsettings_strv(value: &str) -> Vec<String> {
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
-    match bounded_command_output("gsettings", args, probe_timeout()) {
+    match bounded_session_command_output("gsettings", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }

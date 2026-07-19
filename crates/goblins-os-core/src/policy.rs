@@ -206,8 +206,7 @@ pub(crate) fn build_policy_status() -> PolicyStatus {
         profile,
         locked: policy_locked(),
         data_boundary: data_boundary(profile),
-        secret_boundary:
-            "OpenAI credentials and relay tokens stay in OS-owned services or server-side relays.",
+        secret_boundary: "OpenAI credentials stay in protected Goblins OS services or a managed organization service.",
         controls: policy_controls(profile),
     }
 }

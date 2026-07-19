@@ -8,7 +8,8 @@ historical proof records; do not treat those entries as current run
 instructions.
 
 ## Run: YYYY-MM-DD
-- Runner/device: 
+- Runner/device:
+- Candidate/source commit:
 - ISO image: 
 - ISO SHA256: 
 - Boot path used: USB | VM

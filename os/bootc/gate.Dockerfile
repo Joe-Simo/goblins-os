@@ -15,7 +15,7 @@ COPY crates ./crates
 RUN cargo fmt --all --check
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo clippy --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-ui/native-desktop" -- -D warnings
+    cargo clippy --workspace --features "goblins-os-installer/native-desktop goblins-os-control-center/native-desktop goblins-os-launcher/native-desktop goblins-os-login/native-desktop goblins-os-markup/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-today/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop" -- -D warnings
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo test --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-ui/native-desktop"
+    cargo test --workspace --features "goblins-os-installer/native-desktop goblins-os-control-center/native-desktop goblins-os-launcher/native-desktop goblins-os-login/native-desktop goblins-os-markup/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-today/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop"

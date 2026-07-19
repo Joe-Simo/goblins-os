@@ -10,7 +10,7 @@
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_session_command_output, probe_timeout};
 
 const SCHEMA: &str = "org.goblins.os.today";
 
@@ -145,7 +145,8 @@ fn schema_available(schema: &str) -> bool {
 }
 
 fn gsettings(args: &[&str]) -> Result<String, ()> {
-    let output = bounded_command_output("gsettings", args, probe_timeout()).map_err(|_| ())?;
+    let output =
+        bounded_session_command_output("gsettings", args, probe_timeout()).map_err(|_| ())?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {

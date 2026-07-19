@@ -7,7 +7,7 @@
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_session_command_output, probe_timeout};
 
 const WM_SCHEMA: &str = "org.goblins.shell.extensions.wm";
 
@@ -331,7 +331,7 @@ fn setting_string(schema: &SchemaSnapshot, schema_name: &str, key: &str) -> Opti
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
-    let output = bounded_command_output("gsettings", args, probe_timeout())
+    let output = bounded_session_command_output("gsettings", args, probe_timeout())
         .map_err(|_| GSettingsError::Missing)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())

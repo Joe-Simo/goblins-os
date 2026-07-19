@@ -1,8 +1,8 @@
 #!/bin/bash
 # Goblins OS hardware-gate in-session capture orchestrator (full 28-shot).
 # Real captures of the real installed OS in the real VM. Gaming via the OS's own
-# lavapipe/gamescope/pipewire software stack. Dual-boot via a fixture core
-# (GOBLINS_OS_SYS_BLOCK_DIR, the render-harness mechanism) on an alt port.
+# lavapipe/gamescope/pipewire software stack. Dual-boot uses a root-controlled
+# fixture core swapped onto the exact production AF_UNIX capability sockets.
 exec >/tmp/gate-cap.log 2>&1
 set -x
 LOCK_DIR=/tmp/goblins-hwgate-orchestrator.lock
@@ -11,7 +11,44 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   exit 0
 fi
 MODEL_LOOPBACK_PID=""
+FIXTURE_ACTIVE=false
+CORE_HEALTH_URL=http://127.0.0.1:8787/health
+CORE_PROOF_RESULT_DIR=/run/goblins-hwgate-core-proof
+
+core_proof_request(){
+  local operation="$1"
+  local output_file="$2"
+  local unit="goblins-hwgate-core-proof@${operation}.service"
+  local status_file="$CORE_PROOF_RESULT_DIR/${operation}.status"
+  local body_file="$CORE_PROOF_RESULT_DIR/${operation}.json"
+
+  if ! systemctl --no-ask-password --wait start "$unit"; then
+    printf '{"ok":false,"text":"root proof operation failed: %s"}\n' "$operation" >"$output_file"
+    printf '000\n'
+    return 1
+  fi
+  if [ ! -r "$status_file" ] || [ ! -r "$body_file" ]; then
+    printf '{"ok":false,"text":"root proof result missing: %s"}\n' "$operation" >"$output_file"
+    printf '000\n'
+    return 1
+  fi
+  cp "$body_file" "$output_file"
+  tr -cd '0-9' <"$status_file" | cut -c1-3
+}
+
+restore_fixture_core(){
+  if [ "$FIXTURE_ACTIVE" = "true" ]; then
+    if core_proof_request fixture-restore /tmp/gate-fixture-restore.json >/dev/null 2>&1; then
+      FIXTURE_ACTIVE=false
+      return 0
+    fi
+    return 1
+  fi
+  return 0
+}
+
 cleanup(){
+  restore_fixture_core
   if [ -n "${MODEL_LOOPBACK_PID:-}" ]; then
     kill "$MODEL_LOOPBACK_PID" 2>/dev/null || true
   fi
@@ -20,7 +57,6 @@ cleanup(){
 trap cleanup EXIT
 H=10.0.2.2:8099
 B=/usr/libexec/goblins-os
-LIVE_URL=http://127.0.0.1:8787
 TEXT_SHORTCUTS_INPUT_DRIVER=qmp-keyboard
 TEXT_SHORTCUTS_IBUS_SERVICE=org.freedesktop.IBus.session.GNOME.service
 export GDK_BACKEND=wayland
@@ -436,28 +472,15 @@ except Exception:
 PY
 }
 grant_policy_permission(){
-  local base_url="$1"
-  local control_id="$2"
-  local grant_file="$3"
-  local status_file="$4"
-  local profile acknowledgement payload grant_http grant_ok
+  local control_id="$1"
+  local grant_file="$2"
+  local status_file="$3"
+  local status_http grant_http grant_ok
 
-  curl -s -o "$status_file" "$base_url/v1/policy/status" || true
-  profile="$(json_field "$status_file" profile)"
-  if [ -z "$profile" ]; then
-    printf '{"ok":false,"text":"Could not read active policy profile from /v1/policy/status."}\n' > "$grant_file"
-    return 1
-  fi
-
-  acknowledgement="GRANT GOBLINS OS PERMISSION $control_id FOR $profile"
-  payload="$(python3 - "$control_id" "$acknowledgement" <<'PY'
-import json
-import sys
-
-print(json.dumps({"control_id": sys.argv[1], "acknowledgement": sys.argv[2]}))
-PY
-)"
-  grant_http="$(curl -s -o "$grant_file" -w '%{http_code}' -X POST "$base_url/v1/policy/permissions/grant" -H 'content-type: application/json' -d "$payload" || true)"
+  [ "$control_id" = "app-builder" ] || return 64
+  status_http="$(core_proof_request policy-status "$status_file" || true)"
+  [ "$status_http" = "200" ] || return 1
+  grant_http="$(core_proof_request policy-grant-app-builder "$grant_file" || true)"
   grant_ok="$(json_field "$grant_file" ok)"
   [ "$grant_http" = "200" ] && [ "$grant_ok" = "true" ]
 }
@@ -639,11 +662,7 @@ generate_audio_probe_wav_bounded(){
 audio_status_http_code(){
   local status_file="$1"
   : >"$status_file"
-  curl \
-    --connect-timeout "${GOS_AUDIO_CURL_CONNECT_TIMEOUT_SECONDS:-1}" \
-    --max-time "${GOS_AUDIO_CURL_MAX_TIME_SECONDS:-4}" \
-    -s -o "$status_file" -w '%{http_code}' \
-    "$LIVE_URL/v1/audio/status" || true
+  core_proof_request audio-status "$status_file" || true
 }
 audio_core_restart_count(){
   timeout 3 systemctl show goblins-os-core -p NRestarts --value 2>/dev/null \
@@ -654,11 +673,7 @@ audio_core_service_diag(){
   # second core route plus the systemd unit state distinguish "core daemon down
   # (and why)" from "the audio route alone timing out".
   local probe_http diag state key value
-  probe_http=$(curl \
-    --connect-timeout "${GOS_AUDIO_CURL_CONNECT_TIMEOUT_SECONDS:-1}" \
-    --max-time "${GOS_AUDIO_CURL_MAX_TIME_SECONDS:-4}" \
-    -s -o /dev/null -w '%{http_code}' \
-    "$LIVE_URL/v1/preview/status" || true)
+  probe_http=$(core_proof_request preview-status /tmp/gate-preview-diagnostic.json || true)
   diag="core_probe_route=/v1/preview/status&core_probe_http=${probe_http:-000}"
   state=$(timeout 3 systemctl show goblins-os-core \
     -p ActiveState,SubState,Result,NRestarts,ExecMainCode,ExecMainStatus 2>/dev/null || true)
@@ -786,11 +801,11 @@ firewall_live_toggle_proof(){
   local disable_text enable_text
 
   for _ in $(seq 1 60); do
-    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    curl -sf "$CORE_HEALTH_URL" >/dev/null 2>&1 && break
     sleep 0.5
   done
 
-  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/firewall/status" || true)
+  status_code=$(core_proof_request firewall-status "$status_file" || true)
   before_available=$(json_field "$status_file" available)
   before_manageable=$(json_field "$status_file" manageable)
   if [ "$status_code" != "200" ] || [ "$before_available" != "true" ] || [ "$before_manageable" != "true" ]; then
@@ -798,26 +813,20 @@ firewall_live_toggle_proof(){
     return 1
   fi
 
-  disable_code=$(curl -s -o "$disable_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"enabled":false}' \
-    "$LIVE_URL/v1/firewall/enabled" || true)
+  disable_code=$(core_proof_request firewall-disable "$disable_file" || true)
   disable_ok=$(json_field "$disable_file" ok)
   disable_enabled=$(json_field "$disable_file" enabled)
   disable_text=$(json_field "$disable_file" text)
   sleep 2
-  curl -s -o "$status_file" "$LIVE_URL/v1/firewall/status" >/dev/null 2>&1 || true
+  core_proof_request firewall-status "$status_file" >/dev/null 2>&1 || true
   disable_active=$(json_field "$status_file" active)
 
-  enable_code=$(curl -s -o "$enable_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"enabled":true}' \
-    "$LIVE_URL/v1/firewall/enabled" || true)
+  enable_code=$(core_proof_request firewall-enable "$enable_file" || true)
   enable_ok=$(json_field "$enable_file" ok)
   enable_enabled=$(json_field "$enable_file" enabled)
   enable_text=$(json_field "$enable_file" text)
   sleep 2
-  curl -s -o "$status_file" "$LIVE_URL/v1/firewall/status" >/dev/null 2>&1 || true
+  core_proof_request firewall-status "$status_file" >/dev/null 2>&1 || true
   enable_active=$(json_field "$status_file" active)
 
   if [ "$disable_code" = "200" ] && [ "$disable_ok" = "true" ] && [ "$disable_enabled" = "false" ] && [ "$disable_active" = "false" ] \
@@ -902,7 +911,7 @@ text_shortcuts_session_enable_proof(){
   # The live readiness flip propagates through the session bridge's ibus
   # probe; poll briefly instead of failing on the first read.
   for _ in $(seq 1 8); do
-    core_code=$(curl --connect-timeout 1 --max-time 4 -s -o "$core_file" -w '%{http_code}' "$LIVE_URL/v1/text-shortcuts" || true)
+    core_code=$(core_proof_request text-shortcuts-status "$core_file" || true)
     core_engine_available=$(json_field "$core_file" engine_available)
     core_runtime_loop=$(json_field "$core_file" engine.runtime_loop_available)
     if [ "$core_code" = "200" ] && [ "$core_engine_available" = "true" ] && [ "$core_runtime_loop" = "true" ]; then
@@ -1365,14 +1374,11 @@ keyboard_shortcuts_roundtrip_proof(){
   local modifier_code modifier_ok xkb_after_set modifier_reset_code modifier_reset_ok xkb_after_reset
 
   for _ in $(seq 1 60); do
-    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    curl -sf "$CORE_HEALTH_URL" >/dev/null 2>&1 && break
     sleep 0.5
   done
 
-  shortcut_code=$(curl -s -o "$shortcut_set_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"action":"window-hud","bindings":["<Super><Shift>H"]}' \
-    "$LIVE_URL/v1/keyboard/shortcuts/binding" || true)
+  shortcut_code=$(core_proof_request keyboard-shortcut-set "$shortcut_set_file" || true)
   shortcut_ok=$(json_field "$shortcut_set_file" ok)
   for _ in $(seq 1 20); do
     shortcut_after_set="$(gsettings get org.goblins.shell.extensions.wm window-hud 2>/dev/null || true)"
@@ -1386,10 +1392,7 @@ keyboard_shortcuts_roundtrip_proof(){
     return 1
   fi
 
-  reset_code=$(curl -s -o "$shortcut_reset_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"action":"window-hud","reset":true}' \
-    "$LIVE_URL/v1/keyboard/shortcuts/binding" || true)
+  reset_code=$(core_proof_request keyboard-shortcut-reset "$shortcut_reset_file" || true)
   reset_ok=$(json_field "$shortcut_reset_file" ok)
   for _ in $(seq 1 20); do
     shortcut_after_reset="$(gsettings get org.goblins.shell.extensions.wm window-hud 2>/dev/null || true)"
@@ -1401,10 +1404,7 @@ keyboard_shortcuts_roundtrip_proof(){
     return 1
   fi
 
-  modifier_code=$(curl -s -o "$modifier_set_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"target":"caps-lock","value":"control"}' \
-    "$LIVE_URL/v1/keyboard/modifier-remap" || true)
+  modifier_code=$(core_proof_request keyboard-modifier-set "$modifier_set_file" || true)
   modifier_ok=$(json_field "$modifier_set_file" ok)
   for _ in $(seq 1 20); do
     xkb_after_set="$(gsettings get org.gnome.desktop.input-sources xkb-options 2>/dev/null || true)"
@@ -1416,10 +1416,7 @@ keyboard_shortcuts_roundtrip_proof(){
     return 1
   fi
 
-  modifier_reset_code=$(curl -s -o "$modifier_reset_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"target":"caps-lock","value":"default"}' \
-    "$LIVE_URL/v1/keyboard/modifier-remap" || true)
+  modifier_reset_code=$(core_proof_request keyboard-modifier-reset "$modifier_reset_file" || true)
   modifier_reset_ok=$(json_field "$modifier_reset_file" ok)
   for _ in $(seq 1 20); do
     xkb_after_reset="$(gsettings get org.gnome.desktop.input-sources xkb-options 2>/dev/null || true)"
@@ -1449,7 +1446,7 @@ input_sources_roundtrip_proof(){
   local sources_after_restore current_after_restore current_after_restore_value restore_sources_ok restore_current_ok
 
   for _ in $(seq 1 60); do
-    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    curl -sf "$CORE_HEALTH_URL" >/dev/null 2>&1 && break
     sleep 0.5
   done
 
@@ -1461,10 +1458,7 @@ input_sources_roundtrip_proof(){
     return 1
   fi
 
-  set_code=$(curl -s -o "$set_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"sources":[{"kind":"xkb","id":"us"},{"kind":"xkb","id":"gb"}]}' \
-    "$LIVE_URL/v1/input/sources" || true)
+  set_code=$(core_proof_request input-sources-set "$set_file" || true)
   set_ok=$(json_field "$set_file" ok)
   for _ in $(seq 1 20); do
     sources_after_set="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
@@ -1494,8 +1488,7 @@ input_sources_roundtrip_proof(){
     return 1
   fi
 
-  switch_code=$(curl -s -o "$switch_file" -w '%{http_code}' -X POST \
-    "$LIVE_URL/v1/input/switch-next" || true)
+  switch_code=$(core_proof_request input-switch-next "$switch_file" || true)
   switch_ok=$(json_field "$switch_file" ok)
   switch_switched=$(json_field "$switch_file" switched)
   current_after_switch="$(gsettings get org.gnome.desktop.input-sources current 2>/dev/null || true)"
@@ -1609,11 +1602,11 @@ multi_display_apply_proof(){
   local state_error
 
   for _ in $(seq 1 60); do
-    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    curl -sf "$CORE_HEALTH_URL" >/dev/null 2>&1 && break
     sleep 0.5
   done
 
-  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/displays/status" || true)
+  status_code=$(core_proof_request displays-status "$status_file" || true)
   available=$(json_field "$status_file" mutter_display_config_available)
   allowed=$(json_field "$status_file" mutter_display_apply_allowed)
   serial=$(json_field "$status_file" display_config_serial)
@@ -1645,40 +1638,28 @@ multi_display_apply_proof(){
     return 1
   fi
 
-  verify_code=$(curl -s -o "$verify_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d "@$verify_payload" \
-    "$LIVE_URL/v1/displays/apply" || true)
+  verify_code=$(core_proof_request display-apply-verify "$verify_file" || true)
   verify_ok=$(json_field "$verify_file" ok)
   if [ "$verify_code" != "200" ] || [ "$verify_ok" != "true" ]; then
     proof_multi_display_apply "status=fail&stage=verify&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&connector=$(proof_query_value "$connector")&mode_id=$(proof_query_value "$mode_id")&serial=$state_serial&verify_http=${verify_code:-000}&verify_ok=${verify_ok:-missing}"
     return 1
   fi
 
-  temporary_code=$(curl -s -o "$temporary_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d "@$temporary_payload" \
-    "$LIVE_URL/v1/displays/apply" || true)
+  temporary_code=$(core_proof_request display-apply-temporary "$temporary_file" || true)
   temporary_ok=$(json_field "$temporary_file" ok)
   if [ "$temporary_code" != "200" ] || [ "$temporary_ok" != "true" ]; then
     proof_multi_display_apply "status=fail&stage=temporary&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&connector=$(proof_query_value "$connector")&mode_id=$(proof_query_value "$mode_id")&serial=$state_serial&verify_http=200&verify_ok=true&temporary_http=${temporary_code:-000}&temporary_ok=${temporary_ok:-missing}"
     return 1
   fi
 
-  guard_code=$(curl -s -o "$persistent_guard_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d "@$persistent_guard_payload" \
-    "$LIVE_URL/v1/displays/apply" || true)
+  guard_code=$(core_proof_request display-apply-persistent-guard "$persistent_guard_file" || true)
   guard_ok=$(json_field "$persistent_guard_file" ok)
   if [ "$guard_code" != "400" ] || [ "$guard_ok" = "true" ]; then
     proof_multi_display_apply "status=fail&stage=persistent-guard&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&connector=$(proof_query_value "$connector")&mode_id=$(proof_query_value "$mode_id")&serial=$state_serial&persistent_guard_http=${guard_code:-000}&persistent_guard_ok=${guard_ok:-missing}&persistent_confirmation_required=false"
     return 1
   fi
 
-  stale_code=$(curl -s -o "$stale_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d "@$stale_payload" \
-    "$LIVE_URL/v1/displays/apply" || true)
+  stale_code=$(core_proof_request display-apply-stale "$stale_file" || true)
   stale_ok=$(json_field "$stale_file" ok)
   if [ "$stale_code" != "409" ] || [ "$stale_ok" = "true" ]; then
     proof_multi_display_apply "status=fail&stage=stale-serial&status_route=/v1/displays/status&apply_route=/v1/displays/apply&display_config=org.gnome.Mutter.DisplayConfig&connector=$(proof_query_value "$connector")&mode_id=$(proof_query_value "$mode_id")&serial=$state_serial&stale_serial=${stale_serial:-missing}&stale_serial_http=${stale_code:-000}&stale_serial_ok=${stale_ok:-missing}&stale_serial_rejected=false"
@@ -1797,7 +1778,7 @@ app_privacy_revoke_proof(){
   local seed_readback post_revoke_absent restore_prior_state
 
   for _ in $(seq 1 60); do
-    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    curl -sf "$CORE_HEALTH_URL" >/dev/null 2>&1 && break
     sleep 0.5
   done
 
@@ -1833,10 +1814,7 @@ app_privacy_revoke_proof(){
     return 1
   fi
 
-  revoke_code=$(curl -s -o "$revoke_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d "{\"table\":\"$table\",\"id\":\"$id\",\"app\":\"$app\"}" \
-    "$LIVE_URL/v1/app-privacy/revoke" || true)
+  revoke_code=$(core_proof_request app-privacy-revoke "$revoke_file" || true)
   revoke_ok=$(json_field "$revoke_file" ok)
   after_reply="$(permission_store_get_permission "$table" "$id" "$app")"
   after_permissions="$(permission_store_permissions_variant "$after_reply")"
@@ -1875,7 +1853,7 @@ focus_arm_roundtrip_proof(){
   local original_focus_state_restored original_notification_banners_restored
 
   for _ in $(seq 1 60); do
-    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    curl -sf "$CORE_HEALTH_URL" >/dev/null 2>&1 && break
     sleep 0.5
   done
 
@@ -1900,17 +1878,14 @@ focus_arm_roundtrip_proof(){
     proof_focus_arm_roundtrip "status=fail&stage=seed&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&test_mode=gate-work&test_mode_configured=false"
     return 1
   fi
-  focus_mode_seed_code=$(curl -s -o /tmp/gate-focus-mode-seed.json -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"id":"gate-work","name":"Gate Work"}' \
-    "$LIVE_URL/v1/focus/mode" || true)
+  focus_mode_seed_code=$(core_proof_request focus-mode-seed /tmp/gate-focus-mode-seed.json || true)
   if [ "$focus_mode_seed_code" != "200" ] || [ "$(json_field /tmp/gate-focus-mode-seed.json ok)" != "true" ]; then
     restore_focus_roundtrip_state "$original_modes" "$original_active" "$original_armed" "$original_restore" "$original_banners"
     proof_focus_arm_roundtrip "status=fail&stage=seed&status_route=/v1/focus/status&activate_route=/v1/focus/activate&deactivate_route=/v1/focus/deactivate&test_mode=gate-work&test_mode_configured=false"
     return 1
   fi
 
-  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/focus/status" || true)
+  status_code=$(core_proof_request focus-status "$status_file" || true)
   available=$(json_field "$status_file" available)
   if [ "$status_code" != "200" ] || [ "$available" != "true" ]; then
     restore_focus_roundtrip_state "$original_modes" "$original_active" "$original_armed" "$original_restore" "$original_banners"
@@ -1918,10 +1893,7 @@ focus_arm_roundtrip_proof(){
     return 1
   fi
 
-  activate_code=$(curl -s -o "$activate_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"mode":"gate-work"}' \
-    "$LIVE_URL/v1/focus/activate" || true)
+  activate_code=$(core_proof_request focus-activate "$activate_file" || true)
   activate_ok=$(json_field "$activate_file" ok)
   activate_active=$(json_field "$activate_file" active_mode)
   active_after_activate="$(gsettings_string_value "$(gsettings get org.goblins.os.focus active-mode 2>/dev/null || true)")"
@@ -1936,10 +1908,7 @@ focus_arm_roundtrip_proof(){
     return 1
   fi
 
-  deactivate_code=$(curl -s -o "$deactivate_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{}' \
-    "$LIVE_URL/v1/focus/deactivate" || true)
+  deactivate_code=$(core_proof_request focus-deactivate "$deactivate_file" || true)
   deactivate_ok=$(json_field "$deactivate_file" ok)
   deactivate_active=$(json_field "$deactivate_file" active_mode)
   active_after_deactivate="$(gsettings_string_value "$(gsettings get org.goblins.os.focus active-mode 2>/dev/null || true)")"
@@ -1990,7 +1959,7 @@ preview_open_render_proof(){
   pkill -x loupe 2>/dev/null || true
 
   for _ in $(seq 1 60); do
-    curl -sf "$LIVE_URL/health" >/dev/null 2>&1 && break
+    curl -sf "$CORE_HEALTH_URL" >/dev/null 2>&1 && break
     sleep 0.5
   done
 
@@ -2007,7 +1976,7 @@ preview_open_render_proof(){
     return 1
   fi
 
-  status_code=$(curl -s -o "$status_file" -w '%{http_code}' "$LIVE_URL/v1/preview/status" || true)
+  status_code=$(core_proof_request preview-status "$status_file" || true)
   available=$(json_field "$status_file" available)
   xdg_open=$(json_field "$status_file" xdg_open_available)
   papers=$(json_field "$status_file" papers_available)
@@ -2017,10 +1986,7 @@ preview_open_render_proof(){
     return 1
   fi
 
-  pdf_code=$(curl -s -o "$pdf_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d "$(json_path_payload "$preview_pdf")" \
-    "$LIVE_URL/v1/preview/open" || true)
+  pdf_code=$(core_proof_request preview-open-pdf "$pdf_file" || true)
   pdf_ok=$(json_field "$pdf_file" ok)
   pdf_kind=$(json_field "$pdf_file" kind)
   if [ "$pdf_code" != "200" ] || [ "$pdf_ok" != "true" ] || [ "$pdf_kind" != "pdf" ] || ! wait_process_or_bus papers org.gnome.Papers; then
@@ -2032,10 +1998,7 @@ preview_open_render_proof(){
   sig 29-preview-pdf-open
   pkill -x papers 2>/dev/null || true
 
-  image_code=$(curl -s -o "$image_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d "$(json_path_payload "$preview_png")" \
-    "$LIVE_URL/v1/preview/open" || true)
+  image_code=$(core_proof_request preview-open-image "$image_file" || true)
   image_ok=$(json_field "$image_file" ok)
   image_kind=$(json_field "$image_file" kind)
   if [ "$image_code" != "200" ] || [ "$image_ok" != "true" ] || [ "$image_kind" != "image" ] || ! wait_process_or_bus loupe org.gnome.Loupe; then
@@ -2047,10 +2010,7 @@ preview_open_render_proof(){
   sig 30-preview-image-open
   pkill -x loupe 2>/dev/null || true
 
-  unsupported_code=$(curl -s -o "$unsupported_file" -w '%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d "$(json_path_payload "$preview_txt")" \
-    "$LIVE_URL/v1/preview/open" || true)
+  unsupported_code=$(core_proof_request preview-open-unsupported "$unsupported_file" || true)
   unsupported_ok=$(json_field "$unsupported_file" ok)
   if [ "$unsupported_code" != "400" ] || [ "$unsupported_ok" = "true" ]; then
     proof_preview_open_render "status=fail&stage=unsupported&status_route=/v1/preview/status&route=/v1/preview/open&status_http=200&available=true&xdg_open=true&papers=true&loupe=true&pdf_default=$pdf_default&image_default=$image_default&pdf_http=200&pdf_ok=true&pdf_kind=pdf&image_http=200&image_ok=true&image_kind=image&unsupported_http=${unsupported_code:-000}&unsupported_ok=${unsupported_ok:-missing}&pdf_screenshot=29-preview-pdf-open.png&image_screenshot=30-preview-image-open.png&rendered_pdf_frame=true&rendered_image_frame=true"
@@ -2077,7 +2037,7 @@ shot(){
     "GOBLINS_OS_CAPTURE_NON_UNIQUE=1"
     "GOBLINS_OS_RENDER_FULLSCREEN=1"
   )
-  for key in GOBLINS_OS_THEME GOBLINS_OS_INSTALLER_PAGE GOBLINS_OS_INSTALLER_CORE_WAIT_SECS GOBLINS_OS_SETTINGS_CORE_WAIT_SECS GOBLINS_OS_CORE_URL GOBLINS_OS_CAPTURE_PRESENT_LEDGER; do
+  for key in GOBLINS_OS_THEME GOBLINS_OS_INSTALLER_PAGE GOBLINS_OS_INSTALLER_CORE_WAIT_SECS GOBLINS_OS_SETTINGS_CORE_WAIT_SECS GOBLINS_OS_CAPTURE_PRESENT_LEDGER; do
     if [ "${!key+x}" ]; then
       env_args+=("$key=${!key}")
     fi
@@ -2129,8 +2089,7 @@ shot(){
 installer_shot(){
   local page="$1"
   local name="$2"
-  GOBLINS_OS_CORE_URL="$FIX_URL" \
-    GOBLINS_OS_INSTALLER_CORE_WAIT_SECS="${GOS_INSTALLER_CAPTURE_CORE_WAIT_SECS:-3}" \
+  GOBLINS_OS_INSTALLER_CORE_WAIT_SECS="${GOS_INSTALLER_CAPTURE_CORE_WAIT_SECS:-3}" \
     GOBLINS_OS_INSTALLER_PAGE="$page" \
     shot "$name" "$B/goblins-os-installer"
 }
@@ -2158,31 +2117,14 @@ focus_arm_roundtrip_proof || true
 app_privacy_revoke_proof || true
 preview_open_render_proof || true
 
-# ---- seed a multi-OS fixture disk + start a fixture core on :8788 (dual-boot) ----
-FIX=/tmp/fix; rm -rf "$FIX"; mkdir -p "$FIX/nvme0n1/queue" "$FIX/nvme0n1/device"
-printf '536870912\n' > $FIX/nvme0n1/size; printf '0\n' > $FIX/nvme0n1/removable
-printf '0\n' > $FIX/nvme0n1/queue/rotational; printf 'Goblins NVMe SSD\n' > $FIX/nvme0n1/device/model
-seedpart(){ mkdir -p $FIX/nvme0n1/nvme0n1p$1; printf '%s\n' "$1" > $FIX/nvme0n1/nvme0n1p$1/partition; printf '%s\n' "$2" > $FIX/nvme0n1/nvme0n1p$1/uevent; }
-seedpart 1 $'DEVNAME=nvme0n1p1\nDEVTYPE=partition\nPARTNAME=EFI System Partition\nPART_ENTRY_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b'
-seedpart 2 $'DEVNAME=nvme0n1p2\nDEVTYPE=partition\nTYPE=ntfs\nPARTLABEL=Windows'
-seedpart 3 $'DEVNAME=nvme0n1p3\nDEVTYPE=partition\nTYPE=apfs\nPARTLABEL=Macintosh HD'
-seedpart 4 $'DEVNAME=nvme0n1p4\nDEVTYPE=partition\nTYPE=crypto_LUKS\nPARTLABEL=Linux encrypted root'
-FIX_STATE=/tmp/goblins-os-fixture-state
-rm -rf "$FIX_STATE"
-mkdir -p \
-  "$FIX_STATE/policy" \
-  "$FIX_STATE/apps" \
-  "$FIX_STATE/ai" \
-  "$FIX_STATE/installer" \
-  "$FIX_STATE/session" \
-  "$FIX_STATE/models/install-state" \
-  "$FIX_STATE/resident" \
-  "$FIX_STATE/voice"
-CAPTURE_LOCAL_MODEL="${GOBLINS_OS_LOCAL_MODEL:-llama3.2:1b}"
+# The verification-only root service owns the fixture block/state directories
+# and later swaps the fixture daemon onto the same production sockets. The
+# session never receives a core URL, group membership, or second listener.
+CAPTURE_LOCAL_MODEL=llama3.2:1b
 CAPTURE_LOCAL_MODEL_JSON="$(json_string_literal "$CAPTURE_LOCAL_MODEL")"
 CAPTURE_MODEL_RUNTIME_URL=http://127.0.0.1:41134
 CAPTURE_MODEL_RELAY_URL=http://127.0.0.1:41135/v1/resident
-CAPTURE_MODEL_KEEP_ALIVE="${GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE:-30m}"
+CAPTURE_MODEL_KEEP_ALIVE=30m
 CAPTURE_MODEL_KEEP_ALIVE_JSON="$(json_string_literal "$CAPTURE_MODEL_KEEP_ALIVE")"
 MODEL_LOOPBACK_READY=false
 if start_capture_model_loopback; then
@@ -2199,33 +2141,6 @@ MODEL_CONTRACT_READY=false
 if start_capture_model_contract_relay; then
   MODEL_CONTRACT_READY=true
 fi
-GOBLINS_OS_CORE_PORT=8788 GOBLINS_OS_SYS_BLOCK_DIR=$FIX GOBLINS_OS_RAM_GB=32 \
-  GOBLINS_OS_POLICY_STATE="$FIX_STATE/policy" \
-  GOBLINS_OS_APPS_DIR="$FIX_STATE/apps" \
-  GOBLINS_OS_AI_STATE="$FIX_STATE/ai" \
-  GOBLINS_OS_INSTALLER_STATE="$FIX_STATE/installer" \
-  GOBLINS_OS_SESSION_STATE="$FIX_STATE/session" \
-  GOBLINS_OS_MODEL_DIR="$FIX_STATE/models" \
-  GOBLINS_OS_MODEL_INSTALL_STATE="$FIX_STATE/models/install-state" \
-  GOBLINS_OS_RESIDENT_STATE="$FIX_STATE/resident" \
-  GOBLINS_OS_VOICE_DIR="$FIX_STATE/voice" \
-  GOBLINS_OS_LOCAL_MODEL="$CAPTURE_LOCAL_MODEL" \
-  GOBLINS_OS_LOCAL_MODEL_RELAY="$CAPTURE_MODEL_RELAY_URL" \
-  GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE="$CAPTURE_MODEL_KEEP_ALIVE" \
-  GOBLINS_OS_LOCAL_MODEL_RUNTIME=os-managed-runtime GOBLINS_OS_LOCAL_RUNTIME_URL="$CAPTURE_MODEL_RUNTIME_URL" \
-  "$B/goblins-os-core" >/tmp/fixcore.log 2>&1 &
-FIXCORE=$!
-GOBLINS_OS_CORE_PORT=8788 \
-  GOBLINS_OS_RESIDENT_STATE="$FIX_STATE/resident" \
-  GOBLINS_OS_MODEL_DIR="$FIX_STATE/models" \
-  GOBLINS_OS_MODEL_INSTALL_STATE="$FIX_STATE/models/install-state" \
-  GOBLINS_OS_LOCAL_MODEL="$CAPTURE_LOCAL_MODEL" \
-  GOBLINS_OS_LOCAL_MODEL_RELAY="$CAPTURE_MODEL_RELAY_URL" \
-  GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE="$CAPTURE_MODEL_KEEP_ALIVE" \
-  GOBLINS_OS_LOCAL_RUNTIME_URL="$CAPTURE_MODEL_RUNTIME_URL" \
-  "$B/goblins-os-resident" >/tmp/fixres.log 2>&1 &
-sleep 5
-FIX_URL=http://127.0.0.1:8788
 
 # ---- login + onboarding ----
 shot 03-login         "$B/goblins-os-login"
@@ -2251,7 +2166,17 @@ GOBLINS_OS_THEME=dark shot 12-settings-dark "$B/goblins-os-settings"
 GOBLINS_OS_THEME=dark shot 17-dark-motion   "$B/goblins-os-shell"
 darkoff
 
-# ---- installer pages (real core = this VM's blank scratch disk) ----
+# Swap the root-owned fixture daemon onto the same production capability
+# sockets. Installed UIs keep their fixed transport; a timed systemd service
+# and the EXIT trap both restore the real daemon.
+fixture_start_http="$(core_proof_request fixture-start /tmp/gate-fixture-start.json || true)"
+if [ "$fixture_start_http" != "200" ] || [ "$(json_field /tmp/gate-fixture-start.json ok)" != "true" ]; then
+  echo "GOBLINS_HWGATE_FIXTURE_CORE_START_FAILED http=${fixture_start_http:-000}"
+  exit 1
+fi
+FIXTURE_ACTIVE=true
+
+# ---- installer pages through the root-owned multi-OS fixture core ----
 installer_shot appearance 01-installer
 installer_shot network 02-install-network
 installer_shot install-disk 25-install-destination
@@ -2274,12 +2199,11 @@ if [ "$MODEL_CONTRACT_READY" != "true" ]; then
   : >/tmp/build.err
   echo 1 >/tmp/build.rc
   build_pid=""
-elif grant_policy_permission "$FIX_URL" app-builder /tmp/app-builder-grant.json /tmp/policy-status.json; then
+elif grant_policy_permission app-builder /tmp/app-builder-grant.json /tmp/policy-status.json; then
   (
     set +e
-    curl -s -X POST "$FIX_URL/v1/apps/builds" -H 'content-type: application/json' \
-      -d '{"intent":"A focus timer that counts down 25 minutes and rings."}' >/tmp/build.json 2>/tmp/build.err
-    build_rc="$?"
+    build_http="$(core_proof_request app-build /tmp/build.json 2>/tmp/build.err)"
+    if [ "$build_http" = "200" ]; then build_rc=0; else build_rc=1; fi
     set -e
     echo "$build_rc" >/tmp/build.rc
   ) &
@@ -2290,7 +2214,7 @@ else
   echo 1 >/tmp/build.rc
   build_pid=""
 fi
-GOBLINS_OS_CORE_URL=$FIX_URL shot 14-studio-running "$B/goblins-os-shell" --studio
+shot 14-studio-running "$B/goblins-os-shell" --studio
 for _ in $(seq 1 60); do
   if [ -s /tmp/build.rc ]; then
     break
@@ -2310,15 +2234,20 @@ else
   if [ -n "$build_id" ] && [ -n "$build_name" ] && [ -n "$build_source" ]; then
     proof_runtime_build "status=pass&route=/v1/apps/builds&intent=$(proof_query_value "${build_intent:-A focus timer that counts down 25 minutes and rings.}")&engine_mode=local-model&engine_source=$(proof_query_value "$build_source")&built_artifact_id=$(proof_query_value "$build_id")&built_artifact_name=$(proof_query_value "$build_name")&response_bytes=$(file_size_value /tmp/build.json)"
   elif [ "$MODEL_CONTRACT_READY" != "true" ]; then
-    proof_runtime_build "status=fail&stage=model-contract&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&relay_url=$(proof_query_value "$CAPTURE_MODEL_RELAY_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&contract_direct_tail=$(file_tail_query_value /tmp/model-contract-direct.json)&contract_log_tail=$(file_tail_query_value /tmp/model-contract.log)&model_tags_tail=$(file_tail_query_value /tmp/model-loopback-tags.json)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /tmp/fixcore.log)&resident_log_tail=$(file_tail_query_value /tmp/fixres.log)&error_tail=$(file_tail_query_value /tmp/model-contract-direct.err)"
+    proof_runtime_build "status=fail&stage=model-contract&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&relay_url=$(proof_query_value "$CAPTURE_MODEL_RELAY_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&contract_direct_tail=$(file_tail_query_value /tmp/model-contract-direct.json)&contract_log_tail=$(file_tail_query_value /tmp/model-contract.log)&model_tags_tail=$(file_tail_query_value /tmp/model-loopback-tags.json)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /run/goblins-hwgate-core-proof/fixture-core.log)&resident_log_tail=$(file_tail_query_value /run/goblins-hwgate-core-proof/fixture-resident.log)&error_tail=$(file_tail_query_value /tmp/model-contract-direct.err)"
   elif [ -s /tmp/app-builder-grant.json ] && [ "$(json_field /tmp/app-builder-grant.json ok)" != "true" ]; then
     proof_runtime_build "status=fail&stage=permission-grant&route=/v1/apps/builds&grant_route=/v1/policy/permissions/grant&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=missing&built_artifact_id=missing&built_artifact_name=missing&response_bytes=$(file_size_value /tmp/build.json)&grant_response_tail=$(file_tail_query_value /tmp/app-builder-grant.json)"
   else
-    proof_runtime_build "status=fail&stage=response&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&relay_url=$(proof_query_value "$CAPTURE_MODEL_RELAY_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=$(proof_query_value "${build_source:-missing}")&built_artifact_id=$(proof_query_value "${build_id:-missing}")&built_artifact_name=$(proof_query_value "${build_name:-missing}")&response_bytes=$(file_size_value /tmp/build.json)&response_tail=$(file_tail_query_value /tmp/build.json)&contract_direct_tail=$(file_tail_query_value /tmp/model-contract-direct.json)&contract_log_tail=$(file_tail_query_value /tmp/model-contract.log)&model_direct_tail=$(file_tail_query_value /tmp/model-direct.json)&model_error_tail=$(file_tail_query_value /tmp/model-direct.err)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /tmp/fixcore.log)&resident_log_tail=$(file_tail_query_value /tmp/fixres.log)&error_tail=$(file_tail_query_value /tmp/build.err)"
+    proof_runtime_build "status=fail&stage=response&route=/v1/apps/builds&runtime_url=$(proof_query_value "$CAPTURE_MODEL_RUNTIME_URL")&relay_url=$(proof_query_value "$CAPTURE_MODEL_RELAY_URL")&model=$(proof_query_value "$CAPTURE_LOCAL_MODEL")&keep_alive=$(proof_query_value "$CAPTURE_MODEL_KEEP_ALIVE")&intent=$(proof_query_value "A focus timer that counts down 25 minutes and rings.")&engine_mode=local-model&engine_source=$(proof_query_value "${build_source:-missing}")&built_artifact_id=$(proof_query_value "${build_id:-missing}")&built_artifact_name=$(proof_query_value "${build_name:-missing}")&response_bytes=$(file_size_value /tmp/build.json)&response_tail=$(file_tail_query_value /tmp/build.json)&contract_direct_tail=$(file_tail_query_value /tmp/model-contract-direct.json)&contract_log_tail=$(file_tail_query_value /tmp/model-contract.log)&model_direct_tail=$(file_tail_query_value /tmp/model-direct.json)&model_error_tail=$(file_tail_query_value /tmp/model-direct.err)&model_loopback_tail=$(file_tail_query_value /tmp/model-loopback.log)&core_log_tail=$(file_tail_query_value /run/goblins-hwgate-core-proof/fixture-core.log)&resident_log_tail=$(file_tail_query_value /run/goblins-hwgate-core-proof/fixture-resident.log)&error_tail=$(file_tail_query_value /tmp/build.err)"
   fi
 fi
-GOBLINS_OS_CORE_URL=$FIX_URL shot 15-studio-app-detail "$B/goblins-os-shell" --studio
-GOBLINS_OS_CORE_URL=$FIX_URL shot 16-built-app-open "$B/goblins-os-shell" --studio
+shot 15-studio-app-detail "$B/goblins-os-shell" --studio
+shot 16-built-app-open "$B/goblins-os-shell" --studio
+
+if ! restore_fixture_core; then
+  echo "GOBLINS_HWGATE_PRODUCTION_CORE_RESTORE_FAILED"
+  exit 1
+fi
 
 curl -s "http://$H/ready/ORCH_ALLDONE" >/dev/null 2>&1
 sleep 2

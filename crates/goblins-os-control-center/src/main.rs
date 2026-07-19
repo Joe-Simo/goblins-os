@@ -9,25 +9,15 @@
 //! to a disabled state with an honest reason, never an invented value. Outside a Linux
 //! native-desktop build the crate degrades to a one-line status print.
 
-use std::{env, error::Error};
+use std::error::Error;
 
-const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
+use goblins_os_core_client::{initialize, ClientKind, CoreClient};
 
 type ControlResult<T> = Result<T, Box<dyn Error>>;
 
 #[derive(Clone)]
 struct ControlConfig {
-    core_url: String,
-}
-
-impl ControlConfig {
-    fn from_env() -> Self {
-        Self {
-            core_url: env::var("GOBLINS_OS_CORE_URL")
-                .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
-                .unwrap_or_else(|_| DEFAULT_CORE_URL.into()),
-        }
-    }
+    core: CoreClient,
 }
 
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
@@ -136,12 +126,13 @@ fn focus_mode_name<'a>(modes: &'a [FocusMode], id: &str) -> Option<&'a str> {
 }
 
 fn main() -> ControlResult<()> {
-    run_control_center(ControlConfig::from_env())
+    let core = initialize(ClientKind::ControlCenter)?;
+    run_control_center(ControlConfig { core })
 }
 
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
 fn run_control_center(config: ControlConfig) -> ControlResult<()> {
-    let _ = config.core_url.as_str();
+    let _ = config.core;
     println!("goblins_os_control_center=unavailable");
     println!("control_center_reason=build_requires_linux_native_desktop_feature");
     Ok(())
@@ -152,14 +143,7 @@ use native::run_control_center;
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 mod native {
-    use std::{
-        cell::Cell,
-        io::{Read, Write},
-        net::{TcpStream, ToSocketAddrs},
-        process::Command,
-        rc::Rc,
-        time::Duration,
-    };
+    use std::{cell::Cell, process::Command, rc::Rc, time::Duration};
 
     use gtk::gdk;
     use gtk::glib;
@@ -167,10 +151,10 @@ mod native {
     use gtk4 as gtk;
     use serde::Deserialize;
 
-    use super::{focus_tile_copy, ControlConfig, ControlResult, FocusStatus};
+    use super::{focus_tile_copy, ControlConfig, ControlResult, CoreClient, FocusStatus};
 
     const APP_ID: &str = "org.goblins.OS.ControlCenter";
-    const MAX_BODY_BYTES: u64 = 256 * 1024;
+    const CORE_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
     // Panel-local refinements layered over the shared design tokens. These don't
     // invent new color — they reach for the SAME `@gos_*` tokens the design crate
@@ -294,21 +278,18 @@ mod native {
 
         // ── Focus ──
         card.append(&section("Focus"));
-        card.append(&focus_tile(&config.core_url, &window));
+        card.append(&focus_tile(&config.core, &window));
 
         // ── AI mode ──
         card.append(&section("AI Mode"));
-        card.append(&engine_switch(&config.core_url));
+        card.append(&engine_switch(&config.core));
 
         // ── Goblins AI entry points ──
         card.append(&section("Goblins AI"));
-        let ask_availability = ai_action_availability(&config.core_url, "ask-goblins");
-        let selected_text_availability =
-            ai_action_availability(&config.core_url, "ask-selected-text");
-        let writing_tools_availability =
-            ai_action_availability(&config.core_url, "write-with-goblins");
-        let screen_context_availability =
-            ai_action_availability(&config.core_url, "summarize-screen");
+        let ask_availability = ai_action_availability(&config.core, "ask-goblins");
+        let selected_text_availability = ai_action_availability(&config.core, "ask-selected-text");
+        let writing_tools_availability = ai_action_availability(&config.core, "write-with-goblins");
+        let screen_context_availability = ai_action_availability(&config.core, "summarize-screen");
         let ai_actions = gtk::Box::new(gtk::Orientation::Vertical, 8);
         let ai_primary = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         ai_primary.set_homogeneous(true);
@@ -553,8 +534,8 @@ mod native {
         tile
     }
 
-    fn focus_tile(core_url: &str, window: &gtk::ApplicationWindow) -> gtk::Button {
-        let status = focus_status(core_url);
+    fn focus_tile(core: &CoreClient, window: &gtk::ApplicationWindow) -> gtk::Button {
+        let status = focus_status(core);
         let copy = focus_tile_copy(status.as_ref());
         let (tile, _state) = make_tile(
             "preferences-system-notifications-symbolic",
@@ -632,8 +613,8 @@ mod native {
     /// A two-segment AI mode switch. The active segment reflects the OS core's
     /// current mode; clicking a segment posts the switch (the core validates
     /// account requirements, and only a 2xx moves the highlight).
-    fn engine_switch(core_url: &str) -> gtk::Box {
-        let current = current_engine(core_url);
+    fn engine_switch(core: &CoreClient) -> gtk::Box {
+        let current = current_engine(core);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         row.add_css_class("gos-cc-engine");
         row.set_homogeneous(true);
@@ -652,28 +633,30 @@ mod native {
         }
         update_engine_accessibility(&local, &codex, current.as_deref());
 
-        let wire =
-            |button: &gtk::Button, engine: &'static str, sibling: &gtk::Button, url: String| {
-                let button_weak = button.downgrade();
-                let sibling_weak = sibling.downgrade();
-                button.connect_clicked(move |_| {
-                    if set_engine(&url, engine) {
-                        if let (Some(button), Some(sibling)) =
-                            (button_weak.upgrade(), sibling_weak.upgrade())
-                        {
-                            button.add_css_class("is-active");
-                            sibling.remove_css_class("is-active");
-                            if engine == "codex" {
-                                update_engine_accessibility(&sibling, &button, Some(engine));
-                            } else {
-                                update_engine_accessibility(&button, &sibling, Some(engine));
-                            }
+        let wire = |button: &gtk::Button,
+                    engine: &'static str,
+                    sibling: &gtk::Button,
+                    core: CoreClient| {
+            let button_weak = button.downgrade();
+            let sibling_weak = sibling.downgrade();
+            button.connect_clicked(move |_| {
+                if set_engine(&core, engine) {
+                    if let (Some(button), Some(sibling)) =
+                        (button_weak.upgrade(), sibling_weak.upgrade())
+                    {
+                        button.add_css_class("is-active");
+                        sibling.remove_css_class("is-active");
+                        if engine == "codex" {
+                            update_engine_accessibility(&sibling, &button, Some(engine));
+                        } else {
+                            update_engine_accessibility(&button, &sibling, Some(engine));
                         }
                     }
-                });
-            };
-        wire(&local, "local-gpt-oss", &codex, core_url.to_string());
-        wire(&codex, "codex", &local, core_url.to_string());
+                }
+            });
+        };
+        wire(&local, "local-gpt-oss", &codex, core.clone());
+        wire(&codex, "codex", &local, core.clone());
 
         row.append(&local);
         row.append(&codex);
@@ -969,19 +952,19 @@ mod native {
         engine: String,
     }
 
-    fn current_engine(core_url: &str) -> Option<String> {
-        let (status, body) = http_request(core_url, "GET", "/v1/models/openai-key", None).ok()?;
-        if !(200..=299).contains(&status) {
+    fn current_engine(core: &CoreClient) -> Option<String> {
+        let response = core.get("/v1/models/openai-key", CORE_READ_TIMEOUT).ok()?;
+        if !response.is_success() {
             return None;
         }
-        serde_json::from_slice::<EngineStatus>(&body)
+        serde_json::from_slice::<EngineStatus>(&response.body)
             .ok()
             .map(|status| status.engine)
     }
 
-    fn ai_action_availability(core_url: &str, id: &str) -> AiActionAvailability {
+    fn ai_action_availability(core: &CoreClient, id: &str) -> AiActionAvailability {
         let fallback = "Set up local or hosted AI in Models before asking Goblins AI.".to_string();
-        let Some(catalog) = get_json::<AiActionCatalog>(core_url, "/v1/ai/actions") else {
+        let Some(catalog) = get_json::<AiActionCatalog>(core, "/v1/ai/actions") else {
             return AiActionAvailability {
                 enabled: false,
                 reason: fallback,
@@ -1002,77 +985,22 @@ mod native {
             })
     }
 
-    fn focus_status(core_url: &str) -> Option<FocusStatus> {
-        get_json(core_url, "/v1/focus/status")
+    fn focus_status(core: &CoreClient) -> Option<FocusStatus> {
+        get_json(core, "/v1/focus/status")
     }
 
-    fn get_json<T: for<'de> Deserialize<'de>>(core_url: &str, path: &str) -> Option<T> {
-        let (status, body) = http_request(core_url, "GET", path, None).ok()?;
-        if !(200..=299).contains(&status) {
+    fn get_json<T: for<'de> Deserialize<'de>>(core: &CoreClient, path: &str) -> Option<T> {
+        let response = core.get(path, CORE_READ_TIMEOUT).ok()?;
+        if !response.is_success() {
             return None;
         }
-        serde_json::from_slice(&body).ok()
+        serde_json::from_slice(&response.body).ok()
     }
 
-    fn set_engine(core_url: &str, engine: &str) -> bool {
+    fn set_engine(core: &CoreClient, engine: &str) -> bool {
         let body = serde_json::json!({ "engine": engine }).to_string();
-        matches!(
-            http_request(core_url, "POST", "/v1/models/engine", Some(&body)),
-            Ok((200..=299, _))
-        )
-    }
-
-    fn http_request(
-        core_url: &str,
-        method: &str,
-        path: &str,
-        body: Option<&str>,
-    ) -> Result<(u16, Vec<u8>), ()> {
-        let rest = core_url.strip_prefix("http://").ok_or(())?;
-        let authority = rest.split('/').next().ok_or(())?;
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((h, p)) => (h, p.parse::<u16>().map_err(|_| ())?),
-            None => (authority, 80),
-        };
-        let address = (host, port)
-            .to_socket_addrs()
-            .map_err(|_| ())?
-            .next()
-            .ok_or(())?;
-        let mut stream =
-            TcpStream::connect_timeout(&address, Duration::from_millis(700)).map_err(|_| ())?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .map_err(|_| ())?;
-        stream
-            .set_write_timeout(Some(Duration::from_millis(2000)))
-            .map_err(|_| ())?;
-
-        let request = match body {
-            Some(payload) => format!(
-                "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-                payload.len()
-            ),
-            None => format!(
-                "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
-            ),
-        };
-        stream.write_all(request.as_bytes()).map_err(|_| ())?;
-
-        let mut raw = Vec::new();
-        stream
-            .take(MAX_BODY_BYTES)
-            .read_to_end(&mut raw)
-            .map_err(|_| ())?;
-        let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or(())?;
-        let head = std::str::from_utf8(&raw[..header_end]).map_err(|_| ())?;
-        let status = head
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|code| code.parse::<u16>().ok())
-            .ok_or(())?;
-        Ok((status, raw[header_end + 4..].to_vec()))
+        core.post_json("/v1/models/engine", body.as_bytes(), CORE_READ_TIMEOUT)
+            .is_ok_and(|response| response.is_success())
     }
 }
 

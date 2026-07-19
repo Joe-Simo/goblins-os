@@ -11,7 +11,6 @@ Type=simple
 Environment=GOBLINS_OS_SESSION=gnome-native-desktop
 Environment=GOBLINS_OS_GUI_PLATFORM=gnome-session
 Environment=GOBLINS_OS_SHELL_MODE=native-desktop
-Environment=GOBLINS_OS_CORE_URL=http://127.0.0.1:8787
 EnvironmentFile=-/etc/goblins-os/environment
 ExecStart=/usr/libexec/goblins-os/goblins-os-shell
 Restart=on-failure

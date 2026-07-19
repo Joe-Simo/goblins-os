@@ -21,7 +21,9 @@ RUN install -d /out/usr/libexec/goblins-os \
       goblins-os-color-picker \
       goblins-os-control-center \
       goblins-os-core \
+      goblins-os-dictate \
       goblins-os-file-builder \
+      goblins-os-focus-tick \
       goblins-os-full-installer \
       goblins-os-install-game-launcher \
       goblins-os-installer \
@@ -37,6 +39,7 @@ RUN install -d /out/usr/libexec/goblins-os \
       goblins-os-today \
       goblins-os-verify \
       goblins-os-visual-lookup \
+      goblins-os-voice-control \
       goblins-textshortcuts-engine; do \
         install -m 0755 "/src/target/release/${binary}" "/out/usr/libexec/goblins-os/${binary}"; \
       done
@@ -66,13 +69,11 @@ COPY --chmod=0755 os/goblins-os-textshortcuts/goblins-textshortcuts-ibus /usr/li
 COPY os/goblins-os-textshortcuts/goblins-textshortcuts.xml /usr/share/ibus/component/goblins-textshortcuts.xml
 COPY --chmod=0755 os/input/goblins-os-input-source-seed /usr/libexec/goblins-os/goblins-os-input-source-seed
 COPY --chmod=0755 os/sound-recognition/goblins-os-sound-listener /usr/libexec/goblins-os/goblins-os-sound-listener
-COPY --chmod=0755 os/focus/goblins-os-focus-tick /usr/libexec/goblins-os/goblins-os-focus-tick
-COPY --chmod=0755 os/voice/goblins-os-dictate /usr/libexec/goblins-os/goblins-os-dictate
-COPY --chmod=0755 os/voice/goblins-os-voice-control /usr/libexec/goblins-os/goblins-os-voice-control
 COPY os/systemd-user/ /usr/lib/systemd/user/
 COPY os/applications/ /usr/share/applications/
 COPY os/glib-schemas/ /usr/share/glib-2.0/schemas/
 COPY os/tmpfiles/goblins-os-session.conf /usr/lib/tmpfiles.d/goblins-os-session.conf
+COPY os/tmpfiles/goblins-os-core.conf /usr/lib/tmpfiles.d/goblins-os-core.conf
 COPY os/brand/ /usr/share/goblins-os/brand/
 COPY os/themes/ /usr/share/themes/
 COPY os/gnome-shell-extensions/ /usr/share/gnome-shell/extensions/
@@ -342,10 +343,17 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && ! rpm -q steam-devices >/dev/null 2>&1 \
     && dnf clean all
 
-RUN groupadd --system goblins-session-bridge \
+RUN for client in \
+      control-center dictate file-builder focus-tick installer launcher login markup open release-proof resident \
+      screenshot-context settings shell today visual-lookup voice-control; do \
+      groupadd --system "goblins-core-${client}"; \
+    done \
+    && groupadd --system goblins-session-bridge \
     && useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/sbin/nologin goblins-os \
-    && usermod -aG goblins-session-bridge goblins-os \
-    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/resident \
+    && usermod -aG goblins-session-bridge,goblins-core-resident goblins-os \
+    && useradd --system --no-user-group --gid goblins-core-resident --home-dir /var/lib/goblins-os/resident --shell /usr/sbin/nologin goblins-resident \
+    && install -d -m 0710 -o goblins-os -g goblins-core-resident /var/lib/goblins-os \
+    && install -d -m 0750 -o goblins-resident -g goblins-core-resident /var/lib/goblins-os/resident \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/installer \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/session \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/policy \
@@ -382,7 +390,39 @@ RUN install -d /var/home \
 
 COPY --from=rust-build /out/ /
 COPY --from=os-assets / /
-RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
+RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
+    && for binding in \
+      control-center:goblins-os-control-center \
+      dictate:goblins-os-dictate \
+      file-builder:goblins-os-file-builder \
+      focus-tick:goblins-os-focus-tick \
+      installer:goblins-os-installer \
+      launcher:goblins-os-launcher \
+      login:goblins-os-login \
+      markup:goblins-os-markup \
+      open:goblins-os-open \
+      screenshot-context:goblins-os-screenshot-context \
+      settings:goblins-os-settings \
+      shell:goblins-os-shell \
+      today:goblins-os-today \
+      visual-lookup:goblins-os-visual-lookup \
+      voice-control:goblins-os-voice-control; do \
+      client="${binding%%:*}"; binary="${binding#*:}"; \
+      install -m 0755 -o root -g root "/usr/libexec/goblins-os/${binary}" "/usr/libexec/goblins-os/ui/${binary}"; \
+      chown "root:goblins-core-${client}" "/usr/libexec/goblins-os/${binary}"; \
+      chmod 2755 "/usr/libexec/goblins-os/${binary}"; \
+      test "$(stat -c '%U:%G:%a' "/usr/libexec/goblins-os/ui/${binary}")" = "root:root:755"; \
+      test "$(stat -c '%U:%G:%a' "/usr/libexec/goblins-os/${binary}")" = "root:goblins-core-${client}:2755"; \
+    done \
+    && chown root:goblins-core-resident /usr/libexec/goblins-os/goblins-os-resident \
+    && chmod 0755 /usr/libexec/goblins-os/goblins-os-resident \
+    && test "$(stat -c '%U:%G:%a' /usr/libexec/goblins-os/goblins-os-resident)" = "root:goblins-core-resident:755" \
+    && ! id -nG goblin | tr ' ' '\n' | grep -Eq '^goblins-core-' \
+    && getent group goblins-core-release-proof >/dev/null \
+    && test -f /usr/lib/tmpfiles.d/goblins-os-core.conf \
+    && grep -Fq 'd /run/goblins-os-core/settings 2750 goblins-os goblins-core-settings -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
+    && grep -Fq 'd /run/goblins-os-core/release-proof 2750 goblins-os goblins-core-release-proof -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
+    && test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && test -x /usr/libexec/goblins-os/goblins-os-session-bridge \
     && /usr/libexec/goblins-os/goblins-os-session-bridge --self-test \
     && test -f /usr/lib/systemd/user/org.goblins.OS.SessionBridge.service \
@@ -390,7 +430,10 @@ RUN test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && test -f /usr/lib/tmpfiles.d/goblins-os-session.conf \
     && grep -Fq 'd /run/goblins-os-session 0770 goblin goblins-session-bridge -' /usr/lib/tmpfiles.d/goblins-os-session.conf \
     && grep -Fq 'Wants=org.goblins.OS.SessionBridge.service' /usr/lib/systemd/user/gnome-session@goblins-os.target.d/goblins-os.session.conf \
-    && grep -Fq 'SupplementaryGroups=goblins-session-bridge' /usr/lib/systemd/system/goblins-os-core.service \
+    && grep -Fq 'SupplementaryGroups=goblins-session-bridge goblins-core-resident' /usr/lib/systemd/system/goblins-os-core.service \
+    && grep -Fq 'User=goblins-resident' /usr/lib/systemd/system/goblins-os-resident.service \
+    && grep -Fq 'Group=goblins-core-resident' /usr/lib/systemd/system/goblins-os-resident.service \
+    && ! grep -Fq 'goblins-os/resident' /usr/lib/systemd/system/goblins-os-model-cache.service \
     && grep -Fq 'StateDirectory=goblins-os/models goblins-os/ai goblins-os/policy' /usr/lib/systemd/system/goblins-os-core.service \
     && grep -Fq 'StateDirectoryMode=0750' /usr/lib/systemd/system/goblins-os-core.service \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \

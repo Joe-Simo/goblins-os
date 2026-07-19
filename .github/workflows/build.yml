@@ -36,15 +36,19 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  GOBLINS_OS_CANDIDATE_COMMIT: ${{ github.sha }}
   # Same feature set the Containerfile uses for the native desktop binaries.
   NATIVE_FEATURES: >-
     goblins-os-installer/native-desktop
     goblins-os-control-center/native-desktop
     goblins-os-launcher/native-desktop
     goblins-os-login/native-desktop
+    goblins-os-markup/native-desktop
     goblins-os-settings/native-desktop
     goblins-os-shell/native-desktop
+    goblins-os-today/native-desktop
     goblins-os-ui/native-desktop
+    goblins-os-visual-lookup/native-desktop
 
 jobs:
   # 1. Fast Rust gate: compile, lint, and unit tests for the whole workspace.
@@ -190,6 +194,25 @@ jobs:
         with:
           name: goblins-os-settings-interactions-${{ matrix.arch }}
           path: settings-interactions/*.png
+      - name: Prepare polish interaction proof Dockerfile
+        run: |
+          cat os/bootc/Containerfile os/bootc/render.suffix.Dockerfile > /tmp/render-polish-interactions.Dockerfile
+          mkdir -p polish-interactions
+      - name: Build polish interaction proofs
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: /tmp/render-polish-interactions.Dockerfile
+          target: screenshots
+          build-args: |
+            GOBLINS_OS_RENDER_SCOPE=polish-interactions
+          outputs: type=local,dest=polish-interactions
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goblins-os-polish-interactions-${{ matrix.arch }}
+          path: polish-interactions/*
       # Composited DESKTOP proof: headless GNOME exports the whole desktop (wallpaper
       # + translucent menu bar + glass dock + WM) in light AND dark — the coherence
       # proof the local aarch64 podman VM can't capture (surfaceless, no GPU).
@@ -273,7 +296,8 @@ jobs:
             /usr/libexec/goblins-os/goblins-os-verify \
             --source-root /workspace \
             --release-evidence /out \
-            --arch ${{ matrix.arch }}
+            --arch ${{ matrix.arch }} \
+            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT"
           docker run --rm \
             -v "$PWD/os/signoff-proofs/sbom/${{ matrix.arch }}:/out" \
             -w /out \

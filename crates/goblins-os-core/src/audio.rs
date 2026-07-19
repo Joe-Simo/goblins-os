@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, time::Duration};
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, BoundedCommandError};
+use crate::bounded::{bounded_session_command_output, BoundedCommandError};
 use crate::session_bridge::{self, SessionBridgeResult};
 
 const DEFAULT_SINK: &str = "@DEFAULT_AUDIO_SINK@";
@@ -345,7 +345,7 @@ fn audio_endpoint_detail(target: AudioTarget, volume_percent: u8, muted: bool) -
 
 fn audio_endpoint_ready_without_volume_detail(target: AudioTarget) -> String {
     format!(
-        "{} is ready. Volume read-back is not required for endpoint readiness.",
+        "{} is ready. Volume can become available after the device connects.",
         title_case_audio_target(target)
     )
 }
@@ -545,7 +545,7 @@ fn build_sound_preferences_status() -> SoundPreferencesStatus {
         input_feedback_sounds: None,
         volume_boost: None,
         theme_name: None,
-        detail: "Audio endpoint readiness does not wait for desktop sound preference reads. Changing system sounds still checks the session bridge live.".to_string(),
+        detail: "Audio device readiness does not wait for desktop sound preferences. Changing system sounds still checks the current session.".to_string(),
     }
 }
 
@@ -850,7 +850,7 @@ fn wpctl(args: &[&str]) -> Result<String, WpctlError> {
         SessionBridgeResult::Unavailable => {}
     }
 
-    match bounded_command_output("wpctl", args, wpctl_timeout_duration()) {
+    match bounded_session_command_output("wpctl", args, wpctl_timeout_duration()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
@@ -894,7 +894,7 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
         SessionBridgeResult::Unavailable => {}
     }
 
-    match bounded_command_output(
+    match bounded_session_command_output(
         "gsettings",
         args,
         Duration::from_millis(GSETTINGS_TIMEOUT_MS),
@@ -1042,7 +1042,7 @@ Audio
         assert_eq!(status.volume_percent, None);
         assert!(status
             .detail
-            .contains("Volume read-back is not required for endpoint readiness."));
+            .contains("Volume can become available after the device connects."));
     }
 
     #[test]
@@ -1079,7 +1079,7 @@ Audio
         assert!(!sound.schema_available);
         assert_eq!(sound.event_sounds, None);
         assert!(sound.detail.contains("does not wait"));
-        assert!(sound.detail.contains("checks the session bridge live"));
+        assert!(sound.detail.contains("checks the current session"));
     }
 
     #[test]

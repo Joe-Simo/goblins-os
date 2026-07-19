@@ -7,7 +7,7 @@
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_session_command_output, probe_timeout};
 
 const NOTIFICATIONS_SCHEMA: &str = "org.gnome.desktop.notifications";
 const NOTIFICATION_APPLICATION_SCHEMA: &str = "org.gnome.desktop.notifications.application";
@@ -624,8 +624,8 @@ fn notification_application_label(child: &str, application_id: Option<&str>) -> 
 
 fn notification_application_record_detail(child: &str, application_id: Option<&str>) -> String {
     match application_id.map(str::trim).filter(|id| !id.is_empty()) {
-        Some(id) => format!("Application ID {id} · notification registry {child}."),
-        None => format!("Notification registry {child}; application ID is not reported."),
+        Some(id) => format!("Application ID {id} · saved notification name {child}."),
+        None => format!("Saved notification name {child}; application ID is not reported."),
     }
 }
 
@@ -649,7 +649,7 @@ fn notification_app_enable_detail(enabled: bool) -> &'static str {
     if enabled {
         "This application can deliver notifications when global delivery allows it."
     } else {
-        "This application is muted in the desktop notification registry."
+        "Notifications are muted for this application."
     }
 }
 
@@ -707,7 +707,7 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
         }
         crate::session_bridge::SessionBridgeResult::Unavailable => {}
     }
-    let output = bounded_command_output("gsettings", args, probe_timeout())
+    let output = bounded_session_command_output("gsettings", args, probe_timeout())
         .map_err(|_| GSettingsError::Missing)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())

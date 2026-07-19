@@ -17,6 +17,7 @@ RUN dnf -y --setopt=retries=20 --setopt=timeout=600 --setopt=minrate=1 install \
       mesa-libgbm \
       mutter \
       gnome-shell-extension-user-theme \
+      ImageMagick \
       dconf \
       glib2 \
       curl \

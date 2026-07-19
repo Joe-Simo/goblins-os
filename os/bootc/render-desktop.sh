@@ -18,6 +18,12 @@ set -euo pipefail
 
 OUT=/out
 mkdir -p "$OUT"
+CORE_PROOF_SOCKET=/run/goblins-os-core/release-proof/control.sock
+CORE_PROOF_URL=http://localhost
+
+core_proof_curl() {
+  curl --unix-socket "$CORE_PROOF_SOCKET" "$@"
+}
 
 RENDER_STATE_DIR=${GOBLINS_OS_RENDER_STATE_DIR:-/tmp/goblins-os-render-state}
 export GOBLINS_OS_SESSION=${GOBLINS_OS_SESSION:-gnome-native-desktop}
@@ -29,10 +35,15 @@ if [ "$(id -u)" -eq 0 ] && [ -z "${GOBLINS_RENDER_USER_SESSION:-}" ]; then
   export GOBLINS_OS_INSTALLER_STATE="$RENDER_STATE_DIR/installer"
   export GOBLINS_OS_SESSION_STATE="$RENDER_STATE_DIR/session"
   rm -rf "$GOBLINS_OS_RENDER_STATE_DIR"
-  mkdir -p "$GOBLINS_OS_INSTALLER_STATE" "$GOBLINS_OS_SESSION_STATE"
+  install -d -m 0750 -o goblins-os -g goblins-os \
+    "$GOBLINS_OS_INSTALLER_STATE" "$GOBLINS_OS_SESSION_STATE"
   printf '{"mode":"local-gpt-oss","completed_at":"%s"}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$GOBLINS_OS_INSTALLER_STATE/first-boot.json"
-  chown -R goblin:goblin "$GOBLINS_OS_RENDER_STATE_DIR"
+  chown -R goblins-os:goblins-os "$GOBLINS_OS_RENDER_STATE_DIR"
+  if runuser -u goblin -- test -r "$GOBLINS_OS_INSTALLER_STATE/first-boot.json"; then
+    echo "RENDER-FAILED core-owned installer state is readable by the desktop user" >&2
+    exit 1
+  fi
 
   export GOBLINS_OS_RAM_GB=32
   export GOBLINS_OS_LOCAL_MODEL_RUNTIME=os-managed-runtime
@@ -53,17 +64,25 @@ if [ "$(id -u)" -eq 0 ] && [ -z "${GOBLINS_RENDER_USER_SESSION:-}" ]; then
   }
   trap cleanup_root EXIT
 
-  /usr/libexec/goblins-os/goblins-os-core & CORE_PID=$!
-  /usr/libexec/goblins-os/goblins-os-resident & RES_PID=$!
+  systemd-tmpfiles --create /usr/lib/tmpfiles.d/goblins-os-core.conf
+  install -d -m 0750 -o goblins-resident -g goblins-core-resident \
+    /run/goblins-os /var/lib/goblins-os/resident
+  setpriv --reuid=goblins-os --regid=goblins-os --init-groups -- \
+    /usr/libexec/goblins-os/goblins-os-core & CORE_PID=$!
+  GOBLINS_OS_RESIDENT_STATE=/var/lib/goblins-os/resident \
+  GOBLINS_OS_RESIDENT_SOCKET=/run/goblins-os/resident.sock \
+    setpriv --reuid=goblins-resident --regid=goblins-core-resident --init-groups -- \
+      /usr/libexec/goblins-os/goblins-os-resident & RES_PID=$!
   for _ in $(seq 1 50); do
-    curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1 && { echo "core healthy"; break; }
+    core_proof_curl -sf "$CORE_PROOF_URL/health" >/dev/null 2>&1 && { echo "core healthy"; break; }
     sleep 0.2
   done
-  curl -s -X POST http://127.0.0.1:8787/v1/session/unlock \
+  core_proof_curl -s -X POST "$CORE_PROOF_URL/v1/session/unlock" \
     -H 'content-type: application/json' -d '{"mode":"local-gpt-oss"}' >/dev/null 2>&1 || true
 
   runuser -u goblin -- env \
     GOBLINS_RENDER_USER_SESSION=1 \
+    GOBLINS_OS_RENDER_ROOT_CORE_READY=1 \
     GOBLINS_OS_RENDER_STATE_DIR="$GOBLINS_OS_RENDER_STATE_DIR" \
     GOBLINS_OS_INSTALLER_STATE="$GOBLINS_OS_INSTALLER_STATE" \
     GOBLINS_OS_SESSION_STATE="$GOBLINS_OS_SESSION_STATE" \
@@ -107,18 +126,15 @@ export XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_HOME="$HOME/.local/share"
 
 # Render unlocked and past first boot, so the shell shows the real desktop (not
-# the lock hero). Same OS-owned JSON contract the core reads.
+# the lock hero). The root half seeded this OS-owned JSON for the core.
+# Native clients consume only their fixed capability sockets. The desktop user
+# deliberately does not read or rewrite that private state.
 export GOBLINS_OS_RENDER_STATE_DIR="$RENDER_STATE_DIR"
 export GOBLINS_OS_INSTALLER_STATE="$GOBLINS_OS_RENDER_STATE_DIR/installer"
 export GOBLINS_OS_SESSION_STATE="$GOBLINS_OS_RENDER_STATE_DIR/session"
 export GOBLINS_OS_SESSION=gnome-native-desktop
 export GOBLINS_OS_GUI_PLATFORM=gnome-session
 export GOBLINS_OS_SHELL_MODE=native-desktop
-mkdir -p "$GOBLINS_OS_INSTALLER_STATE" "$GOBLINS_OS_SESSION_STATE"
-if [ ! -f "$GOBLINS_OS_INSTALLER_STATE/first-boot.json" ]; then
-  printf '{"mode":"local-gpt-oss","completed_at":"%s"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$GOBLINS_OS_INSTALLER_STATE/first-boot.json"
-fi
 export GOBLINS_OS_RAM_GB=32
 export GOBLINS_OS_LOCAL_MODEL_RUNTIME=os-managed-runtime
 
@@ -126,31 +142,71 @@ WALLPAPER_DIR=/usr/share/goblins-os/brand/wallpaper
 SHELL_PID=""; CORE_PID=""; RES_PID=""
 
 cleanup() {
-  pkill -f "/usr/libexec/goblins-os/goblins-os-shell" 2>/dev/null || true
-  pkill -f "/usr/libexec/goblins-os/goblins-os-settings" 2>/dev/null || true
-  [ -n "$SHELL_PID" ] && kill "$SHELL_PID" 2>/dev/null || true
+  cleanup_scheme
   [ -n "$CORE_PID" ] && kill "$CORE_PID" 2>/dev/null || true
   [ -n "$RES_PID" ] && kill "$RES_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+cleanup_scheme() {
+  pkill -f "/usr/libexec/goblins-os/goblins-os-shell" 2>/dev/null || true
+  pkill -f "/usr/libexec/goblins-os/goblins-os-settings" 2>/dev/null || true
+  if [ -n "$SHELL_PID" ]; then
+    kill "$SHELL_PID" 2>/dev/null || true
+    for _ in $(seq 1 40); do
+      kill -0 "$SHELL_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$SHELL_PID" 2>/dev/null; then
+      kill -KILL "$SHELL_PID" 2>/dev/null || true
+    fi
+    wait "$SHELL_PID" 2>/dev/null || true
+    SHELL_PID=""
+  fi
+}
 
 # Capture the full composited stage via the GNOME Shell Screenshot D-Bus API.
 # Screenshot(in b include_cursor, in b flash, in s filename)
 #   -> (out b success, out s filename_used). Some versions write to a temp path
 # and report it in filename_used, so we honor that and copy into /out.
 shoot() {
-  local name="$1" res used
-  res=$(gdbus call --session --dest org.gnome.Shell \
+  local name="$1" res used image_info
+  rm -f "$OUT/$name"
+  res=$(gdbus call --timeout 15 --session --dest org.gnome.Shell \
     --object-path /org/gnome/Shell/Screenshot \
     --method org.gnome.Shell.Screenshot.Screenshot \
     false false "$OUT/$name" 2>&1) || {
       echo "RENDER-FAILED $name: screenshot D-Bus call errored: $res" >&2; return 1; }
+  printf '%s' "$res" | grep -q "^(true," || {
+    echo "RENDER-FAILED $name: screenshot D-Bus call returned failure: $res" >&2
+    rm -f "$OUT/$name"
+    return 1
+  }
   used=$(printf '%s' "$res" | sed -n "s/.*, '\\(.*\\)')/\\1/p")
   if [ -n "$used" ] && [ "$used" != "$OUT/$name" ] && [ -f "$used" ]; then
     cp "$used" "$OUT/$name"
   fi
-  if [ -f "$OUT/$name" ]; then echo "RENDERED $name"; else
-    echo "RENDER-FAILED $name: no file produced ($res)" >&2; return 1; fi
+  if [ ! -s "$OUT/$name" ]; then
+    echo "RENDER-FAILED $name: screenshot is missing or empty ($res)" >&2
+    rm -f "$OUT/$name"
+    return 1
+  fi
+  image_info=$(timeout 10s magick identify -format '%m %wx%h' "$OUT/$name" 2>&1) || {
+    echo "RENDER-FAILED $name: screenshot is not a decodable PNG: $image_info" >&2
+    rm -f "$OUT/$name"
+    return 1
+  }
+  if [ "$image_info" != "PNG ${RES}" ]; then
+    echo "RENDER-FAILED $name: expected PNG ${RES}, got $image_info" >&2
+    rm -f "$OUT/$name"
+    return 1
+  fi
+  chmod 0644 "$OUT/$name" || {
+    echo "RENDER-FAILED $name: could not make screenshot exportable" >&2
+    rm -f "$OUT/$name"
+    return 1
+  }
+  echo "RENDERED $name ($image_info)"
 }
 
 # Execute a tiny statement in the live GNOME Shell process. The render container
@@ -158,13 +214,38 @@ shoot() {
 # proofs, so this is available here; the shipped OS does not depend on Eval.
 shell_eval() {
   local script="$1" res
-  res=$(gdbus call --session --dest org.gnome.Shell \
+  res=$(gdbus call --timeout 5 --session --dest org.gnome.Shell \
     --object-path /org/gnome/Shell \
     --method org.gnome.Shell.Eval "$script" 2>&1) || {
       echo "RENDER-FAILED shell-eval: $res" >&2; return 1; }
   printf '%s\n' "$res"
   printf '%s' "$res" | grep -q "^(true," || {
     echo "RENDER-FAILED shell-eval returned failure: $res" >&2; return 1; }
+}
+
+assert_switch_control_inactive() {
+  shell_eval "if (!globalThis.goblinsSwitchControl.renderProofInactive()) throw new Error('Switch Control surfaced while disabled'); 'switch-control-inactive';" >/dev/null
+}
+
+assert_live_captions_inactive() {
+  shell_eval "if (!globalThis.goblinsLiveCaptions.renderProofInactive()) throw new Error('Live Captions surfaced while disabled'); 'live-captions-inactive';" >/dev/null
+}
+
+wait_for_two_native_windows() {
+  local res="" deadline=$((SECONDS + 20))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    res=$(gdbus call --timeout 1 --session --dest org.gnome.Shell \
+      --object-path /org/gnome/Shell \
+      --method org.gnome.Shell.Eval \
+      "globalThis.goblinsWindowManager.renderWindowCount() >= 2;" 2>/dev/null || true)
+    if printf '%s' "$res" | grep -q "^(true, 'true')"; then
+      echo "two native windows are mapped"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "RENDER-FAILED snap assist needs two mapped native windows ($res)" >&2
+  return 1
 }
 
 render_scheme() {
@@ -197,7 +278,7 @@ render_scheme() {
     # The Screenshot INTERFACE registers only once main.js fully initializes, a few
     # seconds in. Grep for the interface (not just introspect exit code) so we don't
     # false-positive on the node existing before the interface is exported.
-    if gdbus introspect --session --dest org.gnome.Shell \
+    if timeout -k 1s 2s gdbus introspect --session --dest org.gnome.Shell \
         --object-path /org/gnome/Shell/Screenshot 2>/dev/null \
         | grep -q "interface org.gnome.Shell.Screenshot"; then
       up=1; echo "gnome-shell ($suffix) is up (Screenshot ready)"; break
@@ -206,7 +287,7 @@ render_scheme() {
   done
   if [ -z "$up" ]; then
     echo "RENDER-FAILED desktop-$suffix: gnome-shell never claimed org.gnome.Shell" >&2
-    kill "$SHELL_PID" 2>/dev/null || true; SHELL_PID=""; return 1
+    return 1
   fi
   sleep 2.0
 
@@ -224,8 +305,18 @@ render_scheme() {
     "file://$WALLPAPER_DIR/goblins-os-dark.png" 2>/dev/null || true
   sleep 3.0
 
+  # Accessibility overlays are opt-in. Establish the disabled baseline once,
+  # then assert it remains true after native apps map; opening an app must never
+  # surface or focus Switch Control.
+  gsettings set org.goblins.os.a11y.switch-control enabled false || return 1
+  shell_eval "globalThis.goblinsSwitchControl.hide(); 'switch-control-disabled';" >/dev/null || return 1
+  assert_switch_control_inactive || return 1
+  gsettings set org.goblins.shell.extensions.captions enabled false || return 1
+  shell_eval "globalThis.goblinsLiveCaptions.hide(); 'live-captions-disabled';" >/dev/null || return 1
+  assert_live_captions_inactive || return 1
+
   # Bare desktop: wallpaper + menu bar + dock, no window.
-  shoot "50-desktop-$suffix.png" || true
+  shoot "50-desktop-$suffix.png" || return 1
 
   # IME menu-bar proof: seed two stock XKB sources and switch to the second one
   # so the Goblins menu-bar input-source chip is visible. This proves only the
@@ -233,7 +324,7 @@ render_scheme() {
   gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us'), ('xkb', 'gb')]" || return 1
   gsettings set org.gnome.desktop.input-sources current 1 || return 1
   sleep 0.8
-  shoot "59-menubar-input-source-$suffix.png"
+  shoot "59-menubar-input-source-$suffix.png" || return 1
   gsettings set org.gnome.desktop.input-sources current 0 2>/dev/null || true
   gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us')]" 2>/dev/null || true
   sleep 0.2
@@ -244,7 +335,7 @@ render_scheme() {
   gsettings set org.goblins.os.focus modes '[{"id":"work","name":"Deep Work"}]' || return 1
   gsettings set org.goblins.os.focus active-mode work || return 1
   sleep 0.8
-  shoot "59b-menubar-focus-$suffix.png"
+  shoot "59b-menubar-focus-$suffix.png" || return 1
   gsettings set org.goblins.os.focus active-mode '' 2>/dev/null || true
   gsettings set org.goblins.os.focus modes '[]' 2>/dev/null || true
   sleep 0.2
@@ -259,7 +350,7 @@ render_scheme() {
   gsettings set org.gnome.desktop.interface clock-show-weekday true || return 1
   gsettings set org.gnome.desktop.interface clock-show-seconds false || return 1
   sleep 0.8
-  shoot "59c-menubar-today-$suffix.png"
+  shoot "59c-menubar-today-$suffix.png" || return 1
   gsettings set org.gnome.desktop.interface clock-format "$clock_format" 2>/dev/null || true
   gsettings set org.gnome.desktop.interface clock-show-weekday "$clock_weekday" 2>/dev/null || true
   gsettings set org.gnome.desktop.interface clock-show-seconds "$clock_seconds" 2>/dev/null || true
@@ -273,51 +364,54 @@ render_scheme() {
   WAYLAND_DISPLAY="$WAYLAND_SOCK" GDK_BACKEND=wayland GSK_RENDERER=cairo \
     /usr/libexec/goblins-os/goblins-os-settings &
   sleep 4.0
-  shoot "51-desktop-shell-$suffix.png" || true
+  assert_switch_control_inactive || return 1
+  assert_live_captions_inactive || return 1
+  shoot "51-desktop-shell-$suffix.png" || return 1
 
   # Goblins window-management surfaces: actual Shell actors and real window
   # clones over real native windows, not isolated app screenshots.
   shell_eval "globalThis.goblinsWindowManager.showWorkspaceOverviewDemo(); 'workspace-overview';" || return 1
   sleep 0.9
-  shoot "52-wm-workspace-overview-$suffix.png"
+  shoot "52-wm-workspace-overview-$suffix.png" || return 1
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
   shell_eval "globalThis.goblinsWindowManager.showFocusedAppWindowsDemo(); 'focused-app-windows';" || return 1
   sleep 0.9
-  shoot "52b-wm-focused-app-windows-$suffix.png"
+  shoot "52b-wm-focused-app-windows-$suffix.png" || return 1
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
   gsettings set org.goblins.shell.extensions.wm hot-corner-top-left 'app-expose' 2>/dev/null || true
   shell_eval "globalThis.goblinsWindowManager.showHotCornerDemo(); 'hot-corner';" || return 1
   sleep 0.9
-  shoot "52c-wm-hot-corner-$suffix.png"
+  shoot "52c-wm-hot-corner-$suffix.png" || return 1
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   gsettings set org.goblins.shell.extensions.wm hot-corner-top-left 'none' 2>/dev/null || true
   sleep 0.3
 
   shell_eval "globalThis.goblinsWindowManager.showWorkspacesDemo(); 'workspaces';" || return 1
   sleep 0.9
-  shoot "53-wm-workspaces-$suffix.png"
+  shoot "53-wm-workspaces-$suffix.png" || return 1
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
   shell_eval "globalThis.goblinsWindowManager.showSwitcherDemo(); 'switcher';" || return 1
   sleep 0.9
-  shoot "54-wm-switcher-$suffix.png"
+  shoot "54-wm-switcher-$suffix.png" || return 1
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
-  shell_eval "globalThis.goblinsWindowManager.showSnapAssistDemo(); 'snap-assist';" || return 1
+  wait_for_two_native_windows || return 1
+  shell_eval "if (!globalThis.goblinsWindowManager.showSnapAssistDemo()) throw new Error('Snap Assist needs two real native windows'); 'snap-assist';" || return 1
   sleep 0.9
-  shoot "55-wm-snap-assist-$suffix.png"
+  shoot "55-wm-snap-assist-$suffix.png" || return 1
   shell_eval "globalThis.goblinsWindowManager._clearSnapAssist(); 'snap-assist-hidden';" || true
   sleep 0.5
 
   shell_eval "globalThis.goblinsWindowManager.showHudDemo(); 'hud';" || return 1
   sleep 0.9
-  shoot "56-wm-hud-$suffix.png"
+  shoot "56-wm-hud-$suffix.png" || return 1
   shell_eval "globalThis.goblinsWindowManager.hide(); 'hidden';" || true
   sleep 0.3
 
@@ -326,7 +420,7 @@ render_scheme() {
   # unproved pointer injection.
   shell_eval "globalThis.goblinsSwitchControl.showPointScanDemo(); 'switch-control-point';" || return 1
   sleep 0.9
-  shoot "57-switch-control-point-$suffix.png"
+  shoot "57-switch-control-point-$suffix.png" || return 1
   shell_eval "globalThis.goblinsSwitchControl.hide(); 'switch-control-hidden';" || true
   sleep 0.3
 
@@ -334,32 +428,39 @@ render_scheme() {
   # start capture, stream transcription, or claim caption text.
   shell_eval "globalThis.goblinsLiveCaptions.showWaitingRenderProof(); 'live-captions-waiting';" || return 1
   sleep 0.9
-  shoot "58-live-captions-waiting-$suffix.png"
+  shell_eval "if (!globalThis.goblinsLiveCaptions.renderProofWaiting()) throw new Error('Live Captions waiting overlay is not mapped with honest copy'); 'live-captions-waiting-mapped';" >/dev/null || return 1
+  shoot "58-live-captions-waiting-$suffix.png" || return 1
   shell_eval "globalThis.goblinsLiveCaptions.hide(); 'live-captions-hidden';" || true
+  assert_live_captions_inactive || return 1
 
-  pkill -f "/usr/libexec/goblins-os/goblins-os-shell" 2>/dev/null || true
-  pkill -f "/usr/libexec/goblins-os/goblins-os-settings" 2>/dev/null || true
-  kill "$SHELL_PID" 2>/dev/null || true; SHELL_PID=""
-  sleep 1.0
 }
 
-# Use the root wrapper's OS daemon + resident when available; if the script is
-# invoked directly, try to bring them online in the current user context.
-if ! curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1; then
-  /usr/libexec/goblins-os/goblins-os-core & CORE_PID=$!
-  /usr/libexec/goblins-os/goblins-os-resident & RES_PID=$!
-  for _ in $(seq 1 50); do
-    curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1 && { echo "core healthy"; break; }
-    sleep 0.2
-  done
+run_render_scheme() {
+  local status=0
+  render_scheme "$@" || status=$?
+  cleanup_scheme
+  sleep 1.0
+  return "$status"
+}
+
+# The outer root wrapper owns service startup and the proof-only capability.
+# This user-session half only launches the installed setgid desktop clients,
+# which connect to their own fixed capability sockets.
+if [ "${GOBLINS_OS_RENDER_ROOT_CORE_READY:-}" != "1" ]; then
+  echo "RENDER-FAILED render-desktop.sh must start through its root service wrapper" >&2
+  exit 1
 fi
-curl -s -X POST http://127.0.0.1:8787/v1/session/unlock \
-  -H 'content-type: application/json' -d '{"mode":"local-gpt-oss"}' >/dev/null 2>&1 || true
 
 # Never let one scheme's failure abort the run — always export whatever rendered.
 RENDER_FAILED=0
-render_scheme 'default'     'light' 'light' || { echo "render_scheme light failed" >&2; RENDER_FAILED=1; }
-render_scheme 'prefer-dark' 'dark'  'dark'  || { echo "render_scheme dark failed" >&2; RENDER_FAILED=1; }
+run_render_scheme 'default'     'light' 'light' || { echo "render_scheme light failed" >&2; RENDER_FAILED=1; }
+run_render_scheme 'prefer-dark' 'dark'  'dark'  || { echo "render_scheme dark failed" >&2; RENDER_FAILED=1; }
+
+VALID_PNGS=$(find "$OUT" -maxdepth 1 -type f -name '*.png' -size +0c | wc -l)
+if [ "$VALID_PNGS" -ne 28 ]; then
+  echo "RENDER-FAILED desktop proof expected 28 valid PNGs, found $VALID_PNGS" >&2
+  RENDER_FAILED=1
+fi
 
 echo "=== captured desktop artifacts ==="
 ls -la "$OUT"

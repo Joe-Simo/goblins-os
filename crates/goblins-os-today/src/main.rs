@@ -11,20 +11,11 @@
     allow(dead_code, unused_imports)
 )]
 
-use std::{
-    env,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    process::Command,
-    time::Duration,
-};
+use std::{process::Command, time::Duration};
 
+use goblins_os_core_client::{initialize, ClientKind, CoreClient};
 use serde::Deserialize;
 
-const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
-const CORE_URL_ENV: &str = "GOBLINS_OS_CORE_URL";
-const LEGACY_CORE_URL_ENV: &str = "OPENAI_OS_CORE_URL";
-const HTTP_MAX_BODY: u64 = 512 * 1024;
 const HTTP_TIMEOUT: Duration = Duration::from_millis(900);
 
 const FALLBACK_WIDGETS: &[(&str, &str, &str)] = &[
@@ -39,18 +30,7 @@ type TodayResult<T> = Result<T, String>;
 
 #[derive(Clone)]
 struct TodayConfig {
-    core_url: String,
-}
-
-impl TodayConfig {
-    fn from_env() -> Self {
-        let core_url = env::var(CORE_URL_ENV)
-            .or_else(|_| env::var(LEGACY_CORE_URL_ENV))
-            .ok()
-            .and_then(|value| loopback_http_url(&value))
-            .unwrap_or_else(|| DEFAULT_CORE_URL.to_string());
-        Self { core_url }
-    }
+    core: CoreClient,
 }
 
 #[derive(Clone, Deserialize)]
@@ -87,14 +67,21 @@ struct TodayViewModel {
 }
 
 fn main() {
-    if let Err(detail) = run_today(TodayConfig::from_env()) {
+    let core = match initialize(ClientKind::Today) {
+        Ok(core) => core,
+        Err(error) => {
+            eprintln!("goblins-os-today: {error}");
+            return;
+        }
+    };
+    if let Err(detail) = run_today(TodayConfig { core }) {
         eprintln!("goblins-os-today: {detail}");
     }
 }
 
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
 fn run_today(config: TodayConfig) -> TodayResult<()> {
-    let _ = config.core_url.as_str();
+    let _ = config.core;
     println!("goblins_os_today=unavailable");
     println!("today_reason=build_requires_linux_native_desktop_feature");
     Ok(())
@@ -103,17 +90,23 @@ fn run_today(config: TodayConfig) -> TodayResult<()> {
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn run_today(config: TodayConfig) -> TodayResult<()> {
     let status =
-        fetch_today_status(&config.core_url).unwrap_or_else(|detail| unavailable_status(&detail));
+        fetch_today_status(&config.core).unwrap_or_else(|detail| unavailable_status(&detail));
     let view = view_model_from_status(&status, &local_date_label(), &local_time_label());
     native::show_today(view)
 }
 
-fn fetch_today_status(core_url: &str) -> TodayResult<TodayStatus> {
-    let (status, body) = http_request(core_url, "GET", "/v1/today/status")?;
-    if status != 200 {
-        return Err(format!("Goblins OS core returned HTTP {status} for Today."));
+fn fetch_today_status(core: &CoreClient) -> TodayResult<TodayStatus> {
+    let response = core
+        .get("/v1/today/status", HTTP_TIMEOUT)
+        .map_err(|_| "Goblins OS core is not ready for Today.".to_string())?;
+    if response.status != 200 {
+        return Err(format!(
+            "Goblins OS core returned HTTP {} for Today.",
+            response.status
+        ));
     }
-    serde_json::from_str(&body).map_err(|_| "Goblins OS returned unreadable Today status.".into())
+    serde_json::from_slice(&response.body)
+        .map_err(|_| "Goblins OS returned unreadable Today status.".into())
 }
 
 fn unavailable_status(detail: &str) -> TodayStatus {
@@ -285,72 +278,6 @@ fn command_text(program: &str, args: &[&str]) -> Option<String> {
         .and_then(|value| non_empty(&value))
 }
 
-fn http_request(core_url: &str, method: &str, path: &str) -> TodayResult<(u16, String)> {
-    let rest = core_url
-        .strip_prefix("http://")
-        .ok_or_else(|| "Today only connects to the local Goblins OS core.".to_string())?;
-    let host_port = rest.split('/').next().unwrap_or("");
-    let mut addrs = host_port
-        .to_socket_addrs()
-        .map_err(|_| "Goblins OS core is not ready for Today.".to_string())?;
-    let address = addrs
-        .next()
-        .ok_or_else(|| "Goblins OS core is not ready for Today.".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&address, HTTP_TIMEOUT)
-        .map_err(|_| "Goblins OS core is not ready for Today.".to_string())?;
-    stream.set_read_timeout(Some(HTTP_TIMEOUT)).ok();
-    stream.set_write_timeout(Some(HTTP_TIMEOUT)).ok();
-    let request =
-        format!("{method} {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|_| "Goblins OS core did not accept the Today request.".to_string())?;
-
-    let mut raw = Vec::new();
-    stream
-        .take(HTTP_MAX_BODY)
-        .read_to_end(&mut raw)
-        .map_err(|_| "Goblins OS core did not finish the Today response.".to_string())?;
-    parse_http_response(&raw)
-}
-
-fn parse_http_response(raw: &[u8]) -> TodayResult<(u16, String)> {
-    let text = String::from_utf8_lossy(raw);
-    let (head, body) = text
-        .split_once("\r\n\r\n")
-        .ok_or_else(|| "Goblins OS core returned an invalid Today response.".to_string())?;
-    let status = head
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| "Goblins OS core returned an invalid Today status.".to_string())?;
-    Ok((status, body.to_string()))
-}
-
-fn loopback_http_url(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("http://")?;
-    let host_port = if let Some(after_bracket) = rest.strip_prefix('[') {
-        let (host, tail) = after_bracket.split_once(']')?;
-        let port = tail.strip_prefix(':')?.split('/').next()?;
-        (host.to_string(), port.to_string())
-    } else {
-        let before_path = rest.split('/').next().unwrap_or("");
-        let (host, port) = before_path.split_once(':')?;
-        (host.to_string(), port.to_string())
-    };
-    let (host, port) = host_port;
-    let loopback = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
-    let numeric_port = port.parse::<u16>().ok()?;
-    loopback.then(|| {
-        if host == "::1" {
-            format!("http://[::1]:{numeric_port}")
-        } else {
-            format!("http://{host}:{numeric_port}")
-        }
-    })
-}
-
 fn sanitize_copy(value: &str, max_chars: usize) -> String {
     value
         .replace(['\r', '\n', '\t'], " ")
@@ -502,25 +429,6 @@ mod tests {
     }
 
     #[test]
-    fn loopback_core_urls_are_required() {
-        assert_eq!(
-            loopback_http_url("http://127.0.0.1:8787").as_deref(),
-            Some("http://127.0.0.1:8787")
-        );
-        assert_eq!(
-            loopback_http_url("http://localhost:8787/v1").as_deref(),
-            Some("http://localhost:8787")
-        );
-        assert_eq!(
-            loopback_http_url("http://[::1]:8787").as_deref(),
-            Some("http://[::1]:8787")
-        );
-        assert!(loopback_http_url("https://localhost:8787").is_none());
-        assert!(loopback_http_url("http://example.com:8787").is_none());
-        assert!(loopback_http_url("http://localhost").is_none());
-    }
-
-    #[test]
     fn layout_keeps_known_widgets_once_and_falls_back_when_empty() {
         let widgets = fallback_widgets();
         assert_eq!(
@@ -562,15 +470,6 @@ mod tests {
         assert_eq!(cards[0].value, "Saturday, June 27");
         assert_eq!(cards[1].value, "9:41 AM");
         assert!(cards.iter().all(|card| card.ready));
-    }
-
-    #[test]
-    fn parses_http_status_and_body() {
-        let (status, body) =
-            parse_http_response(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").unwrap();
-        assert_eq!(status, 200);
-        assert_eq!(body, "{}");
-        assert!(parse_http_response(b"not http").is_err());
     }
 
     #[test]

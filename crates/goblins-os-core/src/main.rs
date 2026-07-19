@@ -10,6 +10,8 @@ mod bluetooth;
 mod boot_lock;
 mod bounded;
 mod codex;
+mod control_plane;
+mod credentials;
 mod displays;
 mod encryption;
 mod fingerprint;
@@ -77,12 +79,12 @@ use crate::{
         set_sound_preference,
     },
     auth::{
-        openai_auth_callback, openai_auth_device_poll, openai_auth_device_start,
-        openai_auth_refresh, openai_auth_start, openai_auth_status,
+        forget_openai_auth_session, openai_auth_callback, openai_auth_device_poll,
+        openai_auth_device_start, openai_auth_refresh, openai_auth_start, openai_auth_status,
     },
     bluetooth::{bluetooth_status, set_bluetooth_power},
     boot_lock::boot_lock_status,
-    codex::{codex_login_start, codex_login_url, codex_status},
+    codex::{codex_login_start, codex_login_url, codex_logout, codex_status},
     displays::{apply_displays, displays_status},
     encryption::encryption_status,
     fingerprint::fingerprint_status,
@@ -101,7 +103,7 @@ use crate::{
     model_manager::{install_local_model, local_model_catalog},
     network::{network_status, set_proxy_mode, wifi_connect, wifi_scan},
     notifications::{notifications_status, set_notification_preference},
-    openai_key::{openai_key_status, set_openai_key, set_resident_engine},
+    openai_key::{openai_key_status, set_resident_engine},
     policy::{configure_policy, grant_permission, policy_status},
     preview::{open_preview, preview_status},
     privacy::{privacy_status, set_desktop_privacy, set_privacy},
@@ -129,13 +131,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // Refresh the OS-owned OpenAI account session before expiry without ever
+    // handing refresh tokens to a desktop client. The task is generation-gated
+    // against sign-out and ends with this runtime.
+    tokio::spawn(auth::maintain_openai_auth_session());
+
     let port = std::env::var("GOBLINS_OS_CORE_PORT")
         .or_else(|_| std::env::var("OPENAI_OS_CORE_PORT"))
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8787);
     let address = SocketAddr::from(([127, 0, 0, 1], port));
-    let app = Router::new()
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    tracing::info!("Goblins OS core browser callback listening on http://{address}");
+
+    control_plane::serve(listener, tcp_router(), private_router(), shutdown_signal()).await?;
+    Ok(())
+}
+
+/// The only browser-facing surface. Native clients use their capability-specific
+/// Unix sockets; every other loopback TCP path is deliberately indistinguishable
+/// from a missing route.
+fn tcp_router() -> Router {
+    control_plane::tcp_surface_router(
+        Router::new()
+            .route("/health", get(health))
+            .route("/v1/auth/openai/callback", get(openai_auth_callback))
+            .method_not_allowed_fallback(|| async { axum::http::StatusCode::NOT_FOUND })
+            .layer(TraceLayer::new_for_http()),
+    )
+}
+
+/// The complete private API. Each Unix listener wraps this router in a
+/// compile-time client capability allowlist before it accepts traffic.
+fn private_router() -> Router {
+    Router::new()
         .route("/health", get(health))
         .route("/v1/readiness", get(readiness))
         .route("/v1/boot-lock", get(boot_lock_status))
@@ -335,10 +365,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/studio/session", get(studio_session))
         .route("/v1/studio/file", get(studio_file))
         .route("/v1/codex/status", get(codex_status))
-        .route("/v1/codex/login", post(codex_login_start))
+        .route(
+            "/v1/codex/login",
+            post(codex_login_start).delete(codex_logout),
+        )
         .route("/v1/codex/login/url", get(codex_login_url))
         .route("/v1/models/openai-key", get(openai_key_status))
-        .route("/v1/models/openai-key", post(set_openai_key))
         .route("/v1/models/engine", post(set_resident_engine))
         .route("/v1/policy/status", get(policy_status))
         .route("/v1/policy/configure", post(configure_policy))
@@ -347,6 +379,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/apps/builds", post(create_app_build))
         .route("/v1/apps", get(list_apps))
         .route("/v1/auth/openai/status", get(openai_auth_status))
+        .route(
+            "/v1/auth/openai/session",
+            axum::routing::delete(forget_openai_auth_session),
+        )
         .route("/v1/auth/openai/start", get(openai_auth_start))
         .route("/v1/auth/openai/callback", get(openai_auth_callback))
         .route(
@@ -361,16 +397,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // runtime route became the product-facing API surface.
         .route("/v1/codex/resident/status", get(ai_runtime_status))
         .route("/v1/codex/resident", post(ai_runtime))
-        .layer(TraceLayer::new_for_http());
-
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    tracing::info!("Goblins OS core listening on http://{address}");
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-
-    Ok(())
+        .layer(TraceLayer::new_for_http())
 }
 
 async fn shutdown_signal() {

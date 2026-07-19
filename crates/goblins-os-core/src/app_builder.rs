@@ -1,12 +1,12 @@
 //! App-from-intent: Goblins OS has no pre-installed apps. The user describes the
-//! app they need; the Goblins AI runtime (GPT-OSS by default, or the user's OpenAI
-//! key if selected) designs it; the OS persists it as an OS-owned app record and
-//! lists it so it can be opened and re-built ("edited") later.
+//! app they need; the explicitly selected Goblins AI engine designs it; the OS
+//! persists it as an OS-owned app record and lists it so it can be opened and
+//! re-built ("edited") later.
 
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{http::StatusCode, Json};
@@ -20,9 +20,6 @@ use crate::{
 
 const DEFAULT_APPS_DIR: &str = "/var/lib/goblins-os/apps";
 const MAX_INTENT_CHARS: usize = 1200;
-const AGENTS_SDK_RELAY_ENV: &str = "GOBLINS_OS_AGENTS_SDK_RELAY_URL";
-const AGENTS_SDK_RELAY_LEGACY_ENV: &str = "OPENAI_OS_AGENTS_SDK_RELAY_URL";
-const AGENTS_SDK_BUILD_SOURCE: &str = "official-openai-agents-sdk";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -75,8 +72,7 @@ pub struct AppList {
 
 pub async fn app_builder_catalog() -> Json<AppBuilderCatalog> {
     let policy = policy_state_for_control("app-builder");
-    let builder = builder_status_for_policy(policy);
-    let agents_sdk_builder = agents_sdk_builder_status(policy, agents_sdk_app_builder_configured());
+    let builder = builder_status_for_policy(policy, crate::resident::active_engine_locality());
 
     Json(AppBuilderCatalog {
         model: "gpt-oss-builds-apps-not-installs",
@@ -87,12 +83,6 @@ pub async fn app_builder_catalog() -> Json<AppBuilderCatalog> {
                 role:
                     "Describe an app; the active Goblins AI runtime designs it and the OS owns it",
                 status: builder,
-            },
-            AppBuildSurface {
-                id: "official-agents-sdk",
-                name: "Official Agents SDK",
-                role: "Optional server-side OpenAI Agents SDK runner for tools, handoffs, guardrails, tracing, approvals, and sandbox execution",
-                status: agents_sdk_builder,
             },
             AppBuildSurface {
                 id: "app-library",
@@ -126,14 +116,21 @@ pub async fn list_apps() -> Json<AppList> {
     })
 }
 
-/// Designing the app plan is a model turn (`codex exec` under its 600s bound,
-/// the resident relay with its 120s+ read timeout, or the Agents SDK relay),
-/// so the body runs on the blocking pool instead of pinning an async runtime
-/// worker.
+/// Designing the app plan is a model turn through the explicitly selected
+/// resident engine, so the body runs on the blocking pool instead of pinning an
+/// async runtime worker.
 pub async fn create_app_build(
     Json(payload): Json<AppBuildRequest>,
 ) -> (StatusCode, Json<BuildOutcome>) {
-    crate::bounded::run_blocking(move || create_app_build_blocking(payload)).await
+    crate::bounded::run_blocking(move || create_app_build_blocking(payload))
+        .await
+        .unwrap_or_else(|_| {
+            outcome(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                None,
+            )
+        })
 }
 
 fn create_app_build_blocking(payload: AppBuildRequest) -> (StatusCode, Json<BuildOutcome>) {
@@ -146,28 +143,8 @@ fn create_app_build_blocking(payload: AppBuildRequest) -> (StatusCode, Json<Buil
         );
     }
 
-    match policy_state_for_control("app-builder") {
-        PolicyControlState::Allowed => {}
-        PolicyControlState::Denied => {
-            audit_ai_action("build-app", Some("launcher"), AiActionOutcome::Denied);
-            return outcome(
-                StatusCode::FORBIDDEN,
-                "App building is blocked by the active Goblins OS policy profile.".to_string(),
-                None,
-            );
-        }
-        PolicyControlState::PermissionGated => {
-            audit_ai_action(
-                "build-app",
-                Some("launcher"),
-                AiActionOutcome::PermissionGated,
-            );
-            return outcome(
-                StatusCode::FORBIDDEN,
-                "App building requires an explicit Goblins OS permission review first.".to_string(),
-                None,
-            );
-        }
+    if let Err(detail) = authorize_app_builder("launcher") {
+        return outcome(StatusCode::FORBIDDEN, detail.to_string(), None);
     }
 
     let (plan, source) = match design_app_plan(intent) {
@@ -203,6 +180,38 @@ fn create_app_build_blocking(payload: AppBuildRequest) -> (StatusCode, Json<Buil
     )
 }
 
+/// One authoritative authorization guard for every surface that can ask an AI
+/// engine to create app files. It audits the attempted entry point and returns
+/// before any model call, session mutation, or workspace write.
+pub(crate) fn authorize_app_builder(entrypoint: &str) -> Result<(), &'static str> {
+    authorize_app_builder_for_state(policy_state_for_control("app-builder"), entrypoint)
+}
+
+pub(crate) fn authorize_app_builder_for_state(
+    state: PolicyControlState,
+    entrypoint: &str,
+) -> Result<(), &'static str> {
+    let Some((audit_outcome, detail)) = app_builder_policy_denial(state) else {
+        return Ok(());
+    };
+    audit_ai_action("build-app", Some(entrypoint), audit_outcome);
+    Err(detail)
+}
+
+fn app_builder_policy_denial(state: PolicyControlState) -> Option<(AiActionOutcome, &'static str)> {
+    match state {
+        PolicyControlState::Allowed => None,
+        PolicyControlState::Denied => Some((
+            AiActionOutcome::Denied,
+            "App building is blocked by the active Goblins OS policy profile.",
+        )),
+        PolicyControlState::PermissionGated => Some((
+            AiActionOutcome::PermissionGated,
+            "App building requires an explicit Goblins OS permission review first.",
+        )),
+    }
+}
+
 #[derive(Serialize)]
 pub struct BuildOutcome {
     ok: bool,
@@ -236,110 +245,7 @@ fn build_prompt(intent: &str) -> String {
 }
 
 fn design_app_plan(intent: &str) -> Result<(String, &'static str), &'static str> {
-    if let Some(relay) = agents_sdk_app_builder_relay() {
-        return forward_agents_sdk_build(&relay, intent)
-            .map(|plan| (plan, AGENTS_SDK_BUILD_SOURCE));
-    }
-
-    crate::resident::resident_generate(&build_prompt(intent))
-        .map(|plan| (plan, crate::resident::active_engine_label()))
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct AgentsSdkAppBuilderRelay {
-    url: String,
-    authorization: String,
-}
-
-#[derive(Deserialize)]
-struct AgentsSdkBuildResponse {
-    #[serde(default)]
-    plan: Option<String>,
-    #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
-    output_text: Option<String>,
-}
-
-fn agents_sdk_app_builder_relay() -> Option<AgentsSdkAppBuilderRelay> {
-    if crate::privacy::offline_enabled() {
-        return None;
-    }
-    let url = env_var_with_compat(AGENTS_SDK_RELAY_ENV, AGENTS_SDK_RELAY_LEGACY_ENV)?;
-    if !server_https_url(&url) {
-        return None;
-    }
-    let key = env::var("AI_GATEWAY_API_KEY").ok()?;
-    Some(AgentsSdkAppBuilderRelay {
-        url,
-        authorization: format!("Bearer {key}"),
-    })
-}
-
-fn forward_agents_sdk_build(
-    relay: &AgentsSdkAppBuilderRelay,
-    intent: &str,
-) -> Result<String, &'static str> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout_read(Duration::from_secs(240))
-        .timeout_write(Duration::from_secs(10))
-        .build();
-    let response = agent
-        .post(&relay.url)
-        .set("Authorization", &relay.authorization)
-        .send_json(serde_json::json!({
-            "workflow": "build-app",
-            "agent": {
-                "name": "Goblins OS Build Studio",
-                "instructions": app_builder_agent_instructions(),
-                "sdk": "official-openai-agents-sdk",
-                "capabilities": [
-                    "tools",
-                    "handoffs",
-                    "guardrails",
-                    "tracing",
-                    "approvals",
-                    "sandbox-execution"
-                ]
-            },
-            "intent": intent,
-            "output_contract": {
-                "plan": "string",
-                "name_on_first_line": true
-            }
-        }))
-        .map_err(|_| "Agents SDK app builder relay request was rejected")?;
-    let reply: AgentsSdkBuildResponse = response
-        .into_json()
-        .map_err(|_| "Agents SDK app builder relay response was not understood")?;
-    extract_agents_sdk_build_plan(reply)
-}
-
-fn extract_agents_sdk_build_plan(reply: AgentsSdkBuildResponse) -> Result<String, &'static str> {
-    for candidate in [reply.plan, reply.text, reply.output_text]
-        .into_iter()
-        .flatten()
-    {
-        let trimmed = candidate.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.chars().take(6000).collect());
-        }
-    }
-    Err("Agents SDK app builder relay returned no plan")
-}
-
-fn app_builder_agent_instructions() -> &'static str {
-    "Use the official OpenAI Agents SDK on the relay side: one focused Build Studio agent, typed function tools only when the relay has real tools, handoffs only when a specialist takes over, guardrails and human approval for sensitive actions, tracing for operator-owned diagnostics, and sandbox execution for workspace writes. Return a concise app plan with the app name on the first line. Do not expose secrets, fabricate installed apps, or claim an action was performed outside the OS policy gate."
-}
-
-fn agents_sdk_app_builder_configured() -> bool {
-    let Some(url) = env_var_with_compat(AGENTS_SDK_RELAY_ENV, AGENTS_SDK_RELAY_LEGACY_ENV) else {
-        return false;
-    };
-    !crate::privacy::offline_enabled()
-        && server_https_url(&url)
-        && env::var_os("AI_GATEWAY_API_KEY").is_some()
+    crate::resident::resident_generate_with_engine(&build_prompt(intent))
 }
 
 fn build_app_record(intent: &str, plan: &str, source: &'static str) -> BuiltApp {
@@ -477,43 +383,27 @@ fn list_apps_from(dir: &Path) -> Vec<BuiltApp> {
     apps
 }
 
-fn builder_status_for_policy(policy: PolicyControlState) -> BuilderStatus {
+fn builder_status_for_policy(
+    policy: PolicyControlState,
+    locality: Option<crate::resident::EngineLocality>,
+) -> BuilderStatus {
     match policy {
-        PolicyControlState::Allowed => BuilderStatus::Local,
+        PolicyControlState::Allowed => match locality {
+            Some(crate::resident::EngineLocality::OnDevice) => BuilderStatus::Local,
+            Some(crate::resident::EngineLocality::Cloud) => BuilderStatus::ServerGated,
+            None => BuilderStatus::NotConfigured,
+        },
         PolicyControlState::PermissionGated => BuilderStatus::PermissionGated,
         PolicyControlState::Denied => BuilderStatus::Blocked,
     }
-}
-
-fn agents_sdk_builder_status(policy: PolicyControlState, configured: bool) -> BuilderStatus {
-    match policy {
-        PolicyControlState::Allowed if configured => BuilderStatus::ServerGated,
-        PolicyControlState::Allowed => BuilderStatus::NotConfigured,
-        PolicyControlState::PermissionGated => BuilderStatus::PermissionGated,
-        PolicyControlState::Denied => BuilderStatus::Blocked,
-    }
-}
-
-fn env_var_with_compat(primary: &str, legacy: &str) -> Option<String> {
-    env::var(primary).or_else(|_| env::var(legacy)).ok()
-}
-
-fn server_https_url(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("https://") else {
-        return false;
-    };
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let authority = &rest[..authority_end];
-    !authority.is_empty() && !authority.contains('@')
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        agents_sdk_builder_status, app_builder_agent_instructions, app_id, build_app_record,
-        build_prompt, builder_status_for_policy, derive_app_name, display_name,
-        extract_agents_sdk_build_plan, list_apps_from, server_https_url, slugify, write_app_to,
-        AgentsSdkBuildResponse, BuilderStatus, AGENTS_SDK_BUILD_SOURCE,
+        app_builder_policy_denial, app_id, build_app_record, build_prompt,
+        builder_status_for_policy, derive_app_name, display_name, list_apps_from, slugify,
+        write_app_to, BuilderStatus,
     };
 
     #[test]
@@ -554,37 +444,47 @@ mod tests {
     #[test]
     fn builder_surface_reflects_os_policy_gate() {
         assert_eq!(
-            builder_status_for_policy(PolicyControlState::Allowed),
+            builder_status_for_policy(
+                PolicyControlState::Allowed,
+                Some(crate::resident::EngineLocality::OnDevice),
+            ),
             BuilderStatus::Local
         );
         assert_eq!(
-            builder_status_for_policy(PolicyControlState::PermissionGated),
+            builder_status_for_policy(
+                PolicyControlState::Allowed,
+                Some(crate::resident::EngineLocality::Cloud),
+            ),
+            BuilderStatus::ServerGated
+        );
+        assert_eq!(
+            builder_status_for_policy(PolicyControlState::Allowed, None),
+            BuilderStatus::NotConfigured
+        );
+        assert_eq!(
+            builder_status_for_policy(PolicyControlState::PermissionGated, None),
             BuilderStatus::PermissionGated
         );
         assert_eq!(
-            builder_status_for_policy(PolicyControlState::Denied),
+            builder_status_for_policy(PolicyControlState::Denied, None),
             BuilderStatus::Blocked
         );
     }
 
     #[test]
-    fn agents_sdk_builder_surface_reflects_policy_and_configuration() {
-        assert_eq!(
-            agents_sdk_builder_status(PolicyControlState::Allowed, true),
-            BuilderStatus::ServerGated
-        );
-        assert_eq!(
-            agents_sdk_builder_status(PolicyControlState::Allowed, false),
-            BuilderStatus::NotConfigured
-        );
-        assert_eq!(
-            agents_sdk_builder_status(PolicyControlState::PermissionGated, true),
-            BuilderStatus::PermissionGated
-        );
-        assert_eq!(
-            agents_sdk_builder_status(PolicyControlState::Denied, true),
-            BuilderStatus::Blocked
-        );
+    fn every_build_surface_uses_the_same_fail_closed_policy_contract() {
+        assert!(app_builder_policy_denial(PolicyControlState::Allowed).is_none());
+
+        let (denied_outcome, denied_copy) =
+            app_builder_policy_denial(PolicyControlState::Denied).expect("denied gate");
+        assert_eq!(denied_outcome, crate::ai::AiActionOutcome::Denied);
+        assert!(denied_copy.contains("blocked"));
+
+        let (gated_outcome, gated_copy) =
+            app_builder_policy_denial(PolicyControlState::PermissionGated)
+                .expect("permission gate");
+        assert_eq!(gated_outcome, crate::ai::AiActionOutcome::PermissionGated);
+        assert!(gated_copy.contains("explicit"));
     }
 
     #[test]
@@ -646,60 +546,5 @@ mod tests {
         assert!(prompt.contains("Fedora bootc Linux OS"));
         let old_product_frame = ["OpenAI-centered", "Linux OS"].join(" ");
         assert!(!prompt.contains(&old_product_frame));
-    }
-
-    #[test]
-    fn agents_sdk_build_contract_names_official_sdk_boundaries() {
-        let instructions = app_builder_agent_instructions();
-        for required in [
-            "official OpenAI Agents SDK",
-            "typed function tools",
-            "handoffs",
-            "guardrails",
-            "tracing",
-            "human approval",
-            "sandbox execution",
-            "Do not expose secrets",
-        ] {
-            assert!(
-                instructions.contains(required),
-                "missing SDK contract term: {required}"
-            );
-        }
-        let app = build_app_record(
-            "a notes app",
-            "Notes\nA simple notes app.",
-            AGENTS_SDK_BUILD_SOURCE,
-        );
-        assert_eq!(app.source, "official-openai-agents-sdk-built");
-    }
-
-    #[test]
-    fn agents_sdk_build_response_extracts_first_real_plan() {
-        let reply = AgentsSdkBuildResponse {
-            plan: None,
-            text: Some("  Relay Plan\nDo the thing. ".to_string()),
-            output_text: Some("ignored".to_string()),
-        };
-        assert_eq!(
-            extract_agents_sdk_build_plan(reply).unwrap(),
-            "Relay Plan\nDo the thing."
-        );
-        let empty = AgentsSdkBuildResponse {
-            plan: Some(" ".to_string()),
-            text: None,
-            output_text: None,
-        };
-        assert!(extract_agents_sdk_build_plan(empty).is_err());
-    }
-
-    #[test]
-    fn agents_sdk_relay_requires_https_without_embedded_credentials() {
-        assert!(server_https_url("https://relay.example.com/agents"));
-        assert!(!server_https_url("http://relay.example.com/agents"));
-        assert!(!server_https_url(
-            "https://user:pass@relay.example.com/agents"
-        ));
-        assert!(!server_https_url("https:///agents"));
     }
 }

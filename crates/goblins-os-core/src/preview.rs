@@ -8,11 +8,13 @@
 
 use std::{
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+
+use crate::bounded::isolated_session_command;
 
 const PREVIEW_KIND_PDF: &str = "pdf";
 const PREVIEW_KIND_IMAGE: &str = "image";
@@ -153,7 +155,7 @@ fn open_preview_outcome(request: PreviewOpenRequest) -> (StatusCode, PreviewOpen
         crate::session_bridge::SessionBridgeResult::Unavailable => {}
     }
 
-    match Command::new("xdg-open")
+    match isolated_session_command("xdg-open")
         .arg(&path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

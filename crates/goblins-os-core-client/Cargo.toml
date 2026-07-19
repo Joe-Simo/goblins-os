@@ -1,0 +1,22 @@
+[package]
+name = "goblins-os-core-client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# Explicitly opt-in transport injection for downstream integration tests. This
+# feature is never enabled by an installed Goblins OS binary.
+test-transport = []
+
+[dependencies]
+libc = "0.2"
+socket2 = { version = "0.6", features = ["all"] }
+
+[[test]]
+name = "native-capability"
+path = "tests/native_capability.rs"
+harness = false

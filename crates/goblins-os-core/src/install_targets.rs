@@ -5,13 +5,13 @@ use std::{
     env, fs,
     io::{BufRead, BufReader, Read},
     path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{Arc, Mutex},
     thread,
     time::SystemTime,
 };
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_command_output, isolated_command, probe_timeout};
 
 const DEFAULT_SYS_BLOCK: &str = "/sys/block";
 const DEFAULT_EFI_DIR: &str = "/sys/firmware/efi";
@@ -1721,7 +1721,7 @@ fn spawn_bootc_install(command: &[String]) -> std::io::Result<()> {
     // bootc logs its install phases to stderr and progress to stdout; we drain
     // both (so the pipes never fill and stall the install) and surface the most
     // recent real line.
-    let mut child = Command::new(program)
+    let mut child = isolated_command(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

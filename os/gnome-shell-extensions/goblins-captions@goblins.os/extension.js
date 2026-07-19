@@ -14,6 +14,7 @@ import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js'
 
 const SCHEMA_ID = 'org.goblins.shell.extensions.captions';
 const MARGIN = 36;
+const BOTTOM_DOCK_CLEARANCE = 120;
 const WAITING_COPY = 'Live Captions are waiting for the local caption stream.';
 
 const LiveCaptionsToggle = GObject.registerClass(
@@ -77,6 +78,7 @@ export default class GoblinsLiveCaptions extends Extension {
     enable() {
         this._settings = new Gio.Settings({schema_id: SCHEMA_ID});
         this._signals = [];
+        this._renderProofActive = false;
         this._indicator = new LiveCaptionsIndicator(this._settings);
         Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
 
@@ -95,6 +97,21 @@ export default class GoblinsLiveCaptions extends Extension {
         this._overlay.add_child(this._label);
         Main.layoutManager.addChrome(this._overlay, {affectsStruts: false, trackFullscreen: true});
 
+        // Chrome actors can be made visible again by a stage relayout when a
+        // native window maps. Disabled captions must remain absent, and stale
+        // caption text must never return merely because the desktop relaid out.
+        this._signals.push([
+            this._overlay,
+            this._overlay.connect('notify::visible', () => {
+                if (
+                    this._overlay?.visible &&
+                    !this._settings?.get_boolean('enabled') &&
+                    !this._renderProofActive
+                )
+                    this.hide();
+            }),
+        ]);
+
         for (const key of ['enabled', 'text-size', 'position', 'keep-onscreen']) {
             this._signals.push([
                 this._settings,
@@ -111,6 +128,7 @@ export default class GoblinsLiveCaptions extends Extension {
     }
 
     disable() {
+        this.hide();
         for (const [actor, id] of this._signals)
             actor.disconnect(id);
         this._signals = [];
@@ -132,19 +150,27 @@ export default class GoblinsLiveCaptions extends Extension {
         this._label = null;
         this._dot = null;
         this._settings = null;
+        this._renderProofActive = false;
     }
 
-    showStatus(text = WAITING_COPY) {
+    showStatus(text = WAITING_COPY, renderProof = false) {
         if (!this._overlay)
-            return;
+            return false;
+        if (!renderProof && !this._settings?.get_boolean('enabled')) {
+            this.hide();
+            return false;
+        }
+        this._renderProofActive = renderProof;
         this._label.set_text(text);
         this._dot.set_style_class_name('goblins-captions-dot idle');
         this._overlay.show();
         this._reposition();
+        return true;
     }
 
     showWaitingRenderProof() {
-        this.showStatus(WAITING_COPY);
+        if (!this.showStatus(WAITING_COPY, true))
+            throw new Error('Live Captions waiting proof could not be shown');
         return {
             proof: 'waiting-overlay-only',
             waitingCopy: WAITING_COPY,
@@ -157,6 +183,11 @@ export default class GoblinsLiveCaptions extends Extension {
     showCaption(text) {
         if (!this._overlay || !text)
             return;
+        if (!this._settings?.get_boolean('enabled')) {
+            this.hide();
+            return;
+        }
+        this._renderProofActive = false;
         this._label.set_text(text);
         this._dot.set_style_class_name('goblins-captions-dot live');
         this._overlay.show();
@@ -164,8 +195,32 @@ export default class GoblinsLiveCaptions extends Extension {
     }
 
     hide() {
+        this._renderProofActive = false;
+        if (this._label)
+            this._label.set_text('');
         if (this._overlay)
             this._overlay.hide();
+    }
+
+    renderProofInactive() {
+        return Boolean(
+            this._settings &&
+            !this._settings.get_boolean('enabled') &&
+            !this._overlay?.visible &&
+            !this._renderProofActive &&
+            this._label?.text === ''
+        );
+    }
+
+    renderProofWaiting() {
+        return Boolean(
+            this._settings &&
+            !this._settings.get_boolean('enabled') &&
+            this._renderProofActive &&
+            this._overlay?.visible &&
+            this._overlay.is_mapped() &&
+            this._label?.text === WAITING_COPY
+        );
     }
 
     _sync() {
@@ -196,7 +251,7 @@ export default class GoblinsLiveCaptions extends Extension {
         const position = settingString(this._settings, 'position', 'bottom');
         const [width, height] = this._overlay.get_size();
         const x = monitor.x + Math.max(MARGIN, Math.round((monitor.width - width) / 2));
-        let y = monitor.y + monitor.height - height - MARGIN;
+        let y = monitor.y + monitor.height - height - BOTTOM_DOCK_CLEARANCE;
         if (position === 'top')
             y = monitor.y + MARGIN;
         else if (position === 'floating')

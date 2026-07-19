@@ -11,6 +11,7 @@ default = []
 native-desktop = ["dep:gtk4", "goblins-os-ui/native-desktop"]
 
 [dependencies]
+goblins-os-core-client = { path = "../goblins-os-core-client" }
 goblins-os-design = { path = "../goblins-os-design" }
 goblins-os-ui = { path = "../goblins-os-ui" }
 # Build/parse the local core's OCR request/response for the "Copy Text" handoff.

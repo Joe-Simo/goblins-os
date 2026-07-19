@@ -9,7 +9,7 @@ use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
+use crate::bounded::{bounded_session_command_output, probe_timeout, BoundedCommandError};
 
 const KEYBOARD_SCHEMA: &str = "org.gnome.desktop.peripherals.keyboard";
 const MOUSE_SCHEMA: &str = "org.gnome.desktop.peripherals.mouse";
@@ -414,7 +414,7 @@ fn input_engine_packages_detail(installed_count: usize, total_count: usize) -> S
 }
 
 fn ibus_engine_probe() -> IbusEngineProbe {
-    match bounded_command_output("ibus", &["list-engine"], probe_timeout()) {
+    match bounded_session_command_output("ibus", &["list-engine"], probe_timeout()) {
         Ok(output) if output.status.success() => {
             let engine_ids = parse_ibus_list_engine(&String::from_utf8_lossy(&output.stdout));
             IbusEngineProbe {
@@ -1339,7 +1339,7 @@ fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
         }
         crate::session_bridge::SessionBridgeResult::Unavailable => {}
     }
-    match bounded_command_output("gsettings", args, probe_timeout()) {
+    match bounded_session_command_output("gsettings", args, probe_timeout()) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }

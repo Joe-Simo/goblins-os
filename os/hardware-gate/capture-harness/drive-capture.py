@@ -336,16 +336,16 @@ def probe_graphical_vts():
 
 def complete_first_boot_setup():
     """Wait for the verification-only user service to complete first boot."""
-    print("first boot setup: completing private offline path through session core APIs", flush=True)
-    frame_sample("first boot before private unlock", save_debug=True)
+    print("first boot setup: completing offline path through the root release-proof capability", flush=True)
+    frame_sample("first boot before release-proof unlock", save_debug=True)
     try:
         wait_http_contains("first boot helper download", "/firstboot-unlock.sh", 180)
-        wait_http_contains("first boot private unlock callback", "/ready/FIRSTBOOT_UNLOCK", 180)
+        wait_http_contains("first boot release-proof unlock callback", "/ready/FIRSTBOOT_UNLOCK", 180)
     except SystemExit:
         print("first boot setup failed before helper callback; collecting VT diagnostics", flush=True)
         probe_graphical_vts()
         raise
-    frame_sample("post first boot private unlock", save_debug=True)
+    frame_sample("post first boot release-proof unlock", save_debug=True)
 
 def publish_orchestrator():
     if not ORCHESTRATOR_SOURCE or not ORCHESTRATOR_DEST:

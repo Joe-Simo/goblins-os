@@ -1,13 +1,11 @@
 use std::{
     env,
     error::Error,
-    fmt,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    thread,
+    fmt, thread,
     time::{Duration, Instant},
 };
 
+use goblins_os_core_client::{initialize, ClientKind, CoreClient, Response};
 use serde::Deserialize;
 
 // Rc/RefCell hold the Build Studio's active session id, shared between the sidebar
@@ -18,22 +16,20 @@ use std::{
     rc::Rc,
 };
 
-const DEFAULT_CORE_URL: &str = "http://127.0.0.1:8787";
 const DEFAULT_CORE_WAIT_SECS: u64 = 45;
-const MAX_CORE_BODY_BYTES: usize = 1024 * 1024;
+// Voice can consume 30s capture + 120s STT + 3600s inference + 60s TTS +
+// 60s playback. The 65-minute client ceiling covers that bounded 3870s path.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+const LONG_CORE_JOB_TIMEOUT: Duration = Duration::from_secs(65 * 60);
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_millis(1500);
 
 type ShellResult<T> = Result<T, Box<dyn Error>>;
 
 #[derive(Clone)]
 struct ShellConfig {
-    core_url: String,
+    core: CoreClient,
     core_wait: Duration,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct HttpEndpoint {
-    host: String,
-    port: u16,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -148,6 +144,32 @@ impl VoiceStatus {
 
 fn default_voice_wake_word() -> String {
     "Goblin".to_string()
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn engine_display(engine: &str) -> &'static str {
+    match engine {
+        "local-gpt-oss" => "GPT-OSS",
+        "codex" => "Codex",
+        "openai-api" => "Your OpenAI API key",
+        "cloud-openai" => "Managed OpenAI cloud",
+        _ => "Engine unavailable",
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn engine_route_disclosure(engine: Option<&str>) -> &'static str {
+    match engine {
+        Some("codex") => "OpenAI account via Codex — requests leave this device for OpenAI.",
+        Some("openai-api") => {
+            "OpenAI hosted models — requests leave this device using your API key."
+        }
+        Some("cloud-openai") => {
+            "Managed OpenAI cloud — requests leave this device through your organization's protected service."
+        }
+        Some("local-gpt-oss") => "On-device GPT-OSS — requests stay on this computer.",
+        _ => "Engine status is unavailable. Reconnect to Goblins OS before building.",
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -349,6 +371,7 @@ struct ResidentCapability {
 #[derive(Debug, PartialEq, Eq)]
 enum CoreFetchError {
     Status(u16),
+    #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
     Malformed,
     Transport,
     Decode,
@@ -358,6 +381,7 @@ impl fmt::Display for CoreFetchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Status(status) => write!(formatter, "core returned HTTP {status}"),
+            #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
             Self::Malformed => formatter.write_str("core response was malformed"),
             Self::Transport => formatter.write_str("core connection failed"),
             Self::Decode => formatter.write_str("core response JSON did not match the OS contract"),
@@ -449,7 +473,8 @@ fn text_shortcuts_proof_application_id(mode: TextShortcutsProofMode) -> &'static
 }
 
 fn main() -> ShellResult<()> {
-    let config = ShellConfig::from_env();
+    let core = initialize(ClientKind::Shell)?;
+    let config = ShellConfig::from_env(core);
 
     // Launcher deep-link: open a built app or the Build Studio in its own window
     // under a distinct application id, so it never collides with — or re-presents —
@@ -462,7 +487,7 @@ fn main() -> ShellResult<()> {
     let shell_state = load_shell_state(&config, boot_state);
 
     println!("Goblins OS native shell session started");
-    println!("core={}", config.core_url);
+    println!("core=capability-socket");
     println!("app_model=codex-builds-apps");
     println!("session_owner=rust");
     println!("shell_mode=native-desktop");
@@ -481,11 +506,9 @@ fn main() -> ShellResult<()> {
 }
 
 impl ShellConfig {
-    fn from_env() -> Self {
+    fn from_env(core: CoreClient) -> Self {
         Self {
-            core_url: env::var("GOBLINS_OS_CORE_URL")
-                .or_else(|_| env::var("OPENAI_OS_CORE_URL"))
-                .unwrap_or_else(|_| DEFAULT_CORE_URL.into()),
+            core,
             core_wait: Duration::from_secs(env_u64(
                 "GOBLINS_OS_SHELL_CORE_WAIT_SECS",
                 DEFAULT_CORE_WAIT_SECS,
@@ -495,9 +518,9 @@ impl ShellConfig {
 }
 
 fn inspect_boot_state(config: &ShellConfig) -> BootState {
-    let core_ready = wait_for_core(&config.core_url, config.core_wait);
+    let core_ready = wait_for_core(&config.core, config.core_wait);
     let installer_state = if core_ready {
-        status_label(http_status(&config.core_url, "/v1/installer/readiness"))
+        status_label(http_status(&config.core, "/v1/installer/readiness"))
     } else {
         "unreachable"
     };
@@ -525,23 +548,21 @@ fn load_shell_state(config: &ShellConfig, boot: BootState) -> ShellState {
         };
     }
 
-    let auth = get_core_json::<AuthStatus>(&config.core_url, "/v1/auth/openai/status").ok();
-    let session_gate =
-        get_core_json::<SessionGateStatus>(&config.core_url, "/v1/session/gate").ok();
+    let auth = get_core_json::<AuthStatus>(&config.core, "/v1/auth/openai/status").ok();
+    let session_gate = get_core_json::<SessionGateStatus>(&config.core, "/v1/session/gate").ok();
     let installer =
-        get_core_json::<InstallerReadiness>(&config.core_url, "/v1/installer/readiness").ok();
-    let services = get_core_json::<ServiceCatalog>(&config.core_url, "/v1/services")
+        get_core_json::<InstallerReadiness>(&config.core, "/v1/installer/readiness").ok();
+    let services = get_core_json::<ServiceCatalog>(&config.core, "/v1/services")
         .map(|catalog| catalog.services)
         .unwrap_or_default();
-    let local_models =
-        get_core_json::<LocalModelCatalog>(&config.core_url, "/v1/local-models").ok();
-    let resident = get_core_json::<ResidentStatus>(&config.core_url, "/v1/ai/runtime/status").ok();
-    let apps = get_core_json::<AppList>(&config.core_url, "/v1/apps")
+    let local_models = get_core_json::<LocalModelCatalog>(&config.core, "/v1/local-models").ok();
+    let resident = get_core_json::<ResidentStatus>(&config.core, "/v1/ai/runtime/status").ok();
+    let apps = get_core_json::<AppList>(&config.core, "/v1/apps")
         .map(|list| list.apps)
         .unwrap_or_default();
-    let voice = get_core_json::<VoiceStatus>(&config.core_url, "/v1/voice/status").ok();
-    let engine = get_core_json::<EngineStatus>(&config.core_url, "/v1/models/openai-key").ok();
-    let codex = get_core_json::<CodexStatus>(&config.core_url, "/v1/codex/status").ok();
+    let voice = get_core_json::<VoiceStatus>(&config.core, "/v1/voice/status").ok();
+    let engine = get_core_json::<EngineStatus>(&config.core, "/v1/models/openai-key").ok();
+    let codex = get_core_json::<CodexStatus>(&config.core, "/v1/codex/status").ok();
 
     ShellState {
         boot,
@@ -949,7 +970,7 @@ fn build_home(
         false,
     ));
     column.append(&centered(
-        "Describe an app in a sentence. The on-device model designs it, and Goblins OS keeps it — nothing else comes pre-installed.",
+        "Describe an app in a sentence. Goblins AI designs it with your active engine, and Goblins OS keeps it — nothing else comes pre-installed.",
         &["gos-home-sub"],
         true,
     ));
@@ -961,11 +982,18 @@ fn build_home(
     entry.set_hexpand(true);
     entry.set_placeholder_text(Some("Describe an app — a quiet focus-session timer"));
     let build = button("Build", &["gos-home-build"]);
+    let engine_available = shell_state.engine.is_some();
+    build.set_sensitive(engine_available);
+    if !engine_available {
+        build.set_tooltip_text(Some(
+            "Reconnect to Goblins OS before sending a build request.",
+        ));
+    }
     field.append(&entry);
     field.append(&build);
     column.append(&field);
     // The working animation — a calm three-dot "thinking" pulse shown only while
-    // the on-device model is designing the app. Hidden (and so paused) at rest.
+    // the active engine is designing the app. Hidden (and so paused) at rest.
     // Dots and status share one fixed-height slot so the hero never shifts when
     // the working state toggles.
     let status_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -976,7 +1004,12 @@ fn build_home(
     status_slot.append(&thinking);
 
     let status = centered(
-        "On-device GPT-OSS — your apps stay on this machine.",
+        engine_route_disclosure(
+            shell_state
+                .engine
+                .as_ref()
+                .map(|engine| engine.engine.as_str()),
+        ),
         &["gos-home-status"],
         true,
     );
@@ -990,7 +1023,7 @@ fn build_home(
     // weight tracks importance instead of letting a novelty action shout.
 
     // The prominent secondary: the way into the full Build Studio — the multi-turn
-    // agent surface where you switch engines (GPT-OSS · Codex · your key).
+    // agent surface where you switch engines (GPT-OSS · Codex · protected service key).
     let open_studio = button("Open Build Studio", &["gos-home-voice"]);
     open_studio.set_halign(gtk::Align::Center);
     open_studio.set_margin_top(14);
@@ -1065,7 +1098,7 @@ fn build_home(
     column.append(&ledger_scroll);
 
     let ui = BuildUi {
-        core_url: config.core_url.clone(),
+        core: config.core.clone(),
         entry: entry.clone(),
         build: build.clone(),
         status,
@@ -1100,7 +1133,7 @@ fn build_home(
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 #[derive(Clone)]
 struct BuildUi {
-    core_url: String,
+    core: CoreClient,
     entry: gtk4::Entry,
     build: gtk4::Button,
     status: gtk4::Label,
@@ -1180,9 +1213,9 @@ fn start_build(ui: &BuildUi) {
     ui.thinking.set_visible(true);
 
     let (tx, rx) = std::sync::mpsc::channel::<Result<BuiltApp, String>>();
-    let core_url = ui.core_url.clone();
+    let core = ui.core.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(submit_build(&core_url, &intent));
+        let _ = tx.send(submit_build(&core, &intent));
     });
 
     let ui = ui.clone();
@@ -1249,9 +1282,9 @@ fn start_voice(ui: &BuildUi, voice: &gtk4::Button, wake_word: &str) {
     voice.set_sensitive(false);
 
     let (tx, rx) = std::sync::mpsc::channel::<Result<(String, String), String>>();
-    let core_url = ui.core_url.clone();
+    let core = ui.core.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(converse(&core_url));
+        let _ = tx.send(converse(&core));
     });
 
     let ui = ui.clone();
@@ -1295,8 +1328,8 @@ fn finish_voice(ui: &BuildUi, voice: &gtk4::Button, result: Result<(String, Stri
 
 /// Drive one on-device voice turn through the core and return (heard, spoken).
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn converse(core_url: &str) -> Result<(String, String), String> {
-    let response = http_post_response(core_url, "/v1/voice/converse", "{}")
+fn converse(core: &CoreClient) -> Result<(String, String), String> {
+    let response = http_post_response(core, "/v1/voice/converse", "{}")
         .map_err(|_| "Goblins OS could not reach the on-device voice service.".to_string())?;
     let outcome: ConverseOutcome = serde_json::from_slice(&response.body)
         .map_err(|_| "Goblins OS could not read the voice result.".to_string())?;
@@ -1581,7 +1614,7 @@ fn truncate_intent(intent: &str) -> String {
 /// The Build Studio: a dark, developer-grade agent surface. A sidebar of your
 /// builds and their threads on the left; a center conversation with the agent's
 /// tool calls and changed-file diffs; and a composer whose model picker is the
-/// engine switch (GPT-OSS · Codex · your key). One surface, whichever brain runs.
+/// engine switch (GPT-OSS · Codex · protected service key). One surface, whichever brain runs.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::Stack) -> gtk4::Box {
     use gtk::prelude::*;
@@ -1604,7 +1637,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     head.append(&label("Build Studio", &["gos-studio-wordmark"]));
     head.append(&spacer());
     // The active engine is named exactly once on this surface — by the composer's
-    // interactive "GPT-OSS ▾" picker, which is the single source of truth for which
+    // interactive GPT-OSS picker, which is the single source of truth for which
     // brain the next build runs on. A second static engine pill up here would only
     // restate that label and make the reader wonder whether the two mean different
     // things, so the header stays a clean wordmark row.
@@ -1668,7 +1701,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     main.add_css_class("gos-studio-main");
     main.set_hexpand(true);
 
-    let session = latest_studio_session(&config.core_url);
+    let session = latest_studio_session(&config.core);
 
     // The build currently open in the center, shared with the composer so a
     // follow-up turn continues it instead of forking a new session.
@@ -1708,7 +1741,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     conv_scroll.add_css_class("gos-studio-conv-scroll");
     main.append(&conv_scroll);
 
-    // Composer — the build input with the live engine switch (GPT-OSS / Codex / your key).
+    // Composer — the build input with the live engine switch (GPT-OSS / Codex / protected service key).
     let composer = gtk::Box::new(gtk::Orientation::Vertical, 0);
     composer.add_css_class("gos-studio-composer");
     let input = gtk::Entry::new();
@@ -1719,17 +1752,42 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     let active_engine = shell_state
         .engine
         .as_ref()
-        .map(|engine| engine.engine.clone())
-        .unwrap_or_else(|| "local-gpt-oss".to_string());
+        .map(|engine| engine.engine.clone());
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     controls.add_css_class("gos-studio-controls");
-    controls.append(&engine_pill(config, &active_engine));
+    let codex_ready = shell_state
+        .codex
+        .as_ref()
+        .is_some_and(|codex| codex.installed && codex.authenticated);
+    let key_ready = shell_state
+        .engine
+        .as_ref()
+        .is_some_and(|engine| engine.configured);
+    controls.append(&engine_picker(
+        config,
+        active_engine.as_deref(),
+        codex_ready,
+        key_ready,
+    ));
     controls.append(&spacer());
     let thinking = thinking_dots();
     thinking.set_visible(false);
     thinking.set_valign(gtk::Align::Center);
     controls.append(&thinking);
     let send = button("↑", &["gos-studio-send"]);
+    send.set_tooltip_text(Some("Send build request"));
+    send.update_property(&[
+        gtk::accessible::Property::Label("Send build request"),
+        gtk::accessible::Property::Description(
+            "Send this request to the active Goblins AI engine.",
+        ),
+    ]);
+    send.set_sensitive(active_engine.is_some());
+    if active_engine.is_none() {
+        send.set_tooltip_text(Some(
+            "Reconnect to Goblins OS before sending a build request.",
+        ));
+    }
     controls.append(&send);
     composer.append(&controls);
     main.append(&composer);
@@ -1758,7 +1816,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     // opens that saved session; "+ New build" clears to the empty composer state;
     // the search field filters the list live.
     for (row, id) in &studio_rows {
-        wire_studio_open(row, &config.core_url, id, &conv, &title, &active_id);
+        wire_studio_open(row, &config.core, id, &conv, &title, &active_id);
     }
     {
         let conv = conv.clone();
@@ -1780,7 +1838,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     }
 
     let ui = StudioUi {
-        core_url: config.core_url.clone(),
+        core: config.core.clone(),
         input: input.clone(),
         send: send.clone(),
         thinking,
@@ -1805,7 +1863,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 #[derive(Clone)]
 struct StudioUi {
-    core_url: String,
+    core: CoreClient,
     input: gtk4::Entry,
     send: gtk4::Button,
     thinking: gtk4::Box,
@@ -1921,58 +1979,154 @@ fn sidebar_thread(thread: &StudioThreadItem) -> gtk4::Button {
     button
 }
 
-/// The model picker in the composer — our engine switch. Click to cycle GPT-OSS →
-/// Codex → your key; the core validates (Codex needs sign-in, the key engine
-/// needs a key, both need the internet), and the pill relabels on success.
+/// The model picker in the composer. Every route is named explicitly with its
+/// readiness instead of hiding a provider change behind a cycling button.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn engine_pill(config: &ShellConfig, active: &str) -> gtk4::Button {
+fn engine_picker(
+    config: &ShellConfig,
+    active: Option<&str>,
+    codex_ready: bool,
+    key_ready: bool,
+) -> gtk4::MenuButton {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
-    let pill = button(
-        &format!("{} ▾", engine_display(active)),
-        &["gos-studio-control", "gos-studio-engine"],
+    let picker = gtk::MenuButton::new();
+    picker.set_label(active.map(engine_display).unwrap_or("Engine unavailable"));
+    // Studio's picker sits at the bottom edge of the composer. MenuButton owns
+    // popup placement, so its direction must agree with the popover preference.
+    // Let GTK draw the one direction-aware arrow instead of duplicating it in
+    // the label.
+    picker.set_direction(gtk::ArrowType::Up);
+    picker.add_css_class("gos-studio-control");
+    picker.add_css_class("gos-studio-engine");
+    picker.set_tooltip_text(Some("Choose the engine for this build"));
+    picker.update_property(&[
+        gtk::accessible::Property::Label("Choose Goblins AI engine"),
+        gtk::accessible::Property::Description(
+            "Choose on-device GPT-OSS, your OpenAI account through Codex, or hosted models using an administrator-installed protected service credential.",
+        ),
+    ]);
+
+    let popover = gtk::Popover::new();
+    // The picker sits on the bottom edge of Studio. Keep the complete engine
+    // menu and its inline readiness feedback inside the application window.
+    popover.set_position(gtk::PositionType::Top);
+    popover.add_css_class("gos-studio-engine-popover");
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    list.add_css_class("gos-studio-engine-list");
+
+    let feedback = label(
+        engine_route_disclosure(active),
+        &["gos-studio-engine-feedback"],
     );
-    let core_url = config.core_url.clone();
-    pill.connect_clicked(move |pill| {
-        let current = engine_from_display(pill.label().map(|g| g.to_string()).unwrap_or_default());
-        let next = next_engine(current);
-        if set_engine_shell(&core_url, next).is_ok() {
-            // The pill is the single source of truth for the active engine, so its
-            // own label is the only thing that relabels on a successful switch.
-            pill.set_label(&format!("{} ▾", engine_display(next)));
-        }
-    });
-    pill
-}
+    feedback.set_wrap(true);
+    feedback.set_xalign(0.0);
+    list.append(&feedback);
 
-#[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn engine_display(engine: &str) -> &'static str {
-    match engine {
-        "codex" => "Codex",
-        "openai-api" => "Your OpenAI API key",
-        _ => "GPT-OSS",
-    }
-}
+    let options = [
+        (
+            "local-gpt-oss",
+            "On-device · GPT-OSS",
+            active.is_some(),
+            if active.is_some() {
+                "Runs on this computer. No prompt leaves the device."
+            } else {
+                "Engine status is unavailable until Goblins OS reconnects."
+            },
+        ),
+        (
+            "codex",
+            "OpenAI account · Codex",
+            codex_ready,
+            if codex_ready {
+                "Uses your OpenAI account through Codex."
+            } else {
+                "Sign in to Codex in Settings before choosing this engine."
+            },
+        ),
+        (
+            "openai-api",
+            "OpenAI hosted · Your API key",
+            key_ready,
+            if key_ready {
+                "Uses OpenAI hosted models with your stored API key."
+            } else {
+                "Ask a device administrator to install an OpenAI API key before choosing this engine."
+            },
+        ),
+    ];
 
-#[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn engine_from_display(label: String) -> &'static str {
-    if label.starts_with("Codex") {
-        "codex"
-    } else if label.starts_with("Your OpenAI API key") {
-        "openai-api"
-    } else {
-        "local-gpt-oss"
-    }
-}
+    for (engine, title, ready, detail) in options {
+        let option = gtk::Button::new();
+        option.add_css_class("gos-studio-engine-option");
+        let option_copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        option_copy.append(&label(title, &["gos-studio-engine-option-title"]));
+        let detail_label = label(detail, &["gos-studio-engine-option-detail"]);
+        detail_label.set_wrap(true);
+        option_copy.append(&detail_label);
+        option.set_child(Some(&option_copy));
+        option.set_hexpand(true);
+        option.set_sensitive(ready);
+        option.set_tooltip_text(Some(detail));
+        option.update_property(&[
+            gtk::accessible::Property::Label(title),
+            gtk::accessible::Property::Description(detail),
+        ]);
+        let picker = picker.clone();
+        let popover = popover.clone();
+        let feedback = feedback.clone();
+        let core = config.core.clone();
+        option.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            feedback.set_text(&format!("Switching to {}…", engine_display(engine)));
 
-#[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn next_engine(current: &str) -> &'static str {
-    match current {
-        "local-gpt-oss" => "codex",
-        "codex" => "openai-api",
-        _ => "local-gpt-oss",
+            let (tx, rx) = std::sync::mpsc::channel();
+            let request_url = core.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(set_engine_shell(&request_url, engine));
+            });
+
+            let button = button.clone();
+            let picker = picker.clone();
+            let popover = popover.clone();
+            let feedback = feedback.clone();
+            let _poll = gtk::glib::timeout_add_local(Duration::from_millis(75), move || {
+                match rx.try_recv() {
+                    Ok(Ok(())) => {
+                        picker.set_label(engine_display(engine));
+                        feedback.set_text(engine_route_disclosure(Some(engine)));
+                        popover.popdown();
+                        button.set_sensitive(ready);
+                        gtk::glib::ControlFlow::Break
+                    }
+                    Ok(Err(error)) => {
+                        feedback.set_text(
+                            "Goblins OS could not switch engines. Review readiness in Settings and try again.",
+                        );
+                        eprintln!("studio_engine_switch_error={error:?}");
+                        button.set_sensitive(ready);
+                        gtk::glib::ControlFlow::Break
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        gtk::glib::ControlFlow::Continue
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        feedback.set_text(
+                            "Goblins OS could not switch engines. Review readiness in Settings and try again.",
+                        );
+                        button.set_sensitive(ready);
+                        gtk::glib::ControlFlow::Break
+                    }
+                }
+            });
+        });
+        list.append(&option);
     }
+
+    popover.set_child(Some(&list));
+    picker.set_popover(Some(&popover));
+    picker
 }
 
 /// The Studio's first-run / new-build empty state for the conversation pane. The
@@ -2109,10 +2263,10 @@ fn start_studio_turn(ui: &StudioUi) {
     ui.thinking.set_visible(true);
 
     let (tx, rx) = std::sync::mpsc::channel::<Result<StudioSessionView, String>>();
-    let core_url = ui.core_url.clone();
+    let core = ui.core.clone();
     let app_id = ui.app_id.borrow().clone();
     std::thread::spawn(move || {
-        let _ = tx.send(studio_turn_request(&core_url, &message, &app_id));
+        let _ = tx.send(studio_turn_request(&core, &message, &app_id));
     });
 
     let ui = ui.clone();
@@ -2159,20 +2313,20 @@ fn finish_studio_turn(ui: &StudioUi, result: Result<StudioSessionView, String>) 
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn load_studio_session(core_url: &str, id: &str) -> Option<StudioSessionView> {
+fn load_studio_session(core: &CoreClient, id: &str) -> Option<StudioSessionView> {
     if id.is_empty() {
         return None;
     }
-    get_core_json::<StudioTurnView>(core_url, &format!("/v1/studio/session?app_id={id}"))
+    get_core_json::<StudioTurnView>(core, &format!("/v1/studio/session?app_id={id}"))
         .ok()?
         .session
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn latest_studio_session(core_url: &str) -> Option<StudioSessionView> {
-    let list = get_core_json::<StudioSessionList>(core_url, "/v1/studio/sessions").ok()?;
+fn latest_studio_session(core: &CoreClient) -> Option<StudioSessionView> {
+    let list = get_core_json::<StudioSessionList>(core, "/v1/studio/sessions").ok()?;
     let id = list.sessions.first()?.id.clone();
-    load_studio_session(core_url, &id)
+    load_studio_session(core, &id)
 }
 
 /// Open a saved build in place: load its session and rebuild the conversation and
@@ -2180,7 +2334,7 @@ fn latest_studio_session(core_url: &str) -> Option<StudioSessionView> {
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn wire_studio_open(
     row: &gtk4::Button,
-    core_url: &str,
+    core: &CoreClient,
     id: &str,
     conv: &gtk4::Box,
     title: &gtk4::Label,
@@ -2191,13 +2345,13 @@ fn wire_studio_open(
     if id.is_empty() {
         return;
     }
-    let core_url = core_url.to_string();
+    let core = core.clone();
     let id = id.to_string();
     let conv = conv.clone();
     let title = title.clone();
     let app_id = app_id.clone();
     row.connect_clicked(move |_| {
-        if let Some(view) = load_studio_session(&core_url, &id) {
+        if let Some(view) = load_studio_session(&core, &id) {
             // Make the composer continue this build, not fork a new one.
             *app_id.borrow_mut() = view.id.clone();
             rebuild_conversation(&conv, &view);
@@ -2230,8 +2384,7 @@ fn reset_studio_to_new_build(
 /// The sidebar's builds. Each saved Studio session is a build with one thread.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn studio_projects(config: &ShellConfig, _shell_state: &ShellState) -> Vec<StudioProject> {
-    let Ok(list) = get_core_json::<StudioSessionList>(&config.core_url, "/v1/studio/sessions")
-    else {
+    let Ok(list) = get_core_json::<StudioSessionList>(&config.core, "/v1/studio/sessions") else {
         return Vec::new();
     };
     list.sessions
@@ -2255,7 +2408,7 @@ fn studio_projects(config: &ShellConfig, _shell_state: &ShellState) -> Vec<Studi
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn studio_turn_request(
-    core_url: &str,
+    core: &CoreClient,
     message: &str,
     app_id: &str,
 ) -> Result<StudioSessionView, String> {
@@ -2265,7 +2418,7 @@ fn studio_turn_request(
     } else {
         serde_json::json!({ "message": message, "app_id": app_id }).to_string()
     };
-    let response = http_post_response(core_url, "/v1/studio/turn", &body)
+    let response = http_post_response(core, "/v1/studio/turn", &body)
         .map_err(|_| "Goblins OS could not reach the build engine.".to_string())?;
     let outcome: StudioTurnView = serde_json::from_slice(&response.body)
         .map_err(|_| "Goblins OS could not read the build result.".to_string())?;
@@ -2279,9 +2432,9 @@ fn studio_turn_request(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_engine_shell(core_url: &str, engine: &str) -> Result<(), CoreFetchError> {
+fn set_engine_shell(core: &CoreClient, engine: &str) -> Result<(), CoreFetchError> {
     let body = serde_json::json!({ "engine": engine }).to_string();
-    let response = http_post_response(core_url, "/v1/models/engine", &body)?;
+    let response = http_post_control_response(core, "/v1/models/engine", &body)?;
     if (200..=299).contains(&response.status) {
         Ok(())
     } else {
@@ -2347,9 +2500,9 @@ fn build_session_locked_panel(config: &ShellConfig, shell_state: &ShellState) ->
         },
     );
     if auth_configured && !auth_authenticated {
-        let core_url = config.core_url.clone();
+        let core = config.core.clone();
         let feedback = feedback.clone();
-        sign_in.connect_clicked(move |_| match openai_login_destination(&core_url) {
+        sign_in.connect_clicked(move |_| match openai_login_destination(&core) {
             Ok(destination) => {
                 feedback.set_text("Opening the configured OpenAI account provider.");
                 if let Err(error) = gtk::gio::AppInfo::launch_default_for_uri(
@@ -2858,7 +3011,7 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
 
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
 fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<()> {
-    let _ = config.core_url.as_str();
+    let _ = &config.core;
     match &target {
         StandaloneTarget::App(name) => {
             let _ = name.as_str();
@@ -2883,11 +3036,11 @@ fn run_native_shell(_config: ShellConfig, _shell_state: ShellState) -> ShellResu
     }
 }
 
-fn wait_for_core(core_url: &str, timeout: Duration) -> bool {
+fn wait_for_core(core: &CoreClient, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
-        if matches!(http_status(core_url, "/health"), Some(200)) {
+        if matches!(http_status(core, "/health"), Some(200)) {
             return true;
         }
 
@@ -2897,46 +3050,24 @@ fn wait_for_core(core_url: &str, timeout: Duration) -> bool {
     false
 }
 
-fn http_status(base_url: &str, path: &str) -> Option<u16> {
-    let endpoint = parse_http_endpoint(base_url)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .ok()?
-        .next()?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(600)).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(900)))
-        .ok()?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(900)))
-        .ok()?;
-
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        endpoint.host
-    );
-    stream.write_all(request.as_bytes()).ok()?;
-
-    let mut buffer = [0_u8; 128];
-    let read = stream.read(&mut buffer).ok()?;
-    let response = std::str::from_utf8(&buffer[..read]).ok()?;
-    let status = response.split_whitespace().nth(1)?;
-
-    status.parse().ok()
+fn http_status(core: &CoreClient, path: &str) -> Option<u16> {
+    core.get(path, Duration::from_millis(900))
+        .ok()
+        .map(|response| response.status)
 }
 
-fn get_core_json<T>(base_url: &str, path: &str) -> Result<T, CoreFetchError>
+fn get_core_json<T>(core: &CoreClient, path: &str) -> Result<T, CoreFetchError>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let body = http_get_body(base_url, path)?;
+    let body = http_get_body(core, path)?;
 
     serde_json::from_slice(&body).map_err(|_| CoreFetchError::Decode)
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn openai_login_destination(core_url: &str) -> Result<String, CoreFetchError> {
-    let response = http_get_response(core_url, "/v1/auth/openai/start")?;
+fn openai_login_destination(core: &CoreClient) -> Result<String, CoreFetchError> {
+    let response = http_get_response(core, "/v1/auth/openai/start")?;
     openai_login_destination_from_response(&response)
 }
 
@@ -2953,8 +3084,8 @@ fn openai_login_destination_from_response(
         .ok_or(CoreFetchError::Malformed)
 }
 
-fn http_get_body(base_url: &str, path: &str) -> Result<Vec<u8>, CoreFetchError> {
-    let response = http_get_response(base_url, path)?;
+fn http_get_body(core: &CoreClient, path: &str) -> Result<Vec<u8>, CoreFetchError> {
+    let response = http_get_response(core, path)?;
 
     if !(200..=299).contains(&response.status) {
         return Err(CoreFetchError::Status(response.status));
@@ -2963,38 +3094,22 @@ fn http_get_body(base_url: &str, path: &str) -> Result<Vec<u8>, CoreFetchError> 
     Ok(response.body)
 }
 
-fn http_get_response(base_url: &str, path: &str) -> Result<HttpResponse, CoreFetchError> {
-    let endpoint = parse_http_endpoint(base_url).ok_or(CoreFetchError::Malformed)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .map_err(|_| CoreFetchError::Transport)?
-        .next()
-        .ok_or(CoreFetchError::Transport)?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(700))
-        .map_err(|_| CoreFetchError::Transport)?;
+fn core_response(response: Response) -> HttpResponse {
+    let headers = response
+        .header("location")
+        .map(|value| vec![("location".to_string(), value.to_string())])
+        .unwrap_or_default();
+    HttpResponse {
+        status: response.status,
+        headers,
+        body: response.body,
+    }
+}
 
-    stream
-        .set_read_timeout(Some(Duration::from_millis(1200)))
-        .map_err(|_| CoreFetchError::Transport)?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(900)))
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
-        endpoint.host
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    let mut response = Vec::new();
-    stream
-        .take(MAX_CORE_BODY_BYTES as u64)
-        .read_to_end(&mut response)
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    parse_http_response(&response)
+fn http_get_response(core: &CoreClient, path: &str) -> Result<HttpResponse, CoreFetchError> {
+    core.get(path, Duration::from_millis(1200))
+        .map(core_response)
+        .map_err(|_| CoreFetchError::Transport)
 }
 
 /// POST JSON to the local OS service with a long read window: building an app
@@ -3002,52 +3117,43 @@ fn http_get_response(base_url: &str, path: &str) -> Result<HttpResponse, CoreFet
 /// time out early.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn http_post_response(
-    base_url: &str,
+    core: &CoreClient,
     path: &str,
     body: &str,
 ) -> Result<HttpResponse, CoreFetchError> {
-    let endpoint = parse_http_endpoint(base_url).ok_or(CoreFetchError::Malformed)?;
-    let address = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .map_err(|_| CoreFetchError::Transport)?
-        .next()
-        .ok_or(CoreFetchError::Transport)?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(700))
-        .map_err(|_| CoreFetchError::Transport)?;
+    core.post_json(path, body.as_bytes(), shell_request_timeout(path))
+        .map(core_response)
+        .map_err(|_| CoreFetchError::Transport)
+}
 
-    stream
-        .set_read_timeout(Some(Duration::from_secs(180)))
-        .map_err(|_| CoreFetchError::Transport)?;
-    stream
-        .set_write_timeout(Some(Duration::from_millis(2000)))
-        .map_err(|_| CoreFetchError::Transport)?;
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn shell_request_timeout(path: &str) -> Duration {
+    match path {
+        "/v1/apps/builds" | "/v1/studio/turn" | "/v1/voice/converse" => LONG_CORE_JOB_TIMEOUT,
+        _ => Duration::from_secs(5),
+    }
+}
 
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        endpoint.host,
-        body.len(),
-        body
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    let mut response = Vec::new();
-    stream
-        .take(MAX_CORE_BODY_BYTES as u64)
-        .read_to_end(&mut response)
-        .map_err(|_| CoreFetchError::Transport)?;
-
-    parse_http_response(&response)
+/// Short, non-generative OS control requests must never inherit the model turn's
+/// three-minute read window. They run off the GTK thread and fail promptly.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn http_post_control_response(
+    core: &CoreClient,
+    path: &str,
+    body: &str,
+) -> Result<HttpResponse, CoreFetchError> {
+    core.post_json(path, body.as_bytes(), CONTROL_REQUEST_TIMEOUT)
+        .map(core_response)
+        .map_err(|_| CoreFetchError::Transport)
 }
 
 /// Ask the Goblins AI runtime to build an app from intent; return the built app's
 /// name on success or a calm, user-facing error line.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn submit_build(core_url: &str, intent: &str) -> Result<BuiltApp, String> {
+fn submit_build(core: &CoreClient, intent: &str) -> Result<BuiltApp, String> {
     let body = serde_json::json!({ "intent": intent }).to_string();
-    let response = http_post_response(core_url, "/v1/apps/builds", &body)
-        .map_err(|_| "Goblins OS could not reach the on-device model engine.".to_string())?;
+    let response = http_post_response(core, "/v1/apps/builds", &body)
+        .map_err(|_| "Goblins OS could not reach the active model engine.".to_string())?;
     let outcome: BuildOutcome = serde_json::from_slice(&response.body)
         .map_err(|_| "Goblins OS could not read the build result.".to_string())?;
     if (200..=299).contains(&response.status) && outcome.ok {
@@ -3081,65 +3187,6 @@ fn relative_time(created_at: &str) -> String {
     } else {
         format!("Built {}d ago", delta / 86_400)
     }
-}
-
-#[cfg(test)]
-fn parse_http_body(response: &[u8]) -> Result<Vec<u8>, CoreFetchError> {
-    let response = parse_http_response(response)?;
-
-    if !(200..=299).contains(&response.status) {
-        return Err(CoreFetchError::Status(response.status));
-    }
-
-    Ok(response.body)
-}
-
-fn parse_http_response(response: &[u8]) -> Result<HttpResponse, CoreFetchError> {
-    let header_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or(CoreFetchError::Malformed)?;
-    let headers =
-        std::str::from_utf8(&response[..header_end]).map_err(|_| CoreFetchError::Malformed)?;
-    let mut lines = headers.lines();
-    let status = lines
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|status| status.parse::<u16>().ok())
-        .ok_or(CoreFetchError::Malformed)?;
-    let headers = lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
-        .collect();
-
-    Ok(HttpResponse {
-        status,
-        headers,
-        body: response[(header_end + 4)..].to_vec(),
-    })
-}
-
-fn parse_http_endpoint(url: &str) -> Option<HttpEndpoint> {
-    let rest = url.strip_prefix("http://")?;
-    let authority = rest.split('/').next()?.trim();
-
-    if authority.is_empty() {
-        return None;
-    }
-
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) => (host, port.parse().ok()?),
-        None => (authority, 80),
-    };
-
-    if host.is_empty() {
-        return None;
-    }
-
-    Some(HttpEndpoint {
-        host: host.to_string(),
-        port,
-    })
 }
 
 fn env_u64(key: &str, fallback: u64) -> u64 {
@@ -3391,11 +3438,54 @@ window.gos-windowed .gos-top-bar {
 #[cfg(test)]
 mod tests {
     use super::{
-        launch_local_action, local_action_command, openai_login_destination_from_response,
-        parse_http_body, parse_http_endpoint, parse_http_response, standalone_target_from_args,
-        status_label, CoreFetchError, HttpEndpoint, HttpResponse, StandaloneTarget,
-        TextShortcutsProofMode,
+        engine_display, engine_route_disclosure, launch_local_action, local_action_command,
+        openai_login_destination_from_response, shell_request_timeout, standalone_target_from_args,
+        status_label, CoreFetchError, HttpResponse, StandaloneTarget, TextShortcutsProofMode,
+        CONTROL_REQUEST_TIMEOUT, LONG_CORE_JOB_TIMEOUT,
     };
+
+    #[test]
+    fn build_studio_and_voice_timeouts_cover_their_bounded_core_jobs() {
+        for path in ["/v1/apps/builds", "/v1/studio/turn", "/v1/voice/converse"] {
+            assert_eq!(shell_request_timeout(path), LONG_CORE_JOB_TIMEOUT);
+        }
+        assert_eq!(LONG_CORE_JOB_TIMEOUT, std::time::Duration::from_secs(3900));
+        assert!(LONG_CORE_JOB_TIMEOUT <= goblins_os_core_client::MAX_READ_TIMEOUT);
+        assert_eq!(
+            CONTROL_REQUEST_TIMEOUT,
+            std::time::Duration::from_millis(1500)
+        );
+    }
+
+    #[test]
+    fn engine_copy_discloses_locality_and_studio_uses_an_explicit_menu() {
+        assert_eq!(engine_display("local-gpt-oss"), "GPT-OSS");
+        assert_eq!(engine_display("cloud-openai"), "Managed OpenAI cloud");
+        assert_eq!(engine_display("unknown"), "Engine unavailable");
+        assert!(engine_route_disclosure(Some("local-gpt-oss")).contains("stay"));
+        for cloud in ["codex", "openai-api", "cloud-openai"] {
+            assert!(
+                engine_route_disclosure(Some(cloud)).contains("leave this device"),
+                "{cloud} must disclose network egress"
+            );
+        }
+        assert!(engine_route_disclosure(None).contains("unavailable"));
+
+        let source = include_str!("main.rs");
+        let engine_picker_source = source
+            .split_once("fn engine_picker(")
+            .expect("engine picker implementation")
+            .1
+            .split_once("fn studio_empty_state()")
+            .expect("engine picker implementation boundary")
+            .0;
+        assert!(engine_picker_source.contains("let picker = gtk::MenuButton::new()"));
+        assert!(engine_picker_source.contains("picker.set_direction(gtk::ArrowType::Up)"));
+        assert!(engine_picker_source.contains("popover.set_position(gtk::PositionType::Top)"));
+        assert!(source.contains("Send build request"));
+        assert!(!source.contains(&["fn next_", "engine("].concat()));
+        assert!(!source.contains(&["fn engine_from_", "display("].concat()));
+    }
 
     #[test]
     fn voice_entrypoint_uses_goblin_wake_word_copy() {
@@ -3508,33 +3598,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_localhost_with_port() {
-        assert_eq!(
-            parse_http_endpoint("http://127.0.0.1:8787"),
-            Some(HttpEndpoint {
-                host: "127.0.0.1".to_string(),
-                port: 8787,
-            })
-        );
-    }
-
-    #[test]
-    fn defaults_http_port() {
-        assert_eq!(
-            parse_http_endpoint("http://localhost/v1/readiness"),
-            Some(HttpEndpoint {
-                host: "localhost".to_string(),
-                port: 80,
-            })
-        );
-    }
-
-    #[test]
-    fn rejects_non_http_urls() {
-        assert_eq!(parse_http_endpoint("https://127.0.0.1:8787"), None);
-    }
-
-    #[test]
     fn labels_status_safely() {
         assert_eq!(status_label(Some(204)), "ready");
         assert_eq!(status_label(Some(503)), "blocked");
@@ -3543,29 +3606,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_http_json_body() {
-        let body = parse_http_body(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}",
-        )
-        .unwrap();
-
-        assert_eq!(body, br#"{"ok":true}"#);
-    }
-
-    #[test]
-    fn rejects_non_success_http_body() {
-        assert_eq!(
-            parse_http_body(b"HTTP/1.1 503 Service Unavailable\r\n\r\n{}"),
-            Err(CoreFetchError::Status(503))
-        );
-    }
-
-    #[test]
     fn parses_redirect_location_header() {
-        let response = parse_http_response(
-            b"HTTP/1.1 302 Found\r\nLocation: https://auth.openai.example/start\r\n\r\n",
-        )
-        .unwrap();
+        let response = HttpResponse {
+            status: 302,
+            headers: vec![(
+                "location".to_string(),
+                "https://auth.openai.example/start".to_string(),
+            )],
+            body: Vec::new(),
+        };
 
         assert_eq!(response.status, 302);
         assert_eq!(

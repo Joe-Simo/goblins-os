@@ -10,10 +10,13 @@
 
 use std::error::Error;
 
+use goblins_os_core_client::{initialize, ClientKind, CoreClient};
+
 type MarkupResult<T> = Result<T, Box<dyn Error>>;
 
 fn main() -> MarkupResult<()> {
-    run()
+    let core = initialize(ClientKind::Markup)?;
+    run(core)
 }
 
 /// JSON body for the local core's OCR request (`POST /v1/ocr/recognize`). Pure so the
@@ -37,40 +40,17 @@ fn parse_ocr_response_text(response_body: &str) -> Option<String> {
     (parsed.ok && !text.is_empty()).then(|| text.to_string())
 }
 
-#[cfg(test)]
-mod ocr_handoff_tests {
-    use super::{ocr_request_body, parse_ocr_response_text};
-
-    #[test]
-    fn request_body_carries_the_image_path() {
-        assert_eq!(
-            ocr_request_body("/tmp/a b.png"),
-            r#"{"image_path":"/tmp/a b.png"}"#
-        );
-    }
-
-    #[test]
-    fn parse_returns_trimmed_text_only_on_success() {
-        assert_eq!(
-            parse_ocr_response_text(r#"{"ok":true,"text":"  Hello\nWorld \n"}"#).as_deref(),
-            Some("Hello\nWorld")
-        );
-        assert!(parse_ocr_response_text(r#"{"ok":true,"text":"   "}"#).is_none());
-        assert!(parse_ocr_response_text(r#"{"ok":false,"text":"x"}"#).is_none());
-        assert!(parse_ocr_response_text("not json").is_none());
-    }
-}
-
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
-fn run() -> MarkupResult<()> {
+fn run(core: CoreClient) -> MarkupResult<()> {
+    let _ = core;
     println!("goblins_os_markup=unavailable");
     println!("markup_reason=build_requires_linux_native_desktop_feature");
     Ok(())
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn run() -> MarkupResult<()> {
-    native::run()
+fn run(core: CoreClient) -> MarkupResult<()> {
+    native::run(core)
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -91,7 +71,7 @@ mod native {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
-    use super::MarkupResult;
+    use super::{CoreClient, MarkupResult};
 
     const APP_ID: &str = "org.goblins.OS.Markup";
 
@@ -168,18 +148,18 @@ mod native {
         stroke: f64,
     }
 
-    pub fn run() -> MarkupResult<()> {
+    pub fn run(core: CoreClient) -> MarkupResult<()> {
         let path = std::env::args().nth(1);
         let app = gtk::Application::builder().application_id(APP_ID).build();
         app.connect_activate(move |app| {
             goblins_os_ui::init_theming(MARKUP_CSS);
-            build_window(app, path.clone());
+            build_window(app, path.clone(), core.clone());
         });
         app.run_with_args(&["goblins-os-markup"]);
         Ok(())
     }
 
-    fn build_window(app: &gtk::Application, path: Option<String>) {
+    fn build_window(app: &gtk::Application, path: Option<String>, core: CoreClient) {
         let pixbuf = path
             .as_deref()
             .and_then(|p| Pixbuf::from_file(p).ok())
@@ -344,6 +324,7 @@ mod native {
             &status,
             pixbuf.clone(),
             path.clone(),
+            &core,
             &window,
         );
         root.append(&toolbar);
@@ -379,6 +360,7 @@ mod native {
         status: &gtk::Label,
         pixbuf: Rc<Pixbuf>,
         path: Option<String>,
+        core: &CoreClient,
         window: &gtk::ApplicationWindow,
     ) -> gtk::Box {
         let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -494,6 +476,7 @@ mod native {
         {
             let status = status.clone();
             let source = path.clone();
+            let core = core.clone();
             copy_text.connect_clicked(move |btn| {
                 let Some(image_path) = source.clone() else {
                     status.set_text("No image to recognize");
@@ -501,9 +484,12 @@ mod native {
                 };
                 let status = status.clone();
                 let clipboard = btn.clipboard();
+                let core = core.clone();
                 status.set_text("Recognizing text…");
                 glib::spawn_future_local(async move {
-                    match gio::spawn_blocking(move || recognize_text_via_core(&image_path)).await {
+                    match gio::spawn_blocking(move || recognize_text_via_core(&core, &image_path))
+                        .await
+                    {
                         Ok(Some(text)) => {
                             clipboard.set_text(&text);
                             status.set_text("Copied text");
@@ -649,37 +635,24 @@ mod native {
         Some(out)
     }
 
-    /// Recognize text in the source image via the local core's on-device OCR (no
-    /// network, no HTTP-client dep). Runs on a blocking thread off the UI loop; any
-    /// failure (core down, no Tesseract, no text) returns None and the caller shows an
-    /// honest status. `Connection: close` lets us read the whole body to EOF.
-    fn recognize_text_via_core(image_path: &str) -> Option<String> {
-        use std::io::{Read, Write};
-        use std::net::TcpStream;
+    /// Recognize text in the source image via the local core's on-device OCR.
+    /// Runs on a blocking thread off the UI loop; any failure (core down, no
+    /// Tesseract, no text) returns None and the caller shows an honest status.
+    fn recognize_text_via_core(core: &CoreClient, image_path: &str) -> Option<String> {
         use std::time::Duration;
 
-        const CORE_HOST: &str = "127.0.0.1:8787";
-        const MAX_BODY: u64 = 1_048_576;
-
         let body = super::ocr_request_body(image_path);
-        let mut stream = TcpStream::connect(CORE_HOST).ok()?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(30)))
+        let response = core
+            .post_json(
+                "/v1/ocr/recognize",
+                body.as_bytes(),
+                Duration::from_secs(30),
+            )
             .ok()?;
-        stream
-            .set_write_timeout(Some(Duration::from_secs(10)))
-            .ok()?;
-        let request = format!(
-            "POST /v1/ocr/recognize HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(request.as_bytes()).ok()?;
-        let mut raw = Vec::new();
-        stream.take(MAX_BODY).read_to_end(&mut raw).ok()?;
-        let text = String::from_utf8_lossy(&raw);
-        let body_start = text.find("\r\n\r\n")? + 4;
-        super::parse_ocr_response_text(&text[body_start..])
+        if !response.is_success() {
+            return None;
+        }
+        super::parse_ocr_response_text(std::str::from_utf8(&response.body).ok()?)
     }
 
     fn copy_to_clipboard(widget: &impl IsA<gtk::Widget>, texture: &gdk::MemoryTexture) {
@@ -787,5 +760,29 @@ mod native {
             gtk::accessible::Property::Label(label),
             gtk::accessible::Property::Description(label),
         ]);
+    }
+}
+
+#[cfg(test)]
+mod ocr_handoff_tests {
+    use super::{ocr_request_body, parse_ocr_response_text};
+
+    #[test]
+    fn request_body_carries_the_image_path() {
+        assert_eq!(
+            ocr_request_body("/tmp/a b.png"),
+            r#"{"image_path":"/tmp/a b.png"}"#
+        );
+    }
+
+    #[test]
+    fn parse_returns_trimmed_text_only_on_success() {
+        assert_eq!(
+            parse_ocr_response_text(r#"{"ok":true,"text":"  Hello\nWorld \n"}"#).as_deref(),
+            Some("Hello\nWorld")
+        );
+        assert!(parse_ocr_response_text(r#"{"ok":true,"text":"   "}"#).is_none());
+        assert!(parse_ocr_response_text(r#"{"ok":false,"text":"x"}"#).is_none());
+        assert!(parse_ocr_response_text("not json").is_none());
     }
 }

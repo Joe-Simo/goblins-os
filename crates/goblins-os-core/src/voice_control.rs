@@ -225,7 +225,25 @@ pub async fn resolve_voice_command(Json(request): Json<ResolveRequest>) -> Json<
 pub async fn voice_control(
     Json(request): Json<VoiceControlRequest>,
 ) -> (StatusCode, Json<VoiceControlOutcome>) {
-    crate::bounded::run_blocking(move || voice_control_blocking(request)).await
+    crate::bounded::run_blocking(move || voice_control_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(VoiceControlOutcome {
+                    ok: false,
+                    transcript: String::new(),
+                    normalized: String::new(),
+                    matched_action_id: None,
+                    action_title: None,
+                    executed: false,
+                    needs_confirmation: false,
+                    fall_through_to_dictation: false,
+                    launch_argument: None,
+                    text: crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                }),
+            )
+        })
 }
 
 fn voice_control_blocking(request: VoiceControlRequest) -> (StatusCode, Json<VoiceControlOutcome>) {

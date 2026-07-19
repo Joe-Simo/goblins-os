@@ -18,7 +18,7 @@ stable public release.
   and anonymous registry manifest requests for
   `ghcr.io/joe-simo/goblins-os:x86_64` and `:aarch64` return `200`.
 
-## Release Verification
+## Published Alpha Verification
 
 - [x] Release workflow builds architecture-specific media for `x86_64` and
   `aarch64`.
@@ -43,30 +43,29 @@ stable public release.
   `45abf064735fa2a2ba9ef034883d19453c4bfc02a3b0c311d29e3679c52db434` is
   checksum-verified by the release artifact gate instead of being used for
   automated capture.
-- [x] `aarch64` display-backed verification-ISO screenshot/runtime run is
-  complete.
-  Current proof: GitHub Actions run `28727099426` captured
-  `os/screenshots/hardware-gate/aarch64/2026-07-05` from the verification ISO
-  built from `ghcr.io/joe-simo/goblins-os:aarch64`; the proof manifest records
-  ISO SHA256 `3c73a77335b8be7b1fdaeb73e7992bacf6ec253cb0755f030484a673b0c293dc`.
+- [ ] Reconcile the `aarch64` display-backed verification-ISO proof with its
+  signoff row. The proof manifest records ISO SHA256
+  `3c73a77335b8be7b1fdaeb73e7992bacf6ec253cb0755f030484a673b0c293dc`,
+  while the latest `aarch64` signoff row records
+  `539fe24454f5cf1b0bb3ac00c9b8a838614ada85a310511fb9605afa978686a7`.
+  Treat the run as incomplete until one recapture and signoff identify the same
+  verification ISO.
 - [x] `aarch64` public release ISO artifacts are checked separately from
   automated screenshots.
-  Current check: the completed aarch64 screenshot proof uses verification-only
-  media because public release media intentionally leaves storage interactive.
+  Current check: the aarch64 screenshot run uses verification-only media because
+  public release media intentionally leaves storage interactive.
   The hydrated public release ISO SHA
   `13b2b59ea03054d66b3f8c0986c2314631437e57074685c515a1dffa3a4f6fbf` is
   checksum-verified by the release artifact gate instead of being used for
   automated capture.
-- [x] Latest signoff row records runner, ISO, checksums, self-test, runtime
-  proof, app-build proof, gaming proof, storage proof, and SBOM evidence.
-  Current check: the latest `x86_64` row from GitHub Actions run
-  `28721788279` records runner, ISO, `blocked=0`, self-test, runtime/app-build,
-  gaming, storage proof, release evidence/SBOM, and `Current project completion
-  status: complete`.
-- [x] `./os/hardware-gate/verify-shipping-status.sh` passes.
-  Current local check: with both architecture release artifacts and
-  verification-ISO screenshot/signoff rows present, the shipping status gate
-  reports `Shipping status gate: PASS`.
+- [ ] Produce coherent per-architecture signoff rows for one exact candidate.
+  The historical `x86_64` row is internally coherent, but neither architecture
+  is signed off for an exact stable candidate and the `aarch64` SHA mismatch
+  remains unresolved.
+- [ ] Run `./os/hardware-gate/verify-shipping-status.sh` after the SHA linkage and
+  exact-candidate checks are enforced. A prior pass is not stable-readiness
+  evidence because it predates the corrected media-linkage requirement and does
+  not attest to an exact stable candidate.
 
 ## Stable Release Promotion
 
@@ -79,15 +78,24 @@ podman manifest inspect ghcr.io/joe-simo/goblins-os:x86_64
 podman manifest inspect ghcr.io/joe-simo/goblins-os:aarch64
 ```
 
-- [x] Complete per-architecture display-backed signoff for the current alpha.
-- [x] Hydrate release artifacts before local signoff. Use the default
-  metadata/SBOM mode for lightweight review, or set `GOBLINS_OS_DOWNLOAD_ISO=1`
-  only on a machine with enough disk and bandwidth for ISO reconstruction.
-- [x] Build or fetch the verification-only hardware-gate ISO for screenshot
-  capture; do not use hydrated public release media for automated capture.
+- [ ] Select and record the exact stable candidate commit.
+- [ ] Export that full commit as `GOBLINS_OS_CANDIDATE_COMMIT` for every ISO,
+  release-evidence, capture, close-signoff, and shipping-status command. Stable
+  promotion fails if either architecture is missing it or records a different value.
+- [ ] Build native shippable release media and package evidence for both
+  architectures from that exact candidate.
+- [ ] Complete per-architecture display-backed signoff for that exact candidate,
+  with each proof manifest and signoff row naming the same verification ISO SHA.
+- [ ] Hydrate the exact-candidate release artifacts before local signoff. Use the
+  default metadata/SBOM mode for lightweight review, or set
+  `GOBLINS_OS_DOWNLOAD_ISO=1` only on a machine with enough disk and bandwidth
+  for ISO reconstruction.
+- [ ] Build or fetch each exact-candidate verification-only hardware-gate ISO
+  for screenshot capture; do not use hydrated public release media for
+  automated capture.
 - [ ] Create a stable release tag.
 - [ ] Update website release data from alpha to stable.
-- [x] Run website checks:
+- [ ] Run website checks after the stable release data is updated:
 
 ```sh
 bun run lint
@@ -95,6 +103,6 @@ bun run typecheck
 bun run build
 ```
 
-- [x] Deploy production website.
-- [x] Verify live domain, download links, checksum links, source links, and
-  container pull commands.
+- [ ] Deploy the stable production website.
+- [ ] Verify the stable live domain, download links, checksum links, source
+  links, and container pull commands.

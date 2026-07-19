@@ -49,6 +49,9 @@
 #                      daemon on constrained CI runners.
 #   GOBLINS_OS_SHIPPABLE_RELEASE
 #                      set 1 to fail if the BIB source image is local/test-only
+#   GOBLINS_OS_CANDIDATE_COMMIT
+#                      exact 40-hex source commit used for this image and ISO;
+#                      required for every artifact, including non-release tests
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -72,6 +75,7 @@ BIB_STORAGE_VOLUME="${GOBLINS_OS_BIB_STORAGE_VOLUME:-goblins-os-bib-storage-$DOC
 BIB_SOURCE_IMAGE_OVERRIDE="${GOBLINS_OS_BIB_SOURCE_IMAGE:-}"
 SKIP_LOCAL_IMAGE_BUILD="${GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD:-0}"
 SHIPPABLE_RELEASE="${GOBLINS_OS_SHIPPABLE_RELEASE:-0}"
+CANDIDATE_COMMIT="${GOBLINS_OS_CANDIDATE_COMMIT:-}"
 BIB_SOURCE_IMAGE_USED=""
 BIB_SOURCE_KIND=""
 BIB_SOURCE_LOCAL_ONLY="false"
@@ -114,6 +118,23 @@ require_command() {
     exit 1
   fi
 }
+
+if [[ ! "$CANDIDATE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  echo "error: GOBLINS_OS_CANDIDATE_COMMIT must be the exact 40-hex source commit used to build this ISO." >&2
+  exit 1
+fi
+CANDIDATE_COMMIT="$(printf '%s' "$CANDIDATE_COMMIT" | tr '[:upper:]' '[:lower:]')"
+if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  SOURCE_HEAD="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  if [ "$(printf '%s' "$SOURCE_HEAD" | tr '[:upper:]' '[:lower:]')" != "$CANDIDATE_COMMIT" ]; then
+    echo "error: selected candidate $CANDIDATE_COMMIT does not match checked-out source HEAD $SOURCE_HEAD." >&2
+    exit 1
+  fi
+  if [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal)" ]; then
+    echo "error: source worktree has uncommitted files; commit the exact candidate before generating release media." >&2
+    exit 1
+  fi
+fi
 
 image_ref_is_local_only() {
   case "$1" in
@@ -286,6 +307,7 @@ finalize_outputs() {
 {
   "product": "Goblins OS",
   "architecture": "$ARCH",
+  "candidate_commit": "$CANDIDATE_COMMIT",
   "image": "$IMAGE",
   "container_runtime": "$CONTAINER_RUNTIME",
   "rootfs": "$ROOTFS",

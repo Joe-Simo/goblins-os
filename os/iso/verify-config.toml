@@ -166,7 +166,6 @@ serial() {
 serial "GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED"
 
 HOST_READY_URL="${GOBLINS_HWGATE_HOST_URL:-http://10.0.2.2:8099}"
-LIVE_URL="${GOBLINS_OS_CORE_URL:-http://127.0.0.1:8787}"
 
 download_with_wait() {
   local path="$1"
@@ -184,19 +183,22 @@ download_with_wait() {
   return 1
 }
 
-download_with_wait firstboot-unlock.sh /tmp/gos-firstboot 240
-serial "GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED"
-GOBLINS_HWGATE_HOST_URL="$HOST_READY_URL" GOBLINS_OS_CORE_URL="$LIVE_URL" \
-  bash /tmp/gos-firstboot
-serial "GOBLINS_HWGATE_FIRSTBOOT_HELPER_RAN"
+for _ in $(seq 1 300); do
+  [ -f /run/goblins-hwgate-firstboot-unlocked ] && break
+  sleep 1
+done
+if [ ! -f /run/goblins-hwgate-firstboot-unlocked ]; then
+  serial "GOBLINS_HWGATE_ROOT_FIRSTBOOT_HELPER_MISSING"
+  exit 1
+fi
+serial "GOBLINS_HWGATE_ROOT_FIRSTBOOT_HELPER_READY"
 
 # drive-capture.py publishes orchestrator.sh only after it has recorded the
 # post-unlock HTTP log offset, so screenshot/proof signals cannot race ahead of
 # the host tailer.
 download_with_wait orchestrator.sh /tmp/gos-orchestrator 600
 serial "GOBLINS_HWGATE_ORCHESTRATOR_DOWNLOADED"
-GOBLINS_HWGATE_HOST_URL="$HOST_READY_URL" GOBLINS_OS_CORE_URL="$LIVE_URL" \
-  bash /tmp/gos-orchestrator
+GOBLINS_HWGATE_HOST_URL="$HOST_READY_URL" bash /tmp/gos-orchestrator
 EOF
 chmod 0755 /etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator
 
@@ -221,7 +223,6 @@ Wants=org.goblins.OS.Shell.service org.goblins.OS.SessionBridge.service
 [Service]
 Type=oneshot
 Environment=GOBLINS_HWGATE_HOST_URL=http://10.0.2.2:8099
-Environment=GOBLINS_OS_CORE_URL=http://127.0.0.1:8787
 Environment=XDG_SESSION_TYPE=wayland
 Environment=WAYLAND_DISPLAY=wayland-0
 Environment=DISPLAY=:0
@@ -238,7 +239,6 @@ systemctl --global enable goblins-hwgate-session-orchestrator.service || true
 cat > /etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-exec >>/tmp/goblins-hwgate-start-session-orchestrator.log 2>&1
 
 serial() {
   echo "$*"
@@ -248,6 +248,7 @@ serial() {
 uid="$(id -u goblin)"
 runtime_dir="/run/user/${uid}"
 bus="${runtime_dir}/bus"
+HOST_READY_URL="${GOBLINS_HWGATE_HOST_URL:-http://10.0.2.2:8099}"
 
 for _ in $(seq 1 240); do
   if [ -S "$bus" ]; then
@@ -262,11 +263,40 @@ if [ ! -S "$bus" ]; then
   exit 1
 fi
 
+download_with_wait() {
+  local path="$1"
+  local output="$2"
+  local attempts="$3"
+  local i
+  for i in $(seq 1 "$attempts"); do
+    if curl -fsS --max-time 2 -o "$output" "$HOST_READY_URL/$path"; then
+      chmod 0700 "$output"
+      return 0
+    fi
+    sleep 1
+  done
+  serial "GOBLINS_HWGATE_ROOT_HELPER_DOWNLOAD_FAILED path=$path"
+  return 1
+}
+
+# Only this root system service receives the release-proof socket capability.
+# The desktop user service waits for the root-owned marker and never receives a
+# core URL, Unix group, or generic request relay.
+install -d -m 0700 -o root -g root /run/goblins-hwgate-root
+download_with_wait firstboot-unlock.sh /run/goblins-hwgate-root/firstboot 240
+serial "GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED"
+download_with_wait core-proof-operation.sh /run/goblins-hwgate-root/core-proof-operation 240
+install -m 0755 -o root -g root /run/goblins-hwgate-root/core-proof-operation \
+  /etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation
+serial "GOBLINS_HWGATE_CORE_PROOF_HELPER_INSTALLED"
+GOBLINS_HWGATE_HOST_URL="$HOST_READY_URL" bash /run/goblins-hwgate-root/firstboot
+install -m 0644 -o root -g root /dev/null /run/goblins-hwgate-firstboot-unlocked
+serial "GOBLINS_HWGATE_FIRSTBOOT_HELPER_RAN"
+
 env_common=(
   "XDG_RUNTIME_DIR=${runtime_dir}"
   "DBUS_SESSION_BUS_ADDRESS=unix:path=${bus}"
   "GOBLINS_HWGATE_HOST_URL=http://10.0.2.2:8099"
-  "GOBLINS_OS_CORE_URL=http://127.0.0.1:8787"
   "XDG_SESSION_TYPE=wayland"
   "WAYLAND_DISPLAY=wayland-0"
   "DISPLAY=:0"
@@ -292,6 +322,124 @@ fi
 EOF
 chmod 0755 /etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator
 
+cat > /etc/systemd/system/goblins-hwgate-core-proof@.service <<'EOF'
+[Unit]
+Description=Goblins OS verification-only core proof operation %i
+After=goblins-os-core.service
+
+[Service]
+Type=oneshot
+ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation %i
+ExecStopPost=-/etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation %i-finished ${SERVICE_RESULT}
+TimeoutStartSec=3900
+NoNewPrivileges=yes
+PrivateTmp=no
+ProtectSystem=strict
+ProtectHome=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+EOF
+
+cat > /etc/systemd/system/goblins-hwgate-fixture-core.service <<'EOF'
+[Unit]
+Description=Goblins OS verification-only fixture core on production capability sockets
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=goblins-os
+Group=goblins-os
+SupplementaryGroups=goblins-session-bridge goblins-core-resident
+EnvironmentFile=-/etc/goblins-os/environment
+Environment=GOBLINS_OS_SYS_BLOCK_DIR=/run/goblins-hwgate-fixture-block
+Environment=GOBLINS_OS_RAM_GB=32
+Environment=GOBLINS_OS_POLICY_STATE=/run/goblins-hwgate-fixture-state/policy
+Environment=GOBLINS_OS_APPS_DIR=/run/goblins-hwgate-fixture-state/apps
+Environment=GOBLINS_OS_AI_STATE=/run/goblins-hwgate-fixture-state/ai
+Environment=GOBLINS_OS_INSTALLER_STATE=/run/goblins-hwgate-fixture-state/installer
+Environment=GOBLINS_OS_SESSION_STATE=/run/goblins-hwgate-fixture-state/session
+Environment=GOBLINS_OS_MODEL_DIR=/run/goblins-hwgate-fixture-state/models
+Environment=GOBLINS_OS_MODEL_INSTALL_STATE=/run/goblins-hwgate-fixture-state/models/install-state
+Environment=GOBLINS_OS_RESIDENT_STATE=/run/goblins-hwgate-fixture-state/resident
+Environment=GOBLINS_OS_VOICE_DIR=/run/goblins-hwgate-fixture-state/voice
+Environment=GOBLINS_OS_LOCAL_MODEL=llama3.2:1b
+Environment=GOBLINS_OS_LOCAL_MODEL_RELAY=http://127.0.0.1:41135/v1/resident
+Environment=GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE=30m
+Environment=GOBLINS_OS_LOCAL_MODEL_RUNTIME=os-managed-runtime
+Environment=GOBLINS_OS_LOCAL_RUNTIME_URL=http://127.0.0.1:41134
+ExecStart=/usr/libexec/goblins-os/goblins-os-core
+ExecStopPost=-/etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation fixture-core-stopped
+RuntimeMaxSec=1800
+TimeoutStopSec=30
+StandardOutput=append:/run/goblins-hwgate-core-proof/fixture-core.log
+StandardError=append:/run/goblins-hwgate-core-proof/fixture-core.log
+NoNewPrivileges=yes
+PrivateTmp=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/goblins-hwgate-fixture-state /run/goblins-os-core
+ReadOnlyPaths=/run/goblins-hwgate-fixture-block
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+EOF
+
+cat > /etc/systemd/system/goblins-hwgate-fixture-resident.service <<'EOF'
+[Unit]
+Description=Goblins OS verification-only fixture resident
+After=goblins-hwgate-fixture-core.service
+Requires=goblins-hwgate-fixture-core.service
+
+[Service]
+Type=simple
+User=goblins-resident
+Group=goblins-core-resident
+EnvironmentFile=-/etc/goblins-os/environment
+Environment=GOBLINS_OS_RESIDENT_STATE=/run/goblins-hwgate-fixture-state/resident
+Environment=GOBLINS_OS_RESIDENT_SOCKET=/run/goblins-os/resident.sock
+Environment=GOBLINS_OS_MODEL_DIR=/run/goblins-hwgate-fixture-state/models
+Environment=GOBLINS_OS_MODEL_INSTALL_STATE=/run/goblins-hwgate-fixture-state/models/install-state
+Environment=GOBLINS_OS_LOCAL_MODEL=llama3.2:1b
+Environment=GOBLINS_OS_LOCAL_MODEL_RELAY=http://127.0.0.1:41135/v1/resident
+Environment=GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE=30m
+Environment=GOBLINS_OS_LOCAL_RUNTIME_URL=http://127.0.0.1:41134
+ExecStart=/usr/libexec/goblins-os/goblins-os-resident
+RuntimeDirectory=goblins-os
+RuntimeDirectoryMode=0750
+StandardOutput=append:/run/goblins-hwgate-core-proof/fixture-resident.log
+StandardError=append:/run/goblins-hwgate-core-proof/fixture-resident.log
+NoNewPrivileges=yes
+PrivateTmp=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/goblins-hwgate-fixture-state/resident /run/goblins-os
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+EOF
+
+install -d -m 0755 /etc/polkit-1/rules.d
+cat > /etc/polkit-1/rules.d/60-goblins-hwgate-core-proof.rules <<'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units" ||
+        subject.user !== "goblin") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (verb === "start" && unit && unit.match(/^goblins-hwgate-core-proof@(health|audio-status|preview-status|firewall-status|firewall-disable|firewall-enable|text-shortcuts-status|keyboard-shortcut-set|keyboard-shortcut-reset|keyboard-modifier-set|keyboard-modifier-reset|input-sources-set|input-switch-next|displays-status|display-apply-verify|display-apply-temporary|display-apply-persistent-guard|display-apply-stale|app-privacy-revoke|focus-mode-seed|focus-status|focus-activate|focus-deactivate|preview-open-pdf|preview-open-image|preview-open-unsupported|policy-status|policy-grant-app-builder|app-build|fixture-start|fixture-restore)\\.service$/)) {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});
+EOF
+systemctl daemon-reload
+
 cat > /etc/systemd/system/goblins-hwgate-session-orchestrator-starter.service <<'EOF'
 [Unit]
 Description=Goblins OS hardware-gate session orchestrator starter
@@ -301,6 +449,8 @@ Wants=graphical.target
 [Service]
 Type=oneshot
 ExecStart=/etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=graphical.target

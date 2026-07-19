@@ -37,12 +37,29 @@ families. CI runs the same native matrix — see `.github/workflows/build.yml`.
 
 The image bakes in **no credentials**. Operators supply OpenAI account / relay
 secrets in `/etc/goblins-os/openai-secrets.env` (shipped empty, mode `0600
-root:root`), which is read **only** by root — systemd (PID 1) loads it into the OS
-services (`goblins-os-core`/`-resident`/`-model-cache`) via their `EnvironmentFile`
-before dropping to the service user, so no desktop user or group can read it.
-It is **never** sourced into the desktop session — the world-readable
-`/etc/goblins-os/environment` holds non-secret config only, and the client GUIs
-receive booleans and file paths from the core, never tokens.
+root:root`). systemd (PID 1) copies it into `goblins-os-core`'s private runtime
+credential directory with `LoadCredential=`; the core reads named auth/relay
+values directly from that file, never from its process environment. No desktop
+user or group can read it, and generic core subprocesses receive a closed,
+non-secret environment. It is **never** sourced into the desktop session — the
+world-readable `/etc/goblins-os/environment` holds non-secret config only, and
+the client GUIs receive readiness booleans and opaque storage labels, never
+tokens or credential paths.
+
+Encrypted-at-rest provisioning uses the same runtime contract. An operator can
+replace the plaintext unit directive with this drop-in after creating the
+encrypted payload with `systemd-creds`; no application configuration changes:
+
+```ini
+[Service]
+LoadCredential=
+LoadCredentialEncrypted=openai-secrets.env:/etc/credstore.encrypted/goblins-os-core.service/openai-secrets.env
+```
+
+The credential payload keeps the existing literal `NAME=VALUE` format and key
+names. Matching outer quotes remain accepted for migration compatibility, but
+shell expansion is not supported. Direct secret injection through service
+environment variables is intentionally unsupported.
 
 ## 1. Build the OS image
 
@@ -52,8 +69,9 @@ DOCKER_BUILDKIT=1 docker build -f os/bootc/Containerfile -t "localhost/goblins-o
 ```
 
 This compiles the Rust workspace, assembles the Fedora-bootc image (GNOME session,
-the four native apps, the core daemon, systemd units), and runs `bootc container
-lint` as the final layer. A clean build = the image is well-formed.
+the native desktop surfaces and supporting system tools, the core daemon, and
+systemd units), and runs `bootc container lint` as the final layer. A clean build
+means the image is well-formed.
 
 ## 2. Verify the packaging contract
 
@@ -83,10 +101,12 @@ and dark — the actual installed pixels, not mockups.
 
 ```sh
 ARCH=x86_64 # or aarch64
+CANDIDATE_COMMIT="$(git rev-parse HEAD)"
 cargo run -p goblins-os-verify -- \
   --source-root . \
   --release-evidence "os/signoff-proofs/sbom/$ARCH" \
-  --arch "$ARCH"
+  --arch "$ARCH" \
+  --candidate-commit "$CANDIDATE_COMMIT"
 ```
 
 This writes `release-evidence-manifest.json`, `cargo-lock-packages.tsv`, and an
@@ -99,12 +119,18 @@ Generated release evidence, ISO manifests, SHA files, signoff notes, release
 tables, and command files must also pass the artifact/evidence secret scan
 before the hardware gate accepts them.
 
+The ISO manifest, release-evidence manifest, screenshot proof manifest, and
+signoff row must all record this same full candidate commit. Both architecture
+tracks must match it before stable promotion; historical evidence without the
+field is intentionally incomplete.
+
 ## 5. Build the installer ISO
 
 ```sh
 GOBLINS_OS_CONTAINER_RUNTIME=docker \
 GOBLINS_OS_ARCH="$ARCH" \
 GOBLINS_OS_IMAGE="localhost/goblins-os:$ARCH" \
+GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT" \
 os/iso/build-iso.sh
 # uses privileged bootc-image-builder in Docker
 ```

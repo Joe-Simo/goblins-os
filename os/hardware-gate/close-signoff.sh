@@ -26,6 +26,13 @@ if [ "$ARCH" = "unsupported" ]; then
   fail "Unsupported architecture '${GOBLINS_OS_ARCH:-$(uname -m)}'; expected aarch64 or x86_64."
   exit 1
 fi
+CANDIDATE_COMMIT="${GOBLINS_OS_CANDIDATE_COMMIT:-${GITHUB_SHA:-}}"
+if [[ ! "$CANDIDATE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  fail "GOBLINS_OS_CANDIDATE_COMMIT must identify the exact 40-hex source commit selected for this signoff."
+  exit 1
+fi
+CANDIDATE_COMMIT="$(printf '%s' "$CANDIDATE_COMMIT" | tr '[:upper:]' '[:lower:]')"
+export GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT"
 VERIFY_LOG="/tmp/goblins-os-verify.log"
 VERIFY_ERR="/tmp/verify.err"
 SELFTEST_LOG="/tmp/goblins-os-selftest.log"
@@ -116,6 +123,8 @@ MULTI_DISPLAY_APPLY_STATUS="not checked"
 FOCUS_ARM_ROUNDTRIP_STATUS="not checked"
 APP_PRIVACY_REVOKE_STATUS="not checked"
 PREVIEW_OPEN_RENDER_STATUS="not checked"
+SCREENSHOT_ISO_SHA="not checked"
+ISO_CANDIDATE_STATUS="not checked"
 RUNTIME_ENGINE_MODE="${RUNTIME_ENGINE_MODE:-}"
 RUNTIME_ENGINE_SOURCE="${RUNTIME_ENGINE_SOURCE:-}"
 RUNTIME_ENGINE_CONFIG="${RUNTIME_ENGINE_CONFIG:-}"
@@ -220,7 +229,8 @@ generate_source_release_evidence() {
     target/release/goblins-os-verify \
       --source-root . \
       --release-evidence "$output_dir" \
-      --arch "$arch"
+      --arch "$arch" \
+      --candidate-commit "$CANDIDATE_COMMIT"
     return
   fi
 
@@ -228,7 +238,8 @@ generate_source_release_evidence() {
     cargo run -p goblins-os-verify -- \
       --source-root . \
       --release-evidence "$output_dir" \
-      --arch "$arch"
+      --arch "$arch" \
+      --candidate-commit "$CANDIDATE_COMMIT"
     return
   fi
 
@@ -255,6 +266,7 @@ run_rpm_release_evidence() {
 release_evidence_manifest_has_diligence_fields() {
   local manifest="$1"
   [ -f "$manifest" ] \
+    && grep -Fq '"candidate_commit": "'"$CANDIDATE_COMMIT"'"' "$manifest" \
     && grep -Fq '"asset_provenance": "os/release/asset-provenance.toml"' "$manifest" \
     && grep -Fq '"third_party_notices": "os/release/third-party-notices.toml"' "$manifest" \
     && grep -Fq '"trademark_posture": "os/release/trademark-posture.toml"' "$manifest" \
@@ -332,6 +344,7 @@ screenshot_manifest_matches_iso() {
 
   [ -s "$manifest" ] || return 1
   rg -q '"architecture"[[:space:]]*:[[:space:]]*"'"$ARCH"'"' "$manifest" \
+    && rg -q '"candidate_commit"[[:space:]]*:[[:space:]]*"'"$CANDIDATE_COMMIT"'"' "$manifest" \
     && rg -q '"iso"[[:space:]]*:[[:space:]]*"'"$ISO_PATH"'"' "$manifest" \
     && rg -q '"iso_sha256"[[:space:]]*:[[:space:]]*"[a-fA-F0-9]{64}"' "$manifest" \
     && rg -q '"captured_at"[[:space:]]*:[[:space:]]*"[^"]+"' "$manifest" \
@@ -357,6 +370,11 @@ screenshot_manifest_matches_iso() {
 
 screenshot_manifest_iso_sha() {
   awk -F'"' '/"iso_sha256"/ { print $4; exit }' "$1" 2>/dev/null || true
+}
+
+semantic_screenshot_frames_are_distinct() {
+  "$REPO_ROOT/os/hardware-gate/capture-harness/run-capture.sh" \
+    --check-semantic-screenshots "$1" "${2:-verbose}"
 }
 
 firewall_live_toggle_proof_passes() {
@@ -848,11 +866,19 @@ else
 fi
 
 expected_iso="os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso"
+ISO_MANIFEST="os/iso/output/$ARCH/manifest-goblins-os-$ARCH.json"
 if [ -f "$expected_iso" ]; then
   ISO_PATH="$expected_iso"
   ISO_SHA="$(sha256sum "$ISO_PATH" | awk '{print $1}')"
+  if [ ! -f "$ISO_MANIFEST" ] \
+    || ! grep -Fq '"candidate_commit": "'"$CANDIDATE_COMMIT"'"' "$ISO_MANIFEST"; then
+    fail "ISO manifest must bind $ARCH media to candidate commit $CANDIDATE_COMMIT: $ISO_MANIFEST"
+    exit 1
+  fi
+  ISO_CANDIDATE_STATUS="yes ($ISO_MANIFEST binds $CANDIDATE_COMMIT)"
   log "Latest installer ISO: $ISO_PATH"
   log "SHA256: $ISO_SHA"
+  log "Candidate/source commit: $CANDIDATE_COMMIT"
 else
   warn "No $ARCH ISO found at $expected_iso (if available, verify on Linux host)"
 fi
@@ -866,7 +892,7 @@ if [ ! -f "$SBOM_DIR/release-evidence-manifest.json" ] \
   || ! release_evidence_manifest_has_diligence_fields "$SBOM_DIR/release-evidence-manifest.json"; then
   log "Generating source release evidence in $SBOM_DIR"
   if ! generate_source_release_evidence "$SBOM_DIR" "$ARCH"; then
-    warn "Could not generate source release evidence; run target/release/goblins-os-verify --source-root . --release-evidence $SBOM_DIR --arch $ARCH"
+    warn "Could not generate source release evidence; run target/release/goblins-os-verify --source-root . --release-evidence $SBOM_DIR --arch $ARCH --candidate-commit $CANDIDATE_COMMIT"
   fi
 fi
 
@@ -888,9 +914,9 @@ else
 fi
 
 if release_evidence_complete "$SBOM_DIR"; then
-  RELEASE_EVIDENCE_STATUS="yes (manifest, diligence links, Cargo TSV, and RPM TSV present in $SBOM_DIR)"
+  RELEASE_EVIDENCE_STATUS="yes (candidate $CANDIDATE_COMMIT, manifest, diligence links, Cargo TSV, and RPM TSV present in $SBOM_DIR)"
 else
-  warn "Release evidence incomplete for $ARCH; expected release-evidence-manifest.json with diligence links plus cargo-lock-packages.tsv and rpm-packages.tsv in $SBOM_DIR"
+  warn "Release evidence incomplete for $ARCH candidate $CANDIDATE_COMMIT; expected a matching release-evidence-manifest.json with diligence links plus cargo-lock-packages.tsv and rpm-packages.tsv in $SBOM_DIR"
 fi
 
 if [ -n "$SCREENSHOT_DIR" ]; then
@@ -924,19 +950,28 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Screenshots must be non-empty PNG captures from the display-backed VM or hardware run."
     exit 1
   fi
+  if ! semantic_screenshot_frames_are_distinct "$SCREENSHOT_DIR"; then
+    fail "Screenshot proof reuses a central application crop for named login/Home or Studio semantic states."
+    fail "Clock, top-bar, and pointer-only changes cannot satisfy release proof."
+    exit 1
+  fi
   manifest="$SCREENSHOT_DIR/proof-manifest.json"
   if ! screenshot_manifest_matches_iso "$manifest"; then
     fail "Screenshot proof manifest missing or incoherent for this architecture verification proof: $manifest"
-    fail "Expected architecture=$ARCH, iso=$ISO_PATH, a 64-character iso_sha256, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF, audio_output_proof=$AUDIO_OUTPUT_PROOF, and runtime_build_proof=$RUNTIME_BUILD_PROOF."
+    fail "Expected architecture=$ARCH, candidate_commit=$CANDIDATE_COMMIT, iso=$ISO_PATH, a 64-character iso_sha256, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF, audio_output_proof=$AUDIO_OUTPUT_PROOF, and runtime_build_proof=$RUNTIME_BUILD_PROOF."
     exit 1
   fi
-  screenshot_iso_sha="$(screenshot_manifest_iso_sha "$manifest")"
-  log "Screenshot verification ISO SHA256: ${screenshot_iso_sha:-missing}"
-  if [ "$ISO_SHA" != "not-found" ]; then
-    log "Current hydrated architecture ISO SHA256: $ISO_SHA"
-    if [ -n "$screenshot_iso_sha" ] && [ "$screenshot_iso_sha" != "$ISO_SHA" ]; then
-      log "Screenshot proof uses verification-only media; hydrated release ISO artifacts are checked separately."
-    fi
+  SCREENSHOT_ISO_SHA="$(screenshot_manifest_iso_sha "$manifest" | tr '[:upper:]' '[:lower:]')"
+  log "Screenshot verification ISO SHA256: ${SCREENSHOT_ISO_SHA:-missing}"
+  if [ "$ISO_SHA" = "not-found" ]; then
+    fail "The associated verification ISO must be present so its SHA256 can be bound to this signoff row."
+    exit 1
+  fi
+  log "Associated signoff-row verification ISO SHA256: $ISO_SHA"
+  if [ -z "$SCREENSHOT_ISO_SHA" ] || [ "$SCREENSHOT_ISO_SHA" != "$ISO_SHA" ]; then
+    fail "Screenshot proof-manifest ISO SHA256 does not equal the associated signoff-row verification ISO SHA256."
+    fail "manifest=${SCREENSHOT_ISO_SHA:-missing} signoff=$ISO_SHA"
+    exit 1
   fi
   if ! firewall_live_toggle_proof_passes "$SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"; then
     fail "Firewall live toggle proof missing or failed: $SCREENSHOT_DIR/$FIREWALL_LIVE_TOGGLE_PROOF"
@@ -1131,10 +1166,12 @@ if [ "$VERIFY_STATUS" = "pass" ] \
   && [[ "$FOCUS_ARM_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$APP_PRIVACY_REVOKE_STATUS" == yes* ]] \
   && [[ "$PREVIEW_OPEN_RENDER_STATUS" == yes* ]] \
-  && [[ "$GAMING_AUDIO_OUTPUT_STATUS" == yes* ]] \
-  && [ "$ISO_PATH" != "not-found" ] \
-  && [ "$ISO_SHA" != "not-found" ] \
-  && proof_field_is_real "$RUNTIME_ENGINE_MODE" \
+	  && [[ "$GAMING_AUDIO_OUTPUT_STATUS" == yes* ]] \
+	  && [ "$ISO_PATH" != "not-found" ] \
+	  && [ "$ISO_SHA" != "not-found" ] \
+	  && [[ "$ISO_CANDIDATE_STATUS" == yes* ]] \
+	  && [ "$SCREENSHOT_ISO_SHA" = "$ISO_SHA" ] \
+	  && proof_field_is_real "$RUNTIME_ENGINE_MODE" \
   && proof_field_is_real "$RUNTIME_ENGINE_SOURCE" \
   && built_artifact_reference_is_real "$BUILT_ARTIFACT_PATH_URL"; then
   PROJECT_COMPLETION_STATUS="complete"
@@ -1152,6 +1189,7 @@ cat >> "$OUT" <<EOF2
 - Runner: ${SIGNOFF_RUNNER_VALUE}
 - CI workflow references: verified in-repo at .github/workflows/build.yml
 - Architecture: ${ARCH}
+- Candidate/source commit: ${CANDIDATE_COMMIT}
 - CI run IDs/URLs:
   - rust: ${CI_RUST_URL:-not provided}
   - image: ${CI_IMAGE_URL:-not provided}
@@ -1159,6 +1197,8 @@ cat >> "$OUT" <<EOF2
 - Image: ${IMAGE}
 - ISO: ${ISO_PATH}
 - ISO SHA256: ${ISO_SHA}
+- Screenshot proof ISO SHA256: ${SCREENSHOT_ISO_SHA}
+- ISO candidate binding checked: ${ISO_CANDIDATE_STATUS}
 - Rootfs verify command: \
   ${CONTAINER_RUNTIME:-docker} run --rm ${IMAGE} /usr/libexec/goblins-os/goblins-os-verify --installed-root /
 - Verify result (blocked=0): ${VERIFY_STATUS}

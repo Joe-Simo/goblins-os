@@ -9,7 +9,7 @@
 use axum::Json;
 use serde::Serialize;
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_session_command_output, probe_timeout};
 
 const SECRET_SERVICE_DEST: &str = "org.freedesktop.secrets";
 const SECRET_SERVICE_PATH: &str = "/org/freedesktop/secrets";
@@ -153,7 +153,7 @@ fn secret_collection_status(path: &str) -> KeychainCollectionStatus {
 }
 
 fn secret_property(object_path: &str, interface: &str, property: &str) -> Result<String, String> {
-    let output = bounded_command_output(
+    let output = bounded_session_command_output(
         "gdbus",
         &[
             "call",

@@ -18,7 +18,7 @@ use axum::Json;
 use goblins_os_textshortcuts_engine::{sanitize_shortcuts, TextShortcut};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_command_output, probe_timeout};
+use crate::bounded::{bounded_session_command_output, probe_timeout};
 use crate::session_bridge::{self, SessionBridgeResult};
 
 const ENGINE_BINARY_PATH: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine";
@@ -295,7 +295,7 @@ fn single_quoted_strings(fragment: &str) -> Vec<String> {
 
 fn gsettings_get(schema: &str, key: &str) -> Option<String> {
     let output =
-        bounded_command_output("gsettings", &["get", schema, key], probe_timeout()).ok()?;
+        bounded_session_command_output("gsettings", &["get", schema, key], probe_timeout()).ok()?;
     if !output.status.success() {
         return None;
     }

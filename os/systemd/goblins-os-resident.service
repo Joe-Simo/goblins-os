@@ -5,18 +5,19 @@ Wants=goblins-os-core.service
 
 [Service]
 Type=simple
-User=goblins-os
-Group=goblins-os
+User=goblins-resident
+Group=goblins-core-resident
 EnvironmentFile=-/etc/goblins-os/environment
-EnvironmentFile=-/etc/goblins-os/openai-secrets.env
 Environment=GOBLINS_OS_RESIDENT_STATE=/var/lib/goblins-os/resident
 Environment=GOBLINS_OS_RESIDENT_SOCKET=/run/goblins-os/resident.sock
 ExecStart=/usr/libexec/goblins-os/goblins-os-resident
 Restart=always
 RestartSec=3s
 StateDirectory=goblins-os/resident
+StateDirectoryMode=0750
 RuntimeDirectory=goblins-os
 RuntimeDirectoryMode=0750
+UMask=0027
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

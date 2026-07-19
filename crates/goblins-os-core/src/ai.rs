@@ -311,7 +311,15 @@ pub async fn ai_action_history() -> Json<AiActionHistory> {
 pub async fn ask_file_context(
     Json(request): Json<FileContextRequest>,
 ) -> (StatusCode, Json<FileContextResponse>) {
-    crate::bounded::run_blocking(move || ask_file_context_blocking(request)).await
+    crate::bounded::run_blocking(move || ask_file_context_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            file_context_outcome(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                None,
+            )
+        })
 }
 
 fn ask_file_context_blocking(
@@ -389,7 +397,15 @@ fn ask_file_context_blocking(
 pub async fn ask_settings_context(
     Json(request): Json<SettingsContextRequest>,
 ) -> (StatusCode, Json<SettingsContextResponse>) {
-    crate::bounded::run_blocking(move || ask_settings_context_blocking(request)).await
+    crate::bounded::run_blocking(move || ask_settings_context_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            settings_context_outcome(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                None,
+            )
+        })
 }
 
 fn ask_settings_context_blocking(
@@ -514,7 +530,15 @@ fn audit_open_settings_panel(outcome: AiActionOutcome) {
 pub async fn ask_system_status(
     Json(request): Json<SystemStatusContextRequest>,
 ) -> (StatusCode, Json<SystemStatusContextResponse>) {
-    crate::bounded::run_blocking(move || ask_system_status_blocking(request)).await
+    crate::bounded::run_blocking(move || ask_system_status_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            system_status_context_outcome(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                None,
+            )
+        })
 }
 
 fn ask_system_status_blocking(
@@ -647,7 +671,15 @@ pub async fn change_safe_setting(
 pub async fn ask_selected_text_context(
     Json(request): Json<SelectedTextContextRequest>,
 ) -> (StatusCode, Json<SelectedTextContextResponse>) {
-    crate::bounded::run_blocking(move || ask_selected_text_context_blocking(request)).await
+    crate::bounded::run_blocking(move || ask_selected_text_context_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            selected_text_context_outcome(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                None,
+            )
+        })
 }
 
 fn ask_selected_text_context_blocking(
@@ -720,7 +752,15 @@ fn ask_selected_text_context_blocking(
 pub async fn write_selected_text_context(
     Json(request): Json<SelectedTextContextRequest>,
 ) -> (StatusCode, Json<SelectedTextContextResponse>) {
-    crate::bounded::run_blocking(move || write_selected_text_context_blocking(request)).await
+    crate::bounded::run_blocking(move || write_selected_text_context_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            selected_text_context_outcome(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                None,
+            )
+        })
 }
 
 fn write_selected_text_context_blocking(
@@ -793,7 +833,15 @@ fn write_selected_text_context_blocking(
 pub async fn ask_notification_context(
     Json(request): Json<NotificationContextRequest>,
 ) -> (StatusCode, Json<NotificationContextResponse>) {
-    crate::bounded::run_blocking(move || ask_notification_context_blocking(request)).await
+    crate::bounded::run_blocking(move || ask_notification_context_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            notification_context_outcome(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                None,
+            )
+        })
 }
 
 fn ask_notification_context_blocking(
@@ -879,7 +927,15 @@ fn ask_notification_context_blocking(
 pub async fn ask_screen_context(
     Json(request): Json<ScreenContextRequest>,
 ) -> (StatusCode, Json<ScreenContextResponse>) {
-    crate::bounded::run_blocking(move || ask_screen_context_blocking(request)).await
+    crate::bounded::run_blocking(move || ask_screen_context_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            screen_context_outcome(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                None,
+            )
+        })
 }
 
 fn ask_screen_context_blocking(
@@ -1162,12 +1218,12 @@ fn readiness_reason(
     _policy: PolicyControlState,
 ) -> String {
     match state {
-        AiActionReadiness::Ready => "Ready through the OS-owned resident path.".to_string(),
+        AiActionReadiness::Ready => "Ready in Goblins AI.".to_string(),
         AiActionReadiness::ConfirmationRequired => {
             "Ready after the user reviews and confirms the exact action.".to_string()
         }
         AiActionReadiness::WaitingForEngine => {
-            "Set up on-device GPT-OSS, sign in to Codex, or add your own OpenAI key to use Goblins AI."
+            "Set up on-device GPT-OSS, sign in to Codex, or ask a device administrator to install an OpenAI key to use Goblins AI."
                 .to_string()
         }
         AiActionReadiness::PermissionGated => format!(
@@ -1182,9 +1238,11 @@ fn readiness_reason(
 
 fn engine_detail(engine: &str, ready: bool) -> String {
     if ready {
-        return format!("Goblins AI is using {engine} through an OS-owned relay.");
+        return format!(
+            "Goblins AI is ready with {engine} through a protected Goblins OS service."
+        );
     }
-    "Goblins AI is waiting for GPT-OSS, Codex sign-in, or your own OpenAI key in OS-owned storage."
+    "Goblins AI is waiting for GPT-OSS, Codex sign-in, or an administrator-installed OpenAI key."
         .to_string()
 }
 

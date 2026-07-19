@@ -117,6 +117,18 @@ export default class GoblinsSwitchControl extends Extension {
         this._interfaceSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
         this._buildActors();
 
+        // Chrome actors must stay absent while Switch Control is off. GNOME Shell
+        // can re-show actors when the stage relayouts around a newly mapped app;
+        // enforce the preference boundary at the actor itself so merely opening
+        // Settings or another window can never surface or focus the scanner.
+        this._signals.push([
+            this._panel,
+            this._panel.connect('notify::visible', () => {
+                if (this._panel?.visible && !this._settings?.get_boolean('enabled'))
+                    this._stopScanner();
+            }),
+        ]);
+
         for (const key of ['enabled', 'mode', 'scanning', 'auto-interval-ms', 'dwell-ms', 'debounce-ms']) {
             this._signals.push([
                 this._settings,
@@ -137,7 +149,7 @@ export default class GoblinsSwitchControl extends Extension {
     }
 
     disable() {
-        this._stopTick();
+        this._stopScanner();
         for (const [actor, id] of this._signals)
             actor.disconnect(id);
         this._signals = [];
@@ -180,6 +192,18 @@ export default class GoblinsSwitchControl extends Extension {
         if (this._settings)
             this._settings.set_boolean('enabled', false);
         this._stopScanner();
+    }
+
+    renderProofInactive() {
+        return Boolean(
+            this._settings &&
+            !this._settings.get_boolean('enabled') &&
+            !this._panel?.visible &&
+            !this._ring?.visible &&
+            !this._crosshairX?.visible &&
+            !this._crosshairY?.visible &&
+            !this._panel?.has_key_focus()
+        );
     }
 
     _buildActors() {
@@ -253,6 +277,8 @@ export default class GoblinsSwitchControl extends Extension {
         this._stopTick();
         this._loadingTargets = false;
         this._scanTargets = [];
+        if (this._panel?.has_key_focus())
+            global.stage.set_key_focus(null);
         this._ring?.hide();
         this._crosshairX?.hide();
         this._crosshairY?.hide();

@@ -6,7 +6,11 @@
 //! the actual firewalld unit write, and polkit scopes that system-bus request to
 //! the `goblins-os` service user plus the two template instances.
 
-use std::{path::Path, thread, time::Duration};
+use std::{
+    path::Path,
+    thread,
+    time::{Duration, Instant},
+};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
@@ -16,9 +20,14 @@ use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError}
 // Starting the templated firewalld unit blocks until the systemd job settles,
 // which legitimately outlives the short probe bound under load.
 const SERVICE_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+const FIREWALL_STATE_POLL_ATTEMPTS: usize = 20;
+const FIREWALL_STATE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const FIREWALL_STATE_POLL_WINDOW: Duration = Duration::from_secs(5);
 const FIREWALL_HELPER: &str = "/usr/libexec/goblins-os/goblins-os-firewall";
 const FIREWALL_UNIT_TEMPLATE: &str = "/usr/lib/systemd/system/goblins-os-firewall@.service";
 const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
+const SYSTEMD_RUNTIME_DIR: &str = "/run/systemd/system";
+const SYSTEM_BUS_SOCKET: &str = "/run/dbus/system_bus_socket";
 const FIREWALL_POLKIT_RULE_PATHS: &[&str] = &[
     "/usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules",
     "/etc/polkit-1/rules.d/60-goblins-os-firewall.rules",
@@ -102,10 +111,26 @@ fn executable_exists(name: &str) -> bool {
 }
 
 fn firewall_bridge_ready() -> bool {
-    systemctl_available()
+    system_control_runtime_ready()
+        && systemctl_available()
         && Path::new(FIREWALL_HELPER).is_file()
         && Path::new(FIREWALL_UNIT_TEMPLATE).is_file()
         && firewall_polkit_rule_present()
+}
+
+#[cfg(unix)]
+fn system_control_runtime_ready() -> bool {
+    use std::os::unix::fs::FileTypeExt;
+
+    Path::new(SYSTEMD_RUNTIME_DIR).is_dir()
+        && std::fs::symlink_metadata(SYSTEM_BUS_SOCKET).is_ok_and(|metadata| {
+            metadata.file_type().is_socket() && !metadata.file_type().is_symlink()
+        })
+}
+
+#[cfg(not(unix))]
+fn system_control_runtime_ready() -> bool {
+    false
 }
 
 /// firewalld is "running" only when the command succeeded AND said so — pure,
@@ -179,8 +204,7 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
         SERVICE_CONTROL_TIMEOUT,
     ) {
         Ok(output) if output.status.success() => {
-            let status = wait_for_firewall_state(enabled);
-            if status.available && status.active == enabled {
+            if let Some(status) = wait_for_firewall_state(enabled) {
                 firewall_toggle_response(
                     StatusCode::OK,
                     true,
@@ -197,7 +221,7 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
             }
         }
         Ok(output) => {
-            let status = wait_for_firewall_state(enabled);
+            let status = build_firewall_status();
             if status.available && status.active == enabled {
                 return firewall_toggle_response(
                     StatusCode::OK,
@@ -230,16 +254,90 @@ fn firewall_enabled_outcome(enabled: bool) -> (StatusCode, Json<FirewallToggleOu
     }
 }
 
-fn wait_for_firewall_state(enabled: bool) -> FirewallStatus {
-    let mut status = build_firewall_status();
-    for _ in 0..180 {
-        if status.available && status.active == enabled {
-            return status;
+fn wait_for_firewall_state(enabled: bool) -> Option<FirewallStatus> {
+    poll_firewall_state_until(
+        enabled,
+        FIREWALL_STATE_POLL_WINDOW,
+        FIREWALL_STATE_POLL_INTERVAL,
+        FIREWALL_STATE_POLL_ATTEMPTS,
+        probe_firewall_active_before,
+    )
+    .filter(|active| *active == enabled)
+    .map(observed_firewall_status)
+}
+
+fn poll_firewall_state_until<F>(
+    enabled: bool,
+    window: Duration,
+    interval: Duration,
+    attempts: usize,
+    mut probe: F,
+) -> Option<bool>
+where
+    F: FnMut(Instant) -> Option<bool>,
+{
+    let started = Instant::now();
+    let deadline = started.checked_add(window).unwrap_or(started);
+    let mut last_observation = None;
+    for attempt in 0..=attempts {
+        remaining_probe_time(deadline)?;
+        if let Some(active) = probe(deadline) {
+            last_observation = Some(active);
+            if active == enabled {
+                return last_observation;
+            }
         }
-        thread::sleep(Duration::from_millis(500));
-        status = build_firewall_status();
+        if attempt == attempts {
+            break;
+        }
+        let remaining = remaining_probe_time(deadline)?;
+        thread::sleep(interval.min(remaining));
     }
-    status
+    last_observation
+}
+
+fn probe_firewall_active_before(deadline: Instant) -> Option<bool> {
+    let timeout = remaining_probe_time(deadline)?;
+    match bounded_command_output("firewall-cmd", &["--state"], timeout) {
+        Ok(output)
+            if firewall_is_running(
+                output.status.success(),
+                &String::from_utf8_lossy(&output.stdout),
+            ) =>
+        {
+            return Some(true);
+        }
+        Err(BoundedCommandError::TimedOut) => return None,
+        _ => {}
+    }
+
+    let timeout = remaining_probe_time(deadline)?;
+    bounded_command_output(
+        systemctl_command(),
+        &["is-active", "--quiet", "firewalld.service"],
+        timeout,
+    )
+    .map(|output| output.status.success())
+    .ok()
+}
+
+fn remaining_probe_time(deadline: Instant) -> Option<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .map(|remaining| remaining.min(probe_timeout()))
+}
+
+fn observed_firewall_status(active: bool) -> FirewallStatus {
+    let manageable = firewall_bridge_ready();
+    FirewallStatus {
+        source: "goblins-os-core",
+        available: true,
+        active,
+        manageable,
+        detail: firewall_detail(active, None),
+        management_detail: firewall_management_detail(manageable).to_string(),
+    }
 }
 
 fn firewall_template_instance(enabled: bool) -> &'static str {
@@ -317,7 +415,9 @@ mod tests {
     use super::{
         firewall_command_error_detail, firewall_detail, firewall_is_running,
         firewall_management_detail, firewall_polkit_rule_paths, firewall_template_instance,
-        firewall_toggle_response, systemctl_command, SYSTEMCTL_PATH,
+        firewall_toggle_response, poll_firewall_state_until, remaining_probe_time,
+        systemctl_command, FIREWALL_STATE_POLL_ATTEMPTS, FIREWALL_STATE_POLL_INTERVAL,
+        FIREWALL_STATE_POLL_WINDOW, SYSTEMCTL_PATH,
     };
 
     #[test]
@@ -391,5 +491,30 @@ mod tests {
             "Firewall control failed: stdout"
         );
         assert!(firewall_command_error_detail("", "").contains("without a system message"));
+    }
+
+    #[test]
+    fn post_start_state_poll_has_one_real_wall_clock_deadline() {
+        assert_eq!(
+            FIREWALL_STATE_POLL_INTERVAL * FIREWALL_STATE_POLL_ATTEMPTS as u32,
+            FIREWALL_STATE_POLL_WINDOW
+        );
+
+        let started = std::time::Instant::now();
+        let observed = poll_firewall_state_until(
+            true,
+            std::time::Duration::from_millis(300),
+            std::time::Duration::from_millis(10),
+            FIREWALL_STATE_POLL_ATTEMPTS,
+            |deadline| {
+                let timeout = remaining_probe_time(deadline)?;
+                let _ = crate::bounded::bounded_command_output("sleep", &["30"], timeout);
+                None
+            },
+        );
+        let elapsed = started.elapsed();
+        assert_eq!(observed, None);
+        assert!(elapsed >= std::time::Duration::from_millis(250));
+        assert!(elapsed < std::time::Duration::from_secs(2));
     }
 }

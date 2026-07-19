@@ -11,7 +11,7 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     thread,
     time::{Duration, Instant},
 };
@@ -19,7 +19,9 @@ use std::{
 use axum::{http::StatusCode, Json};
 use serde::Serialize;
 
-use crate::bounded::{bounded_output_of, BoundedCommandError};
+use crate::bounded::{
+    bounded_output_of, isolated_command, isolated_session_command, BoundedCommandError,
+};
 
 const DEFAULT_VOICE_DIR: &str = "/var/lib/goblins-os/voice";
 const CAPTURE_SECONDS: &str = "6";
@@ -74,7 +76,19 @@ pub async fn voice_status() -> Json<VoiceStatus> {
 /// turn, Piper, playback), so the body runs on the blocking pool instead of
 /// pinning an async runtime worker.
 pub async fn voice_converse() -> (StatusCode, Json<ConverseOutcome>) {
-    crate::bounded::run_blocking(voice_converse_blocking).await
+    crate::bounded::run_blocking(voice_converse_blocking)
+        .await
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ConverseOutcome {
+                    ok: false,
+                    transcript: String::new(),
+                    reply: String::new(),
+                    text: crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                }),
+            )
+        })
 }
 
 fn voice_converse_blocking() -> (StatusCode, Json<ConverseOutcome>) {
@@ -107,7 +121,18 @@ fn voice_converse_blocking() -> (StatusCode, Json<ConverseOutcome>) {
 /// Dictation blocks on the fixed capture window plus a Whisper pass, so the
 /// body runs on the blocking pool instead of pinning an async runtime worker.
 pub async fn voice_dictate() -> (StatusCode, Json<DictateOutcome>) {
-    crate::bounded::run_blocking(voice_dictate_blocking).await
+    crate::bounded::run_blocking(voice_dictate_blocking)
+        .await
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(DictateOutcome {
+                    ok: false,
+                    transcript: String::new(),
+                    text: crate::bounded::LONG_OPERATION_BUSY_MESSAGE.to_string(),
+                }),
+            )
+        })
 }
 
 fn voice_dictate_blocking() -> (StatusCode, Json<DictateOutcome>) {
@@ -297,7 +322,7 @@ fn record_audio(path: &Path) -> Result<(), String> {
     // 16 kHz mono PCM is what Whisper expects; a fixed window keeps the loop
     // simple and predictable without a voice-activity detector. The bound leaves
     // the fixed capture window plenty of room while still killing a hung capture.
-    let mut command = Command::new(capture_bin());
+    let mut command = isolated_session_command(&capture_bin());
     command
         .args([
             "-q",
@@ -333,7 +358,7 @@ fn transcribe(input: &Path) -> Result<String, String> {
     // Recognition is genuinely heavy compute — the bound has to cover model
     // load plus inference for whatever model the user installed — so it gets a
     // much wider bound than the status probes.
-    let mut command = Command::new(whisper_bin());
+    let mut command = isolated_command(&whisper_bin());
     command
         .args(["-m"])
         .arg(&model)
@@ -359,7 +384,8 @@ fn synthesize(text: &str, output: &Path) -> Result<(), String> {
 
     let voice = first_model(&tts_dir(), &["onnx"])
         .ok_or_else(|| "No Piper voice is installed.".to_string())?;
-    let mut child = Command::new(piper_bin())
+    let mut command = isolated_command(&piper_bin());
+    let mut child = command
         .args(["-q", "-m"])
         .arg(&voice)
         .args(["-f"])
@@ -408,7 +434,7 @@ fn synthesize(text: &str, output: &Path) -> Result<(), String> {
 }
 
 fn play_audio(path: &Path) {
-    let mut command = Command::new(playback_bin());
+    let mut command = isolated_session_command(&playback_bin());
     command.arg("-q").arg(path);
     let _ = bounded_output_of(&mut command, Duration::from_secs(60));
 }

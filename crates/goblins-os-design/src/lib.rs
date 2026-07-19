@@ -836,6 +836,7 @@ tooltip label {
 .gos-secondary-action,
 .gos-local-action,
 .gos-permission-action,
+.gos-destructive-action,
 .gos-mode,
 .gos-mode-selected,
 .gos-disabled-action {
@@ -896,6 +897,17 @@ tooltip label {
 .gos-permission-action:hover,
 .gos-mode:hover {
   box-shadow: 0 8px 20px @gos_shadow_raise;
+}
+
+.gos-destructive-action {
+  color: @gos_system_red;
+  border: 1px solid alpha(@gos_system_red, 0.34);
+  background: alpha(@gos_system_red, 0.07);
+}
+
+.gos-destructive-action:hover {
+  background: alpha(@gos_system_red, 0.13);
+  border-color: alpha(@gos_system_red, 0.52);
 }
 
 .gos-mode-selected {
@@ -1841,6 +1853,76 @@ button:active {
   color: @gos_studio_text;
   background: @gos_studio_active;
   border-color: @gos_studio_border;
+}
+
+/* GtkMenuButton owns an inner toggle button. Carry the same composer-control
+   treatment onto that real hit target so the explicit engine menu looks and
+   focuses exactly like its sibling controls. */
+.gos-studio-engine > button {
+  min-height: 30px;
+  padding: 0 11px;
+  border-radius: 8px;
+  color: @gos_studio_text;
+  background: @gos_studio_active;
+  border: 1px solid @gos_studio_border;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.gos-studio-engine > button:focus:focus-visible {
+  box-shadow: 0 0 0 3px @gos_focus;
+}
+
+.gos-studio-engine-popover contents {
+  min-width: 300px;
+  padding: 10px;
+  border: 1px solid @gos_studio_border;
+  border-radius: 12px;
+  background: @gos_material_thick;
+  box-shadow: 0 12px 32px @gos_material_shadow;
+}
+
+.gos-studio-engine-feedback {
+  margin: 2px 4px 6px;
+  color: @gos_studio_text_muted;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.gos-studio-engine-option {
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.gos-studio-engine-option:hover {
+  border-color: @gos_studio_border;
+  background: @gos_studio_hover;
+}
+
+.gos-studio-engine-option:focus:focus-visible {
+  border-color: @gos_primary_border;
+  box-shadow: 0 0 0 3px @gos_focus;
+}
+
+.gos-studio-engine-option:disabled {
+  opacity: 1;
+  background: alpha(@gos_studio_hover, 0.45);
+}
+
+.gos-studio-engine-option-title {
+  color: @gos_studio_text;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.gos-studio-engine-option-detail {
+  color: @gos_studio_text_muted;
+  font-size: 11px;
+  line-height: 15px;
 }
 
 .gos-studio-send {
@@ -3100,6 +3182,39 @@ mod tests {
             "no 2px focus ring may remain — the canonical ring is 3px"
         );
         assert!(GOBLINS_NATIVE_CSS.contains("0 0 0 3px @gos_focus"));
+    }
+
+    #[test]
+    fn studio_engine_menu_has_visible_readiness_and_focus_states() {
+        for selector in [
+            ".gos-studio-engine > button",
+            ".gos-studio-engine-popover contents",
+            ".gos-studio-engine-option:disabled",
+            ".gos-studio-engine-option:focus:focus-visible",
+            ".gos-studio-engine-option-detail",
+        ] {
+            assert!(
+                GOBLINS_NATIVE_CSS.contains(selector),
+                "missing Studio engine menu selector: {selector}"
+            );
+        }
+        let option = GOBLINS_NATIVE_CSS
+            .split(".gos-studio-engine-option {")
+            .nth(1)
+            .and_then(|block| block.split('}').next())
+            .expect("engine option rule");
+        assert!(option.contains("min-height: 52px;"));
+    }
+
+    #[test]
+    fn destructive_actions_use_the_system_role_without_losing_control_height() {
+        assert!(GOBLINS_NATIVE_CSS.contains(".gos-destructive-action,"));
+        let destructive = GOBLINS_NATIVE_CSS
+            .split(".gos-destructive-action {")
+            .nth(1)
+            .and_then(|block| block.split('}').next())
+            .expect("destructive action rule");
+        assert!(destructive.contains("@gos_system_red"));
     }
 
     #[test]

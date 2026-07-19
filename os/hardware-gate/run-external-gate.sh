@@ -25,6 +25,9 @@ Usage:
 
 Optional env:
   GOBLINS_OS_ARCH=aarch64|x86_64
+  GOBLINS_OS_CANDIDATE_COMMIT=40-hex-commit
+                              Exact source commit selected for both architectures.
+                              Defaults to GITHUB_SHA or the checked-out Git HEAD.
   DATE=YYYY-MM-DD            Screenshot directory date segment (default UTC date)
   SCREENSHOT_DIR=path         Full screenshot directory path
   SCREENSHOT_RUN_DIR=path     Alias for SCREENSHOT_DIR
@@ -78,6 +81,35 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
 fi
+
+resolve_candidate_commit() {
+  local selected="${GOBLINS_OS_CANDIDATE_COMMIT:-${GITHUB_SHA:-}}"
+  local source_head=""
+
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    source_head="$(git rev-parse HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "$selected" ]]; then
+    selected="$source_head"
+  fi
+  if [[ ! "$selected" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    warn "GOBLINS_OS_CANDIDATE_COMMIT must identify the exact 40-hex source commit selected for release proof."
+    exit 1
+  fi
+  selected="$(printf '%s' "$selected" | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "$source_head" && "$(printf '%s' "$source_head" | tr '[:upper:]' '[:lower:]')" != "$selected" ]]; then
+    warn "Selected candidate commit $selected does not match checked-out source HEAD $source_head."
+    exit 1
+  fi
+  if [[ -n "$source_head" && -n "$(git status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
+    warn "Source worktree has uncommitted files; commit the exact candidate before generating release proof."
+    exit 1
+  fi
+  CANDIDATE_COMMIT="$selected"
+  export GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT"
+}
+
+resolve_candidate_commit
 
 ARCH="$(normalize_arch "${GOBLINS_OS_ARCH:-$(uname -m)}")"
 if [[ "$ARCH" == "unsupported" ]]; then
@@ -326,6 +358,7 @@ verify_iso_artifacts() {
   require_file "$ARCH ISO SHA256" "$sha_path"
   require_file "$ARCH ISO manifest" "$manifest_path"
   require_file_contains "$ARCH ISO manifest architecture" "$manifest_path" "\"architecture\": \"$ARCH\""
+  require_file_contains "$ARCH ISO manifest candidate commit" "$manifest_path" "\"candidate_commit\": \"$CANDIDATE_COMMIT\""
   require_file_contains "$ARCH ISO manifest image" "$manifest_path" "\"image\": \"$IMAGE_NAME\""
   if [[ "$RUN_QEMU" == "1" ]]; then
     require_file_contains "$ARCH ISO manifest nonlocal installer payload source" "$manifest_path" "\"installer_payload_source_local_only\": false"
@@ -360,7 +393,8 @@ generate_release_evidence() {
     /usr/libexec/goblins-os/goblins-os-verify \
     --source-root /workspace \
     --release-evidence /out \
-    --arch "$ARCH"
+    --arch "$ARCH" \
+    --candidate-commit "$CANDIDATE_COMMIT"
 
   log "Generating $ARCH RPM release evidence from $IMAGE_NAME"
   "${CONTAINER_CMD[@]}" run --rm \
@@ -375,6 +409,7 @@ verify_release_evidence() {
 
   require_file "$ARCH release evidence manifest" "$manifest"
   require_file_contains "$ARCH release evidence architecture" "$manifest" "\"architecture\": \"$ARCH\""
+  require_file_contains "$ARCH release evidence candidate commit" "$manifest" "\"candidate_commit\": \"$CANDIDATE_COMMIT\""
   require_file_contains "$ARCH release evidence asset provenance" "$manifest" "\"asset_provenance\": \"os/release/asset-provenance.toml\""
   require_file_contains "$ARCH release evidence third-party notices" "$manifest" "\"third_party_notices\": \"os/release/third-party-notices.toml\""
   require_file_contains "$ARCH release evidence trademark posture" "$manifest" "\"trademark_posture\": \"os/release/trademark-posture.toml\""
@@ -521,6 +556,7 @@ verify_iso_artifacts "$LATEST_ISO"
 ISO_SHA="$(sha256_of_file "$LATEST_ISO")"
 log "Latest ISO: $LATEST_ISO"
 log "ISO SHA256: $ISO_SHA"
+log "Candidate/source commit: $CANDIDATE_COMMIT"
 
 if [[ "$GENERATE_RELEASE_EVIDENCE" == "1" ]]; then
   generate_release_evidence
@@ -555,6 +591,7 @@ Next manual closure steps (once screenshots are collected):
 - Edit os/signoff-notes.md and update the latest 'Manual Gate Run' section:
   - Runner/device
   - Architecture: $ARCH
+  - Candidate/source commit: $CANDIDATE_COMMIT
   - CI run IDs/URLs
   - ISO SHA: $ISO_SHA
   - verify/self-test and runtime-engine fields

@@ -100,6 +100,8 @@ jobs:
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref")" = "$CANDIDATE_COMMIT"
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.base.name"}}' "$image_ref")" = "$BASE_IMAGE"
           test "$(docker image inspect --format '{{index .Config.Labels "io.goblins-os.branding-tool.containerfile.sha256"}}' "$image_ref")" = "$CONTAINERFILE_SHA256"
+          docker run --rm --entrypoint /bin/bash "$image_ref" -ceu \
+            'for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs osirrox unsquashfs xorriso; do command -v "$required_tool" >/dev/null; done'
           output_dir="branding-tool-output/$TARGET_ARCH"
           mkdir -p "$output_dir"
           docker run --rm --entrypoint /bin/cat "$image_ref" \

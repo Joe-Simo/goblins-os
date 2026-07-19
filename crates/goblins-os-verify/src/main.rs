@@ -7829,6 +7829,35 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
             "installer branding Containerfile base image differs from provenance".to_string(),
         );
     }
+    let containerfile_lines = containerfile
+        .lines()
+        .map(str::trim)
+        .collect::<BTreeSet<_>>();
+    if !containerfile_lines.contains("diffutils \\") {
+        return Err(
+            "installer branding Containerfile must install diffutils as the cmp provider"
+                .to_string(),
+        );
+    }
+    if !containerfile_lines.contains("&& command -v cmp \\") {
+        return Err(
+            "installer branding Containerfile must assert the required cmp executable".to_string(),
+        );
+    }
+
+    let branding_workflow_path = root.join(".github/workflows/branding-tool-image.yml");
+    let branding_workflow = fs::read_to_string(&branding_workflow_path)
+        .map_err(|error| format!("cannot read {}: {error}", branding_workflow_path.display()))?;
+    let runtime_tool_check = concat!(
+        "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs ",
+        "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done"
+    );
+    if !branding_workflow.contains(runtime_tool_check) {
+        return Err(
+            "installer branding workflow must verify the remaster runtime tool contract"
+                .to_string(),
+        );
+    }
 
     let architectures = table
         .get("architectures")
@@ -18941,7 +18970,7 @@ paths = [
     }
 
     #[test]
-    fn installer_branding_provenance_accepts_bound_fixture_and_rejects_hash_drift() {
+    fn installer_branding_provenance_enforces_runtime_contract_and_hash_binding() {
         let root = std::env::temp_dir().join(format!(
             "goblins-os-branding-provenance-{}",
             std::process::id()
@@ -18955,7 +18984,17 @@ paths = [
         let repository = "ghcr.io/joe-simo/goblins-os-installer-branding-tool";
         let image_ref = format!("{repository}@sha256:{}", "1".repeat(64));
         let base_image = format!("docker.io/library/fedora@sha256:{}", "2".repeat(64));
-        let containerfile = format!("ARG FEDORA_IMAGE={base_image}\nFROM ${{FEDORA_IMAGE}}\n");
+        let containerfile = format!(
+            concat!(
+                "ARG FEDORA_IMAGE={}\n",
+                "FROM ${{FEDORA_IMAGE}}\n",
+                "RUN dnf install \\\n",
+                "      diffutils \\\n",
+                "    && command -v cmp \\\n",
+                "    && command -v xorriso\n"
+            ),
+            base_image
+        );
         let containerfile_path = root.join("os/iso/branding-tool.Containerfile");
         write_fixture("os/iso/branding-tool.Containerfile", &containerfile);
         let containerfile_sha = sha256_path(&containerfile_path).unwrap();
@@ -18997,6 +19036,13 @@ paths = [
                 "INSTALLER_BRANDING_IMAGE=\"${{GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-{image_ref}}}\"\n"
             ),
         );
+        write_fixture(
+            ".github/workflows/branding-tool-image.yml",
+            concat!(
+                "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs ",
+                "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done\n"
+            ),
+        );
         for workflow in [
             ".github/workflows/build.yml",
             ".github/workflows/candidate-artifacts.yml",
@@ -19010,6 +19056,52 @@ paths = [
         }
 
         assert!(verify_installer_branding_tool_provenance(&root).is_ok());
+
+        write_fixture(
+            ".github/workflows/branding-tool-image.yml",
+            "runtime tool verification removed\n",
+        );
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("must verify the remaster runtime tool contract"));
+        write_fixture(
+            ".github/workflows/branding-tool-image.yml",
+            concat!(
+                "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs ",
+                "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done\n"
+            ),
+        );
+
+        let without_provider = containerfile.replace("      diffutils \\\n", "");
+        fs::write(&containerfile_path, &without_provider).unwrap();
+        let without_provider_sha = sha256_path(&containerfile_path).unwrap();
+        fs::write(
+            root.join("os/release/installer-branding-tool.toml"),
+            provenance.replace(&containerfile_sha, &without_provider_sha),
+        )
+        .unwrap();
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("must install diffutils as the cmp provider"));
+
+        let without_assertion = containerfile.replace("    && command -v cmp \\\n", "");
+        fs::write(&containerfile_path, &without_assertion).unwrap();
+        let without_assertion_sha = sha256_path(&containerfile_path).unwrap();
+        fs::write(
+            root.join("os/release/installer-branding-tool.toml"),
+            provenance.replace(&containerfile_sha, &without_assertion_sha),
+        )
+        .unwrap();
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("must assert the required cmp executable"));
+
+        fs::write(&containerfile_path, &containerfile).unwrap();
+        fs::write(
+            root.join("os/release/installer-branding-tool.toml"),
+            &provenance,
+        )
+        .unwrap();
         fs::write(&containerfile_path, format!("{containerfile}# drift\n")).unwrap();
         assert!(verify_installer_branding_tool_provenance(&root)
             .unwrap_err()

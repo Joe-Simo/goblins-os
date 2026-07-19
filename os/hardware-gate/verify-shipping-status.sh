@@ -596,6 +596,19 @@ if hashlib.sha256(containerfile_bytes).hexdigest() != record.get("containerfile_
 containerfile = containerfile_bytes.decode("utf-8")
 if f"ARG FEDORA_IMAGE={base_image}\n" not in containerfile:
     raise SystemExit(1)
+containerfile_lines = {line.strip() for line in containerfile.splitlines()}
+if "diffutils \\" not in containerfile_lines:
+    raise SystemExit(1)
+if "&& command -v cmp \\" not in containerfile_lines:
+    raise SystemExit(1)
+
+branding_workflow = (root / ".github/workflows/branding-tool-image.yml").read_text(encoding="utf-8")
+runtime_tool_check = (
+    "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs "
+    "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done"
+)
+if runtime_tool_check not in branding_workflow:
+    raise SystemExit(1)
 
 architectures = record.get("architectures", {})
 if set(architectures) != {"aarch64", "x86_64"}:

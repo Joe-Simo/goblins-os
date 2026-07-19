@@ -8,6 +8,7 @@ RUN printf '%s' "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$' \
     && printf '%s' "$CONTAINERFILE_SHA256" | grep -Eq '^[0-9a-f]{64}$' \
     && dnf -y --setopt=install_weak_deps=False install \
       ImageMagick \
+      diffutils \
       isomd5sum \
       squashfs-tools \
       xorriso \
@@ -20,6 +21,7 @@ RUN printf '%s' "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$' \
         | LC_ALL=C sort; \
     } > /usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv \
     && command -v checkisomd5 \
+    && command -v cmp \
     && command -v implantisomd5 \
     && command -v magick \
     && command -v mksquashfs \

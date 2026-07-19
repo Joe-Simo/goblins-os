@@ -19,14 +19,8 @@
 #   - recolors fedora.css accent  #51a2da -> #0b0b0f (Goblins ink)
 #   - repacks the squashfs (zstd, 128K) and re-masters the ISO with xorriso replay
 #
-# RUN (Docker on macOS; the host has no native squashfs/xorriso). From the repo root:
-#   docker run --rm \
-#     -v "$PWD/os/brand/anaconda":/brand:ro \
-#     -v "$PWD/os/iso":/scripts:ro \
-#     -v /tmp/goblins-os-bib-output/bootiso:/iso:ro \
-#     -v /tmp/goblins-os-iso-out:/work \
-#     fedora:44 bash /scripts/remaster-anaconda-branding.sh
-#   -> output: /work/install-goblins.iso  (keep under /tmp, NOT in the iCloud repo)
+# The caller must use the reviewed digest-pinned branding-tool image. This script
+# never installs packages or reaches a network during release-media generation.
 #
 # NOTE ON SELINUX/XATTRS: the Docker LinuxKit VM has no SELinux LSM, so the squashfs
 # is repacked without xattrs. This is safe: the Anaconda live environment runs SELinux
@@ -37,9 +31,22 @@ set -euo pipefail
 ISO_IN="${ISO_IN:-/iso/install.iso}"
 ISO_OUT="${ISO_OUT:-/work/install-goblins.iso}"
 BRAND="${BRAND:-/brand}"
+GOBLINS_INK="#0b0b0f"
+LEGACY_FEDORA_ACCENT="#51a2da"
 
-echo "==> installing tools"
-dnf -y install squashfs-tools xorriso isomd5sum ImageMagick >/dev/null 2>&1
+for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs osirrox unsquashfs xorriso; do
+  command -v "$required_tool" >/dev/null 2>&1 || {
+    echo "missing immutable installer-branding tool: $required_tool" >&2
+    exit 1
+  }
+done
+
+for brand_asset in sidebar-bg.png sidebar-logo.png; do
+  [ -s "$BRAND/$brand_asset" ] || {
+    echo "missing required Goblins installer asset: $BRAND/$brand_asset" >&2
+    exit 1
+  }
+done
 
 mkdir -p /build && cd /build
 echo "==> extracting install.img from $ISO_IN"
@@ -55,12 +62,48 @@ magick -size 1040x132 gradient:'#15151b'-'#0b0b0f' "$PIX/topbar-bg.png"
 sed -i 's/#51a2da/#0b0b0f/gI' "$PIX/fedora.css"
 for v in atomic cloud server; do
   d="$PIX/$v"; [ -d "$d" ] || continue
-  cp "$BRAND/sidebar-bg.png"   "$d/sidebar-bg.png"   2>/dev/null || true
-  cp "$BRAND/sidebar-logo.png" "$d/sidebar-logo.png" 2>/dev/null || true
+  cp "$BRAND/sidebar-bg.png"   "$d/sidebar-bg.png"
+  cp "$BRAND/sidebar-logo.png" "$d/sidebar-logo.png"
   [ -f "$d/topbar-bg.png" ] && cp "$PIX/topbar-bg.png" "$d/topbar-bg.png" || true
   for css in "$d"/*.css; do [ -f "$css" ] && sed -i 's/#51a2da/#0b0b0f/gI' "$css"; done
 done
-grep -n "define-color fedora" "$PIX/fedora.css"
+
+echo "==> verifying Goblins identity before repacking"
+cmp --silent "$BRAND/sidebar-bg.png" "$PIX/sidebar-bg.png" || {
+  echo "installer sidebar background does not match the reviewed Goblins asset" >&2
+  exit 1
+}
+cmp --silent "$BRAND/sidebar-logo.png" "$PIX/sidebar-logo.png" || {
+  echo "installer sidebar logo does not match the reviewed Goblins asset" >&2
+  exit 1
+}
+grep -Fqi "$GOBLINS_INK" "$PIX/fedora.css" || {
+  echo "installer stylesheet does not contain the required Goblins ink color" >&2
+  exit 1
+}
+if grep -Fqi "$LEGACY_FEDORA_ACCENT" "$PIX/fedora.css"; then
+  echo "installer stylesheet still contains the legacy Fedora accent" >&2
+  exit 1
+fi
+for v in atomic cloud server; do
+  d="$PIX/$v"; [ -d "$d" ] || continue
+  cmp --silent "$BRAND/sidebar-bg.png" "$d/sidebar-bg.png" || {
+    echo "$v installer sidebar background does not match the reviewed Goblins asset" >&2
+    exit 1
+  }
+  cmp --silent "$BRAND/sidebar-logo.png" "$d/sidebar-logo.png" || {
+    echo "$v installer sidebar logo does not match the reviewed Goblins asset" >&2
+    exit 1
+  }
+  for css in "$d"/*.css; do
+    [ -f "$css" ] || continue
+    if grep -Fqi "$LEGACY_FEDORA_ACCENT" "$css"; then
+      echo "$css still contains the legacy Fedora accent" >&2
+      exit 1
+    fi
+  done
+done
+grep -nF "$GOBLINS_INK" "$PIX/fedora.css"
 
 echo "==> repacking squashfs"
 mksquashfs /build/sqroot /build/install-new.img -comp zstd -b 131072 -noappend -no-xattrs >/dev/null
@@ -75,6 +118,7 @@ xorriso -indev "$ISO_IN" -outdev "$ISO_OUT" \
         -boot_image any replay -overwrite on \
         -map /build/install-new.img /images/install.img \
         -commit -end 2>&1 | tail -n 5
-implantisomd5 "$ISO_OUT" >/dev/null 2>&1 || echo "  (implantisomd5 warning, non-fatal)"
+implantisomd5 "$ISO_OUT" >/dev/null
+checkisomd5 --verbose "$ISO_OUT"
 
 echo "==> done"; ls -la "$ISO_OUT"; sha256sum "$ISO_OUT"

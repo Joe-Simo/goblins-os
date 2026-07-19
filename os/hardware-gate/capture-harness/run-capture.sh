@@ -221,15 +221,105 @@ fi
 CANDIDATE_COMMIT="$(printf '%s' "$CANDIDATE_COMMIT" | tr '[:upper:]' '[:lower:]')"
 export GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT"
 REPO="${REPO_ROOT:-$(pwd)}"
+REPO="$(cd "$REPO" && pwd -P)"
+. "$REPO/os/iso/manifest-provenance.sh"
+. "$REPO/os/hardware-gate/release-evidence.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$REPO/os/hardware-gate/capture-harness"
+if [ "$SCRIPT_DIR" != "$HERE" ]; then
+  echo "Run the capture harness from the exact candidate checkout: $HERE/run-capture.sh" >&2
+  exit 2
+fi
+if ! git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "REPO_ROOT must identify the exact candidate Git checkout: $REPO" >&2
+  exit 2
+fi
+SOURCE_HEAD="$(git -C "$REPO" rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
+if [ "$SOURCE_HEAD" != "$CANDIDATE_COMMIT" ]; then
+  echo "Capture tooling checkout $SOURCE_HEAD does not match candidate $CANDIDATE_COMMIT." >&2
+  exit 2
+fi
+UNEXPECTED_SOURCE_CHANGES="$({
+  git -C "$REPO" -c core.quotepath=false diff --name-only --no-ext-diff
+  git -C "$REPO" -c core.quotepath=false diff --cached --name-only --no-ext-diff
+  git -C "$REPO" -c core.quotepath=false ls-files --others --exclude-standard
+} | sed '/^$/d' | sort -u | grep -Ev '^os/(iso/output/|signoff-proofs/|screenshots/hardware-gate/)|^os/signoff-notes[.]md$' || true)"
+if [ -n "$UNEXPECTED_SOURCE_CHANGES" ]; then
+  echo "Capture checkout has changes outside generated proof paths:" >&2
+  printf '%s\n' "$UNEXPECTED_SOURCE_CHANGES" >&2
+  exit 2
+fi
 ISO="${GOBLINS_OS_CAPTURE_ISO:-$REPO/os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso}"
 SHA_FILE="${GOBLINS_OS_CAPTURE_ISO_SHA256:-$ISO.sha256}"
 ISO_MANIFEST="${GOBLINS_OS_CAPTURE_ISO_MANIFEST:-$(dirname "$(dirname "$ISO")")/manifest-goblins-os-$ARCH.json}"
+BIB_MANIFEST="${GOBLINS_OS_CAPTURE_BIB_MANIFEST:-$(dirname "$ISO_MANIFEST")/manifest-anaconda-iso.json}"
+CAPTURE_EVIDENCE_DIR="${GOBLINS_OS_CAPTURE_RELEASE_EVIDENCE_DIR:-}"
+CAPTURE_NATIVE_GATE_PROOF="${GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_PROOF:-}"
+CAPTURE_NATIVE_GATE_RUN_URL="${GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_RUN_URL:-}"
+CAPTURE_NATIVE_GATE_RUN_ATTEMPT="${GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_RUN_ATTEMPT:-}"
+EXPECTED_IMAGE_REF="${GOBLINS_OS_CAPTURE_EXPECTED_IMAGE_REF:-${GOBLINS_OS_IMAGE:-}}"
+if [[ ! "$EXPECTED_IMAGE_REF" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]; then
+  echo "GOBLINS_OS_CAPTURE_EXPECTED_IMAGE_REF must name the exact digest-pinned candidate image selected for this proof." >&2
+  exit 2
+fi
+CAPTURE_WORKFLOW_RUN_URL="${GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL:-}"
+CAPTURE_WORKFLOW_RUN_ATTEMPT="${GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT:-}"
+if [ -n "$CAPTURE_WORKFLOW_RUN_URL" ]; then
+  [[ "$CAPTURE_WORKFLOW_RUN_URL" =~ ^https://github\.com/[^/]+/[^/]+/actions/runs/[0-9]+$ ]] || {
+    echo "GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL must be an exact GitHub Actions run URL." >&2
+    exit 2
+  }
+  [[ "$CAPTURE_WORKFLOW_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+    echo "GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT must be a positive integer when a workflow run URL is provided." >&2
+    exit 2
+  }
+elif [ -n "$CAPTURE_WORKFLOW_RUN_ATTEMPT" ]; then
+  echo "GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT requires GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL." >&2
+  exit 2
+fi
+CAPTURE_REQUIRE_COMPLETE="${GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE:-0}"
+case "$CAPTURE_REQUIRE_COMPLETE" in
+  0|1) ;;
+  *)
+    echo "GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE must be 0 or 1." >&2
+    exit 2
+    ;;
+esac
 BASE_WORK="${WORK_DIR:-/tmp/gos-hwgate-$ARCH}"
 WORK="$BASE_WORK"
 PORT="${HTTP_PORT:-8099}"
 DATE="${RUN_DATE:?set RUN_DATE=YYYY-MM-DD (scripts cannot read the clock)}"
-RUN_DIR="$REPO/os/screenshots/hardware-gate/$ARCH/$DATE"
-HERE="$(cd "$(dirname "$0")" && pwd)"
+if [[ ! "$DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+  || ! python3 - "$DATE" <<'PY'
+from datetime import date
+import sys
+
+try:
+    parsed = date.fromisoformat(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if parsed.isoformat() == sys.argv[1] else 1)
+PY
+then
+  echo "RUN_DATE must be a real calendar date in YYYY-MM-DD form." >&2
+  exit 2
+fi
+RUN_ROOT="$REPO/os/screenshots/hardware-gate/$ARCH"
+RUN_DIR="$RUN_ROOT/$DATE"
+RUN_ROOT_COMPONENT="$REPO"
+for run_root_segment in os screenshots hardware-gate "$ARCH"; do
+  RUN_ROOT_COMPONENT="$RUN_ROOT_COMPONENT/$run_root_segment"
+  if [ -L "$RUN_ROOT_COMPONENT" ]; then
+    echo "Refusing symlinked hardware-gate path component: $RUN_ROOT_COMPONENT" >&2
+    exit 2
+  fi
+done
+mkdir -p "$RUN_ROOT"
+RUN_ROOT_REAL="$(cd "$RUN_ROOT" && pwd -P)"
+if [ "$RUN_ROOT_REAL" != "$RUN_ROOT" ]; then
+  echo "Hardware-gate run root resolves outside the canonical candidate checkout: $RUN_ROOT_REAL" >&2
+  exit 2
+fi
 HTTPD=""
 QEMU_PID=""
 CAPTURE_STARTED=0
@@ -245,6 +335,58 @@ dump_file_tail() {
   else
     echo "---- $label missing or empty: $path ----"
   fi
+}
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "sha256sum or shasum is required to hash release proof artifacts." >&2
+    return 1
+  fi
+}
+
+require_repo_generated_directory() {
+  local relative="$1"
+  local current="$REPO"
+  local segment resolved expected
+  local -a path_segments
+
+  IFS='/' read -r -a path_segments <<< "$relative"
+  for segment in "${path_segments[@]}"; do
+    [ -n "$segment" ] || continue
+    current="$current/$segment"
+    if [ -L "$current" ]; then
+      echo "Refusing symlinked generated-artifact path component: $current" >&2
+      exit 2
+    fi
+  done
+  mkdir -p "$current"
+  resolved="$(cd "$current" && pwd -P)"
+  expected="$REPO/$relative"
+  if [ "$resolved" != "$expected" ]; then
+    echo "Generated-artifact directory resolves outside the candidate checkout: $resolved" >&2
+    exit 2
+  fi
+}
+
+copy_file_atomically() {
+  local source="$1"
+  local destination="$2"
+  local temporary
+
+  [ ! -L "$destination" ] || {
+    echo "Refusing symlinked generated-artifact destination: $destination" >&2
+    exit 2
+  }
+  temporary="$(mktemp "$(dirname "$destination")/.goblins-copy.XXXXXX")"
+  if ! cp "$source" "$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  mv -f -- "$temporary" "$destination"
 }
 
 copy_capture_logs() {
@@ -287,11 +429,37 @@ trap cleanup EXIT
 [ -f "$ISO" ] || { echo "missing ISO $ISO"; exit 1; }
 [ -f "$SHA_FILE" ] || { echo "missing ISO SHA256 file $SHA_FILE"; exit 1; }
 [ -f "$ISO_MANIFEST" ] || { echo "missing ISO manifest $ISO_MANIFEST"; exit 1; }
+[ -f "$BIB_MANIFEST" ] || { echo "missing bootc-image-builder manifest $BIB_MANIFEST"; exit 1; }
+for capture_input in "$ISO" "$SHA_FILE" "$ISO_MANIFEST" "$BIB_MANIFEST"; do
+  if [ -L "$capture_input" ]; then
+    echo "Refusing symlinked capture input artifact: $capture_input" >&2
+    exit 2
+  fi
+done
 if ! grep -Fq '"architecture": "'"$ARCH"'"' "$ISO_MANIFEST" \
   || ! grep -Fq '"candidate_commit": "'"$CANDIDATE_COMMIT"'"' "$ISO_MANIFEST"; then
   echo "ISO manifest must bind architecture $ARCH to candidate commit $CANDIDATE_COMMIT: $ISO_MANIFEST" >&2
   exit 1
 fi
+IMAGE_REF="$(awk -F'"' '/"builder_source_image"/ { print $4; exit }' "$ISO_MANIFEST")"
+if [[ ! "$IMAGE_REF" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]; then
+  echo "ISO manifest must bind the installer payload to an immutable registry digest: $ISO_MANIFEST" >&2
+  exit 1
+fi
+if [ "$IMAGE_REF" != "$EXPECTED_IMAGE_REF" ]; then
+  echo "ISO image provenance $IMAGE_REF does not match selected candidate image $EXPECTED_IMAGE_REF." >&2
+  exit 1
+fi
+if ! BIB_IMAGE_REF="$(goblins_os_bib_manifest_payload_ref "$BIB_MANIFEST")"; then
+  echo "Bootc manifest must contain exactly one installer payload image reference: $BIB_MANIFEST" >&2
+  exit 1
+fi
+if [ "$BIB_IMAGE_REF" != "$IMAGE_REF" ]; then
+  echo "Bootc installer payload $BIB_IMAGE_REF does not match ISO image provenance $IMAGE_REF." >&2
+  exit 1
+fi
+
+NATIVE_GATE_PROOF_RELATIVE=""
 
 require_verification_iso() {
   local missing=0
@@ -321,6 +489,173 @@ EOF
 
 require_verification_iso
 ISO_SHA="$(awk '{print $1; exit}' "$SHA_FILE")"
+if [[ ! "$ISO_SHA" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  echo "ISO checksum file does not begin with a valid SHA256 digest: $SHA_FILE" >&2
+  exit 1
+fi
+ACTUAL_ISO_SHA="$(sha256_file "$ISO")"
+ISO_SHA="$(printf '%s' "$ISO_SHA" | tr '[:upper:]' '[:lower:]')"
+ACTUAL_ISO_SHA="$(printf '%s' "$ACTUAL_ISO_SHA" | tr '[:upper:]' '[:lower:]')"
+if [ "$ACTUAL_ISO_SHA" != "$ISO_SHA" ]; then
+  echo "Capture ISO checksum mismatch: expected $ISO_SHA, got $ACTUAL_ISO_SHA." >&2
+  exit 1
+fi
+
+require_repo_generated_directory "os/iso/output/$ARCH/bootiso"
+CANONICAL_OUTPUT="$REPO/os/iso/output/$ARCH"
+CANONICAL_ISO="$CANONICAL_OUTPUT/bootiso/goblins-os-$ARCH.iso"
+CANONICAL_SHA="$CANONICAL_ISO.sha256"
+CANONICAL_ISO_MANIFEST="$CANONICAL_OUTPUT/manifest-goblins-os-$ARCH.json"
+CANONICAL_BIB_MANIFEST="$CANONICAL_OUTPUT/manifest-anaconda-iso.json"
+if [ "$ISO" != "$CANONICAL_ISO" ]; then
+  copy_file_atomically "$ISO" "$CANONICAL_ISO"
+  [ ! -L "$CANONICAL_SHA" ] || { echo "Refusing symlinked checksum destination: $CANONICAL_SHA" >&2; exit 2; }
+  SHA_TEMP="$(mktemp "$(dirname "$CANONICAL_SHA")/.goblins-sha.XXXXXX")"
+  printf '%s  %s\n' "$ISO_SHA" "$(basename "$CANONICAL_ISO")" > "$SHA_TEMP"
+  mv -f -- "$SHA_TEMP" "$CANONICAL_SHA"
+  copy_file_atomically "$ISO_MANIFEST" "$CANONICAL_ISO_MANIFEST"
+  copy_file_atomically "$BIB_MANIFEST" "$CANONICAL_BIB_MANIFEST"
+  ISO="$CANONICAL_ISO"
+  SHA_FILE="$CANONICAL_SHA"
+  ISO_MANIFEST="$CANONICAL_ISO_MANIFEST"
+  BIB_MANIFEST="$CANONICAL_BIB_MANIFEST"
+fi
+
+if [ -n "$CAPTURE_EVIDENCE_DIR" ]; then
+  EVIDENCE_MANIFEST="$CAPTURE_EVIDENCE_DIR/release-evidence-manifest.json"
+  for evidence_file in \
+    "$EVIDENCE_MANIFEST" \
+    "$CAPTURE_EVIDENCE_DIR/cargo-lock-packages.tsv" \
+    "$CAPTURE_EVIDENCE_DIR/rpm-packages.command" \
+    "$CAPTURE_EVIDENCE_DIR/rpm-packages.tsv"; do
+    [ -s "$evidence_file" ] || { echo "missing candidate release evidence $evidence_file" >&2; exit 1; }
+  done
+  grep -Fq '"architecture": "'"$ARCH"'"' "$EVIDENCE_MANIFEST" \
+    && grep -Fq '"candidate_commit": "'"$CANDIDATE_COMMIT"'"' "$EVIDENCE_MANIFEST" \
+    && grep -Fq '"image_ref": "'"$IMAGE_REF"'"' "$EVIDENCE_MANIFEST" \
+    && grep -Fq '"image_digest_pinned": true' "$EVIDENCE_MANIFEST" || {
+      echo "External release evidence is not bound to candidate $CANDIDATE_COMMIT and image $IMAGE_REF." >&2
+      exit 1
+    }
+  goblins_os_release_evidence_hashes_match "$CAPTURE_EVIDENCE_DIR" || {
+    echo "External release evidence Cargo/RPM inventories do not match their sealed SHA256 values." >&2
+    exit 1
+  }
+  for evidence_file in \
+    "$EVIDENCE_MANIFEST" \
+    "$CAPTURE_EVIDENCE_DIR/cargo-lock-packages.tsv" \
+    "$CAPTURE_EVIDENCE_DIR/rpm-packages.command" \
+    "$CAPTURE_EVIDENCE_DIR/rpm-packages.tsv"; do
+    if [ -L "$evidence_file" ]; then
+      echo "Refusing symlinked release evidence input: $evidence_file" >&2
+      exit 2
+    fi
+  done
+  require_repo_generated_directory "os/signoff-proofs/sbom/$ARCH"
+  CANONICAL_EVIDENCE_DIR="$REPO/os/signoff-proofs/sbom/$ARCH"
+  for evidence_name in release-evidence-manifest.json cargo-lock-packages.tsv rpm-packages.command rpm-packages.tsv rpm-packages.not-generated.txt; do
+    [ ! -L "$CANONICAL_EVIDENCE_DIR/$evidence_name" ] || {
+      echo "Refusing symlinked release evidence destination: $CANONICAL_EVIDENCE_DIR/$evidence_name" >&2
+      exit 2
+    }
+    rm -f -- "$CANONICAL_EVIDENCE_DIR/$evidence_name"
+  done
+  for evidence_name in cargo-lock-packages.tsv rpm-packages.command rpm-packages.tsv release-evidence-manifest.json; do
+    copy_file_atomically \
+      "$CAPTURE_EVIDENCE_DIR/$evidence_name" \
+      "$CANONICAL_EVIDENCE_DIR/$evidence_name"
+  done
+  goblins_os_release_evidence_hashes_match "$CANONICAL_EVIDENCE_DIR" || {
+    echo "Canonical release evidence failed hash validation after copy." >&2
+    exit 1
+  }
+  EVIDENCE_MANIFEST="$CANONICAL_EVIDENCE_DIR/release-evidence-manifest.json"
+fi
+
+EVIDENCE_MANIFEST="${EVIDENCE_MANIFEST:-$REPO/os/signoff-proofs/sbom/$ARCH/release-evidence-manifest.json}"
+if [ -n "$CAPTURE_NATIVE_GATE_PROOF" ] \
+  || [ -n "$CAPTURE_NATIVE_GATE_RUN_URL" ] \
+  || [ -n "$CAPTURE_NATIVE_GATE_RUN_ATTEMPT" ]; then
+  [ -s "$CAPTURE_NATIVE_GATE_PROOF" ] || {
+    echo "GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_PROOF must name a nonempty native gate proof." >&2
+    exit 1
+  }
+  [ -s "$EVIDENCE_MANIFEST" ] || {
+    echo "Native packaging proof requires the matching release evidence manifest: $EVIDENCE_MANIFEST" >&2
+    exit 1
+  }
+  [[ "$CAPTURE_NATIVE_GATE_RUN_URL" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || {
+    echo "GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_RUN_URL must be the exact GitHub Actions run URL that produced the proof." >&2
+    exit 1
+  }
+  [[ "$CAPTURE_NATIVE_GATE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+    echo "GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_RUN_ATTEMPT must be the positive run attempt that produced the proof." >&2
+    exit 1
+  }
+  case "$(cd "$(dirname "$CAPTURE_NATIVE_GATE_PROOF")" && pwd -P)/$(basename "$CAPTURE_NATIVE_GATE_PROOF")" in
+    "$RUN_ROOT"/*)
+      echo "Native packaging proof must be staged outside the dated capture root before that root is reset." >&2
+      exit 1
+      ;;
+  esac
+  ISO_MANIFEST_SHA="$(sha256_file "$ISO_MANIFEST")"
+  BIB_MANIFEST_SHA="$(sha256_file "$BIB_MANIFEST")"
+  EVIDENCE_MANIFEST_SHA="$(sha256_file "$EVIDENCE_MANIFEST")"
+  python3 - \
+    "$CAPTURE_NATIVE_GATE_PROOF" \
+    "$ARCH" \
+    "$CANDIDATE_COMMIT" \
+    "$IMAGE_REF" \
+    "$CAPTURE_NATIVE_GATE_RUN_URL" \
+    "$CAPTURE_NATIVE_GATE_RUN_ATTEMPT" \
+    "$ISO_SHA" \
+    "$ISO_MANIFEST_SHA" \
+    "$BIB_MANIFEST_SHA" \
+    "$EVIDENCE_MANIFEST_SHA" <<'PY'
+import json
+import sys
+
+(
+    path,
+    arch,
+    commit,
+    image_ref,
+    run_url,
+    run_attempt,
+    iso_sha,
+    iso_manifest_sha,
+    bib_manifest_sha,
+    evidence_manifest_sha,
+) = sys.argv[1:11]
+with open(path, encoding="utf-8") as handle:
+    proof = json.load(handle)
+source_repository = run_url.split("/actions/runs/", 1)[0]
+expected = {
+    "schema": "goblins-os-native-packaging-gate-v1",
+    "architecture": arch,
+    "candidate_commit": commit,
+    "image_ref": image_ref,
+    "image_digest_pinned": True,
+    "source_verifier": "pass",
+    "installed_root_verifier": "pass",
+    "services_selftest": "pass",
+    "verification_iso_sha256": iso_sha,
+    "iso_manifest_sha256": iso_manifest_sha,
+    "bib_manifest_sha256": bib_manifest_sha,
+    "release_evidence_manifest_sha256": evidence_manifest_sha,
+    "runner_os": "Linux",
+    "runner_architecture": arch,
+    "native_runner": True,
+    "source_repository": source_repository,
+    "workflow_run": run_url,
+    "workflow_run_attempt": int(run_attempt),
+}
+for key, value in expected.items():
+    if proof.get(key) != value:
+        raise SystemExit(f"native packaging proof field {key!r} is {proof.get(key)!r}, expected {value!r}")
+PY
+  NATIVE_GATE_PROOF_RELATIVE="${RUN_DIR#"$REPO/"}/native-packaging-gate.json"
+fi
 
 # Accel: KVM on Linux, HVF on macOS.
 case "$(uname -s)" in
@@ -363,16 +698,25 @@ fi
 PFLASH=(-drive "if=pflash,format=raw,file=$WORK/code.fd,readonly=on" -drive "if=pflash,format=raw,file=$WORK/vars.fd")
 QEMU_AUDIO=(-audiodev none,id=audio0 -device ich9-intel-hda -device hda-output,audiodev=audio0)
 
-case "$RUN_DIR" in
-  "$REPO"/os/screenshots/hardware-gate/"$ARCH"/*)
-    rm -rf "$RUN_DIR"
-    ;;
-  *)
-    echo "refusing to reset unexpected hardware-gate run dir: $RUN_DIR"
-    exit 2
-    ;;
-esac
+if [ "$RUN_DIR" != "$RUN_ROOT/$DATE" ] || [ "$(dirname "$RUN_DIR")" != "$RUN_ROOT" ]; then
+  echo "refusing to reset unexpected hardware-gate run dir: $RUN_DIR"
+  exit 2
+fi
+if [ -L "$RUN_DIR" ]; then
+  rm -f "$RUN_DIR"
+else
+  rm -rf "$RUN_DIR"
+fi
 mkdir -p "$WORK" "$RUN_DIR"
+cp "$ISO_MANIFEST" "$RUN_DIR/verification-iso-manifest.json"
+cp "$BIB_MANIFEST" "$RUN_DIR/verification-bib-manifest.json"
+if [ -s "$EVIDENCE_MANIFEST" ]; then
+  cp "$EVIDENCE_MANIFEST" "$RUN_DIR/verification-release-evidence-manifest.json"
+fi
+VERIFICATION_EVIDENCE_MANIFEST_SHA="$(sha256_file "$RUN_DIR/verification-release-evidence-manifest.json")"
+if [ -n "$NATIVE_GATE_PROOF_RELATIVE" ]; then
+  cp "$CAPTURE_NATIVE_GATE_PROOF" "$RUN_DIR/native-packaging-gate.json"
+fi
 
 stop_qemu() {
   if [ -n "${QEMU_PID:-}" ]; then
@@ -926,11 +1270,18 @@ fi
 # repo-relative ISO path: close-signoff and verify-shipping-status both match
 # the exact string "os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso", and the
 # committed manifest must not leak runner-absolute paths.
-python3 - "$RUN_DIR" "${RUN_DIR#"$REPO/"}" "$ARCH" "${ISO#"$REPO/"}" "$ISO_SHA" "$DATE" "$CANDIDATE_COMMIT" <<'PY'
+python3 - "$RUN_DIR" "${RUN_DIR#"$REPO/"}" "$ARCH" "${ISO#"$REPO/"}" "$ISO_SHA" "$DATE" "$CANDIDATE_COMMIT" "$IMAGE_REF" "$NATIVE_GATE_PROOF_RELATIVE" "$CAPTURE_WORKFLOW_RUN_URL" "${CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}" "$VERIFICATION_EVIDENCE_MANIFEST_SHA" <<'PY'
 import json,sys
-run_dir,rel_run_dir,arch,iso,sha,date,candidate_commit=sys.argv[1:8]
-json.dump({"architecture":arch,"candidate_commit":candidate_commit,"iso":iso,"iso_sha256":sha,
+run_dir,rel_run_dir,arch,iso,sha,date,candidate_commit,image_ref,native_gate_proof,capture_workflow_run,capture_workflow_attempt,verification_evidence_manifest_sha=sys.argv[1:13]
+json.dump({"architecture":arch,"candidate_commit":candidate_commit,"image_ref":image_ref,"iso":iso,"iso_sha256":sha,
           "captured_at":date+"T00:00:00Z","screenshot_run_dir":rel_run_dir,
+          "capture_workflow_run":capture_workflow_run,
+          "capture_workflow_run_attempt":int(capture_workflow_attempt),
+          "native_packaging_gate_proof":native_gate_proof,
+          "verification_iso_manifest":"verification-iso-manifest.json",
+          "verification_bib_manifest":"verification-bib-manifest.json",
+          "verification_release_evidence_manifest":"verification-release-evidence-manifest.json",
+          "verification_release_evidence_manifest_sha256":verification_evidence_manifest_sha,
           "firewall_live_toggle_proof":"firewall-live-toggle-proof.json",
           "text_shortcuts_session_enable_proof":"text-shortcuts-session-enable-proof.json",
           "text_shortcuts_candidate_metadata_proof":"text-shortcuts-candidate-metadata-proof.json",
@@ -966,9 +1317,17 @@ PY
 )"
 ( cd "$REPO" \
   && GOBLINS_OS_ARCH="$ARCH" \
+    GOBLINS_OS_IMAGE="$IMAGE_REF" \
     SCREENSHOT_DIR="${RUN_DIR#"$REPO/"}" \
     RUNTIME_ENGINE_MODE="local-model" \
     RUNTIME_ENGINE_SOURCE="$RUNTIME_ENGINE_SOURCE" \
     RUNTIME_ENGINE_CONFIG="${RUN_DIR#"$REPO/"}/runtime-build-proof.json" \
     BUILT_ARTIFACT_PATH_URL="${RUN_DIR#"$REPO/"}/runtime-build-proof.json" \
+    GOBLINS_OS_NATIVE_PACKAGING_GATE_PROOF="$NATIVE_GATE_PROOF_RELATIVE" \
+    GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_URL="$CAPTURE_NATIVE_GATE_RUN_URL" \
+    GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_ATTEMPT="$CAPTURE_NATIVE_GATE_RUN_ATTEMPT" \
+    GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL="$CAPTURE_WORKFLOW_RUN_URL" \
+    GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT="${CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}" \
+    SIGNOFF_ROW_OUTPUT="${RUN_DIR#"$REPO/"}/signoff-row.md" \
+    REQUIRE_COMPLETE="$CAPTURE_REQUIRE_COMPLETE" \
     os/hardware-gate/close-signoff.sh )

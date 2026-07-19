@@ -5,6 +5,8 @@ REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 cd "$REPO_ROOT"
 . "$REPO_ROOT/os/hardware-gate/secret-scan.sh"
 . "$REPO_ROOT/os/hardware-gate/rpm-sbom-arch.sh"
+. "$REPO_ROOT/os/hardware-gate/release-evidence.sh"
+. "$REPO_ROOT/os/iso/manifest-provenance.sh"
 
 log() { echo "[goblin-signoff] $*"; }
 warn() { echo "[goblin-signoff][warn] $*" >&2; }
@@ -16,6 +18,10 @@ normalize_arch() {
     x86_64|amd64) echo "x86_64" ;;
     *) echo "unsupported" ;;
   esac
+}
+
+image_ref_is_digest_pinned() {
+  [[ "$1" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]
 }
 
 usage() {
@@ -46,8 +52,8 @@ Optional env:
                               GOBLINS_OS_ARCH. This can never satisfy release
                               proof; display-backed signoff still requires a
                               native Linux/KVM runner for the target arch.
-  GOBLINS_OS_BIB_SOURCE_IMAGE=registry.example/org/goblins-os:<arch>
-                              Real pullable bootc image ref used by
+  GOBLINS_OS_BIB_SOURCE_IMAGE=registry.example/org/goblins-os@sha256:<64-hex-digest>
+                              Immutable pullable bootc image ref used by
                               bootc-image-builder for shippable media. Required
                               for RUN_QEMU=1 so the installed system tracks a
                               release registry ref instead of a Docker-local
@@ -68,7 +74,9 @@ Optional env:
                               template copied to AARCH64_UEFI_VARS when needed
 
 Preflight:
-  PREFLIGHT_ONLY=1 GOBLINS_OS_ARCH=<arch> REPO_ROOT=/path os/hardware-gate/run-external-gate.sh
+  PREFLIGHT_ONLY=1 GOBLINS_OS_ARCH=<arch> \
+  GOBLINS_OS_BIB_SOURCE_IMAGE=registry.example/org/goblins-os@sha256:<64-hex-digest> \
+  REPO_ROOT=/path os/hardware-gate/run-external-gate.sh
 
 Preflight validates the native architecture, container runtime health, free
 space, and, when RUN_QEMU=1, the native Linux host, QEMU/KVM requirements, and
@@ -191,20 +199,27 @@ require_file_contains() {
 
 verify_sha256_file() {
   local sha_path="$1"
-  local expected artifact actual
+  local expected_basename="$2"
+  local sha_dir sha_name expected artifact actual
+
+  sha_dir="$(cd "$(dirname "$sha_path")" && pwd -P)" || return 1
+  sha_name="$(basename "$sha_path")"
+  [[ -f "$sha_dir/$sha_name" ]] || return 1
+  [[ "$(awk 'NF { count += 1 } END { print count + 0 }' "$sha_dir/$sha_name")" == "1" ]] || return 1
+  read -r expected artifact < "$sha_dir/$sha_name"
+  artifact="${artifact#\*}"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ -n "$artifact" && "$artifact" = "$expected_basename" && "$artifact" != */* && "$artifact" != "." && "$artifact" != ".." ]] || return 1
+  [[ -f "$sha_dir/$artifact" ]] || return 1
 
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -c "$sha_path" >/dev/null
-    return
+    actual="$(sha256sum "$sha_dir/$artifact" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$sha_dir/$artifact" | awk '{print $1}')"
+  else
+    return 1
   fi
-  if command -v shasum >/dev/null 2>&1; then
-    read -r expected artifact < "$sha_path"
-    [[ -n "$expected" && -n "$artifact" && -f "$artifact" ]] || return 1
-    actual="$(shasum -a 256 "$artifact" | awk '{print $1}')"
-    [[ "$actual" == "$expected" ]]
-    return
-  fi
-  return 1
+  [[ "$actual" == "$expected" ]]
 }
 
 sha256_of_file() {
@@ -353,6 +368,7 @@ verify_iso_artifacts() {
   local sha_path="$iso_path.sha256"
   local manifest_path="os/iso/output/$ARCH/manifest-goblins-os-$ARCH.json"
   local bib_manifest_path="os/iso/output/$ARCH/manifest-anaconda-iso.json"
+  local manifest_image_ref bib_image_ref
 
   require_file "$ARCH ISO" "$iso_path"
   require_file "$ARCH ISO SHA256" "$sha_path"
@@ -363,14 +379,27 @@ verify_iso_artifacts() {
   if [[ "$RUN_QEMU" == "1" ]]; then
     require_file_contains "$ARCH ISO manifest nonlocal installer payload source" "$manifest_path" "\"installer_payload_source_local_only\": false"
     require_file_contains "$ARCH ISO manifest shippable release mode" "$manifest_path" "\"shippable_release\": true"
+    manifest_image_ref="$(awk -F'"' '/"builder_source_image"/ { print $4; exit }' "$manifest_path")"
+    if [ "$manifest_image_ref" != "$BIB_SOURCE_IMAGE" ]; then
+      warn "$ARCH ISO manifest image $manifest_image_ref does not match selected image $BIB_SOURCE_IMAGE."
+      exit 1
+    fi
     require_file "$ARCH BIB manifest" "$bib_manifest_path"
     if rg -q 'bootc switch --mutate-in-place --transport registry (host\.docker\.internal|localhost[:/]|127\.|0\.0\.0\.0[:/]|goblins-os:|docker\.io/library/goblins-os:)' "$bib_manifest_path"; then
       warn "$ARCH BIB manifest still points at a local Docker/test registry; refusing display-backed release proof."
       exit 1
     fi
+    if ! bib_image_ref="$(goblins_os_bib_manifest_payload_ref "$bib_manifest_path")"; then
+      warn "$ARCH BIB manifest must contain exactly one bootc installer payload image reference."
+      exit 1
+    fi
+    if [ "$bib_image_ref" != "$BIB_SOURCE_IMAGE" ]; then
+      warn "$ARCH BIB manifest payload $bib_image_ref does not match selected image $BIB_SOURCE_IMAGE."
+      exit 1
+    fi
   fi
 
-  if ! verify_sha256_file "$sha_path"; then
+  if ! verify_sha256_file "$sha_path" "$(basename "$iso_path")"; then
     warn "$ARCH ISO SHA256 verification failed: $sha_path"
     exit 1
   fi
@@ -394,14 +423,9 @@ generate_release_evidence() {
     --source-root /workspace \
     --release-evidence /out \
     --arch "$ARCH" \
-    --candidate-commit "$CANDIDATE_COMMIT"
+    --candidate-commit "$CANDIDATE_COMMIT" \
+    --image-ref "$EVIDENCE_IMAGE_REF"
 
-  log "Generating $ARCH RPM release evidence from $IMAGE_NAME"
-  "${CONTAINER_CMD[@]}" run --rm \
-    -v "$evidence_abs:/out" \
-    -w /out \
-    "$IMAGE_NAME" \
-    sh rpm-packages.command
 }
 
 verify_release_evidence() {
@@ -410,12 +434,20 @@ verify_release_evidence() {
   require_file "$ARCH release evidence manifest" "$manifest"
   require_file_contains "$ARCH release evidence architecture" "$manifest" "\"architecture\": \"$ARCH\""
   require_file_contains "$ARCH release evidence candidate commit" "$manifest" "\"candidate_commit\": \"$CANDIDATE_COMMIT\""
+  require_file_contains "$ARCH release evidence image ref" "$manifest" "\"image_ref\": \"$EVIDENCE_IMAGE_REF\""
+  if [[ "$RUN_QEMU" == "1" ]]; then
+    require_file_contains "$ARCH release evidence digest pin" "$manifest" "\"image_digest_pinned\": true"
+  fi
   require_file_contains "$ARCH release evidence asset provenance" "$manifest" "\"asset_provenance\": \"os/release/asset-provenance.toml\""
   require_file_contains "$ARCH release evidence third-party notices" "$manifest" "\"third_party_notices\": \"os/release/third-party-notices.toml\""
   require_file_contains "$ARCH release evidence trademark posture" "$manifest" "\"trademark_posture\": \"os/release/trademark-posture.toml\""
   require_file_contains "$ARCH release evidence source manifest" "$manifest" "\"source_tree_manifest\": \"os/release/source-tree-manifest.toml\""
   require_file "$ARCH Cargo SBOM package TSV" "$RELEASE_EVIDENCE_DIR/cargo-lock-packages.tsv"
   require_file "$ARCH RPM SBOM package TSV" "$RELEASE_EVIDENCE_DIR/rpm-packages.tsv"
+  if ! goblins_os_release_evidence_hashes_match "$RELEASE_EVIDENCE_DIR"; then
+    warn "$ARCH release evidence Cargo/RPM inventories do not match their sealed SHA256 values."
+    exit 1
+  fi
   if ! rpm_sbom_arch_matches "$RELEASE_EVIDENCE_DIR/rpm-packages.tsv" "$ARCH"; then
     warn "$ARCH RPM SBOM contains packages outside $ARCH/noarch"
     exit 1
@@ -452,8 +484,12 @@ if [[ "$RUN_QEMU" == "1" && "$HOST_OS" != "Linux" ]]; then
   exit 1
 fi
 if [[ "$RUN_QEMU" == "1" && -z "$BIB_SOURCE_IMAGE" ]]; then
-  warn "Display-backed shipping proof requires GOBLINS_OS_BIB_SOURCE_IMAGE to a real pullable bootc image ref."
+  warn "Display-backed shipping proof requires GOBLINS_OS_BIB_SOURCE_IMAGE to an immutable pullable bootc image digest ref."
   warn "The Docker-local registry path is allowed only for RUN_QEMU=0 artifact testing and cannot satisfy release signoff."
+  exit 1
+fi
+if [[ "$RUN_QEMU" == "1" ]] && ! image_ref_is_digest_pinned "$BIB_SOURCE_IMAGE"; then
+  warn "GOBLINS_OS_BIB_SOURCE_IMAGE must end in @sha256:<64-hex-digest> for display-backed shipping proof."
   exit 1
 fi
 
@@ -511,7 +547,11 @@ if [[ "$PREFLIGHT_ONLY" == "1" ]]; then
   cat <<EOF2
 
 Next artifact command:
-  GOBLINS_OS_ARCH=$ARCH REPO_ROOT="$REPO_ROOT" os/hardware-gate/run-external-gate.sh
+  GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT" \
+  GOBLINS_OS_ARCH=$ARCH \
+  GOBLINS_OS_BIB_SOURCE_IMAGE="$BIB_SOURCE_IMAGE" \
+  GOBLINS_OS_SHIPPABLE_RELEASE=1 \
+  REPO_ROOT="$REPO_ROOT" os/hardware-gate/run-external-gate.sh
 
 Artifact-only command without display proof:
   GOBLINS_OS_ARCH=$ARCH RUN_QEMU=0 REPO_ROOT="$REPO_ROOT" os/hardware-gate/run-external-gate.sh
@@ -528,13 +568,38 @@ fi
 if [[ "$RUN_QEMU" == "1" || "$RUN_CLOSEOFF" == "1" ]]; then
   mkdir -p "$SCREENSHOT_DIR"
 fi
-"${CONTAINER_CMD[@]}" rmi -f "$IMAGE_NAME" localhost/goblins-os:ci || true
-
-if [[ "$HOST_ARCH" != "$ARCH" && "$RUN_QEMU" == "0" && "$CONTAINER_RUNTIME" == "docker" && "$ALLOW_EMULATED_DOCKER" == "1" ]]; then
-  warn "Skipping native pre-build for Docker-emulated artifact testing; os/iso/build-iso.sh will build $IMAGE_NAME with Docker --platform."
+SKIP_LOCAL_IMAGE_BUILD=0
+EVIDENCE_IMAGE_REF="$IMAGE_NAME"
+if [[ "$RUN_QEMU" == "1" ]]; then
+  case "$ARCH" in
+    aarch64) EXPECTED_IMAGE_ARCH=arm64 ;;
+    x86_64) EXPECTED_IMAGE_ARCH=amd64 ;;
+  esac
+  log "Pulling and verifying exact candidate image $BIB_SOURCE_IMAGE"
+  "${CONTAINER_CMD[@]}" pull "$BIB_SOURCE_IMAGE"
+  [ "$("${CONTAINER_CMD[@]}" image inspect --format '{{.Os}}' "$BIB_SOURCE_IMAGE")" = linux ] || {
+    warn "Candidate image is not a Linux image: $BIB_SOURCE_IMAGE"
+    exit 1
+  }
+  [ "$("${CONTAINER_CMD[@]}" image inspect --format '{{.Architecture}}' "$BIB_SOURCE_IMAGE")" = "$EXPECTED_IMAGE_ARCH" ] || {
+    warn "Candidate image architecture does not match $ARCH: $BIB_SOURCE_IMAGE"
+    exit 1
+  }
+  [ "$("${CONTAINER_CMD[@]}" image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$BIB_SOURCE_IMAGE")" = "$CANDIDATE_COMMIT" ] || {
+    warn "Candidate image OCI revision does not match $CANDIDATE_COMMIT: $BIB_SOURCE_IMAGE"
+    exit 1
+  }
+  IMAGE_NAME="$BIB_SOURCE_IMAGE"
+  EVIDENCE_IMAGE_REF="$BIB_SOURCE_IMAGE"
+  SKIP_LOCAL_IMAGE_BUILD=1
 else
-  log "Building native $ARCH bootc image"
-  "${CONTAINER_CMD[@]}" build -f os/bootc/Containerfile -t "$IMAGE_NAME" .
+  "${CONTAINER_CMD[@]}" rmi -f "$IMAGE_NAME" localhost/goblins-os:ci || true
+  if [[ "$HOST_ARCH" != "$ARCH" && "$CONTAINER_RUNTIME" == "docker" && "$ALLOW_EMULATED_DOCKER" == "1" ]]; then
+    warn "Skipping native pre-build for Docker-emulated artifact testing; os/iso/build-iso.sh will build $IMAGE_NAME with Docker --platform."
+  else
+    log "Building native $ARCH bootc image"
+    "${CONTAINER_CMD[@]}" build -f os/bootc/Containerfile -t "$IMAGE_NAME" .
+  fi
 fi
 
 log "Building $ARCH installer ISO"
@@ -543,6 +608,7 @@ GOBLINS_OS_ARCH="$ARCH" \
   GOBLINS_OS_CONTAINER_RUNTIME="$CONTAINER_RUNTIME" \
   GOBLINS_OS_ALLOW_EMULATED_DOCKER="$ALLOW_EMULATED_DOCKER" \
   GOBLINS_OS_BIB_SOURCE_IMAGE="$BIB_SOURCE_IMAGE" \
+  GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD="$SKIP_LOCAL_IMAGE_BUILD" \
   GOBLINS_OS_SHIPPABLE_RELEASE="$SHIPPABLE_RELEASE" \
   os/iso/build-iso.sh
 

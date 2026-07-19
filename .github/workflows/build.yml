@@ -37,6 +37,7 @@ concurrency:
 
 env:
   GOBLINS_OS_CANDIDATE_COMMIT: ${{ github.sha }}
+  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:8ac36779c577249c4d36ad5a1c866dac1b516c3fb93ab762f707433ab07445b2
   # Same feature set the Containerfile uses for the native desktop binaries.
   NATIVE_FEATURES: >-
     goblins-os-installer/native-desktop
@@ -66,7 +67,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: docker.io/library/rust:1.88
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Assert native runner architecture
         run: |
           test "$(uname -m)" = "${{ matrix.expected_uname }}"
@@ -104,7 +105,7 @@ jobs:
             expected_uname: aarch64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Assert native runner architecture
         run: |
           test "$(uname -m)" = "${{ matrix.expected_uname }}"
@@ -124,9 +125,9 @@ jobs:
           sudo swapon /mnt/swapfile
           df -h /
           free -h
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
       - name: Build the Goblins OS image layers (cache only)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: os/bootc/Containerfile
@@ -138,7 +139,7 @@ jobs:
         run: |
           cat os/bootc/Containerfile os/bootc/verify.suffix.Dockerfile > /tmp/verify.Dockerfile
       - name: Verify the packaging contract (must be 0 blocked)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: /tmp/verify.Dockerfile
@@ -150,7 +151,7 @@ jobs:
         run: |
           cat os/bootc/Containerfile os/bootc/selftest.suffix.Dockerfile > /tmp/selftest.Dockerfile
       - name: Run the install + services self-test (non-zero fails the build)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: /tmp/selftest.Dockerfile
@@ -163,7 +164,7 @@ jobs:
           cat os/bootc/Containerfile os/bootc/render.suffix.Dockerfile > /tmp/render.Dockerfile
           mkdir -p screenshots
       - name: Render design-proof screenshots
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: /tmp/render.Dockerfile
@@ -171,7 +172,7 @@ jobs:
           outputs: type=local,dest=screenshots
           cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
           cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: goblins-os-screenshots-${{ matrix.arch }}
           path: screenshots/*.png
@@ -180,7 +181,7 @@ jobs:
           cat os/bootc/Containerfile os/bootc/render.suffix.Dockerfile > /tmp/render-settings-interactions.Dockerfile
           mkdir -p settings-interactions
       - name: Build Settings interaction screenshots
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: /tmp/render-settings-interactions.Dockerfile
@@ -190,7 +191,7 @@ jobs:
           outputs: type=local,dest=settings-interactions
           cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
           cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: goblins-os-settings-interactions-${{ matrix.arch }}
           path: settings-interactions/*.png
@@ -199,7 +200,7 @@ jobs:
           cat os/bootc/Containerfile os/bootc/render.suffix.Dockerfile > /tmp/render-polish-interactions.Dockerfile
           mkdir -p polish-interactions
       - name: Build polish interaction proofs
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: /tmp/render-polish-interactions.Dockerfile
@@ -209,7 +210,7 @@ jobs:
           outputs: type=local,dest=polish-interactions
           cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
           cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: goblins-os-polish-interactions-${{ matrix.arch }}
           path: polish-interactions/*
@@ -221,7 +222,7 @@ jobs:
           cat os/bootc/Containerfile os/bootc/render-desktop.suffix.Dockerfile > /tmp/render-desktop.Dockerfile
           mkdir -p desktop-screenshots
       - name: Build desktop-proof screenshots (light + dark)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: /tmp/render-desktop.Dockerfile
@@ -229,7 +230,7 @@ jobs:
           outputs: type=local,dest=desktop-screenshots
           cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
           cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: goblins-os-desktop-screenshots-${{ matrix.arch }}
           path: desktop-screenshots/*.png
@@ -253,7 +254,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: image
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Assert native runner architecture
         run: |
           test "$(uname -m)" = "${{ matrix.expected_uname }}"
@@ -273,9 +274,9 @@ jobs:
           sudo swapon /mnt/swapfile
           df -h /
           free -h
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
       - name: Build the Goblins OS image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: os/bootc/Containerfile
@@ -297,26 +298,24 @@ jobs:
             --source-root /workspace \
             --release-evidence /out \
             --arch ${{ matrix.arch }} \
-            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT"
-          docker run --rm \
-            -v "$PWD/os/signoff-proofs/sbom/${{ matrix.arch }}:/out" \
-            -w /out \
-            localhost/goblins-os:${{ matrix.arch }} \
-            sh rpm-packages.command
+            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
+            --image-ref "localhost/goblins-os:${{ matrix.arch }}"
           . ./os/hardware-gate/rpm-sbom-arch.sh
           rpm_sbom_arch_matches os/signoff-proofs/sbom/${{ matrix.arch }}/rpm-packages.tsv ${{ matrix.arch }}
+          . ./os/hardware-gate/release-evidence.sh
+          goblins_os_release_evidence_hashes_match os/signoff-proofs/sbom/${{ matrix.arch }}
       - name: Scan generated release evidence for secrets
         run: |
           . ./os/hardware-gate/secret-scan.sh
           goblins_os_artifact_secret_scan "$PWD"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: goblins-os-installer-iso-${{ matrix.arch }}
           path: |
             os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso
             os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso.sha256
             os/iso/output/${{ matrix.arch }}/manifest-goblins-os-${{ matrix.arch }}.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: goblins-os-release-evidence-${{ matrix.arch }}
           path: os/signoff-proofs/sbom/${{ matrix.arch }}/*

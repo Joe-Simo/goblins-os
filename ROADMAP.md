@@ -14,8 +14,9 @@ signoff files, not in this overview.
 - Container images: public anonymous pulls are available from GHCR for both
   `x86_64` and `aarch64`.
 - Stable release status: still alpha. Stable promotion requires one exact
-  candidate commit tied to fresh dual-architecture release media, display-backed
-  proof, coherent signoff hashes, and the stable website data.
+  candidate commit tied to per-architecture immutable image digests, fresh
+  dual-architecture release media, display-backed proof, coherent signoff hashes,
+  reviewed external evidence, and the stable website data.
 
 ## Shipped Foundation
 
@@ -36,8 +37,9 @@ signoff files, not in this overview.
 
 - Reconcile the `aarch64` verification-ISO proof-manifest SHA with its signoff
   row; the recorded values currently identify different media.
-- Select an exact stable candidate and capture fresh per-architecture release
-  and display-backed proof for that same commit and media.
+- Select an exact stable candidate and use the digest-bound, non-promotional
+  candidate workflow plus read-only capture paths for fresh per-architecture
+  release and display-backed proof for that same commit and media.
 - Publish a stable tag only after the exact-candidate gates and signoff close.
 - Keep the website release data synchronized with the published artifacts.
 

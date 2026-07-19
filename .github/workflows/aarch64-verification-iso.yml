@@ -1,8 +1,9 @@
 # Goblins OS — aarch64 verification-only ISO for local HVF capture.
 #
 # This workflow does not publish release media and does not satisfy hardware
-# signoff by itself. It builds the noninteractive hardware-gate ISO on a native
-# GitHub arm runner, uploads it as a short-lived artifact, and leaves the real
+# signoff by itself. It consumes a caller-selected, digest-pinned candidate
+# image, builds the noninteractive hardware-gate ISO on a native GitHub arm
+# runner, uploads it as a short-lived artifact, and leaves the real
 # display-backed capture to the Apple-Silicon/HVF route in the runbook.
 name: aarch64-verification-iso
 
@@ -12,23 +13,71 @@ on:
       run_date:
         description: "Screenshot run date that will consume this ISO (YYYY-MM-DD)"
         required: true
+        type: string
+      candidate_commit:
+        description: "Exact lowercase 40-hex source commit represented by the candidate image"
+        required: true
+        type: string
+      candidate_image_ref:
+        description: "Digest-pinned aarch64 candidate image (ghcr.io/...@sha256:<64 lowercase hex>)"
+        required: true
+        type: string
 
 concurrency:
-  group: aarch64-verification-iso-${{ github.ref }}-${{ inputs.run_date }}
+  group: aarch64-verification-iso-${{ inputs.candidate_commit }}-${{ inputs.run_date }}
   cancel-in-progress: true
 
 env:
-  GOBLINS_OS_CANDIDATE_COMMIT: ${{ github.sha }}
+  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:8ac36779c577249c4d36ad5a1c866dac1b516c3fb93ab762f707433ab07445b2
+  GOBLINS_OS_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+  GOBLINS_OS_CANDIDATE_IMAGE_REF: ${{ inputs.candidate_image_ref }}
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+  packages: read
 
 jobs:
   build-verification-iso:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Validate exact candidate inputs and checkout
+        env:
+          RUN_DATE: ${{ inputs.run_date }}
+        run: |
+          set -euo pipefail
+          [[ "$GOBLINS_OS_CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "candidate_commit must be exactly 40 lowercase hexadecimal characters" >&2
+            exit 1
+          }
+          [[ "$GOBLINS_OS_CANDIDATE_IMAGE_REF" =~ ^ghcr\.io/[a-z0-9][a-z0-9._/-]*[a-z0-9]@sha256:[0-9a-f]{64}$ ]] || {
+            echo "candidate_image_ref must be a lowercase digest-pinned ghcr.io reference" >&2
+            exit 1
+          }
+          [[ "$GOBLINS_OS_CANDIDATE_IMAGE_REF" != *".."* && "$GOBLINS_OS_CANDIDATE_IMAGE_REF" != *"//"* ]] || {
+            echo "candidate_image_ref contains an invalid repository path" >&2
+            exit 1
+          }
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          expected_prefix="ghcr.io/$owner/goblins-os@sha256:"
+          [[ "$GOBLINS_OS_CANDIDATE_IMAGE_REF" == "$expected_prefix"* ]] || {
+            echo "candidate_image_ref must identify this repository's Goblins OS package: $expected_prefix<digest>" >&2
+            exit 1
+          }
+          [[ "$RUN_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || {
+            echo "run_date must use YYYY-MM-DD" >&2
+            exit 1
+          }
+          test "$(date -u -d "$RUN_DATE" +%F 2>/dev/null)" = "$RUN_DATE" || {
+            echo "run_date must be a real calendar date" >&2
+            exit 1
+          }
+          test "$(git rev-parse HEAD)" = "$GOBLINS_OS_CANDIDATE_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=normal)"
       - name: Assert native aarch64 runner
         run: test "$(uname -m)" = "aarch64"
       - name: Free disk and add swap
@@ -52,34 +101,57 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq ripgrep
       - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - name: Compute lowercase GHCR ref
-        id: ref
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Pull and verify the digest-pinned candidate image
         run: |
-          owner='${{ github.repository_owner }}'
-          owner="${owner,,}"
-          echo "ref=ghcr.io/${owner}/goblins-os:aarch64" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
-      - name: Build and publish the aarch64 bootc image to GHCR
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: os/bootc/Containerfile
-          platforms: linux/arm64
-          push: true
-          tags: ${{ steps.ref.outputs.ref }}
-          cache-from: type=gha,scope=goblins-os-bootc-aarch64
-          cache-to: type=gha,scope=goblins-os-bootc-aarch64,mode=max,ignore-error=true
-      - name: Build verification-only installer ISO from the published ref
+          set -euo pipefail
+          docker pull "$GOBLINS_OS_CANDIDATE_IMAGE_REF"
+          test "$(docker image inspect --format '{{.Os}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "linux"
+          test "$(docker image inspect --format '{{.Architecture}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "arm64"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "$GOBLINS_OS_CANDIDATE_COMMIT"
+      - name: Verify the exact candidate source contract
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -w /workspace \
+            "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            /usr/libexec/goblins-os/goblins-os-verify --source-root /workspace \
+            | tee /tmp/goblins-os-aarch64-source-verify.log
+          grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
+            /tmp/goblins-os-aarch64-source-verify.log
+      - name: Verify the exact candidate installed-root contract
+        run: |
+          set -euo pipefail
+          docker run --rm "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            /usr/libexec/goblins-os/goblins-os-verify --installed-root / \
+            | tee /tmp/goblins-os-aarch64-installed-verify.log
+          grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
+            /tmp/goblins-os-aarch64-installed-verify.log
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Run the exact candidate install and services self-test
+        run: |
+          set -euo pipefail
+          printf 'FROM %s AS goblins-os\n' "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            > /tmp/goblins-os-aarch64-candidate-selftest.Dockerfile
+          cat os/bootc/selftest.suffix.Dockerfile \
+            >> /tmp/goblins-os-aarch64-candidate-selftest.Dockerfile
+          docker buildx build \
+            --file /tmp/goblins-os-aarch64-candidate-selftest.Dockerfile \
+            --target selftest \
+            --output type=cacheonly \
+            .
+      - name: Build verification-only installer ISO from the candidate digest
         run: |
           GOBLINS_OS_CONTAINER_RUNTIME=docker \
           GOBLINS_OS_ARCH=aarch64 \
           GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml \
-          GOBLINS_OS_IMAGE='${{ steps.ref.outputs.ref }}' \
+          GOBLINS_OS_IMAGE="$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
           GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 \
           GOBLINS_OS_SHIPPABLE_RELEASE=1 \
-          GOBLINS_OS_BIB_SOURCE_IMAGE='${{ steps.ref.outputs.ref }}' \
-          GOBLINS_OS_BIB_AUTH_FILE="$HOME/.docker/config.json" \
+          GOBLINS_OS_BIB_SOURCE_IMAGE="$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
           os/iso/build-iso.sh
       - name: Verify capture-only ISO markers
         run: |
@@ -98,56 +170,93 @@ jobs:
             -v "$PWD:/workspace:ro" \
             -v "$PWD/os/signoff-proofs/sbom/aarch64:/out" \
             -w /workspace \
-            '${{ steps.ref.outputs.ref }}' \
+            "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
             /usr/libexec/goblins-os/goblins-os-verify \
             --source-root /workspace \
             --release-evidence /out \
             --arch aarch64 \
-            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT"
-          docker run --rm \
-            -v "$PWD/os/signoff-proofs/sbom/aarch64:/out" \
-            -w /out \
-            '${{ steps.ref.outputs.ref }}' \
-            sh rpm-packages.command
+            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
+            --image-ref "$GOBLINS_OS_CANDIDATE_IMAGE_REF"
           . ./os/hardware-gate/rpm-sbom-arch.sh
           rpm_sbom_arch_matches os/signoff-proofs/sbom/aarch64/rpm-packages.tsv aarch64
+          . ./os/hardware-gate/release-evidence.sh
+          goblins_os_release_evidence_hashes_match os/signoff-proofs/sbom/aarch64
+      - name: Record the native aarch64 packaging gate
+        run: |
+          set -euo pipefail
+          proof_dir="/tmp/goblins-os-native-gate-aarch64"
+          iso="os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso"
+          iso_manifest="os/iso/output/aarch64/manifest-goblins-os-aarch64.json"
+          bib_manifest="os/iso/output/aarch64/manifest-anaconda-iso.json"
+          evidence_manifest="os/signoff-proofs/sbom/aarch64/release-evidence-manifest.json"
+          mkdir -p "$proof_dir"
+          verification_iso_sha256="$(sha256sum "$iso" | awk '{print $1}')"
+          iso_manifest_sha256="$(sha256sum "$iso_manifest" | awk '{print $1}')"
+          bib_manifest_sha256="$(sha256sum "$bib_manifest" | awk '{print $1}')"
+          release_evidence_manifest_sha256="$(sha256sum "$evidence_manifest" | awk '{print $1}')"
+          jq -n \
+            --arg commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
+            --arg image "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            --arg source_repository "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --arg workflow_run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --argjson workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg verification_iso_sha256 "$verification_iso_sha256" \
+            --arg iso_manifest_sha256 "$iso_manifest_sha256" \
+            --arg bib_manifest_sha256 "$bib_manifest_sha256" \
+            --arg release_evidence_manifest_sha256 "$release_evidence_manifest_sha256" \
+            '{
+              schema: "goblins-os-native-packaging-gate-v1",
+              architecture: "aarch64",
+              candidate_commit: $commit,
+              image_ref: $image,
+              image_digest_pinned: true,
+              source_verifier: "pass",
+              installed_root_verifier: "pass",
+              services_selftest: "pass",
+              verification_iso_sha256: $verification_iso_sha256,
+              iso_manifest_sha256: $iso_manifest_sha256,
+              bib_manifest_sha256: $bib_manifest_sha256,
+              release_evidence_manifest_sha256: $release_evidence_manifest_sha256,
+              runner_os: "Linux",
+              runner_architecture: "aarch64",
+              native_runner: true,
+              source_repository: $source_repository,
+              workflow_run: $workflow_run,
+              workflow_run_attempt: $workflow_run_attempt
+            }' > "$proof_dir/native-packaging-gate.json"
+          jq -e \
+            --arg commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
+            --arg image "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            --arg iso_sha "$verification_iso_sha256" \
+            --arg iso_manifest_sha "$iso_manifest_sha256" \
+            --arg bib_manifest_sha "$bib_manifest_sha256" \
+            --arg evidence_manifest_sha "$release_evidence_manifest_sha256" \
+            --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '.candidate_commit == $commit
+             and .image_ref == $image
+             and .image_digest_pinned == true
+             and .source_verifier == "pass"
+             and .installed_root_verifier == "pass"
+             and .services_selftest == "pass"
+             and .verification_iso_sha256 == $iso_sha
+             and .iso_manifest_sha256 == $iso_manifest_sha
+             and .bib_manifest_sha256 == $bib_manifest_sha
+             and .release_evidence_manifest_sha256 == $evidence_manifest_sha
+             and .runner_os == "Linux"
+             and .runner_architecture == "aarch64"
+             and .native_runner == true
+             and .workflow_run_attempt == $attempt' \
+            "$proof_dir/native-packaging-gate.json" >/dev/null
+      - name: Materialize the native packaging gate with the candidate artifacts
+        run: |
+          mkdir -p os/signoff-proofs/native-gate/aarch64
+          cp /tmp/goblins-os-native-gate-aarch64/native-packaging-gate.json \
+            os/signoff-proofs/native-gate/aarch64/native-packaging-gate.json
       - name: Scan generated release evidence for secrets
         run: |
           . ./os/hardware-gate/secret-scan.sh
           goblins_os_artifact_secret_scan "$PWD"
-      - name: Run Linux close-signoff for committed HVF screenshot run
-        run: |
-          screenshot_dir="os/screenshots/hardware-gate/aarch64/${{ inputs.run_date }}"
-          if [ ! -d "$screenshot_dir" ]; then
-            echo "No committed local-HVF screenshot run at $screenshot_dir; skipping close-signoff."
-            exit 0
-          fi
-          runtime_engine_source="$(jq -r '.engine_source // empty' "$screenshot_dir/runtime-build-proof.json")"
-          GOBLINS_OS_ARCH=aarch64 \
-          GOBLINS_OS_IMAGE='${{ steps.ref.outputs.ref }}' \
-          SCREENSHOT_DIR="$screenshot_dir" \
-          RUNTIME_ENGINE_MODE=local-model \
-          RUNTIME_ENGINE_SOURCE="$runtime_engine_source" \
-          RUNTIME_ENGINE_CONFIG="$screenshot_dir/runtime-build-proof.json" \
-          BUILT_ARTIFACT_PATH_URL="$screenshot_dir/runtime-build-proof.json" \
-          CI_RUST_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
-          CI_IMAGE_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
-          CI_INSTALLER_ISO_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
-            ./os/hardware-gate/close-signoff.sh
-      - name: Commit Linux aarch64 signoff evidence
-        run: |
-          git config user.name "goblins-os-ci"
-          git config user.email "ci@goblins.os"
-          git add -f os/signoff-proofs/sbom/aarch64 os/signoff-notes.md || true
-          if [ -d "os/screenshots/hardware-gate/aarch64/${{ inputs.run_date }}" ]; then
-            git add -f "os/screenshots/hardware-gate/aarch64/${{ inputs.run_date }}"
-          fi
-          git pull --rebase origin main || true
-          git commit -m "hardware-gate: aarch64 Linux signoff ${{ inputs.run_date }}" || echo "nothing to commit"
-          for i in 1 2 3 4 5; do
-            git push origin main && break || { git pull --rebase origin main; sleep $((RANDOM % 5 + 2)); }
-          done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: goblins-os-aarch64-verification-iso-${{ inputs.run_date }}
           retention-days: 7
@@ -157,5 +266,4 @@ jobs:
             os/iso/output/aarch64/manifest-goblins-os-aarch64.json
             os/iso/output/aarch64/manifest-anaconda-iso.json
             os/signoff-proofs/sbom/aarch64/
-            os/screenshots/hardware-gate/aarch64/${{ inputs.run_date }}/
-            os/signoff-notes.md
+            os/signoff-proofs/native-gate/aarch64/native-packaging-gate.json

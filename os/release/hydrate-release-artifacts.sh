@@ -6,8 +6,10 @@
 # compressed ISO, decompress the final ISO, and verify the final SHA256.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 cd "$REPO_ROOT"
+. "$REPO_ROOT/os/hardware-gate/release-evidence.sh"
+. "$REPO_ROOT/os/hardware-gate/rpm-sbom-arch.sh"
 
 TAG="${GOBLINS_OS_RELEASE_TAG:-v0.1.0-alpha.20260703}"
 BASE_URL="${GOBLINS_OS_RELEASE_BASE_URL:-https://github.com/Joe-Simo/goblins-os/releases/download/$TAG}"
@@ -78,16 +80,57 @@ hydrate_metadata() {
   local iso_dir="os/iso/output/$arch"
   local boot_dir="$iso_dir/bootiso"
   local sbom_dir="os/signoff-proofs/sbom/$arch"
+  local staging_dir resolved_sbom_dir generated_path
 
   download_asset "goblins-os-$arch.iso.sha256" "$boot_dir/goblins-os-$arch.iso.sha256"
   normalize_sha256_file_paths "$boot_dir/goblins-os-$arch.iso.sha256"
   download_asset "manifest-goblins-os-$arch.json" "$iso_dir/manifest-goblins-os-$arch.json"
   download_asset "manifest-anaconda-iso-$arch.json" "$iso_dir/manifest-anaconda-iso.json"
 
-  download_asset "cargo-lock-packages-$arch.tsv" "$sbom_dir/cargo-lock-packages.tsv"
-  download_asset "release-evidence-manifest-$arch.json" "$sbom_dir/release-evidence-manifest.json"
-  download_asset "rpm-packages-$arch.command" "$sbom_dir/rpm-packages.command"
-  download_asset "rpm-packages-$arch.tsv" "$sbom_dir/rpm-packages.tsv"
+  for component in os os/signoff-proofs os/signoff-proofs/sbom "$sbom_dir"; do
+    [ ! -L "$component" ] || {
+      echo "error: refusing symlinked release-evidence path: $component" >&2
+      exit 1
+    }
+  done
+  mkdir -p "$sbom_dir"
+  resolved_sbom_dir="$(cd "$sbom_dir" && pwd -P)"
+  [ "$resolved_sbom_dir" = "$REPO_ROOT/$sbom_dir" ] || {
+    echo "error: release-evidence destination escaped the checkout: $resolved_sbom_dir" >&2
+    exit 1
+  }
+
+  staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/goblins-release-evidence-$arch.XXXXXX")"
+  download_asset "cargo-lock-packages-$arch.tsv" "$staging_dir/cargo-lock-packages.tsv"
+  download_asset "rpm-packages-$arch.command" "$staging_dir/rpm-packages.command"
+  download_asset "rpm-packages-$arch.tsv" "$staging_dir/rpm-packages.tsv"
+  download_asset "release-evidence-manifest-$arch.json" "$staging_dir/release-evidence-manifest.json"
+  if ! goblins_os_release_evidence_hashes_match "$staging_dir"; then
+    echo "error: downloaded $arch release evidence is incomplete or hash-mismatched" >&2
+    exit 1
+  fi
+  if ! rpm_sbom_arch_matches "$staging_dir/rpm-packages.tsv" "$arch"; then
+    echo "error: downloaded $arch RPM inventory contains the wrong architecture" >&2
+    exit 1
+  fi
+
+  for generated_name in release-evidence-manifest.json cargo-lock-packages.tsv rpm-packages.command rpm-packages.tsv rpm-packages.not-generated.txt; do
+    generated_path="$sbom_dir/$generated_name"
+    [ ! -L "$generated_path" ] || {
+      echo "error: refusing symlinked release-evidence file: $generated_path" >&2
+      exit 1
+    }
+    rm -f "$generated_path"
+  done
+  cp "$staging_dir/cargo-lock-packages.tsv" "$sbom_dir/cargo-lock-packages.tsv"
+  cp "$staging_dir/rpm-packages.command" "$sbom_dir/rpm-packages.command"
+  cp "$staging_dir/rpm-packages.tsv" "$sbom_dir/rpm-packages.tsv"
+  cp "$staging_dir/release-evidence-manifest.json" "$sbom_dir/release-evidence-manifest.json"
+  rm -rf "$staging_dir"
+  goblins_os_release_evidence_hashes_match "$sbom_dir" || {
+    echo "error: hydrated $arch release evidence failed destination validation" >&2
+    exit 1
+  }
 }
 
 hydrate_iso() {

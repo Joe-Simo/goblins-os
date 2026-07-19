@@ -1,0 +1,19 @@
+schema = 1
+image_ref = "ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:8ac36779c577249c4d36ad5a1c866dac1b516c3fb93ab762f707433ab07445b2"
+source_commit = "c99090ce66ac6d683539ae4186255e5871af74b1"
+workflow_run = "https://github.com/Joe-Simo/goblins-os/actions/runs/29692619832"
+workflow_run_attempt = 1
+base_image = "docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898"
+containerfile_sha256 = "660c87960a1490a2151e384ffe4ce040877b5ead319030617d9af0d996974dca"
+public_pull_verified_on = "2026-07-19"
+inventory_path_in_image = "/usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv"
+
+[architectures.x86_64]
+native_image_ref = "ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:ef541a4a4389f0bb24fc55cfb646e4d830a46bc3cd9b98d899c13d80b7b87c46"
+rpm_inventory_sha256 = "044f3886abcc2901b0eb0c54cfae1482bf916d41e70c35a18b7970468a4f711e"
+rpm_package_count = 246
+
+[architectures.aarch64]
+native_image_ref = "ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:7b3070c2f4e7276d631e7fafcd86ca57cec20e087350941b8797aaef9820ff25"
+rpm_inventory_sha256 = "454eb1667d4cda32074acdb6aa81b8ff6de4d2710caf9c9d4c9587dc326246f2"
+rpm_package_count = 245

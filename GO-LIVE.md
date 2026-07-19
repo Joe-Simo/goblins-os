@@ -78,21 +78,35 @@ podman manifest inspect ghcr.io/joe-simo/goblins-os:x86_64
 podman manifest inspect ghcr.io/joe-simo/goblins-os:aarch64
 ```
 
-- [ ] Select and record the exact stable candidate commit.
+These mutable alpha tags prove public package visibility only. They are never
+stable-candidate provenance; every stable gate uses a digest reference from the
+exact candidate workflow.
+
+- [ ] Select a clean, pushed current `origin/main` commit and record it as the
+  exact stable candidate.
 - [ ] Export that full commit as `GOBLINS_OS_CANDIDATE_COMMIT` for every ISO,
   release-evidence, capture, close-signoff, and shipping-status command. Stable
   promotion fails if either architecture is missing it or records a different value.
-- [ ] Build native shippable release media and package evidence for both
-  architectures from that exact candidate.
-- [ ] Complete per-architecture display-backed signoff for that exact candidate,
-  with each proof manifest and signoff row naming the same verification ISO SHA.
-- [ ] Hydrate the exact-candidate release artifacts before local signoff. Use the
-  default metadata/SBOM mode for lightweight review, or set
-  `GOBLINS_OS_DOWNLOAD_ISO=1` only on a machine with enough disk and bandwidth
-  for ISO reconstruction.
-- [ ] Build or fetch each exact-candidate verification-only hardware-gate ISO
-  for screenshot capture; do not use hydrated public release media for
+- [ ] Dispatch the canonical `candidate-artifacts.yml` workflow for that commit,
+  retain its exact run URL, and require both native architecture jobs to pass.
+- [ ] Download the two metadata-only candidate artifacts from that exact run.
+  Validate architecture, candidate commit, `non_promotional: true`, and each
+  `immutable_image_ref`; never substitute the commit-scoped tag.
+- [ ] Retain the digest-bound shippable media and package evidence for both
+  architectures from that exact run without moving any public channel.
+- [ ] Run the read-only x86_64 capture workflow with its exact digest. Build the
+  aarch64 verification ISO with its exact digest, then complete the local native
+  HVF display-backed capture. Do not use hydrated public release media for
   automated capture.
+- [ ] Review and overlay the exact Actions/capture artifacts in a disposable
+  checkout of the selected candidate. Require each ISO, BIB manifest, SBOM,
+  screenshot proof, and signoff row to name the same candidate and per-arch
+  immutable image digest, with each signoff row naming its verification ISO SHA.
+- [ ] Run `GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT"
+  ./os/hardware-gate/verify-shipping-status.sh` in that evidence workspace and
+  require a fully green result before any promotion.
+- [ ] Preserve the selected source commit; attach reviewed generated evidence to
+  the release instead of advancing or rebuilding the candidate merely to store proof.
 - [ ] Create a stable release tag.
 - [ ] Update website release data from alpha to stable.
 - [ ] Run website checks after the stable release data is updated:

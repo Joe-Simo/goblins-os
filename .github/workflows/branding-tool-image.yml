@@ -244,6 +244,7 @@ jobs:
             --arg x86_64_inventory_sha256 '${{ steps.sources.outputs.x86_64_inventory_sha256 }}' \
             --arg aarch64_inventory_sha256 '${{ steps.sources.outputs.aarch64_inventory_sha256 }}' \
             --arg workflow_run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --argjson workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
             '{
               schema: "goblins-os-installer-branding-tool-index-v1",
               candidate_commit: $candidate_commit,
@@ -258,7 +259,8 @@ jobs:
                 x86_64: $x86_64_inventory_sha256,
                 aarch64: $aarch64_inventory_sha256
               },
-              workflow_run: $workflow_run
+              workflow_run: $workflow_run,
+              workflow_run_attempt: $workflow_run_attempt
             }' > "$output_dir/image-ref.json"
           cp \
             "branding-tool-artifacts/goblins-os-branding-tool-$CANDIDATE_COMMIT-x86_64/rpm-packages.tsv" \

@@ -100,29 +100,49 @@ and dark — the actual installed pixels, not mockups.
 ## 4. Generate release and SBOM evidence
 
 ```sh
+set -euo pipefail
+
 ARCH=x86_64 # or aarch64
 CANDIDATE_COMMIT="$(git rev-parse HEAD)"
+CANDIDATE_REF_JSON="<downloaded metadata-only artifact>/image-ref.json"
+jq -e --arg arch "$ARCH" --arg commit "$CANDIDATE_COMMIT" \
+  '.architecture == $arch
+   and .candidate_commit == $commit
+   and .candidate_tag_authoritative == false
+   and .non_promotional == true
+   and (.immutable_image_ref | test("^ghcr\\.io/.+@sha256:[0-9a-f]{64}$"))' \
+  "$CANDIDATE_REF_JSON" >/dev/null
+IMAGE_REF="$(jq -er '.immutable_image_ref' "$CANDIDATE_REF_JSON")"
 cargo run -p goblins-os-verify -- \
   --source-root . \
   --release-evidence "os/signoff-proofs/sbom/$ARCH" \
   --arch "$ARCH" \
-  --candidate-commit "$CANDIDATE_COMMIT"
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  --image-ref "$IMAGE_REF"
 ```
 
-This writes `release-evidence-manifest.json`, `cargo-lock-packages.tsv`, and an
-`rpm-packages.command` for the built image. Run the same command inside the
-installed Goblins OS image, or run `rpm-packages.command` there, to capture
-architecture-specific RPM names, versions, architectures, and license tags in
-`rpm-packages.tsv`. If the command is run on a host without `rpm`, it records a
+Generate and download `CANDIDATE_REF_JSON` from the exact
+`candidate-artifacts.yml` run documented in the hardware-gate runbook. Do not
+copy a mutable channel or commit-scoped tag into this field; the registry digest
+is the evidence identity.
+
+This source invocation can prepare diagnostic evidence and an
+`rpm-packages.command`, but it cannot satisfy final release evidence. For each
+architecture, run the packaged `goblins-os-verify --release-evidence` from the
+exact digest-pinned Goblins OS image so one invocation writes the v4 manifest,
+Cargo inventory, and architecture-specific RPM inventory. The final gate
+requires both TSV SHA256 values to match that manifest; a standalone replay of
+`rpm-packages.command` is diagnostic only. A host without `rpm` records a
 `rpm-packages.not-generated.txt` blocker instead of inventing package data.
 Generated release evidence, ISO manifests, SHA files, signoff notes, release
 tables, and command files must also pass the artifact/evidence secret scan
 before the hardware gate accepts them.
 
 The ISO manifest, release-evidence manifest, screenshot proof manifest, and
-signoff row must all record this same full candidate commit. Both architecture
-tracks must match it before stable promotion; historical evidence without the
-field is intentionally incomplete.
+signoff row must all record this same full candidate commit and immutable image
+digest reference. Both architecture tracks must match their own digest-bound
+media before stable promotion; historical evidence without either field is
+intentionally incomplete.
 
 ## 5. Build the installer ISO
 
@@ -143,8 +163,8 @@ non-release artifact testing may set `GOBLINS_OS_ALLOW_EMULATED_DOCKER=1` and
 `GOBLINS_OS_DOCKER_PLATFORM=linux/amd64` or `linux/arm64`; that only fills local
 ISO/SHA/manifest evidence and does not satisfy the native runner or screenshot
 proof gates. Final shippable media must instead build on a native runner from the
-real pullable release image ref with `GOBLINS_OS_SHIPPABLE_RELEASE=1` and
-`GOBLINS_OS_BIB_SOURCE_IMAGE=<real release bootc image ref>`, because the
+immutable pullable release image ref with `GOBLINS_OS_SHIPPABLE_RELEASE=1` and
+`GOBLINS_OS_BIB_SOURCE_IMAGE=<registry>/<image>@sha256:<64-hex-digest>`, because the
 Anaconda ISO records that source ref for post-install bootc tracking. The ISO embeds the image and opens Goblins OS advanced storage for disk selection. Storage is interactive: no
 `clearpart`/`autopart` command is baked into the kickstart, so the person must
 explicitly choose the target disk, review formatting, and confirm the

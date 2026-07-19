@@ -20,7 +20,8 @@
 #                      Hardware proof jobs use os/iso/verify-config.toml; release
 #                      media must keep the default interactive config.
 #   OUTDIR             output directory           (default os/iso/output/<arch>)
-#   BIB_IMAGE          bootc-image-builder image  (default the quay.io latest)
+#   BIB_IMAGE          digest-pinned bootc-image-builder image (default the
+#                      reviewed multi-architecture digest below)
 #   GOBLINS_OS_CONTAINER_RUNTIME
 #                      docker (default docker)
 #   GOBLINS_OS_ALLOW_EMULATED_DOCKER
@@ -65,7 +66,8 @@ CONFIG_LABEL="$CONFIG"
 case "$CONFIG_LABEL" in
   "$REPO_ROOT"/*) CONFIG_LABEL="${CONFIG_LABEL#"$REPO_ROOT/"}" ;;
 esac
-BIB="${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder:latest}"
+BIB="${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b}"
+INSTALLER_BRANDING_IMAGE="${GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:8ac36779c577249c4d36ad5a1c866dac1b516c3fb93ab762f707433ab07445b2}"
 ROOTFS="${GOBLINS_OS_ROOTFS:-xfs}"
 CONTAINER_RUNTIME="${GOBLINS_OS_CONTAINER_RUNTIME:-docker}"
 ALLOW_EMULATED_DOCKER="${GOBLINS_OS_ALLOW_EMULATED_DOCKER:-0}"
@@ -79,6 +81,7 @@ CANDIDATE_COMMIT="${GOBLINS_OS_CANDIDATE_COMMIT:-}"
 BIB_SOURCE_IMAGE_USED=""
 BIB_SOURCE_KIND=""
 BIB_SOURCE_LOCAL_ONLY="false"
+INSTALLER_BRANDING_APPLIED="false"
 DOCKER_PLATFORM=""
 DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS="${GOBLINS_OS_DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS:-20}"
 
@@ -147,6 +150,10 @@ image_ref_is_local_only() {
   esac
 }
 
+image_ref_is_digest_pinned() {
+  [[ "$1" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]
+}
+
 require_shippable_source_ref() {
   local ref="$1"
 
@@ -158,6 +165,36 @@ require_shippable_source_ref() {
     echo "       Push the bootc image to a real release registry and set GOBLINS_OS_BIB_SOURCE_IMAGE to that pullable ref." >&2
     exit 1
   fi
+  if ! image_ref_is_digest_pinned "$ref"; then
+    echo "error: shippable release media requires a digest-pinned installer payload ref: $ref" >&2
+    echo "       Set GOBLINS_OS_BIB_SOURCE_IMAGE to <registry>/<image>@sha256:<64-hex-digest>." >&2
+    exit 1
+  fi
+}
+
+require_shippable_tool_ref() {
+  local label="$1"
+  local ref="$2"
+
+  if [ "$SHIPPABLE_RELEASE" = "1" ] && ! image_ref_is_digest_pinned "$ref"; then
+    echo "error: shippable release media requires a digest-pinned $label image: $ref" >&2
+    echo "       Review and set $label to <registry>/<image>@sha256:<64-hex-digest>." >&2
+    exit 1
+  fi
+}
+
+require_shippable_branding_tool_ref() {
+  if [ "$SHIPPABLE_RELEASE" != "1" ]; then
+    return 0
+  fi
+  require_shippable_tool_ref GOBLINS_OS_INSTALLER_BRANDING_IMAGE "$INSTALLER_BRANDING_IMAGE"
+  case "$INSTALLER_BRANDING_IMAGE" in
+    */goblins-os-installer-branding-tool@sha256:*) ;;
+    *)
+      echo "error: shippable media requires the dedicated Goblins OS installer branding-tool image" >&2
+      exit 1
+      ;;
+  esac
 }
 
 verify_docker_emulation_runtime() {
@@ -233,6 +270,12 @@ if [ "$ARCH" != "$RUNTIME_ARCH" ] && [ "$ALLOW_EMULATED_DOCKER" != "1" ]; then
   echo "       For non-release Docker experiments only, set GOBLINS_OS_ALLOW_EMULATED_DOCKER=1." >&2
   exit 1
 fi
+if [ "$SHIPPABLE_RELEASE" = "1" ] \
+  && { [ "$ARCH" != "$HOST_ARCH" ] || [ "$ARCH" != "$RUNTIME_ARCH" ]; }; then
+  echo "error: shippable $ARCH media requires a native $ARCH host and container engine (host=$HOST_ARCH engine=$RUNTIME_ARCH)" >&2
+  echo "       Emulated Docker builds are restricted to GOBLINS_OS_SHIPPABLE_RELEASE=0 experiments." >&2
+  exit 1
+fi
 DOCKER_PLATFORM="${GOBLINS_OS_DOCKER_PLATFORM:-$(docker_platform_for_arch "$ARCH")}"
 if [ "$(arch_for_docker_platform "$DOCKER_PLATFORM")" != "$ARCH" ]; then
   echo "error: GOBLINS_OS_DOCKER_PLATFORM='$DOCKER_PLATFORM' does not match GOBLINS_OS_ARCH='$ARCH'." >&2
@@ -241,6 +284,12 @@ fi
 
 IMAGE="${GOBLINS_OS_IMAGE:-localhost/goblins-os:$ARCH}"
 OUTDIR="${OUTDIR:-$REPO_ROOT/os/iso/output/$ARCH}"
+case "$OUTDIR" in
+  /*) ;;
+  *) OUTDIR="$REPO_ROOT/$OUTDIR" ;;
+esac
+mkdir -p "$OUTDIR"
+OUTDIR="$(cd "$OUTDIR" && pwd -P)"
 ISO_NAME="goblins-os-$ARCH.iso"
 ISO_PATH="$OUTDIR/bootiso/$ISO_NAME"
 SHA_PATH="$ISO_PATH.sha256"
@@ -265,38 +314,58 @@ brand_installer() {
   # GOBLINS_OS_SKIP_INSTALLER_BRANDING=1.
   local iso="$1" dir base
   if [ "${GOBLINS_OS_SKIP_INSTALLER_BRANDING:-0}" = "1" ]; then
+    if [ "$SHIPPABLE_RELEASE" = "1" ]; then
+      echo "error: shippable release media cannot skip Goblins installer branding" >&2
+      exit 1
+    fi
     echo "==> Skipping Anaconda installer branding (GOBLINS_OS_SKIP_INSTALLER_BRANDING=1)"
     return 0
   fi
   dir="$(cd "$(dirname "$iso")" && pwd)"
   base="$(basename "$iso")"
   echo "==> Branding the Anaconda installer (Goblins sidebar/logo/accent)"
-  docker run --rm \
+  docker run --rm --pull=missing \
+    --platform "$DOCKER_PLATFORM" \
     -v "$REPO_ROOT/os/brand/anaconda":/brand:ro \
     -v "$REPO_ROOT/os/iso":/scripts:ro \
     -v "$dir":/iso:ro \
     -v "$dir":/work \
     -e ISO_IN="/iso/$base" \
     -e ISO_OUT="/work/$base.branded" \
-    docker.io/library/fedora:44 bash /scripts/remaster-anaconda-branding.sh
-  # The remaster container writes the branded ISO as root; reclaim ownership (a
-  # throwaway container, no host sudo) before swapping it in.
-  docker run --rm -v "$dir":/work docker.io/library/alpine:latest \
-    chown -R "$(id -u):$(id -g)" /work 2>/dev/null || true
+    "$INSTALLER_BRANDING_IMAGE" bash /scripts/remaster-anaconda-branding.sh
+  # Reuse the same reviewed branding image to reclaim ownership without adding a
+  # mutable helper to the trust boundary.
+  docker run --rm --pull=missing \
+    --platform "$DOCKER_PLATFORM" \
+    -v "$dir":/work \
+    --entrypoint /bin/chown \
+    "$INSTALLER_BRANDING_IMAGE" \
+    -R "$(id -u):$(id -g)" /work
   mv -f "$iso.branded" "$iso"
+  INSTALLER_BRANDING_APPLIED="true"
 }
 
 finalize_outputs() {
-  local latest_iso
+  local source_iso="$1"
+  local source_manifest="$2"
+  local iso_count
 
-  latest_iso="$(find "$OUTDIR/bootiso" -maxdepth 1 -type f -name '*.iso' -print | sort | tail -n 1 || true)"
-  if [ -z "$latest_iso" ]; then
-    echo "error: bootc-image-builder completed but no ISO was found under $OUTDIR/bootiso" >&2
+  [ -s "$source_iso" ] || {
+    echo "error: bootc-image-builder did not produce the exact expected bootiso/install.iso" >&2
     exit 1
-  fi
-  if [ "$latest_iso" != "$ISO_PATH" ]; then
-    cp "$latest_iso" "$ISO_PATH"
-  fi
+  }
+  [ -s "$source_manifest" ] || {
+    echo "error: bootc-image-builder did not produce manifest-anaconda-iso.json" >&2
+    exit 1
+  }
+  iso_count="$(find "$(dirname "$(dirname "$source_iso")")" -type f -name '*.iso' -print | wc -l | tr -d ' ')"
+  [ "$iso_count" = "1" ] || {
+    echo "error: bootc-image-builder output must contain exactly one ISO; found $iso_count" >&2
+    exit 1
+  }
+  mkdir -p "$(dirname "$ISO_PATH")"
+  mv -f "$source_iso" "$ISO_PATH"
+  cp "$source_manifest" "$OUTDIR/manifest-anaconda-iso.json"
   # Replace Fedora's Anaconda chrome with the Goblins identity before sealing the
   # checksum, so the shipped ISO's installer carries zero Fedora branding.
   brand_installer "$ISO_PATH"
@@ -318,6 +387,11 @@ finalize_outputs() {
   "container_engine_arch": "$RUNTIME_ARCH",
   "docker_platform": "$DOCKER_PLATFORM",
   "installer_config": "$CONFIG_LABEL",
+  "installer_branding_applied": $INSTALLER_BRANDING_APPLIED,
+  "installer_branding_image": "$INSTALLER_BRANDING_IMAGE",
+  "installer_branding_ownership_helper_image": "$INSTALLER_BRANDING_IMAGE",
+  "builder_image": "$BIB",
+  "builder_output_ownership_helper_image": "$BIB",
   "builder_source_image": "$BIB_SOURCE_IMAGE_USED",
   "installer_payload_source_kind": "$BIB_SOURCE_KIND",
   "installer_payload_source_local_only": $BIB_SOURCE_LOCAL_ONLY,
@@ -344,7 +418,7 @@ ensure_docker_registry() {
 }
 
 run_docker_builder() {
-  local registry_image builder_image bib_pull_local
+  local registry_image builder_image bib_pull_local bib_output_dir
   local image_arch
 
   require_command docker
@@ -370,9 +444,15 @@ run_docker_builder() {
   if [ -n "$BIB_SOURCE_IMAGE_OVERRIDE" ]; then
     builder_image="$BIB_SOURCE_IMAGE_OVERRIDE"
     registry_image=""
-    bib_pull_local=0
-    BIB_SOURCE_KIND="release-registry"
-    BIB_SOURCE_LOCAL_ONLY="false"
+    if image_ref_is_local_only "$builder_image"; then
+      bib_pull_local=1
+      BIB_SOURCE_KIND="explicit-local-registry"
+      BIB_SOURCE_LOCAL_ONLY="true"
+    else
+      bib_pull_local=0
+      BIB_SOURCE_KIND="release-registry"
+      BIB_SOURCE_LOCAL_ONLY="false"
+    fi
   else
     ensure_docker_registry
     registry_image="localhost:$DOCKER_REGISTRY_PORT/goblins-os:$ARCH"
@@ -385,22 +465,30 @@ run_docker_builder() {
     BIB_SOURCE_LOCAL_ONLY="true"
   fi
   require_shippable_source_ref "$builder_image"
+  require_shippable_tool_ref BIB_IMAGE "$BIB"
+  require_shippable_branding_tool_ref
   BIB_SOURCE_IMAGE_USED="$builder_image"
 
-  mkdir -p "$OUTDIR"
+  bib_output_dir="$(mktemp -d "$OUTDIR/.bib-output.XXXXXX")"
   docker volume create "$BIB_STORAGE_VOLUME" >/dev/null
   echo "==> Building Goblins OS $ARCH install ISO ($ROOTFS root) from $builder_image"
   echo "==> Docker builder platform: $DOCKER_PLATFORM"
   if [ -n "$registry_image" ]; then
     echo "==> Using Docker local registry: $registry_image"
+  elif [ "$BIB_SOURCE_LOCAL_ONLY" = "true" ]; then
+    echo "==> Using explicit local/test registry source: $builder_image"
   else
     echo "==> Using release registry source: $builder_image"
   fi
-  # Optional: a registry auth file so bootc-image-builder's podman can pull a
-  # private release registry source image (e.g. a private GHCR package). Docker's
-  # ~/.docker/config.json is a valid REGISTRY_AUTH_FILE for podman.
+  # Optional only for non-release private-registry testing. Shippable release
+  # media must pull the public release package anonymously; never expose a
+  # registry token to this privileged third-party builder container.
   local bib_auth_mounts=()
   if [ -n "${GOBLINS_OS_BIB_AUTH_FILE:-}" ]; then
+    if [ "$SHIPPABLE_RELEASE" = "1" ]; then
+      echo "error: shippable release media forbids GOBLINS_OS_BIB_AUTH_FILE; publish the release image for anonymous digest pulls" >&2
+      exit 1
+    fi
     echo "==> Using registry auth file for the bootc-image-builder source pull"
     bib_auth_mounts=(-v "${GOBLINS_OS_BIB_AUTH_FILE}:/run/containers/0/auth.json:ro" -e "REGISTRY_AUTH_FILE=/run/containers/0/auth.json")
   fi
@@ -412,20 +500,29 @@ run_docker_builder() {
     -e BIB_PULL_LOCAL="$bib_pull_local" \
     -e BIB_ROOTFS="$ROOTFS" \
     -v "$CONFIG":/config.toml:ro \
-    -v "$OUTDIR":/output \
+    -v "$bib_output_dir":/output \
     -v "$BIB_STORAGE_VOLUME":/var/lib/containers/storage \
     --entrypoint /bin/bash \
     "$BIB" \
     -lc 'set -euo pipefail; mkdir -p /var/lib/containers/storage/overlay; if [ "$BIB_PULL_LOCAL" = "1" ]; then podman pull --tls-verify=false "$BIB_SOURCE_IMAGE"; else podman pull "$BIB_SOURCE_IMAGE"; fi; bootc-image-builder --verbose build --type anaconda-iso --rootfs "$BIB_ROOTFS" --output /output "$BIB_SOURCE_IMAGE"'
 
-  # The privileged bootc-image-builder container writes /output as root. Reclaim
-  # ownership via a throwaway container (no host sudo needed; a harmless no-op on
-  # Docker Desktop) so the host user can rename the ISO and write the
-  # sha/manifest in finalize_outputs.
-  docker run --rm -v "$OUTDIR":/output docker.io/library/alpine:latest \
-    chown -R "$(id -u):$(id -g)" /output 2>/dev/null || true
+  # The privileged builder writes /output as root. Reuse the same reviewed,
+  # digest-pinned image without privileges to reclaim ownership; introducing a
+  # second mutable helper image would expand the release trust boundary.
+  docker run --rm --pull=missing \
+    --platform "$DOCKER_PLATFORM" \
+    -v "$bib_output_dir":/output \
+    --entrypoint /bin/chown \
+    "$BIB" \
+    -R "$(id -u):$(id -g)" /output
 
-  finalize_outputs
+  finalize_outputs \
+    "$bib_output_dir/bootiso/install.iso" \
+    "$bib_output_dir/manifest-anaconda-iso.json"
+  case "$bib_output_dir" in
+    "$OUTDIR"/.bib-output.*) rm -rf -- "$bib_output_dir" ;;
+    *) echo "error: refusing to remove unexpected builder output path: $bib_output_dir" >&2; exit 1 ;;
+  esac
 }
 
 run_docker_builder

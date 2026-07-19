@@ -64,6 +64,35 @@ function safeTitle(win) {
     }
 }
 
+function safeAppName(tracker, win) {
+    try {
+        return tracker?.get_window_app?.(win)?.get_name?.()?.trim() || '';
+    } catch (_error) {
+        return '';
+    }
+}
+
+function snapAssistChoices(candidates, tracker) {
+    const choices = candidates.slice(0, 6).map(win => {
+        const appName = safeAppName(tracker, win);
+        const title = safeTitle(win).trim();
+        const base = !appName || appName.toLowerCase() === title.toLowerCase()
+            ? title || appName || 'Untitled'
+            : `${appName} — ${title}`;
+        return {win, base};
+    });
+    const totals = new Map();
+    for (const {base} of choices)
+        totals.set(base, (totals.get(base) || 0) + 1);
+    const seen = new Map();
+    return choices.map(({win, base}) => {
+        const index = (seen.get(base) || 0) + 1;
+        seen.set(base, index);
+        const label = totals.get(base) > 1 ? `${base} — Window ${index}` : base;
+        return {win, label};
+    });
+}
+
 function spaceStripLabel(index, count) {
     if (count === 0)
         return `Space ${index + 1} - Empty`;
@@ -1212,9 +1241,7 @@ export default class GoblinsWindowManagement extends Extension {
             text: 'Fill the other half',
             style_class: 'goblins-wm-snap-assist-title',
         }));
-        for (const win of candidates.slice(0, 6)) {
-            const app = this._tracker.get_window_app(win);
-            const label = `${app?.get_name?.() || ''}  ${safeTitle(win)}`.trim();
+        for (const {win, label} of snapAssistChoices(candidates, this._tracker)) {
             const button = new St.Button({
                 style_class: 'goblins-wm-snap-assist-item',
                 label,

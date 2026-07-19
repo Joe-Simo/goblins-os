@@ -5,6 +5,8 @@ ROOT="${ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 cd "$ROOT"
 . "$ROOT/os/hardware-gate/secret-scan.sh"
 . "$ROOT/os/hardware-gate/rpm-sbom-arch.sh"
+. "$ROOT/os/iso/manifest-provenance.sh"
+. "$ROOT/os/hardware-gate/release-evidence.sh"
 
 SHIP_DECL="SHIP.md"
 WORKFLOW=".github/workflows/build.yml"
@@ -14,6 +16,8 @@ RUNBOOK="os/hardware-gate/runbook.md"
 SCREENSHOT_RUN_DIR="${SCREENSHOT_RUN_DIR:-${SCREENSHOT_DIR:-}}"
 FAIL_COUNT=0
 ARCHES=(aarch64 x86_64)
+EXPECTED_BIB_IMAGE="quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b"
+EXPECTED_INSTALLER_BRANDING_IMAGE="$(awk -F'"' '/^image_ref = / { print $2; exit }' os/release/installer-branding-tool.toml)"
 SELECTED_CANDIDATE_COMMIT="${GOBLINS_OS_CANDIDATE_COMMIT:-${GITHUB_SHA:-}}"
 CANDIDATE_SELECTION_VALID=1
 if [[ ! "$SELECTED_CANDIDATE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -21,6 +25,34 @@ if [[ ! "$SELECTED_CANDIDATE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
   SELECTED_CANDIDATE_COMMIT=""
 else
   SELECTED_CANDIDATE_COMMIT="$(printf '%s' "$SELECTED_CANDIDATE_COMMIT" | tr '[:upper:]' '[:lower:]')"
+fi
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "[FAIL] Final shipping verification requires the exact candidate Git checkout"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+  CANDIDATE_SELECTION_VALID=0
+else
+  SOURCE_HEAD="$(git rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
+  if [ "$CANDIDATE_SELECTION_VALID" -ne 1 ] || [ "$SOURCE_HEAD" != "$SELECTED_CANDIDATE_COMMIT" ]; then
+    echo "[FAIL] Final shipping checkout HEAD $SOURCE_HEAD does not match selected candidate ${SELECTED_CANDIDATE_COMMIT:-missing}"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    CANDIDATE_SELECTION_VALID=0
+  else
+    echo "[PASS] Final shipping checkout HEAD matches selected candidate $SELECTED_CANDIDATE_COMMIT"
+  fi
+  UNEXPECTED_SOURCE_CHANGES="$({
+    git -c core.quotepath=false diff --name-only --no-ext-diff
+    git -c core.quotepath=false diff --cached --name-only --no-ext-diff
+    git -c core.quotepath=false ls-files --others --exclude-standard
+  } | sed '/^$/d' | sort -u | grep -Ev '^os/(iso/output/|signoff-proofs/|screenshots/hardware-gate/)|^os/signoff-notes[.]md$' || true)"
+  if [ -n "$UNEXPECTED_SOURCE_CHANGES" ]; then
+    echo "[FAIL] Final shipping checkout has changes outside generated proof paths:"
+    printf '%s\n' "$UNEXPECTED_SOURCE_CHANGES"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    CANDIDATE_SELECTION_VALID=0
+  else
+    echo "[PASS] Final shipping checkout changes are confined to generated proof paths"
+  fi
 fi
 
 REQ_SCREENSHOTS=(
@@ -124,7 +156,8 @@ check_file_contains() {
 check_sha256_file() {
   local label="$1"
   local sha_path="$2"
-  local expected actual artifact sha_dir sha_base
+  local expected_basename="$3"
+  local expected actual artifact sha_dir sha_base nonempty_lines
 
   if [ ! -f "$sha_path" ]; then
     echo "[FAIL] $label: missing $sha_path"
@@ -132,28 +165,34 @@ check_sha256_file() {
     return 1
   fi
 
-  # Verify from the checksum file's own directory so a portable, basename-relative
-  # checksum resolves correctly (an absolute legacy path also still works).
-  sha_dir="$(dirname "$sha_path")"
+  sha_dir="$(cd "$(dirname "$sha_path")" && pwd -P)" || return 1
   sha_base="$(basename "$sha_path")"
+  nonempty_lines="$(awk 'NF { count += 1 } END { print count + 0 }' "$sha_dir/$sha_base")"
+  read -r expected artifact < "$sha_dir/$sha_base"
+  artifact="${artifact#\*}"
+  if [ "$nonempty_lines" != "1" ] \
+    || [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]] \
+    || [ "$artifact" != "$expected_basename" ] \
+    || [[ "$artifact" == */* ]] \
+    || [ ! -f "$sha_dir/$artifact" ]; then
+    echo "[FAIL] $label: checksum must contain one lowercase digest for $expected_basename"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    return 1
+  fi
+
   if command -v sha256sum >/dev/null 2>&1; then
-    if (cd "$sha_dir" && sha256sum -c "$sha_base" >/dev/null 2>&1); then
-      echo "[PASS] $label"
-      return 0
-    fi
+    actual="$(sha256sum "$sha_dir/$artifact" | awk '{print $1}')"
   elif command -v shasum >/dev/null 2>&1; then
-    read -r expected artifact < "$sha_path"
-    if [ -n "$expected" ] && [ -n "$artifact" ] && (cd "$sha_dir" && [ -f "$artifact" ]); then
-      actual="$(cd "$sha_dir" && shasum -a 256 "$artifact" | awk '{print $1}')"
-      if [ "$actual" = "$expected" ]; then
-        echo "[PASS] $label"
-        return 0
-      fi
-    fi
+    actual="$(shasum -a 256 "$sha_dir/$artifact" | awk '{print $1}')"
   else
     echo "[FAIL] $label: no sha256sum or shasum command available"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return 1
+  fi
+
+  if [ "$actual" = "$expected" ]; then
+    echo "[PASS] $label"
+    return 0
   fi
 
   echo "[FAIL] $label: checksum verification failed for $sha_path"
@@ -161,9 +200,21 @@ check_sha256_file() {
   return 1
 }
 
+sha256_of_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
 check_bib_manifest_payload_ref() {
   local label="$1"
   local path="$2"
+  local expected_ref="$3"
+  local actual_ref
 
   if [ ! -f "$path" ]; then
     echo "[FAIL] $label: missing $path"
@@ -172,6 +223,16 @@ check_bib_manifest_payload_ref() {
   fi
   if rg -q 'bootc switch --mutate-in-place --transport registry (host\.docker\.internal|localhost[:/]|127\.|0\.0\.0\.0[:/]|goblins-os:|docker\.io/library/goblins-os:)' "$path"; then
     echo "[FAIL] $label: installer payload tracks a local-only Docker/test registry"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    return 1
+  fi
+  if ! actual_ref="$(goblins_os_bib_manifest_payload_ref "$path")"; then
+    echo "[FAIL] $label: manifest must contain exactly one bootc installer payload image reference"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    return 1
+  fi
+  if [ "$actual_ref" != "$expected_ref" ]; then
+    echo "[FAIL] $label: installer payload $actual_ref does not match ISO image $expected_ref"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return 1
   fi
@@ -300,15 +361,532 @@ manifest_candidate_commit() {
   awk -F'"' '/"candidate_commit"/ { print tolower($4); exit }' "$1" 2>/dev/null || true
 }
 
+manifest_image_ref() {
+  awk -F'"' '/"image_ref"/ { print $4; exit }' "$1" 2>/dev/null || true
+}
+
+manifest_capture_workflow_run() {
+  awk -F'"' '/"capture_workflow_run"/ { print $4; exit }' "$1" 2>/dev/null || true
+}
+
+manifest_capture_workflow_run_attempt() {
+  sed -nE 's/^[[:space:]]*"capture_workflow_run_attempt"[[:space:]]*:[[:space:]]*([0-9]+),?$/\1/p' "$1" 2>/dev/null | head -n 1
+}
+
+native_packaging_gate_workflow_run() {
+  awk -F'"' '/"workflow_run"/ { print $4; exit }' "$1" 2>/dev/null || true
+}
+
+native_packaging_gate_workflow_run_attempt() {
+  sed -nE 's/^[[:space:]]*"workflow_run_attempt"[[:space:]]*:[[:space:]]*([0-9]+),?$/\1/p' "$1" 2>/dev/null | head -n 1
+}
+
+iso_manifest_image_ref() {
+  awk -F'"' '/"builder_source_image"/ { print $4; exit }' "$1" 2>/dev/null || true
+}
+
+image_ref_is_digest_pinned() {
+  [[ "$1" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]
+}
+
+github_actions_run_is_successful() {
+  local run_url="$1"
+  local expected_commit="$2"
+  local expected_attempt="$3"
+  local expected_workflow_path="$4"
+  local run_id
+
+  [[ "$run_url" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || return 1
+  [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$expected_attempt" =~ ^[1-9][0-9]*$ ]] || return 1
+  run_id="${run_url##*/}"
+  python3 - "$run_id" "$run_url" "$expected_commit" "$expected_attempt" "$expected_workflow_path" <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+run_id, run_url, expected_commit, expected_attempt, expected_workflow_paths = sys.argv[1:6]
+request = urllib.request.Request(
+    f"https://api.github.com/repos/Joe-Simo/goblins-os/actions/runs/{run_id}/attempts/{expected_attempt}",
+    headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "goblins-os-release-verifier",
+        "X-GitHub-Api-Version": "2022-11-28",
+    },
+)
+token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+if token:
+    request.add_header("Authorization", f"Bearer {token}")
+try:
+    with urllib.request.urlopen(request, timeout=20) as response:
+        run = json.load(response)
+except Exception:
+    raise SystemExit(1)
+
+expected = {
+    "html_url": run_url,
+    "status": "completed",
+    "conclusion": "success",
+    "head_sha": expected_commit,
+    "run_attempt": int(expected_attempt),
+    "event": "workflow_dispatch",
+}
+if run.get("repository", {}).get("full_name") != "Joe-Simo/goblins-os":
+    raise SystemExit(1)
+if run.get("path") not in expected_workflow_paths.split(","):
+    raise SystemExit(1)
+raise SystemExit(0 if all(run.get(key) == value for key, value in expected.items()) else 1)
+PY
+}
+
+github_actions_artifact_file_matches() {
+  local run_url="$1"
+  local artifact_name="$2"
+  local local_file="$3"
+  local expected_basename="$4"
+  local run_id scratch_dir downloaded_file file_count result
+
+  command -v gh >/dev/null 2>&1 || return 1
+  command -v cmp >/dev/null 2>&1 || return 1
+  [[ "$run_url" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || return 1
+  [ -s "$local_file" ] && [ ! -L "$local_file" ] || return 1
+  run_id="${run_url##*/}"
+  scratch_dir="$(mktemp -d "${TMPDIR:-/tmp}/goblins-actions-artifact.XXXXXX")" || return 1
+  if ! gh run download "$run_id" \
+    --repo Joe-Simo/goblins-os \
+    --name "$artifact_name" \
+    --dir "$scratch_dir" >/dev/null 2>&1; then
+    rm -rf "$scratch_dir"
+    return 1
+  fi
+  file_count="$(find "$scratch_dir" -type f -name "$expected_basename" -print | awk 'END { print NR + 0 }')"
+  downloaded_file="$(find "$scratch_dir" -type f -name "$expected_basename" -print -quit)"
+  result=1
+  if [ "$file_count" = "1" ] \
+    && [ -n "$downloaded_file" ] \
+    && [ ! -L "$downloaded_file" ] \
+    && cmp -s "$local_file" "$downloaded_file"; then
+    result=0
+  fi
+  rm -rf "$scratch_dir"
+  return "$result"
+}
+
+installer_branding_tool_artifact_matches() {
+  local run_url="$1"
+  local source_commit="$2"
+  local run_id scratch_dir
+
+  command -v gh >/dev/null 2>&1 || return 1
+  [[ "$run_url" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || return 1
+  [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  run_id="${run_url##*/}"
+  scratch_dir="$(mktemp -d "${TMPDIR:-/tmp}/goblins-branding-artifact.XXXXXX")" || return 1
+  if ! gh run download "$run_id" \
+    --repo Joe-Simo/goblins-os \
+    --name "goblins-os-branding-tool-$source_commit-index" \
+    --dir "$scratch_dir" >/dev/null 2>&1; then
+    rm -rf "$scratch_dir"
+    return 1
+  fi
+  if ! python3 - "$ROOT" "$scratch_dir" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+import tomllib
+
+root, artifact_root = map(Path, sys.argv[1:3])
+record = tomllib.loads((root / "os/release/installer-branding-tool.toml").read_text(encoding="utf-8"))
+
+def only_file(name):
+    matches = list(artifact_root.rglob(name))
+    if len(matches) != 1 or not matches[0].is_file() or matches[0].is_symlink():
+        raise SystemExit(1)
+    return matches[0]
+
+index = json.loads(only_file("image-ref.json").read_text(encoding="utf-8"))
+x86_inventory = only_file("rpm-packages-x86_64.tsv")
+aarch_inventory = only_file("rpm-packages-aarch64.tsv")
+expected = {
+    "schema": "goblins-os-installer-branding-tool-index-v1",
+    "candidate_commit": record["source_commit"],
+    "image_ref": record["image_ref"],
+    "native_images": {
+        "x86_64": record["architectures"]["x86_64"]["native_image_ref"],
+        "aarch64": record["architectures"]["aarch64"]["native_image_ref"],
+    },
+    "base_image": record["base_image"],
+    "containerfile_sha256": record["containerfile_sha256"],
+    "rpm_inventory_sha256": {
+        "x86_64": record["architectures"]["x86_64"]["rpm_inventory_sha256"],
+        "aarch64": record["architectures"]["aarch64"]["rpm_inventory_sha256"],
+    },
+    "workflow_run": record["workflow_run"],
+}
+if any(index.get(key) != value for key, value in expected.items()):
+    raise SystemExit(1)
+if "workflow_run_attempt" in index and index["workflow_run_attempt"] != record["workflow_run_attempt"]:
+    raise SystemExit(1)
+for arch, inventory in (("x86_64", x86_inventory), ("aarch64", aarch_inventory)):
+    data = inventory.read_bytes()
+    if hashlib.sha256(data).hexdigest() != record["architectures"][arch]["rpm_inventory_sha256"]:
+        raise SystemExit(1)
+    rows = [line for line in data.decode("utf-8").splitlines() if line]
+    if not rows or rows[0] != "name\tevr\tarch\tlicense\tvendor":
+        raise SystemExit(1)
+    if len(rows) - 1 != record["architectures"][arch]["rpm_package_count"]:
+        raise SystemExit(1)
+PY
+  then
+    rm -rf "$scratch_dir"
+    return 1
+  fi
+  rm -rf "$scratch_dir"
+}
+
+installer_branding_tool_provenance_passes() {
+  local source_commit workflow_run workflow_attempt
+  if ! python3 - "$ROOT" <<'PY'
+import datetime
+import hashlib
+from pathlib import Path
+import re
+import sys
+import tomllib
+
+root = Path(sys.argv[1])
+record_path = root / "os/release/installer-branding-tool.toml"
+try:
+    record = tomllib.loads(record_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+repository = "ghcr.io/joe-simo/goblins-os-installer-branding-tool"
+digest_ref = re.compile(re.escape(repository) + r"@sha256:[0-9a-f]{64}\Z")
+generic_digest_ref = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}\Z")
+run_url = re.compile(r"https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+\Z")
+if record.get("schema") != 1:
+    raise SystemExit(1)
+image_ref = record.get("image_ref", "")
+if not digest_ref.fullmatch(image_ref):
+    raise SystemExit(1)
+if not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
+    raise SystemExit(1)
+if not run_url.fullmatch(record.get("workflow_run", "")):
+    raise SystemExit(1)
+if not isinstance(record.get("workflow_run_attempt"), int) or record["workflow_run_attempt"] < 1:
+    raise SystemExit(1)
+base_image = record.get("base_image", "")
+if not generic_digest_ref.fullmatch(base_image):
+    raise SystemExit(1)
+try:
+    if datetime.date.fromisoformat(record.get("public_pull_verified_on", "")).isoformat() != record["public_pull_verified_on"]:
+        raise SystemExit(1)
+except (TypeError, ValueError):
+    raise SystemExit(1)
+if record.get("inventory_path_in_image") != "/usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv":
+    raise SystemExit(1)
+
+containerfile_path = root / "os/iso/branding-tool.Containerfile"
+containerfile_bytes = containerfile_path.read_bytes()
+if hashlib.sha256(containerfile_bytes).hexdigest() != record.get("containerfile_sha256"):
+    raise SystemExit(1)
+containerfile = containerfile_bytes.decode("utf-8")
+if f"ARG FEDORA_IMAGE={base_image}\n" not in containerfile:
+    raise SystemExit(1)
+
+architectures = record.get("architectures", {})
+if set(architectures) != {"aarch64", "x86_64"}:
+    raise SystemExit(1)
+native_refs = set()
+for arch in ("aarch64", "x86_64"):
+    values = architectures.get(arch, {})
+    native_ref = values.get("native_image_ref", "")
+    if not digest_ref.fullmatch(native_ref):
+        raise SystemExit(1)
+    native_refs.add(native_ref)
+    if not re.fullmatch(r"[0-9a-f]{64}", values.get("rpm_inventory_sha256", "")):
+        raise SystemExit(1)
+    if not isinstance(values.get("rpm_package_count"), int) or values["rpm_package_count"] <= 0:
+        raise SystemExit(1)
+if len(native_refs) != 2:
+    raise SystemExit(1)
+
+propagation = {
+    "os/iso/build-iso.sh": f'INSTALLER_BRANDING_IMAGE="${{GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-{image_ref}}}"',
+    ".github/workflows/build.yml": f"GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}",
+    ".github/workflows/candidate-artifacts.yml": f"GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}",
+    ".github/workflows/hardware-gate-capture.yml": f"GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}",
+    ".github/workflows/aarch64-verification-iso.yml": f"GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}",
+}
+for relative, expected in propagation.items():
+    if expected not in (root / relative).read_text(encoding="utf-8"):
+        raise SystemExit(1)
+PY
+  then
+    return 1
+  fi
+  source_commit="$(awk -F'"' '/^source_commit = / { print $2; exit }' os/release/installer-branding-tool.toml)"
+  workflow_run="$(awk -F'"' '/^workflow_run = / { print $2; exit }' os/release/installer-branding-tool.toml)"
+  workflow_attempt="$(awk -F' = ' '/^workflow_run_attempt = / { print $2; exit }' os/release/installer-branding-tool.toml)"
+  github_actions_run_is_successful \
+    "$workflow_run" \
+    "$source_commit" \
+    "$workflow_attempt" \
+    ".github/workflows/branding-tool-image.yml" \
+    || return 1
+  installer_branding_tool_artifact_matches "$workflow_run" "$source_commit"
+}
+
+iso_manifest_release_provenance_passes() {
+  local manifest="$1"
+  local arch="$2"
+  local commit="$3"
+  local image_ref="$4"
+
+  [ -s "$manifest" ] || return 1
+  python3 - \
+    "$manifest" \
+    "$arch" \
+    "$commit" \
+    "$image_ref" \
+    "$EXPECTED_BIB_IMAGE" \
+    "$EXPECTED_INSTALLER_BRANDING_IMAGE" <<'PY'
+import json
+import sys
+
+manifest_path, arch, commit, image_ref, bib_image, branding_image = sys.argv[1:7]
+with open(manifest_path, encoding="utf-8") as handle:
+    manifest = json.load(handle)
+expected = {
+    "architecture": arch,
+    "candidate_commit": commit,
+    "image": image_ref,
+    "native_host_arch": arch,
+    "container_engine_arch": arch,
+    "installer_config": "os/iso/config.toml",
+    "installer_branding_applied": True,
+    "installer_branding_image": branding_image,
+    "installer_branding_ownership_helper_image": branding_image,
+    "builder_image": bib_image,
+    "builder_output_ownership_helper_image": bib_image,
+    "builder_source_image": image_ref,
+    "installer_payload_source_kind": "release-registry",
+    "installer_payload_source_local_only": False,
+    "shippable_release": True,
+}
+raise SystemExit(0 if all(manifest.get(key) == value for key, value in expected.items()) else 1)
+PY
+}
+
+candidate_artifact_metadata_passes() {
+  local metadata="$1"
+  local arch="$2"
+  local commit="$3"
+  local image_ref="$4"
+  local iso_sha="$5"
+
+  [ -s "$metadata" ] || return 1
+  if ! python3 - "$metadata" "$arch" "$commit" "$image_ref" "$iso_sha" <<'PY'
+import json
+import hashlib
+from pathlib import Path
+import re
+import sys
+
+path, arch, commit, image_ref, iso_sha = sys.argv[1:6]
+with open(path, encoding="utf-8") as handle:
+    metadata = json.load(handle)
+run_url = metadata.get("workflow_run", "")
+source_repository = metadata.get("source_repository", "")
+if not re.fullmatch(r"https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+", run_url):
+    raise SystemExit(1)
+if source_repository != "https://github.com/Joe-Simo/goblins-os":
+    raise SystemExit(1)
+if not re.fullmatch(r"ghcr\.io/joe-simo/goblins-os@sha256:[0-9a-f]{64}", image_ref):
+    raise SystemExit(1)
+if metadata.get("workflow_name") != "candidate-artifacts":
+    raise SystemExit(1)
+if not isinstance(metadata.get("workflow_run_attempt"), int) or metadata["workflow_run_attempt"] < 1:
+    raise SystemExit(1)
+
+def sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+iso_manifest = f"os/iso/output/{arch}/manifest-goblins-os-{arch}.json"
+bib_manifest = f"os/iso/output/{arch}/manifest-anaconda-iso.json"
+evidence_dir = Path(f"os/signoff-proofs/sbom/{arch}")
+evidence_manifest = evidence_dir / "release-evidence-manifest.json"
+cargo_tsv = evidence_dir / "cargo-lock-packages.tsv"
+rpm_tsv = evidence_dir / "rpm-packages.tsv"
+expected = {
+    "schema": "goblins-os-candidate-image-ref-v2",
+    "product": "Goblins OS",
+    "architecture": arch,
+    "candidate_commit": commit,
+    "image_digest": image_ref.rsplit("@", 1)[1],
+    "immutable_image_ref": image_ref,
+    "oci_revision": commit,
+    "iso_sha256": iso_sha,
+    "iso_manifest_sha256": sha256(iso_manifest),
+    "bib_manifest_sha256": sha256(bib_manifest),
+    "release_evidence_manifest_sha256": sha256(evidence_manifest),
+    "cargo_packages_sha256": sha256(cargo_tsv),
+    "rpm_packages_sha256": sha256(rpm_tsv),
+    "installer_config": "os/iso/config.toml",
+    "candidate_tag_authoritative": False,
+    "non_promotional": True,
+}
+if not all(metadata.get(key) == value for key, value in expected.items()):
+    raise SystemExit(1)
+gates = metadata.get("exact_candidate_gates", {})
+raise SystemExit(
+    0
+    if gates.get("source_verifier") == "pass"
+    and gates.get("installed_root_verifier") == "pass"
+    and gates.get("services_selftest") == "pass"
+    else 1
+)
+PY
+  then
+    return 1
+  fi
+  github_actions_run_is_successful \
+    "$(candidate_artifact_workflow_run "$metadata")" \
+    "$commit" \
+    "$(candidate_artifact_workflow_attempt "$metadata")" \
+    ".github/workflows/candidate-artifacts.yml,.github/workflows/release.yml" \
+    || return 1
+  github_actions_artifact_file_matches \
+    "$(candidate_artifact_workflow_run "$metadata")" \
+    "goblins-os-candidate-ref-$commit-$arch" \
+    "$metadata" \
+    "image-ref.json"
+}
+
+candidate_artifact_workflow_run() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle).get("workflow_run", ""))
+PY
+}
+
+candidate_artifact_workflow_attempt() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle).get("workflow_run_attempt", ""))
+PY
+}
+
+native_packaging_gate_proof_passes() {
+  local proof="$1"
+  local arch="$2"
+  local commit="$3"
+  local image_ref="$4"
+  local expected_run_url="${5:-}"
+  local iso_sha="${6:-}"
+  local iso_manifest_sha="${7:-}"
+  local bib_manifest_sha="${8:-}"
+  local evidence_manifest_sha="${9:-}"
+
+  [ -s "$proof" ] || return 1
+  python3 - \
+    "$proof" \
+    "$arch" \
+    "$commit" \
+    "$image_ref" \
+    "$expected_run_url" \
+    "$iso_sha" \
+    "$iso_manifest_sha" \
+    "$bib_manifest_sha" \
+    "$evidence_manifest_sha" <<'PY'
+import json
+import re
+import sys
+
+(
+    path,
+    arch,
+    commit,
+    image_ref,
+    expected_run_url,
+    iso_sha,
+    iso_manifest_sha,
+    bib_manifest_sha,
+    evidence_manifest_sha,
+) = sys.argv[1:10]
+with open(path, encoding="utf-8") as handle:
+    proof = json.load(handle)
+run_url = proof.get("workflow_run", "")
+if not re.fullmatch(r"https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+", run_url):
+    raise SystemExit(1)
+if not isinstance(proof.get("workflow_run_attempt"), int) or proof["workflow_run_attempt"] < 1:
+    raise SystemExit(1)
+if expected_run_url and run_url != expected_run_url:
+    raise SystemExit(1)
+expected = {
+    "schema": "goblins-os-native-packaging-gate-v1",
+    "architecture": arch,
+    "candidate_commit": commit,
+    "image_ref": image_ref,
+    "image_digest_pinned": True,
+    "source_verifier": "pass",
+    "installed_root_verifier": "pass",
+    "services_selftest": "pass",
+    "verification_iso_sha256": iso_sha,
+    "iso_manifest_sha256": iso_manifest_sha,
+    "bib_manifest_sha256": bib_manifest_sha,
+    "release_evidence_manifest_sha256": evidence_manifest_sha,
+    "runner_os": "Linux",
+    "runner_architecture": arch,
+    "native_runner": True,
+    "source_repository": run_url.split("/actions/runs/", 1)[0],
+}
+raise SystemExit(0 if all(proof.get(key) == value for key, value in expected.items()) else 1)
+PY
+}
+
 screenshot_manifest_is_coherent() {
   local run_dir="$1"
   local arch="$2"
   local manifest="$run_dir/proof-manifest.json"
   local iso_path="os/iso/output/$arch/bootiso/goblins-os-$arch.iso"
+  local image_ref
+  local verification_iso_manifest="$run_dir/verification-iso-manifest.json"
+  local verification_bib_manifest="$run_dir/verification-bib-manifest.json"
+  local verification_evidence_manifest="$run_dir/verification-release-evidence-manifest.json"
+  local canonical_evidence_dir="os/signoff-proofs/sbom/$arch"
+  local canonical_evidence_manifest="$canonical_evidence_dir/release-evidence-manifest.json"
+  local iso_sha iso_manifest_sha bib_manifest_sha evidence_manifest_sha
+  local recorded_evidence_manifest_sha
+  local native_run native_attempt
 
   [ -s "$manifest" ] || return 1
+  [ -s "$verification_iso_manifest" ] || return 1
+  [ -s "$verification_bib_manifest" ] || return 1
+  [ -s "$verification_evidence_manifest" ] || return 1
+  goblins_os_release_evidence_hashes_match "$canonical_evidence_dir" || return 1
+  [ "$(sha256_of_file "$verification_evidence_manifest")" = "$(sha256_of_file "$canonical_evidence_manifest")" ] \
+    || return 1
   [ "$CANDIDATE_SELECTION_VALID" -eq 1 ] || return 1
-  rg -q '"architecture"[[:space:]]*:[[:space:]]*"'"$arch"'"' "$manifest" \
+  image_ref="$(iso_manifest_image_ref "os/iso/output/$arch/manifest-goblins-os-$arch.json")"
+  image_ref_is_digest_pinned "$image_ref" || return 1
+  [ "$(manifest_candidate_commit "$verification_iso_manifest")" = "$SELECTED_CANDIDATE_COMMIT" ] || return 1
+  [ "$(iso_manifest_image_ref "$verification_iso_manifest")" = "$image_ref" ] || return 1
+  rg -Fq '"installer_config": "os/iso/verify-config.toml"' "$verification_iso_manifest" || return 1
+  goblins_os_bib_manifest_payload_ref "$verification_bib_manifest" | grep -Fxq "$image_ref" || return 1
+  [ "$(manifest_candidate_commit "$verification_evidence_manifest")" = "$SELECTED_CANDIDATE_COMMIT" ] || return 1
+  [ "$(manifest_image_ref "$verification_evidence_manifest")" = "$image_ref" ] || return 1
+  grep -Fq '"image_ref": "'"$image_ref"'"' "$manifest" \
+    && rg -q '"architecture"[[:space:]]*:[[:space:]]*"'"$arch"'"' "$manifest" \
     && rg -q '"candidate_commit"[[:space:]]*:[[:space:]]*"'"$SELECTED_CANDIDATE_COMMIT"'"' "$manifest" \
     && rg -q '"iso"[[:space:]]*:[[:space:]]*"'"$iso_path"'"' "$manifest" \
     && rg -q '"iso_sha256"[[:space:]]*:[[:space:]]*"[a-fA-F0-9]{64}"' "$manifest" \
@@ -330,7 +908,53 @@ screenshot_manifest_is_coherent() {
     && rg -q '"app_privacy_revoke_proof"[[:space:]]*:[[:space:]]*"'"$APP_PRIVACY_REVOKE_PROOF"'"' "$manifest" \
     && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest" \
     && rg -q '"audio_output_proof"[[:space:]]*:[[:space:]]*"'"$AUDIO_OUTPUT_PROOF"'"' "$manifest" \
-    && rg -q '"runtime_build_proof"[[:space:]]*:[[:space:]]*"'"$RUNTIME_BUILD_PROOF"'"' "$manifest"
+    && rg -q '"runtime_build_proof"[[:space:]]*:[[:space:]]*"'"$RUNTIME_BUILD_PROOF"'"' "$manifest" \
+    && rg -q '"verification_iso_manifest"[[:space:]]*:[[:space:]]*"verification-iso-manifest[.]json"' "$manifest" \
+    && rg -q '"verification_bib_manifest"[[:space:]]*:[[:space:]]*"verification-bib-manifest[.]json"' "$manifest" \
+    && rg -q '"verification_release_evidence_manifest"[[:space:]]*:[[:space:]]*"verification-release-evidence-manifest[.]json"' "$manifest" \
+    || return 1
+  recorded_evidence_manifest_sha="$(awk -F'"' '/"verification_release_evidence_manifest_sha256"/ { print $4; exit }' "$manifest")"
+  [[ "$recorded_evidence_manifest_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [ "$recorded_evidence_manifest_sha" = "$(sha256_of_file "$verification_evidence_manifest")" ] || return 1
+  if [ "$arch" = "aarch64" ]; then
+    rg -Fq '"native_packaging_gate_proof": "'"$run_dir"'/native-packaging-gate.json"' "$manifest" \
+      || return 1
+    iso_sha="$(screenshot_manifest_iso_sha "$manifest" | tr '[:upper:]' '[:lower:]')"
+    iso_manifest_sha="$(sha256_of_file "$verification_iso_manifest")" || return 1
+    bib_manifest_sha="$(sha256_of_file "$verification_bib_manifest")" || return 1
+    evidence_manifest_sha="$(sha256_of_file "$verification_evidence_manifest")" || return 1
+    native_packaging_gate_proof_passes \
+      "$run_dir/native-packaging-gate.json" \
+      "$arch" \
+      "$SELECTED_CANDIDATE_COMMIT" \
+      "$image_ref" \
+      "" \
+      "$iso_sha" \
+      "$iso_manifest_sha" \
+      "$bib_manifest_sha" \
+      "$evidence_manifest_sha" \
+      || return 1
+    native_run="$(native_packaging_gate_workflow_run "$run_dir/native-packaging-gate.json")"
+    native_attempt="$(native_packaging_gate_workflow_run_attempt "$run_dir/native-packaging-gate.json")"
+    github_actions_run_is_successful \
+      "$native_run" \
+      "$SELECTED_CANDIDATE_COMMIT" \
+      "$native_attempt" \
+      ".github/workflows/aarch64-verification-iso.yml" \
+      || return 1
+  elif [ "$arch" = "x86_64" ]; then
+    [[ "$(manifest_capture_workflow_run "$manifest")" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] \
+      || return 1
+    [[ "$(manifest_capture_workflow_run_attempt "$manifest")" =~ ^[1-9][0-9]*$ ]] \
+      || return 1
+    github_actions_run_is_successful \
+      "$(manifest_capture_workflow_run "$manifest")" \
+      "$SELECTED_CANDIDATE_COMMIT" \
+      "$(manifest_capture_workflow_run_attempt "$manifest")" \
+      ".github/workflows/hardware-gate-capture.yml" \
+      || return 1
+  fi
+  return 0
 }
 
 print_verification_and_public_release_iso_detail() {
@@ -1012,7 +1636,9 @@ Next evidence command for $arch:
 
 Native runner preflight for $arch without building artifacts (with the same candidate selected):
   GOBLINS_OS_CANDIDATE_COMMIT=$SELECTED_CANDIDATE_COMMIT \\
-  GOBLINS_OS_ARCH=$arch PREFLIGHT_ONLY=1 REPO_ROOT="$ROOT" os/hardware-gate/run-external-gate.sh
+  GOBLINS_OS_ARCH=$arch \
+  GOBLINS_OS_BIB_SOURCE_IMAGE=<real release bootc image digest ref for $arch> \
+  PREFLIGHT_ONLY=1 REPO_ROOT="$ROOT" os/hardware-gate/run-external-gate.sh
 
 Artifact/SBOM build for native $arch without display proof (with the same candidate selected):
   GOBLINS_OS_CANDIDATE_COMMIT=$SELECTED_CANDIDATE_COMMIT \\
@@ -1067,7 +1693,13 @@ EOF
     cat <<EOF
 
 Native aarch64 macOS/HVF capture after the verification ISO is present:
-  RUN_DATE=<date> GOBLINS_OS_ARCH=aarch64 REPO_ROOT="$ROOT" os/hardware-gate/capture-harness/run-capture.sh
+  RUN_DATE=<date> \
+  GOBLINS_OS_ARCH=aarch64 \
+  GOBLINS_OS_CAPTURE_EXPECTED_IMAGE_REF=<selected-aarch64-image@sha256:digest> \
+  GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_PROOF=<native-packaging-gate.json> \
+  GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_RUN_URL=<exact-actions-run-url> \
+  REPO_ROOT="$ROOT" \
+  os/hardware-gate/capture-harness/run-capture.sh
 EOF
   fi
 }
@@ -1133,9 +1765,38 @@ signoff_block_candidate_commit_matches() {
     && [ "$evidence_commit" = "$SELECTED_CANDIDATE_COMMIT" ]
 }
 
+signoff_block_image_ref_matches() {
+  local block="$1"
+  local arch signoff_ref tested_image selftest_image screenshot_dir proof_ref iso_ref evidence_ref
+
+  arch="$(printf '%s\n' "$block" | sed -n 's/^- Architecture: //p' | head -n 1)"
+  case "$arch" in
+    aarch64|x86_64) ;;
+    *) return 1 ;;
+  esac
+  signoff_ref="$(printf '%s\n' "$block" | sed -n 's/^- Image digest reference: //p' | head -n 1)"
+  tested_image="$(printf '%s\n' "$block" | sed -n 's/^- Image: //p' | head -n 1)"
+  selftest_image="$(printf '%s\n' "$block" | sed -n 's/^- Self-test image: //p' | head -n 1)"
+  screenshot_dir="$(printf '%s\n' "$block" | sed -n 's/^- Screenshot dir: //p' | head -n 1)"
+  proof_ref="$(manifest_image_ref "$screenshot_dir/proof-manifest.json")"
+  iso_ref="$(iso_manifest_image_ref "os/iso/output/$arch/manifest-goblins-os-$arch.json")"
+  evidence_ref="$(manifest_image_ref "os/signoff-proofs/sbom/$arch/release-evidence-manifest.json")"
+
+  image_ref_is_digest_pinned "$signoff_ref" \
+    && [ "$tested_image" = "$signoff_ref" ] \
+    && [ "$selftest_image" = "$signoff_ref" ] \
+    && printf '%s\n' "$block" | grep -Fq -- "run --rm $signoff_ref /usr/libexec/goblins-os/goblins-os-verify --installed-root /" \
+    && [ "$proof_ref" = "$signoff_ref" ] \
+    && [ "$iso_ref" = "$signoff_ref" ] \
+    && [ "$evidence_ref" = "$signoff_ref" ]
+}
+
 signoff_block_required_proof_is_complete() {
   local block="$1"
   local arch="${2:-}"
+  local native_gate_path native_gate_run native_gate_attempt proof_native_gate_attempt signoff_ref screenshot_dir
+  local native_iso_sha native_iso_manifest_sha native_bib_manifest_sha native_evidence_manifest_sha
+  local capture_workflow_run capture_workflow_attempt proof_workflow_run proof_workflow_attempt
 
   signoff_block_contains "$block" "^- Runner: .+" || return 1
   if [ -n "$arch" ]; then
@@ -1145,12 +1806,50 @@ signoff_block_required_proof_is_complete() {
     signoff_block_contains "$block" "^- Architecture: (aarch64|x86_64)$" || return 1
     signoff_block_contains "$block" "^- ISO: .*goblins-os-(aarch64|x86_64)\\.iso" || return 1
   fi
+  if [ "$arch" = "aarch64" ]; then
+    signoff_block_contains "$block" "^- Native packaging gate checked: yes \\(" || return 1
+    signoff_block_contains "$block" "^- Native packaging gate run: https://github\\.com/[^/]+/[^/]+/actions/runs/[0-9]+$" || return 1
+    native_gate_path="$(printf '%s\n' "$block" | sed -n 's/^- Native packaging gate proof: //p' | head -n 1)"
+    native_gate_run="$(printf '%s\n' "$block" | sed -n 's/^- Native packaging gate run: //p' | head -n 1)"
+    native_gate_attempt="$(printf '%s\n' "$block" | sed -n 's/^- Native packaging gate run attempt: //p' | head -n 1)"
+    signoff_ref="$(printf '%s\n' "$block" | sed -n 's/^- Image digest reference: //p' | head -n 1)"
+    screenshot_dir="$(printf '%s\n' "$block" | sed -n 's/^- Screenshot dir: //p' | head -n 1)"
+    [ "$native_gate_path" = "$screenshot_dir/native-packaging-gate.json" ] || return 1
+    native_iso_sha="$(screenshot_manifest_iso_sha "$screenshot_dir/proof-manifest.json" | tr '[:upper:]' '[:lower:]')"
+    native_iso_manifest_sha="$(sha256_of_file "$screenshot_dir/verification-iso-manifest.json")" || return 1
+    native_bib_manifest_sha="$(sha256_of_file "$screenshot_dir/verification-bib-manifest.json")" || return 1
+    native_evidence_manifest_sha="$(sha256_of_file "$screenshot_dir/verification-release-evidence-manifest.json")" || return 1
+    native_packaging_gate_proof_passes \
+      "$native_gate_path" \
+      "$arch" \
+      "$SELECTED_CANDIDATE_COMMIT" \
+      "$signoff_ref" \
+      "$native_gate_run" \
+      "$native_iso_sha" \
+      "$native_iso_manifest_sha" \
+      "$native_bib_manifest_sha" \
+      "$native_evidence_manifest_sha" \
+      || return 1
+    proof_native_gate_attempt="$(native_packaging_gate_workflow_run_attempt "$native_gate_path")"
+    [ "$native_gate_attempt" = "$proof_native_gate_attempt" ] || return 1
+    [[ "$native_gate_attempt" =~ ^[1-9][0-9]*$ ]] || return 1
+    github_actions_run_is_successful \
+      "$native_gate_run" \
+      "$SELECTED_CANDIDATE_COMMIT" \
+      "$native_gate_attempt" \
+      ".github/workflows/aarch64-verification-iso.yml" \
+      || return 1
+  fi
   signoff_block_contains "$block" "^- ISO SHA256: [a-fA-F0-9]{64}$" || return 1
   signoff_block_contains "$block" "^- Screenshot proof ISO SHA256: [a-fA-F0-9]{64}$" || return 1
   signoff_block_contains "$block" "^- Candidate/source commit: [a-fA-F0-9]{40}$" || return 1
   signoff_block_candidate_commit_matches "$block" || return 1
+  signoff_block_contains "$block" "^- Image digest reference: [^[:space:]]+@sha256:[a-fA-F0-9]{64}$" || return 1
+  signoff_block_image_ref_matches "$block" || return 1
+  signoff_block_contains "$block" "^- Image: [^[:space:]]+@sha256:[a-fA-F0-9]{64}$" || return 1
   signoff_block_contains "$block" "goblins-os-verify --installed-root /" || return 1
   signoff_block_contains "$block" "^- Verify result \\(blocked=0\\): pass" || return 1
+  signoff_block_contains "$block" "^- Self-test image: [^[:space:]]+@sha256:[a-fA-F0-9]{64}$" || return 1
   signoff_block_contains "$block" "^- Self-test command: .+" || return 1
   signoff_block_contains "$block" "^- Self-test result: pass" || return 1
   signoff_block_contains "$block" "^- Release evidence/SBOM checked: yes" || return 1
@@ -1161,6 +1860,24 @@ signoff_block_required_proof_is_complete() {
     signoff_block_contains "$block" "^- Screenshot dir: .*os/screenshots/hardware-gate/(aarch64|x86_64)/[^[:space:]]+" || return 1
   fi
   signoff_block_contains "$block" "^- Screenshot dir: .*not provided|stale screenshot|stale for this ISO|No fresh .*screenshots|missing current screenshot proof" && return 1
+  screenshot_dir="$(printf '%s\n' "$block" | sed -n 's/^- Screenshot dir: //p' | head -n 1)"
+  screenshot_run_is_complete "$screenshot_dir" || return 1
+  capture_workflow_run="$(printf '%s\n' "$block" | sed -n 's/^- Capture workflow run: //p' | head -n 1)"
+  capture_workflow_attempt="$(printf '%s\n' "$block" | sed -n 's/^- Capture workflow run attempt: //p' | head -n 1)"
+  proof_workflow_run="$(manifest_capture_workflow_run "$screenshot_dir/proof-manifest.json")"
+  proof_workflow_attempt="$(manifest_capture_workflow_run_attempt "$screenshot_dir/proof-manifest.json")"
+  if [ "$arch" = "x86_64" ]; then
+    [ "$capture_workflow_run" = "$proof_workflow_run" ] || return 1
+    [ "$capture_workflow_attempt" = "$proof_workflow_attempt" ] || return 1
+    [[ "$capture_workflow_run" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || return 1
+    [[ "$capture_workflow_attempt" =~ ^[1-9][0-9]*$ ]] || return 1
+    github_actions_run_is_successful \
+      "$capture_workflow_run" \
+      "$SELECTED_CANDIDATE_COMMIT" \
+      "$capture_workflow_attempt" \
+      ".github/workflows/hardware-gate-capture.yml" \
+      || return 1
+  fi
   signoff_block_screenshot_iso_sha_matches "$block" || return 1
   signoff_block_has_real_field "$block" "^  - mode: .+" || return 1
   signoff_block_has_real_field "$block" "^  - engine source: .+" || return 1
@@ -1194,6 +1911,10 @@ signoff_block_from_line() {
 }
 
 signoff_run_for_arch_is_complete() {
+  [ -n "$(signoff_screenshot_run_for_arch "$1")" ]
+}
+
+signoff_screenshot_run_for_arch() {
   local arch="$1"
   local start block
 
@@ -1203,6 +1924,7 @@ signoff_run_for_arch_is_complete() {
 
     signoff_block_required_proof_is_complete "$block" "$arch" || continue
     signoff_block_contains "$block" "^- Current project completion status: complete$" || continue
+    printf '%s\n' "$block" | sed -n 's/^- Screenshot dir: //p' | head -n 1
     return 0
   done < <(rg -n "^## Manual Gate Run:" "$SIGNOFF" | cut -d: -f1)
 
@@ -1255,7 +1977,7 @@ check "image job renders settings interaction proof" "rg -Fq 'GOBLINS_OS_RENDER_
 check "image job has explicit push marker trigger" "rg -Fq \"contains(github.event.head_commit.message, '[image]')\" \"$WORKFLOW\" && rg -Fq \"github.event_name == 'push' && contains(github.event.head_commit.message, '[image]')\" \"$WORKFLOW\""
 check "CI suffixes avoid extra chmod run layers" "rg -Fq 'COPY --chmod=0755 os/bootc/run-selftest.sh' os/bootc/selftest.suffix.Dockerfile && ! rg -Fq 'RUN chmod +x /usr/local/bin/run-selftest.sh' os/bootc/selftest.suffix.Dockerfile && rg -Fq 'COPY --chmod=0755 os/bootc/render-screens.sh' os/bootc/render.suffix.Dockerfile && ! rg -Fq 'RUN chmod +x /usr/local/bin/render-screens.sh' os/bootc/render.suffix.Dockerfile && rg -Fq 'COPY --chmod=0755 os/bootc/render-desktop.sh' os/bootc/render-desktop.suffix.Dockerfile && ! rg -Fq 'RUN chmod +x /usr/local/bin/render-desktop.sh' os/bootc/render-desktop.suffix.Dockerfile"
 check "installer-iso job exists" "rg -q '^  installer-iso:' \"$WORKFLOW\""
-check "installer-iso job generates release evidence" "rg -q -- '--release-evidence /out' \"$WORKFLOW\" && rg -q 'rpm-packages.command' \"$WORKFLOW\""
+check "installer-iso job generates and hash-seals release evidence" "rg -q -- '--release-evidence /out' \"$WORKFLOW\" && rg -q 'goblins_os_release_evidence_hashes_match' \"$WORKFLOW\""
 check "installer-iso job scans generated evidence for secrets" "rg -q 'goblins_os_artifact_secret_scan' \"$WORKFLOW\""
 check "installer-iso job uploads release evidence artifacts" "rg -q 'goblins-os-release-evidence-' \"$WORKFLOW\""
 check "workflow declares aarch64 runner" "rg -q 'ubuntu-24.04-arm|aarch64' \"$WORKFLOW\""
@@ -1274,27 +1996,32 @@ check "ISO builder supports GOBLINS_OS_ARCH" "rg -q 'GOBLINS_OS_ARCH' os/iso/bui
 check "ISO builder writes architecture ISO names" "rg -q 'goblins-os-\\\$ARCH.iso' os/iso/build-iso.sh"
 check "ISO builder host runtime is Docker-only" "rg -q \"expected docker\" os/iso/build-iso.sh && ! rg -q 'docker or podman' os/iso/build-iso.sh && ! rg -q 'GOBLINS_OS_PODMAN_SUDO' os/iso/build-iso.sh && ! rg -q 'run_podman_builder' os/iso/build-iso.sh"
 check "ISO builder uses Docker local registry handoff" "rg -q 'GOBLINS_OS_CONTAINER_RUNTIME' os/iso/build-iso.sh && rg -q 'host.docker.internal' os/iso/build-iso.sh && rg -q 'docker push' os/iso/build-iso.sh && ! rg -q -- '--rm -it' os/iso/build-iso.sh"
-check "ISO builder separates local Docker handoff from shippable release source" "rg -q 'GOBLINS_OS_BIB_SOURCE_IMAGE' os/iso/build-iso.sh && rg -q 'GOBLINS_OS_SHIPPABLE_RELEASE' os/iso/build-iso.sh && rg -q 'shippable release media cannot track local/test-only installer payload ref' os/iso/build-iso.sh"
+check "ISO builder separates local Docker handoff from digest-pinned shippable source" "rg -q 'GOBLINS_OS_BIB_SOURCE_IMAGE' os/iso/build-iso.sh && rg -q 'GOBLINS_OS_SHIPPABLE_RELEASE' os/iso/build-iso.sh && rg -q 'shippable release media requires a digest-pinned installer payload ref' os/iso/build-iso.sh"
 check "ISO builder can skip local image export for shippable registry source" "rg -q 'GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD' os/iso/build-iso.sh && rg -q 'Skipping local Docker image build' os/iso/build-iso.sh && rg -q 'requires GOBLINS_OS_BIB_SOURCE_IMAGE' os/iso/build-iso.sh"
 check "ISO builder supports explicit installer config" "rg -q 'GOBLINS_OS_ISO_CONFIG' os/iso/build-iso.sh && rg -q '\"installer_config\": \"[$]CONFIG_LABEL\"' os/iso/build-iso.sh"
 check "ISO builder supports explicit Docker platform for non-release artifact testing" "rg -q 'GOBLINS_OS_DOCKER_PLATFORM' os/iso/build-iso.sh && rg -q 'docker build --platform \"[$]DOCKER_PLATFORM\"' os/iso/build-iso.sh && rg -q -- '--platform \"[$]DOCKER_PLATFORM\"' os/iso/build-iso.sh && rg -q '\"docker_platform\": \"[$]DOCKER_PLATFORM\"' os/iso/build-iso.sh"
 check "ISO builder fails fast when Docker emulation cannot run rustc" "rg -q 'verify_docker_emulation_runtime' os/iso/build-iso.sh && rg -q 'emulation cannot run rustc' os/iso/build-iso.sh && rg -q 'use a native [$]ARCH runner' os/iso/build-iso.sh"
-check "workflow installer ISO uses cached Buildx image and evidence steps" "rg -q 'docker/build-push-action@v7' \"$WORKFLOW\" && rg -q 'load: true' \"$WORKFLOW\" && rg -q 'docker run --rm' \"$WORKFLOW\" && rg -q 'GOBLINS_OS_CONTAINER_RUNTIME=docker' \"$WORKFLOW\""
-check "workflow image builds use nonblocking BuildKit GHA cache" "rg -q 'docker/setup-buildx-action@v3' \"$WORKFLOW\" && rg -q --fixed-strings 'type=gha,scope=goblins-os-bootc-\${{ matrix.arch }}' \"$WORKFLOW\" && rg -q 'mode=max,ignore-error=true' \"$WORKFLOW\""
-check "hardware gate pushes bootc image without daemon export" "rg -q 'docker/build-push-action@v7' .github/workflows/hardware-gate-capture.yml && rg -q 'push: true' .github/workflows/hardware-gate-capture.yml && rg -q 'GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1' .github/workflows/hardware-gate-capture.yml && ! rg -q 'docker build -f os/bootc/Containerfile -t localhost/goblins-os' .github/workflows/hardware-gate-capture.yml"
+check "workflow installer ISO uses cached Buildx image and evidence steps" "rg -q --fixed-strings 'docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a' \"$WORKFLOW\" && rg -q 'load: true' \"$WORKFLOW\" && rg -q 'docker run --rm' \"$WORKFLOW\" && rg -q 'GOBLINS_OS_CONTAINER_RUNTIME=docker' \"$WORKFLOW\""
+check "workflow image builds use nonblocking BuildKit GHA cache" "rg -q --fixed-strings 'docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f' \"$WORKFLOW\" && rg -q --fixed-strings 'type=gha,scope=goblins-os-bootc-\${{ matrix.arch }}' \"$WORKFLOW\" && rg -q 'mode=max,ignore-error=true' \"$WORKFLOW\""
+check "hardware gate consumes an immutable candidate image without channel promotion" "rg -q 'candidate_image_ref' .github/workflows/hardware-gate-capture.yml && rg -q 'docker pull \"[$]GOBLINS_OS_CANDIDATE_IMAGE_REF\"' .github/workflows/hardware-gate-capture.yml && rg -q 'GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1' .github/workflows/hardware-gate-capture.yml && ! rg -q 'docker/build-push-action|push: true|goblins-os:(x86_64|aarch64|latest|stable)' .github/workflows/hardware-gate-capture.yml"
+check "hardware proof inputs are restricted to this repository image" "rg -q 'expected_prefix=\"ghcr[.]io/[$]owner/goblins-os@sha256:\"' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml"
 check "hardware gate uses verification ISO config" "rg -q 'GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml' .github/workflows/hardware-gate-capture.yml"
 check "aarch64 verification ISO workflow supports local HVF capture" "test -f .github/workflows/aarch64-verification-iso.yml && rg -q 'workflow_dispatch' .github/workflows/aarch64-verification-iso.yml && rg -q 'ubuntu-24.04-arm' .github/workflows/aarch64-verification-iso.yml && rg -q 'GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml' .github/workflows/aarch64-verification-iso.yml && rg -q 'goblins-os-aarch64-verification-iso' .github/workflows/aarch64-verification-iso.yml && rg -q 'retention-days: 7' .github/workflows/aarch64-verification-iso.yml"
 check "hardware gate generates release evidence for captured image" 'rg -q "Generate release evidence for the captured image" .github/workflows/hardware-gate-capture.yml && rg -q -- "--release-evidence /out" .github/workflows/hardware-gate-capture.yml && rg -q "rpm_sbom_arch_matches" .github/workflows/hardware-gate-capture.yml && rg -q "Scan generated release evidence for secrets" .github/workflows/hardware-gate-capture.yml'
-check "hardware gate commits release evidence with signoff" "rg -q 'os/signoff-proofs/sbom/[$][{][{] matrix[.]arch [}][}]/' .github/workflows/hardware-gate-capture.yml"
-check "hardware gate uses nonblocking BuildKit GHA cache and cancels superseded runs" "rg -q 'docker/setup-buildx-action@v3' .github/workflows/hardware-gate-capture.yml && rg -q --fixed-strings 'type=gha,scope=goblins-os-bootc-\${{ matrix.arch }}' .github/workflows/hardware-gate-capture.yml && rg -q 'mode=max,ignore-error=true' .github/workflows/hardware-gate-capture.yml && rg -q 'cancel-in-progress: true' .github/workflows/hardware-gate-capture.yml"
+check "hardware proof workflows are artifact-only and cannot write the repository" "rg -q --fixed-strings 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q 'contents: read' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && ! rg -q 'contents: write|git push|persist_evidence' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml"
+check "GitHub workflows reject mutable major-version action tags" "! rg -q 'uses:[[:space:]]+[^[:space:]#]+@v[0-9]+([[:space:]#]|$)' .github/workflows"
+check "capture harness binds exact source tooling and safe date scope" "rg -q 'Capture tooling checkout .* does not match candidate' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'Run the capture harness from the exact candidate checkout' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'RUN_DATE must be a real calendar date in YYYY-MM-DD form' os/hardware-gate/capture-harness/run-capture.sh && rg -q '[$]RUN_DIR.*[$]RUN_ROOT/[$]DATE' os/hardware-gate/capture-harness/run-capture.sh"
+check "capture harness verifies and canonicalizes external candidate proof" "rg -q 'Capture ISO checksum mismatch' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'GOBLINS_OS_CAPTURE_BIB_MANIFEST' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'GOBLINS_OS_CAPTURE_RELEASE_EVIDENCE_DIR' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'CANONICAL_ISO=' os/hardware-gate/capture-harness/run-capture.sh"
+check "hardware gate cancels superseded runs" "rg -q 'cancel-in-progress: true' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate prepares readable writable KVM for qemu" "rg -q 'sudo chmod a[+]rw /dev/kvm' .github/workflows/hardware-gate-capture.yml && rg -q 'test -r /dev/kvm && test -w /dev/kvm' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate installs close-signoff search dependency" "rg -q 'ripgrep' .github/workflows/hardware-gate-capture.yml && rg -q '\\brg -q\\b' os/hardware-gate/close-signoff.sh"
 check "external gate supports qemu-system-aarch64" "rg -q 'qemu-system-aarch64' os/hardware-gate/run-external-gate.sh"
 check "external gate supports qemu-system-x86_64" "rg -q 'qemu-system-x86_64' os/hardware-gate/run-external-gate.sh"
 check "external gate passes container runtime to ISO builder" "rg -q 'GOBLINS_OS_CONTAINER_RUNTIME=\"[$]CONTAINER_RUNTIME\"' os/hardware-gate/run-external-gate.sh"
 check "external gate host runtime is Docker-only" "rg -q 'GOBLINS_OS_CONTAINER_RUNTIME must be docker' os/hardware-gate/run-external-gate.sh && ! rg -q 'docker or podman' os/hardware-gate/run-external-gate.sh && ! rg -q 'GOBLINS_OS_PODMAN_SUDO' os/hardware-gate/run-external-gate.sh && ! rg -q 'sudo podman' os/hardware-gate/run-external-gate.sh"
-check "external gate requires real bootc source image for display proof" "rg -q 'Display-backed shipping proof requires GOBLINS_OS_BIB_SOURCE_IMAGE' os/hardware-gate/run-external-gate.sh && rg -q 'GOBLINS_OS_BIB_SOURCE_IMAGE=\"[$]BIB_SOURCE_IMAGE\"' os/hardware-gate/run-external-gate.sh && rg -q 'GOBLINS_OS_SHIPPABLE_RELEASE=\"[$]SHIPPABLE_RELEASE\"' os/hardware-gate/run-external-gate.sh"
-check "runbook documents real release image source" "rg -q 'RELEASE_IMAGE=<registry>/<namespace>/goblins-os:[$]ARCH' os/hardware-gate/runbook.md && rg -q '\"installer_payload_source_local_only\": false' os/hardware-gate/runbook.md"
+check "external gate requires immutable bootc source image for display proof" "rg -q 'Display-backed shipping proof requires GOBLINS_OS_BIB_SOURCE_IMAGE to an immutable pullable bootc image digest ref' os/hardware-gate/run-external-gate.sh && rg -q 'GOBLINS_OS_BIB_SOURCE_IMAGE=\"[$]BIB_SOURCE_IMAGE\"' os/hardware-gate/run-external-gate.sh && rg -q 'GOBLINS_OS_SHIPPABLE_RELEASE=\"[$]SHIPPABLE_RELEASE\"' os/hardware-gate/run-external-gate.sh"
+check "external gate runs shipping evidence from the exact candidate digest" "rg -q 'Pulling and verifying exact candidate image' os/hardware-gate/run-external-gate.sh && rg -q 'org[.]opencontainers[.]image[.]revision' os/hardware-gate/run-external-gate.sh && rg -q 'IMAGE_NAME=\"[$]BIB_SOURCE_IMAGE\"' os/hardware-gate/run-external-gate.sh && rg -q 'EVIDENCE_IMAGE_REF=\"[$]BIB_SOURCE_IMAGE\"' os/hardware-gate/run-external-gate.sh && rg -q 'GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=\"[$]SKIP_LOCAL_IMAGE_BUILD\"' os/hardware-gate/run-external-gate.sh"
+check "runbook documents digest-pinned release image source" "rg -q 'RELEASE_IMAGE=<registry>/<namespace>/goblins-os@sha256:<64-hex-digest>' os/hardware-gate/runbook.md && rg -q '\"installer_payload_source_local_only\": false' os/hardware-gate/runbook.md"
 check "external gate requires native KVM acceleration" "rg -q 'QEMU_ACCEL must be kvm' os/hardware-gate/run-external-gate.sh && rg -q '/dev/kvm' os/hardware-gate/run-external-gate.sh"
 check "external gate uses aarch64 UEFI pflash code and vars" "rg -q 'if=pflash,format=raw,readonly=on,file=[$]AARCH64_UEFI_CODE' os/hardware-gate/run-external-gate.sh && rg -q 'if=pflash,format=raw,file=[$]AARCH64_UEFI_VARS' os/hardware-gate/run-external-gate.sh"
 check "external gate copies aarch64 UEFI vars template" "rg -q 'AARCH64_UEFI_VARS_TEMPLATE' os/hardware-gate/run-external-gate.sh && rg -q 'cp \"[$]template\" \"[$]AARCH64_UEFI_VARS\"' os/hardware-gate/run-external-gate.sh"
@@ -1305,9 +2032,9 @@ check "external gate fails low disk before build" "rg -q 'MIN_HOST_FREE_GB' os/h
 check "external gate checks container runtime health before build" "rg -q 'CONTAINER_RUNTIME_HEALTH_TIMEOUT_SECS' os/hardware-gate/run-external-gate.sh && rg -q 'Checking [$]CONTAINER_RUNTIME health' os/hardware-gate/run-external-gate.sh && rg -q 'did not answer within' os/hardware-gate/run-external-gate.sh"
 check "external gate has fail-closed preflight-only mode" "rg -q 'PREFLIGHT_ONLY=1' os/hardware-gate/run-external-gate.sh && rg -q 'Preflight passed for native [$]ARCH release runner' os/hardware-gate/run-external-gate.sh && rg -q 'Docker artifact-only preflight passed for [$]ARCH on [$]HOST_ARCH; not release proof' os/hardware-gate/run-external-gate.sh && rg -q 'No image, ISO, SBOM, screenshot, or signoff artifact was generated' os/hardware-gate/run-external-gate.sh"
 check "runbook documents external preflight command" "rg -q 'PREFLIGHT_ONLY=1 GOBLINS_OS_ARCH' os/hardware-gate/runbook.md && rg -q 'does not create shipping artifacts or satisfy proof by itself' os/hardware-gate/runbook.md"
-check "runbook documents aarch64 macOS HVF capture route" "rg -q 'aarch64 macOS/HVF capture route' os/hardware-gate/runbook.md && rg -q 'capture-harness/run-capture.sh' os/hardware-gate/runbook.md && rg -q 'already materialized verification-only hardware-gate ISO' os/hardware-gate/runbook.md && rg -q 'hydrated public release media' os/hardware-gate/runbook.md && rg -q 'gh workflow run aarch64-verification-iso.yml' os/hardware-gate/runbook.md && rg -q 'GOBLINS_OS_CAPTURE_ISO=.*/bootiso/goblins-os-aarch64.iso' os/hardware-gate/runbook.md"
+check "runbook documents aarch64 macOS HVF capture route" "rg -q 'aarch64 macOS/HVF capture route' os/hardware-gate/runbook.md && rg -q 'capture-harness/run-capture.sh' os/hardware-gate/runbook.md && rg -q 'already materialized verification-only hardware-gate ISO' os/hardware-gate/runbook.md && rg -q 'hydrated public release media' os/hardware-gate/runbook.md && rg -q 'gh workflow run aarch64-verification-iso.yml' os/hardware-gate/runbook.md && rg -Fq 'GOBLINS_OS_CAPTURE_ISO=\"\$AARCH64_VERIFICATION_ISO\"' os/hardware-gate/runbook.md"
 check "external gate allows artifact-only mode without pretending proof is complete" "rg -q 'RUN_QEMU=0: built and verified artifacts only' os/hardware-gate/run-external-gate.sh"
-check "external gate verifies ISO SHA256" "rg -q 'sha256sum -c' os/hardware-gate/run-external-gate.sh"
+check "external gate verifies ISO SHA256" "rg -Fq 'verify_sha256_file()' os/hardware-gate/run-external-gate.sh && rg -Fq 'verify_sha256_file \"\$sha_path\" \"\$(basename \"\$iso_path\")\"' os/hardware-gate/run-external-gate.sh"
 check "external gate generates release evidence" "rg -q -- '--release-evidence /out' os/hardware-gate/run-external-gate.sh"
 check "external gate requires RPM SBOM TSV" "rg -q 'rpm-packages.tsv' os/hardware-gate/run-external-gate.sh"
 check "installer policy exposes dual-boot preservation path" "rg -q 'dual_boot_preservation' crates/goblins-os-core/src/install_targets.rs"
@@ -1406,7 +2133,7 @@ check "fingerprint unlock substrate is source-gated" "rg -q '/v1/fingerprint/sta
 check "keychain collection metadata is source-gated" "rg -q '/v1/keychain/collections' crates/goblins-os-core/src/main.rs crates/goblins-os-settings/src/main.rs && rg -q 'org.freedesktop.Secret.Service' crates/goblins-os-core/src/keychain.rs && rg -q 'Secret values are never returned by Goblins OS' crates/goblins-os-core/src/keychain.rs && rg -q 'Secret values are never displayed in Settings' crates/goblins-os-settings/src/main.rs && ! rg -q 'GetSecrets' crates/goblins-os-core/src/keychain.rs"
 check "keychain manager handoff is source-gated" "rg -q 'Open Passwords & Keys' crates/goblins-os-settings/src/main.rs && rg -Fq 'SEAHORSE_PASSWORDS_AND_KEYS: &str = \"seahorse\"' crates/goblins-os-settings/src/main.rs && rg -Fq 'append_keychain_manager_handoff(panel)' crates/goblins-os-settings/src/main.rs && rg -q 'manage saved passwords, keys, and certificates in the system keyring' crates/goblins-os-settings/src/main.rs"
 check "personal hotspot write substrate is source-gated" "rg -q '/v1/hotspot/enabled' crates/goblins-os-core/src/main.rs && rg -Fq 'policy_state_for_control(\"settings-control\")' crates/goblins-os-core/src/hotspot.rs && rg -q 'dnsmasq_present' crates/goblins-os-core/src/hotspot.rs && rg -q 'Connect to the internet over Ethernet to share it over Wi-Fi.' crates/goblins-os-core/src/hotspot.rs && rg -q 'sanitize_hotspot_error' crates/goblins-os-core/src/hotspot.rs && rg -q 'dnsmasq' os/bootc/Containerfile && rg -q 'command -v dnsmasq' os/bootc/Containerfile && rg -q 'append_hotspot_management' crates/goblins-os-settings/src/main.rs && rg -q 'hotspot_settings_inputs' crates/goblins-os-settings/src/main.rs && rg -q 'Passwords are used once to configure the hotspot and are never shown here.' crates/goblins-os-settings/src/main.rs && rg -q 'connected_clients_known' crates/goblins-os-core/src/hotspot.rs && rg -q 'parse_dnsmasq_leases' crates/goblins-os-core/src/hotspot.rs && rg -q 'Connected devices' crates/goblins-os-settings/src/main.rs"
-check "switch control overlay is source-gated" "test -f os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q \"const SCHEMA_ID = 'org.goblins.os.a11y.switch-control';\" os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -Fq \"import('gi://Atspi')\" os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'This window has no scannable controls - using point scan.' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'Point selection needs live qemu proof before pointer injection is enabled.' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'font-family: \"Inter\"' os/gnome-shell-extensions/goblins-switch@goblins.os/stylesheet.css && rg -q 'goblins-switch@goblins.os' os/gnome-shell-modes/goblins-os.json && rg -q 'goblins-switch@goblins.os' os/dconf/db/local.d/10-goblins-os-desktop"
+check "switch control overlay is source-gated" "test -f os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q \"const SCHEMA_ID = 'org.goblins.os.a11y.switch-control';\" os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -Fq \"import('gi://Atspi')\" os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'This window has no scannable controls - using point scan.' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'Secure pointer control is not available yet.' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -q 'font-family: \"Inter\"' os/gnome-shell-extensions/goblins-switch@goblins.os/stylesheet.css && rg -q 'goblins-switch@goblins.os' os/gnome-shell-modes/goblins-os.json && rg -q 'goblins-switch@goblins.os' os/dconf/db/local.d/10-goblins-os-desktop"
 check "switch control desktop render hook is source-gated" "rg -q 'showPointScanDemo' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -Fq '57-switch-control-point-\$suffix.png' os/bootc/render-desktop.sh && rg -q 'showPointScanDemo' os/bootc/render-desktop.sh"
 check "IME menu-bar input source render hook is source-gated" "rg -Fq '59-menubar-input-source-\$suffix.png' os/bootc/render-desktop.sh && rg -Fq \"[('xkb', 'us'), ('xkb', 'gb')]\" os/bootc/render-desktop.sh && rg -q 'gsettings set org.gnome.desktop.input-sources current 1' os/bootc/render-desktop.sh"
 check "Today menu-bar date button is source-gated" "rg -Fq '/usr/libexec/goblins-os/goblins-os-today' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -Fq \"this._today = new PanelMenu.Button(0.0, 'Today', true);\" os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -Fq \"Main.panel.addToStatusArea('goblins-today', this._today, 1, 'right');\" os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -Fq 'GLib.DateTime.new_now_local().format' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -Fq 'changed::clock-format' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -Fq 'this._clearTodayClockTimer();' os/gnome-shell-extensions/goblins-menubar@goblins.os/extension.js && rg -Fq '.goblins-date-indicator' os/gnome-shell-extensions/goblins-menubar@goblins.os/stylesheet.css os/themes/GoblinsOS/gnome-shell/gnome-shell-light.css"
@@ -1426,7 +2153,7 @@ check "core AI system status route uses policy and audit" "rg -q 'system_trouble
 check "installed self-test checks system status route" "rg -q '/v1/ai/system-status' os/bootc/run-selftest.sh && rg -q 'Summarize current system state' os/bootc/run-selftest.sh"
 check "core input sources expose narrow write route and encoder" "rg -q '/v1/input/sources' crates/goblins-os-core/src/main.rs && rg -q 'normalize_input_sources' crates/goblins-os-core/src/input.rs && rg -q 'encode_input_sources' crates/goblins-os-core/src/input.rs"
 check "settings input sources expose reorder and remove write controls" "rg -q 'input_source_action_button' crates/goblins-os-settings/src/main.rs && rg -q 'reordered_input_sources' crates/goblins-os-settings/src/main.rs && rg -q 'input_sources_without' crates/goblins-os-settings/src/main.rs && rg -q '/v1/input/sources' crates/goblins-os-settings/src/main.rs"
-check "capture harness resets dated run dir before capture" "rg -Fq 'rm -rf \"\$RUN_DIR\"' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'refusing to reset unexpected hardware-gate run dir' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq '\"\$REPO\"/os/screenshots/hardware-gate/\"\$ARCH\"/*' os/hardware-gate/capture-harness/run-capture.sh"
+check "capture harness resets only the exact validated dated run dir" "rg -Fq 'rm -rf \"\$RUN_DIR\"' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'refusing to reset unexpected hardware-gate run dir' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'if [ \"\$RUN_DIR\" != \"\$RUN_ROOT/\$DATE\" ]' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq '[ \"\$(dirname \"\$RUN_DIR\")\" != \"\$RUN_ROOT\" ]' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness rejects stale GDM screenshot sets" "rg -Fq 'stable_frame_hash' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'cropping the top bar' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'macOS sips' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'Refusing stale screenshot signoff' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness waits for unique required screenshots" "rg -Fq 'REQUIRED_FRAME_SETTLE_SECONDS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'framebuffer stayed duplicate' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq \"! -name '_debug-*'\" os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'required captured surfaces are distinct' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture driver uses progress-aware ready-signal timeouts" "rg -Fq 'GOS_CAPTURE_TOTAL_TIMEOUT_SECONDS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'GOS_CAPTURE_INACTIVITY_TIMEOUT_SECONDS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'last_progress = time.time()' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'EXPECTED_READY_SHOTS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'seconds_since_progress' os/hardware-gate/capture-harness/drive-capture.py"
@@ -1536,7 +2263,7 @@ check "hardware gate requires runtime app-build proof in signoff" "rg -q 'runtim
 check "runtime model gate writes verifier runtime proof" "rg -q 'PROOF_PATH' os/runtime-gate/build-an-app-live-model.sh && rg -q 'runtime-build-proof.json' os/runtime-gate/build-an-app-live-model.sh && rg -q '\"route\": \"/v1/apps/builds\"' os/runtime-gate/build-an-app-live-model.sh && rg -q '\"engine_mode\": \"local-model\"' os/runtime-gate/build-an-app-live-model.sh"
 check "runtime model gate grants app-builder for active policy profile" "rg -q '/v1/policy/status' os/runtime-gate/build-an-app-live-model.sh os/hardware-gate/capture-harness/core-proof-operation.sh && rg -q 'grant_app_builder_permission' os/runtime-gate/build-an-app-live-model.sh && rg -q 'grant_policy_permission' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'policy-grant-app-builder' os/hardware-gate/capture-harness/core-proof-operation.sh os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -q 'FOR consumer' os/runtime-gate/build-an-app-live-model.sh os/hardware-gate/capture-harness/core-proof-operation.sh os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture fixture core uses root-owned ephemeral writable state" "rg -Fq 'FIXTURE_STATE=/run/goblins-hwgate-fixture-state' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'install -d -m 0750 -o goblins-os -g goblins-os' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'Environment=GOBLINS_OS_POLICY_STATE=/run/goblins-hwgate-fixture-state/policy' os/iso/verify-config.toml && rg -Fq 'Environment=GOBLINS_OS_APPS_DIR=/run/goblins-hwgate-fixture-state/apps' os/iso/verify-config.toml && rg -Fq 'ReadWritePaths=/run/goblins-hwgate-fixture-state /run/goblins-os-core' os/iso/verify-config.toml"
-check "capture fixture core uses the fixed served local model" "rg -Fq 'CAPTURE_LOCAL_MODEL=llama3.2:1b' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'CAPTURE_MODEL_RUNTIME_URL=http://127.0.0.1:41134' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'CAPTURE_MODEL_RELAY_URL=http://127.0.0.1:41135/v1/resident' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'CAPTURE_MODEL_KEEP_ALIVE=30m' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'start_capture_model_loopback' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'start_capture_model_contract_relay' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'LISTEN = .*127[.]0[.]0[.]1.*, 41134' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'LISTEN = .*127[.]0[.]0[.]1.*, 41135' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'TARGET = .*10[.]0[.]2[.]2.*, 11434' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'Environment=GOBLINS_OS_LOCAL_MODEL=llama3.2:1b' os/iso/verify-config.toml && rg -Fq 'Environment=GOBLINS_OS_LOCAL_MODEL_RELAY=http://127.0.0.1:41135/v1/resident' os/iso/verify-config.toml && rg -Fq 'Environment=GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE=30m' os/iso/verify-config.toml && rg -Fq 'Environment=GOBLINS_OS_LOCAL_RUNTIME_URL=http://127.0.0.1:41134' os/iso/verify-config.toml && rg -Fq '/tmp/model-direct.json' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq '/tmp/model-contract-direct.json' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'contract_log_tail=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'core_log_tail=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'ollama pull llama3.2:1b' .github/workflows/hardware-gate-capture.yml"
+check "capture fixture core uses the fixed digest-verified local model" "rg -Fq 'CAPTURE_LOCAL_MODEL=llama3.2:1b' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'CAPTURE_MODEL_RUNTIME_URL=http://127.0.0.1:41134' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'CAPTURE_MODEL_RELAY_URL=http://127.0.0.1:41135/v1/resident' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'CAPTURE_MODEL_KEEP_ALIVE=30m' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'start_capture_model_loopback' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'start_capture_model_contract_relay' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'LISTEN = .*127[.]0[.]0[.]1.*, 41134' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'LISTEN = .*127[.]0[.]0[.]1.*, 41135' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'TARGET = .*10[.]0[.]2[.]2.*, 11434' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'Environment=GOBLINS_OS_LOCAL_MODEL=llama3.2:1b' os/iso/verify-config.toml && rg -Fq 'Environment=GOBLINS_OS_LOCAL_MODEL_RELAY=http://127.0.0.1:41135/v1/resident' os/iso/verify-config.toml && rg -Fq 'Environment=GOBLINS_OS_LOCAL_MODEL_KEEP_ALIVE=30m' os/iso/verify-config.toml && rg -Fq 'Environment=GOBLINS_OS_LOCAL_RUNTIME_URL=http://127.0.0.1:41134' os/iso/verify-config.toml && rg -Fq '/tmp/model-direct.json' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq '/tmp/model-contract-direct.json' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'contract_log_tail=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'core_log_tail=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ollama/ollama@sha256:[0-9a-f]{64}' .github/workflows/hardware-gate-capture.yml && rg -Fq 'docker exec goblins-proof-ollama ollama pull' .github/workflows/hardware-gate-capture.yml && rg -q 'GOBLINS_OS_PROOF_OLLAMA_MODEL_MANIFEST_SHA256: [0-9a-f]{64}' .github/workflows/hardware-gate-capture.yml && rg -Fq 'actual_model_manifest_sha' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate requires Focus arm roundtrip proof in signoff" "rg -q 'focus_arm_roundtrip_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Focus arm roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Multi-display apply proof in signoff" "rg -q 'multi_display_apply_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Multi-display apply checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'multi-display-apply-proof.json' os/hardware-gate/runbook.md && rg -q 'multi_display_apply_proof' os/hardware-gate/runbook.md"
 check "hardware gate requires App privacy revoke proof in signoff" "rg -q 'app_privacy_revoke_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'App privacy revoke checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'app-privacy-revoke-proof.json' os/hardware-gate/runbook.md"
@@ -1553,7 +2280,7 @@ check "settings and installer hide GNOME as user-facing prerequisite copy" "! rg
 check "installed-root verifier checks gaming tools and Steam absence" "rg -q 'usr/bin/pw-cli' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/pw-play' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/pw-record' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/pw-dump' crates/goblins-os-verify/src/main.rs && rg -q 'usr/bin/evtest' crates/goblins-os-verify/src/main.rs && rg -q 'installed-steam-binary-absent' crates/goblins-os-verify/src/main.rs && rg -q 'installed-steam-devices-rules-absent' crates/goblins-os-verify/src/main.rs"
 check "architecture contract records native non-Steam gaming policy" "rg -q 'non_steam_launcher_policy' os/release/architectures.toml && rg -q 'Steam and steam-devices are intentionally absent' os/release/architectures.toml && rg -q 'does not claim x86-only game runtimes work on Arm' os/release/architectures.toml"
 check "runbook captures video controller and PipeWire gaming diagnostics" "rg -q 'vainfo' os/hardware-gate/runbook.md && rg -q 'evtest --query' os/hardware-gate/runbook.md && rg -q 'wpctl status' os/hardware-gate/runbook.md && rg -q 'pw-cli info 0' os/hardware-gate/runbook.md && rg -q 'pw-dump' os/hardware-gate/runbook.md"
-check "release evidence mode exists" "rg -q -- '--release-evidence' crates/goblins-os-verify/src/main.rs"
+check "release evidence mode records image provenance" "rg -q -- '--release-evidence' crates/goblins-os-verify/src/main.rs && rg -q -- '--image-ref' crates/goblins-os-verify/src/main.rs && rg -q 'image_digest_pinned' crates/goblins-os-verify/src/main.rs"
 check "asset provenance covers Goblins primary marks" "rg -q 'os/brand/Goblins-black-mark.svg' os/release/asset-provenance.toml && rg -q 'os/brand/Goblins-white-mark.svg' os/release/asset-provenance.toml"
 check "asset provenance covers OpenAI mark variants" "rg -q 'OpenAI-black-wordmark.png' os/release/asset-provenance.toml && rg -q 'OpenAI-white-wordmark.png' os/release/asset-provenance.toml && rg -q 'OpenAI-black-monoblossom.png' os/release/asset-provenance.toml && rg -q 'OpenAI-white-monoblossom.png' os/release/asset-provenance.toml"
 check "asset provenance covers installer artwork" "rg -q 'os/brand/anaconda/sidebar-bg.svg' os/release/asset-provenance.toml && rg -q 'os/brand/anaconda/sidebar-logo.png' os/release/asset-provenance.toml"
@@ -1608,9 +2335,26 @@ check "shipping status separates verification proof from public release ISO arti
 check "semantic screenshot states fail closed across capture and signoff" "rg -q -- '--check-semantic-screenshots' os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Studio running vs result/app-detail' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'login vs Home' os/hardware-gate/capture-harness/run-capture.sh"
 check "signoff row ISO SHA is bound to screenshot proof manifest" "rg -q 'Screenshot proof ISO SHA256' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'signoff_block_screenshot_iso_sha_matches' os/hardware-gate/verify-shipping-status.sh"
 check "release proof binds ISO, SBOM, screenshots, and signoff to one candidate commit" "rg -q 'candidate_commit' os/iso/build-iso.sh os/hardware-gate/capture-harness/run-capture.sh crates/goblins-os-verify/src/main.rs && rg -q 'Candidate/source commit' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'signoff_block_candidate_commit_matches' os/hardware-gate/verify-shipping-status.sh"
-check "release workflows propagate the selected candidate commit" "rg -q 'GOBLINS_OS_CANDIDATE_COMMIT: [$][{][{] github[.]sha [}][}]' .github/workflows/build.yml .github/workflows/release.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q -- '--candidate-commit \"[$]GOBLINS_OS_CANDIDATE_COMMIT\"' .github/workflows/build.yml .github/workflows/release.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml"
+check "release workflows propagate selected commit and image provenance" "rg -q 'GOBLINS_OS_CANDIDATE_COMMIT: [$][{][{] github[.]sha [}][}]' .github/workflows/build.yml && rg -q 'candidate_commit: [$][{][{] github[.]sha [}][}]' .github/workflows/release.yml && rg -q 'uses: ./[.]github/workflows/candidate-artifacts[.]yml' .github/workflows/release.yml && rg -q 'GOBLINS_OS_CANDIDATE_COMMIT: [$][{][{] inputs[.]candidate_commit [}][}]' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q -- '--candidate-commit \"[$]GOBLINS_OS_CANDIDATE_COMMIT\"' .github/workflows/build.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q -- '--candidate-commit \"[$]CANDIDATE_COMMIT\"' .github/workflows/candidate-artifacts.yml && rg -q -- '--image-ref' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml"
+check "candidate artifact workflow is digest-bound and non-promotional" "test -f .github/workflows/candidate-artifacts.yml && rg -q 'candidate_commit:' .github/workflows/candidate-artifacts.yml && rg -q 'steps[.]build[.]outputs[.]digest' .github/workflows/candidate-artifacts.yml && rg -q 'GOBLINS_OS_BIB_SOURCE_IMAGE=\"[$]IMMUTABLE_IMAGE_REF\"' .github/workflows/candidate-artifacts.yml && rg -q 'bib_image_ref.*IMMUTABLE_IMAGE_REF' .github/workflows/candidate-artifacts.yml && rg -q 'is not the current origin/main commit' .github/workflows/candidate-artifacts.yml && rg -q 'goblins-os-candidate-ref-' .github/workflows/candidate-artifacts.yml && rg -q 'contents: read' .github/workflows/candidate-artifacts.yml && ! rg -q 'contents: write|git push|gh release|goblins-os:(x86_64|aarch64|latest|stable)' .github/workflows/candidate-artifacts.yml"
+check "candidate workflow gates the exact published digest before artifact production" "rg -q -- '--source-root /workspace' .github/workflows/candidate-artifacts.yml && rg -q -- '--installed-root /' .github/workflows/candidate-artifacts.yml && rg -q -- '--target selftest' .github/workflows/candidate-artifacts.yml && rg -q 'Verify the exact candidate source and installed-root contracts' .github/workflows/candidate-artifacts.yml && rg -q 'Run the exact candidate install and services self-test' .github/workflows/candidate-artifacts.yml"
+check "release workflows pin third-party actions to full commits" "! rg -q 'uses:[[:space:]]+(actions|docker)/[^@]+@v[0-9]+' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q 'actions/checkout@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml && rg -q 'docker/build-push-action@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml && rg -q 'actions/upload-artifact@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml"
+check "release media uses one exact reviewed build and branding tool chain" "rg -q 'bootc-image-builder@sha256:[0-9a-f]{64}' os/iso/build-iso.sh && installer_branding_tool_provenance_passes && rg -q 'shippable release media cannot skip Goblins installer branding' os/iso/build-iso.sh && rg -q 'shippable release media forbids GOBLINS_OS_BIB_AUTH_FILE' os/iso/build-iso.sh && ! rg -q 'dnf -y install' os/iso/remaster-anaconda-branding.sh && rg -Fq 'cmp --silent \"\$BRAND/sidebar-bg.png\" \"\$PIX/sidebar-bg.png\"' os/iso/remaster-anaconda-branding.sh && rg -Fq 'installer stylesheet still contains the legacy Fedora accent' os/iso/remaster-anaconda-branding.sh && rg -q 'checkisomd5 --verbose' os/iso/remaster-anaconda-branding.sh"
+check "release evidence hash-seals exact Cargo and RPM inventories" "rg -Fq 'goblins-os-release-evidence-v4' crates/goblins-os-verify/src/main.rs os/hardware-gate/release-evidence.sh && rg -Fq 'cargo_packages_sha256' crates/goblins-os-verify/src/main.rs .github/workflows/candidate-artifacts.yml && rg -Fq 'rpm_packages_sha256' crates/goblins-os-verify/src/main.rs .github/workflows/candidate-artifacts.yml && rg -Fq 'goblins_os_release_evidence_hashes_match' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml os/hardware-gate/run-external-gate.sh os/hardware-gate/close-signoff.sh"
+check "native aarch64 proof binds the exact verification artifacts and workflow attempt" "rg -q 'verification_iso_sha256' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'release_evidence_manifest_sha256' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'workflow_run_attempt' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Native packaging gate run attempt:' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
+check "final gate retains exact candidate workflow metadata" "rg -q 'os/signoff-proofs/candidate/[$]arch/image-ref[.]json' os/hardware-gate/verify-shipping-status.sh && rg -q 'candidate_artifact_metadata_passes' os/hardware-gate/verify-shipping-status.sh && rg -q 'workflow_run == [$]run' os/hardware-gate/runbook.md"
+check "hardware proof consumers rerun the exact digest source verifier" "rg -q 'goblins-os-x86_64-source-verify[.]log' .github/workflows/hardware-gate-capture.yml && rg -q 'goblins-os-aarch64-source-verify[.]log' .github/workflows/aarch64-verification-iso.yml && rg -q -- '--source-root /workspace' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q '\"source_verifier\": \"pass\"' os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
+check "BIB provenance parser handles JSON-embedded kickstart and is shared by every proof route" "test -f os/iso/manifest-provenance.sh && rg -Fq 'JSON-escaped kickstart payload' os/iso/manifest-provenance.sh && rg -Fq 'rg -o --no-filename' os/iso/manifest-provenance.sh && rg -Fq 'goblins_os_bib_manifest_payload_ref' os/hardware-gate/run-external-gate.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/verify-shipping-status.sh .github/workflows/candidate-artifacts.yml && ! rg -q 'sed -nE .*bootc[ ]switch --mutate-in-place' os/hardware-gate/run-external-gate.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/verify-shipping-status.sh .github/workflows/candidate-artifacts.yml"
+check "x86 hardware capture fails unless close-signoff is complete" "rg -q 'GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE=1' .github/workflows/hardware-gate-capture.yml && rg -q 'REQUIRE_COMPLETE=\"[$]CAPTURE_REQUIRE_COMPLETE\"' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'requires a complete signoff row' os/hardware-gate/close-signoff.sh"
+check "aarch64 local capture imports exact native Linux packaging proof" "rg -q 'goblins-os-native-packaging-gate-v1' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'native_packaging_gate_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'native-packaging-gate.json' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh"
+check "architecture signoff rows compose without overwriting either proof track" "test -f os/hardware-gate/compose-signoff-rows.sh && rg -q 'x86_64-signoff-row.md' os/hardware-gate/compose-signoff-rows.sh && rg -q 'aarch64-signoff-row.md' os/hardware-gate/compose-signoff-rows.sh && rg -q 'SIGNOFF_ROW_OUTPUT' os/hardware-gate/close-signoff.sh os/hardware-gate/capture-harness/run-capture.sh"
+check "x86 proof model runtime and model manifest are digest pinned" "rg -q 'ollama/ollama@sha256:[0-9a-f]{64}' .github/workflows/hardware-gate-capture.yml && rg -q 'GOBLINS_OS_PROOF_OLLAMA_MODEL_MANIFEST_SHA256: [0-9a-f]{64}' .github/workflows/hardware-gate-capture.yml && ! rg -q 'ollama[.]com/install[.]sh' .github/workflows/hardware-gate-capture.yml"
 
 DUAL_ARCH_CANDIDATE_BOUND=1
+CANDIDATE_RUN_AARCH64=""
+CANDIDATE_RUN_X86_64=""
+CANDIDATE_RUN_ATTEMPT_AARCH64=""
+CANDIDATE_RUN_ATTEMPT_X86_64=""
 for arch in "${ARCHES[@]}"; do
   ISO_PATH="os/iso/output/$arch/bootiso/goblins-os-$arch.iso"
   SHA_PATH="$ISO_PATH.sha256"
@@ -1620,12 +2364,16 @@ for arch in "${ARCHES[@]}"; do
   SBOM_MANIFEST="$SBOM_DIR/release-evidence-manifest.json"
   CARGO_TSV="$SBOM_DIR/cargo-lock-packages.tsv"
   RPM_TSV="$SBOM_DIR/rpm-packages.tsv"
+  CANDIDATE_METADATA="os/signoff-proofs/candidate/$arch/image-ref.json"
+  IMAGE_REF=""
+  PUBLIC_ISO_SHA=""
   ARCH_MISSING=()
 
   check_file "$arch ISO artifact exists" "$ISO_PATH" || ARCH_MISSING+=("ISO")
   check_file "$arch ISO SHA256 exists" "$SHA_PATH" || ARCH_MISSING+=("SHA256")
   if [ -f "$ISO_PATH" ] && [ -f "$SHA_PATH" ]; then
-    check_sha256_file "$arch ISO SHA256 verifies" "$SHA_PATH" || ARCH_MISSING+=("SHA256 verification")
+    check_sha256_file "$arch ISO SHA256 verifies the canonical public ISO" "$SHA_PATH" "$(basename "$ISO_PATH")" || ARCH_MISSING+=("SHA256 verification")
+    PUBLIC_ISO_SHA="$(sha256_of_file "$ISO_PATH" 2>/dev/null || true)"
   fi
   check_file "$arch ISO manifest exists" "$MANIFEST_PATH" || ARCH_MISSING+=("ISO manifest")
   check_file_contains "$arch ISO manifest records architecture" "$MANIFEST_PATH" "\"architecture\": \"$arch\"" || ARCH_MISSING+=("ISO manifest architecture")
@@ -1635,23 +2383,51 @@ for arch in "${ARCHES[@]}"; do
   fi
   check_file_contains "$arch ISO manifest records ISO name" "$MANIFEST_PATH" "\"iso\": \"bootiso/goblins-os-$arch.iso\"" || ARCH_MISSING+=("ISO manifest artifact")
   check_file_contains "$arch ISO manifest records SHA file" "$MANIFEST_PATH" "\"sha256_file\": \"bootiso/goblins-os-$arch.iso.sha256\"" || ARCH_MISSING+=("ISO manifest SHA")
-  check_file_contains "$arch ISO manifest records builder source image" "$MANIFEST_PATH" "\"builder_source_image\":" || ARCH_MISSING+=("ISO manifest builder source")
+  check_file_contains "$arch canonical public ISO uses the human-safe installer config" "$MANIFEST_PATH" "\"installer_config\": \"os/iso/config.toml\"" || ARCH_MISSING+=("public installer config")
+  IMAGE_REF="$(iso_manifest_image_ref "$MANIFEST_PATH")"
+  if image_ref_is_digest_pinned "$IMAGE_REF"; then
+    echo "[PASS] $arch ISO manifest pins the builder source image digest"
+  else
+    echo "[FAIL] $arch ISO manifest builder source image must end in @sha256:<64-hex-digest>"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    ARCH_MISSING+=("ISO manifest digest-pinned builder source")
+  fi
+  if iso_manifest_release_provenance_passes \
+    "$MANIFEST_PATH" \
+    "$arch" \
+    "$SELECTED_CANDIDATE_COMMIT" \
+    "$IMAGE_REF"; then
+    echo "[PASS] $arch public ISO records the exact native, pinned builder and Goblins-branding provenance"
+  else
+    echo "[FAIL] $arch public ISO provenance must use native builders, reviewed tool digests, Goblins branding, and the human-safe config"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    ARCH_MISSING+=("public ISO builder/branding provenance")
+  fi
   check_file_contains "$arch ISO manifest records installer payload source kind" "$MANIFEST_PATH" "\"installer_payload_source_kind\":" || ARCH_MISSING+=("ISO manifest payload source kind")
   check_file_contains "$arch ISO manifest records nonlocal installer payload source" "$MANIFEST_PATH" "\"installer_payload_source_local_only\": false" || ARCH_MISSING+=("ISO manifest nonlocal payload source")
   check_file_contains "$arch ISO manifest records shippable release mode" "$MANIFEST_PATH" "\"shippable_release\": true" || ARCH_MISSING+=("ISO manifest shippable release")
-  check_bib_manifest_payload_ref "$arch BIB manifest uses shippable installer payload ref" "$BIB_MANIFEST_PATH" || ARCH_MISSING+=("shippable installer payload ref")
+  check_bib_manifest_payload_ref "$arch BIB manifest uses the exact ISO image digest" "$BIB_MANIFEST_PATH" "$IMAGE_REF" || ARCH_MISSING+=("shippable installer payload ref")
   check_file "$arch release evidence manifest exists" "$SBOM_MANIFEST" || ARCH_MISSING+=("release evidence manifest")
   check_file_contains "$arch release evidence manifest records architecture" "$SBOM_MANIFEST" "\"architecture\": \"$arch\"" || ARCH_MISSING+=("release evidence architecture")
   if ! check_file_contains "$arch release evidence manifest records selected candidate commit" "$SBOM_MANIFEST" "\"candidate_commit\": \"$SELECTED_CANDIDATE_COMMIT\""; then
     ARCH_MISSING+=("release evidence candidate commit")
     DUAL_ARCH_CANDIDATE_BOUND=0
   fi
+  check_file_contains "$arch release evidence manifest records ISO image digest" "$SBOM_MANIFEST" "\"image_ref\": \"$IMAGE_REF\"" || ARCH_MISSING+=("release evidence image digest")
+  check_file_contains "$arch release evidence manifest records digest pin" "$SBOM_MANIFEST" "\"image_digest_pinned\": true" || ARCH_MISSING+=("release evidence digest pin")
   check_file_contains "$arch release evidence manifest records asset provenance" "$SBOM_MANIFEST" "\"asset_provenance\": \"os/release/asset-provenance.toml\"" || ARCH_MISSING+=("release evidence asset provenance")
   check_file_contains "$arch release evidence manifest records third-party notices" "$SBOM_MANIFEST" "\"third_party_notices\": \"os/release/third-party-notices.toml\"" || ARCH_MISSING+=("release evidence third-party notices")
   check_file_contains "$arch release evidence manifest records trademark posture" "$SBOM_MANIFEST" "\"trademark_posture\": \"os/release/trademark-posture.toml\"" || ARCH_MISSING+=("release evidence trademark posture")
   check_file_contains "$arch release evidence manifest records source tree manifest" "$SBOM_MANIFEST" "\"source_tree_manifest\": \"os/release/source-tree-manifest.toml\"" || ARCH_MISSING+=("release evidence source tree manifest")
   check_file "$arch Cargo SBOM package TSV exists" "$CARGO_TSV" || ARCH_MISSING+=("Cargo SBOM TSV")
   check_file "$arch RPM SBOM package TSV exists" "$RPM_TSV" || ARCH_MISSING+=("RPM SBOM TSV")
+  if goblins_os_release_evidence_hashes_match "$SBOM_DIR"; then
+    echo "[PASS] $arch release evidence seals Cargo and RPM inventories with matching SHA256 values"
+  else
+    echo "[FAIL] $arch release evidence Cargo/RPM inventories do not match their manifest SHA256 values"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    ARCH_MISSING+=("sealed release evidence hashes")
+  fi
   if [ -f "$RPM_TSV" ]; then
     if rpm_sbom_arch_matches "$RPM_TSV" "$arch"; then
       echo "[PASS] $arch RPM SBOM package architectures match $arch or noarch"
@@ -1661,35 +2437,41 @@ for arch in "${ARCHES[@]}"; do
       ARCH_MISSING+=("RPM SBOM architecture")
     fi
   fi
-
-  if [ -d "$SCREENSHOT_ROOT/$arch" ]; then
-    LATEST_ARCH_RUN=""
-    while IFS= read -r candidate; do
-      if screenshot_run_is_complete "$candidate"; then
-        LATEST_ARCH_RUN="$candidate"
-        break
-      fi
-    done < <(find "$SCREENSHOT_ROOT/$arch" -mindepth 1 -maxdepth 1 -type d | sort -r)
-    if [ -n "$LATEST_ARCH_RUN" ]; then
-      echo "[PASS] $arch has complete hardware-gate screenshots: $LATEST_ARCH_RUN"
-      print_verification_and_public_release_iso_detail "$LATEST_ARCH_RUN" "$arch"
-    else
-      echo "[FAIL] $arch has no complete hardware-gate screenshot run under $SCREENSHOT_ROOT/$arch"
-      print_latest_incomplete_screenshot_run "$SCREENSHOT_ROOT/$arch" "$arch"
-      FAIL_COUNT=$((FAIL_COUNT + 1))
-      ARCH_MISSING+=("complete screenshot run")
-      DUAL_ARCH_CANDIDATE_BOUND=0
-    fi
+  check_file "$arch candidate workflow metadata exists" "$CANDIDATE_METADATA" || ARCH_MISSING+=("candidate workflow metadata")
+  if candidate_artifact_metadata_passes \
+    "$CANDIDATE_METADATA" \
+    "$arch" \
+    "$SELECTED_CANDIDATE_COMMIT" \
+    "$IMAGE_REF" \
+    "$PUBLIC_ISO_SHA"; then
+    echo "[PASS] $arch public ISO SHA is bound to an exact successful candidate workflow"
+    case "$arch" in
+      aarch64)
+        CANDIDATE_RUN_AARCH64="$(candidate_artifact_workflow_run "$CANDIDATE_METADATA")"
+        CANDIDATE_RUN_ATTEMPT_AARCH64="$(candidate_artifact_workflow_attempt "$CANDIDATE_METADATA")"
+        ;;
+      x86_64)
+        CANDIDATE_RUN_X86_64="$(candidate_artifact_workflow_run "$CANDIDATE_METADATA")"
+        CANDIDATE_RUN_ATTEMPT_X86_64="$(candidate_artifact_workflow_attempt "$CANDIDATE_METADATA")"
+        ;;
+    esac
   else
-    echo "[FAIL] $arch screenshot root missing: $SCREENSHOT_ROOT/$arch"
-    print_latest_incomplete_screenshot_run "$SCREENSHOT_ROOT/$arch" "$arch"
+    echo "[FAIL] $arch candidate metadata must bind this public ISO SHA, commit, digest, and exact-candidate gates to one workflow run"
     FAIL_COUNT=$((FAIL_COUNT + 1))
-    ARCH_MISSING+=("screenshot root")
+    ARCH_MISSING+=("candidate workflow provenance")
+    DUAL_ARCH_CANDIDATE_BOUND=0
   fi
 
-  if signoff_run_for_arch_is_complete "$arch"; then
-    echo "[PASS] $arch has complete signoff row"
+  SIGNED_SCREENSHOT_RUN="$(signoff_screenshot_run_for_arch "$arch" || true)"
+  if [ -n "$SIGNED_SCREENSHOT_RUN" ]; then
+    echo "[PASS] $arch has complete hardware-gate screenshots bound to its signoff row: $SIGNED_SCREENSHOT_RUN"
+    print_verification_and_public_release_iso_detail "$SIGNED_SCREENSHOT_RUN" "$arch"
+    echo "[PASS] $arch has complete signoff row bound to that screenshot run"
   else
+    echo "[FAIL] $arch has no complete hardware-gate screenshot run bound to a complete signoff row"
+    print_latest_incomplete_screenshot_run "$SCREENSHOT_ROOT/$arch" "$arch"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    ARCH_MISSING+=("signoff-bound complete screenshot run")
     echo "[FAIL] $arch has no complete signoff row bound to candidate $SELECTED_CANDIDATE_COMMIT with runner, ISO, verify/self-test, SBOM, runtime, gaming, and install-storage proof"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     ARCH_MISSING+=("complete signoff row")
@@ -1703,6 +2485,17 @@ for arch in "${ARCHES[@]}"; do
     FAIL_COUNT=$((FAIL_COUNT + 1))
   fi
 done
+
+if [ -n "$CANDIDATE_RUN_AARCH64" ] \
+  && [ "$CANDIDATE_RUN_AARCH64" = "$CANDIDATE_RUN_X86_64" ] \
+  && [ -n "$CANDIDATE_RUN_ATTEMPT_AARCH64" ] \
+  && [ "$CANDIDATE_RUN_ATTEMPT_AARCH64" = "$CANDIDATE_RUN_ATTEMPT_X86_64" ]; then
+  echo "[PASS] Both public-media architectures come from candidate run $CANDIDATE_RUN_AARCH64 attempt $CANDIDATE_RUN_ATTEMPT_AARCH64"
+else
+  echo "[FAIL] Both public-media architectures must come from the same exact candidate workflow run and attempt"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+  DUAL_ARCH_CANDIDATE_BOUND=0
+fi
 
 if [ "$CANDIDATE_SELECTION_VALID" -eq 1 ] && [ "$DUAL_ARCH_CANDIDATE_BOUND" -eq 1 ]; then
   echo "[PASS] Both architecture proof tracks are bound to candidate commit $SELECTED_CANDIDATE_COMMIT"
@@ -1733,6 +2526,12 @@ if [ -f "$SIGNOFF" ]; then
       echo "[PASS] Latest signoff run and its release evidence are bound to candidate $SELECTED_CANDIDATE_COMMIT"
     else
       echo "[FAIL] Latest signoff run, ISO manifest, SBOM manifest, and screenshot proof do not all match the selected candidate commit"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+    if signoff_block_image_ref_matches "$LATEST_RUN_BLOCK"; then
+      echo "[PASS] Latest signoff run, ISO, SBOM, and screenshot proof share one immutable image digest"
+    else
+      echo "[FAIL] Latest signoff run, ISO, SBOM, and screenshot proof do not share one immutable image digest"
       FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
     if echo "$LATEST_RUN_BLOCK" | rg -q "^- Verify result \(blocked=0\): pass"; then

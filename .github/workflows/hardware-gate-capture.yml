@@ -1,7 +1,8 @@
 # Hardware-gate display-backed-VM capture for the x86_64 CI route.
-# Manual-dispatch only (never auto-runs) — it boots the shippable ISO in a
-# KVM-accelerated qemu VM, drives the install + the in-session capture harness,
-# writes the 32-shot screenshot run + proof-manifest, and runs close-signoff.
+# Manual-dispatch only (never auto-runs) — it consumes a caller-selected,
+# digest-pinned candidate image, boots the verification ISO in a KVM-accelerated
+# qemu VM, drives the install + the in-session capture harness, writes the
+# 32-shot screenshot run + proof-manifest, and runs close-signoff.
 # This is the only route to the x86_64 hardware-gate track (x86_64 cannot be
 # produced on an Apple-Silicon dev host). Honest: real captures of the real OS;
 # gaming via the image's own lavapipe/gamescope/pipewire stack.
@@ -12,13 +13,31 @@ on:
       run_date:
         description: "Screenshot run date (YYYY-MM-DD)"
         required: true
+        type: string
+      candidate_commit:
+        description: "Exact lowercase 40-hex source commit represented by the candidate image"
+        required: true
+        type: string
+      candidate_image_ref:
+        description: "Digest-pinned x86_64 candidate image (ghcr.io/...@sha256:<64 lowercase hex>)"
+        required: true
+        type: string
 
 concurrency:
-  group: hardware-gate-${{ github.ref }}-${{ inputs.run_date }}
+  group: hardware-gate-${{ inputs.candidate_commit }}-${{ inputs.run_date }}
   cancel-in-progress: true
 
 env:
-  GOBLINS_OS_CANDIDATE_COMMIT: ${{ github.sha }}
+  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:8ac36779c577249c4d36ad5a1c866dac1b516c3fb93ab762f707433ab07445b2
+  GOBLINS_OS_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+  GOBLINS_OS_CANDIDATE_IMAGE_REF: ${{ inputs.candidate_image_ref }}
+  GOBLINS_OS_PROOF_OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:1d9f0b83b852efef42435e65fd53d0dc4f462a60dabf5c719058c99d47f32e36
+  GOBLINS_OS_PROOF_OLLAMA_MODEL: llama3.2:1b
+  GOBLINS_OS_PROOF_OLLAMA_MODEL_MANIFEST_SHA256: baf6a787fdffd633537aa2eb51cfd54cb93ff08e28040095462bb63daf552878
+
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   capture:
@@ -31,13 +50,47 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x86_64,  runner: ubuntu-24.04,     uname: x86_64, platform: linux/amd64 }
+          - { arch: x86_64, runner: ubuntu-24.04, uname: x86_64 }
     runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: write
-      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Validate exact candidate inputs and checkout
+        env:
+          RUN_DATE: ${{ inputs.run_date }}
+        run: |
+          set -euo pipefail
+          [[ "$GOBLINS_OS_CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "candidate_commit must be exactly 40 lowercase hexadecimal characters" >&2
+            exit 1
+          }
+          [[ "$GOBLINS_OS_CANDIDATE_IMAGE_REF" =~ ^ghcr\.io/[a-z0-9][a-z0-9._/-]*[a-z0-9]@sha256:[0-9a-f]{64}$ ]] || {
+            echo "candidate_image_ref must be a lowercase digest-pinned ghcr.io reference" >&2
+            exit 1
+          }
+          [[ "$GOBLINS_OS_CANDIDATE_IMAGE_REF" != *".."* && "$GOBLINS_OS_CANDIDATE_IMAGE_REF" != *"//"* ]] || {
+            echo "candidate_image_ref contains an invalid repository path" >&2
+            exit 1
+          }
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          expected_prefix="ghcr.io/$owner/goblins-os@sha256:"
+          [[ "$GOBLINS_OS_CANDIDATE_IMAGE_REF" == "$expected_prefix"* ]] || {
+            echo "candidate_image_ref must identify this repository's Goblins OS package: $expected_prefix<digest>" >&2
+            exit 1
+          }
+          [[ "$RUN_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || {
+            echo "run_date must use YYYY-MM-DD" >&2
+            exit 1
+          }
+          test "$(date -u -d "$RUN_DATE" +%F 2>/dev/null)" = "$RUN_DATE" || {
+            echo "run_date must be a real calendar date" >&2
+            exit 1
+          }
+          test "$(git rev-parse HEAD)" = "$GOBLINS_OS_CANDIDATE_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=normal)"
       - name: Assert native arch + KVM
         run: |
           test "$(uname -m)" = "${{ matrix.uname }}"
@@ -64,33 +117,36 @@ jobs:
             mtools dosfstools imagemagick curl jq python3 socat ripgrep
           if [ "${{ matrix.arch }}" = aarch64 ]; then sudo apt-get install -y qemu-efi-aarch64; fi
       - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - name: Compute lowercase GHCR ref
-        id: ref
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Pull and verify the digest-pinned candidate image
         run: |
-          owner='${{ github.repository_owner }}'; owner="${owner,,}"
-          echo "ref=ghcr.io/${owner}/goblins-os:${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
-      - name: Build and publish the Goblins OS image to GHCR
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: os/bootc/Containerfile
-          platforms: ${{ matrix.platform }}
-          push: true
-          tags: ${{ steps.ref.outputs.ref }}
-          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
-          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
-      - name: Build the verification installer ISO from the published ref
+          set -euo pipefail
+          docker pull "$GOBLINS_OS_CANDIDATE_IMAGE_REF"
+          test "$(docker image inspect --format '{{.Os}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "linux"
+          test "$(docker image inspect --format '{{.Architecture}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "amd64"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "$GOBLINS_OS_CANDIDATE_COMMIT"
+      - name: Verify the exact candidate source contract
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -w /workspace \
+            "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            /usr/libexec/goblins-os/goblins-os-verify --source-root /workspace \
+            | tee /tmp/goblins-os-x86_64-source-verify.log
+          grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
+            /tmp/goblins-os-x86_64-source-verify.log
+      - name: Build the verification installer ISO from the candidate digest
         run: |
           GOBLINS_OS_CONTAINER_RUNTIME=docker \
           GOBLINS_OS_ARCH=${{ matrix.arch }} \
           GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml \
-          GOBLINS_OS_IMAGE='${{ steps.ref.outputs.ref }}' \
+          GOBLINS_OS_IMAGE="$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
           GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 \
           GOBLINS_OS_SHIPPABLE_RELEASE=1 \
-          GOBLINS_OS_BIB_SOURCE_IMAGE='${{ steps.ref.outputs.ref }}' \
-          GOBLINS_OS_BIB_AUTH_FILE="$HOME/.docker/config.json" \
+          GOBLINS_OS_BIB_SOURCE_IMAGE="$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
           os/iso/build-iso.sh
       - name: Generate release evidence for the captured image
         run: |
@@ -99,55 +155,71 @@ jobs:
             -v "$PWD:/workspace:ro" \
             -v "$PWD/os/signoff-proofs/sbom/${{ matrix.arch }}:/out" \
             -w /workspace \
-            '${{ steps.ref.outputs.ref }}' \
+            "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
             /usr/libexec/goblins-os/goblins-os-verify \
             --source-root /workspace \
             --release-evidence /out \
             --arch ${{ matrix.arch }} \
-            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT"
-          docker run --rm \
-            -v "$PWD/os/signoff-proofs/sbom/${{ matrix.arch }}:/out" \
-            -w /out \
-            '${{ steps.ref.outputs.ref }}' \
-            sh rpm-packages.command
+            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
+            --image-ref "$GOBLINS_OS_CANDIDATE_IMAGE_REF"
           . ./os/hardware-gate/rpm-sbom-arch.sh
           rpm_sbom_arch_matches os/signoff-proofs/sbom/${{ matrix.arch }}/rpm-packages.tsv ${{ matrix.arch }}
+          . ./os/hardware-gate/release-evidence.sh
+          goblins_os_release_evidence_hashes_match os/signoff-proofs/sbom/${{ matrix.arch }}
       - name: Scan generated release evidence for secrets
         run: |
           . ./os/hardware-gate/secret-scan.sh
           goblins_os_artifact_secret_scan "$PWD"
-      - name: Reclaim image-build disk + serve a small model for studio-live
+      - name: Reclaim disk and serve the pinned local model for studio-live
         run: |
+          set -euo pipefail
+          docker create --name goblins-candidate-proof-keeper \
+            "$GOBLINS_OS_CANDIDATE_IMAGE_REF" /usr/bin/true >/dev/null
           docker image prune -af || true
           sudo apt-get clean || true
           df -h /
-          curl -fsSL https://ollama.com/install.sh | sh
-          OLLAMA_HOST=0.0.0.0:11434 nohup ollama serve >/tmp/ollama.log 2>&1 &
-          for i in $(seq 1 30); do curl -sf localhost:11434/api/tags >/dev/null && break; sleep 1; done
-          ollama pull llama3.2:1b
+          docker pull "$GOBLINS_OS_PROOF_OLLAMA_IMAGE"
+          test "$(docker image inspect --format '{{.Os}}' "$GOBLINS_OS_PROOF_OLLAMA_IMAGE")" = linux
+          test "$(docker image inspect --format '{{.Architecture}}' "$GOBLINS_OS_PROOF_OLLAMA_IMAGE")" = amd64
+          model_dir="$RUNNER_TEMP/goblins-os-proof-ollama"
+          mkdir -p "$model_dir"
+          docker run -d --name goblins-proof-ollama \
+            -p 127.0.0.1:11434:11434 \
+            -v "$model_dir:/root/.ollama" \
+            "$GOBLINS_OS_PROOF_OLLAMA_IMAGE" >/dev/null
+          for i in $(seq 1 60); do
+            curl -sf localhost:11434/api/tags >/dev/null && break
+            sleep 1
+          done
+          curl -fsS localhost:11434/api/tags >/dev/null
+          docker exec goblins-proof-ollama ollama pull "$GOBLINS_OS_PROOF_OLLAMA_MODEL"
+          actual_model_manifest_sha="$(
+            docker exec goblins-proof-ollama sha256sum \
+              /root/.ollama/models/manifests/registry.ollama.ai/library/llama3.2/1b \
+              | awk '{print $1}'
+          )"
+          test "$actual_model_manifest_sha" = "$GOBLINS_OS_PROOF_OLLAMA_MODEL_MANIFEST_SHA256"
       - name: Run the display-backed-VM capture + close-signoff
         run: |
-          chmod +x os/hardware-gate/capture-harness/*.sh os/hardware-gate/capture-harness/*.py
           REPO_ROOT="$PWD" \
           GOBLINS_OS_ARCH=${{ matrix.arch }} \
-          GOBLINS_OS_IMAGE='${{ steps.ref.outputs.ref }}' \
+          GOBLINS_OS_IMAGE="$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+          GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+          GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+          GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE=1 \
           RUN_DATE="${{ inputs.run_date }}" \
             bash os/hardware-gate/capture-harness/run-capture.sh
-      - name: Commit the screenshot run + signoff back to the repo
-        run: |
-          git config user.name "goblins-os-ci"
-          git config user.email "ci@goblins.os"
-          git add -f "os/screenshots/hardware-gate/${{ matrix.arch }}/" "os/signoff-proofs/sbom/${{ matrix.arch }}/" os/signoff-notes.md || true
-          git pull --rebase origin main || true
-          git commit -m "hardware-gate: ${{ matrix.arch }} display-backed-VM capture run ${{ inputs.run_date }}" || echo "nothing to commit"
-          for i in 1 2 3 4 5; do git push origin main && break || { git pull --rebase origin main; sleep $((RANDOM % 5 + 2)); }; done
       - name: Verify shipping status (informational)
         run: ./os/hardware-gate/verify-shipping-status.sh || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: hardware-gate-run-${{ matrix.arch }}
           path: |
+            os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso
+            os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso.sha256
+            os/iso/output/${{ matrix.arch }}/manifest-goblins-os-${{ matrix.arch }}.json
+            os/iso/output/${{ matrix.arch }}/manifest-anaconda-iso.json
             os/screenshots/hardware-gate/${{ matrix.arch }}/
             os/signoff-proofs/sbom/${{ matrix.arch }}/
             os/signoff-notes.md

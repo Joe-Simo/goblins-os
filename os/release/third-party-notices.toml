@@ -3,18 +3,25 @@
 
 [cargo]
 lockfile = "Cargo.lock"
-generator = "goblins-os-verify --source-root <source> --release-evidence os/signoff-proofs/sbom/<arch>/ --arch <arch> --candidate-commit <40-hex-commit>"
+generator = "goblins-os-verify --source-root <source> --release-evidence os/signoff-proofs/sbom/<arch>/ --arch <arch> --candidate-commit <40-hex-commit> --image-ref <registry/image@sha256:64-hex-digest>"
 packages_tsv = "os/signoff-proofs/sbom/<arch>/cargo-lock-packages.tsv"
 manifest = "os/signoff-proofs/sbom/<arch>/release-evidence-manifest.json"
 license_policy = "Workspace source is AGPL-3.0-or-later (see LICENSE); dependency and bundled-component licenses remain third-party under their own terms. The 'Goblins OS' name and marks are reserved trademarks (see TRADEMARKS.md)."
 
 [rpm]
 source = "Fedora 44 bootc image package set"
-generator = "Run goblins-os-verify --release-evidence inside the built Goblins OS image, or run os/signoff-proofs/sbom/<arch>/rpm-packages.command in the image."
+generator = "Run the packaged goblins-os-verify --release-evidence inside the exact digest-pinned Goblins OS architecture image; the same invocation must seal the Cargo and RPM inventories into the v4 manifest."
 recommended_sbom = "rpm -qa output and license scan under os/signoff-proofs/sbom/<arch>/"
 packages_tsv = "os/signoff-proofs/sbom/<arch>/rpm-packages.tsv"
 command_file = "os/signoff-proofs/sbom/<arch>/rpm-packages.command"
+command_file_role = "Diagnostic replay recipe only; running this file by itself does not satisfy final release evidence."
 architectures = ["aarch64", "x86_64"]
+
+[installer_branding_tool]
+purpose = "Build-only immutable toolchain for replacing stock Anaconda installer chrome with the Goblins OS identity."
+provenance = "os/release/installer-branding-tool.toml"
+inventory = "Extract /usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv from the exact digest-pinned image; per-architecture SHA256 values and package counts are recorded in the provenance file."
+shipping_boundary = "The tool image and its packages are not installed in Goblins OS; only the remastered ISO output is shipped."
 
 [gnome]
 source = "Fedora RPM package set in the built image"

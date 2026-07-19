@@ -1,0 +1,505 @@
+# Build exact-candidate, digest-bound artifacts without promoting a release
+# channel, creating a Git tag/Release, or writing generated evidence to Git.
+name: candidate-artifacts
+run-name: candidate artifacts · ${{ inputs.candidate_commit }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_commit:
+        description: Exact 40-hex source commit to build without stable promotion
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      candidate_commit:
+        description: Exact 40-hex source commit to build without stable promotion
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: candidate-artifacts-${{ inputs.candidate_commit }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_COMMIT_INPUT: ${{ inputs.candidate_commit }}
+  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:8ac36779c577249c4d36ad5a1c866dac1b516c3fb93ab762f707433ab07445b2
+
+jobs:
+  candidate-artifacts:
+    name: candidate artifacts (${{ matrix.arch }})
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            expected_uname: x86_64
+            platform: linux/amd64
+            image_arch: amd64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            expected_uname: aarch64
+            platform: linux/arm64
+            image_arch: arm64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Validate the selected candidate
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          candidate="${CANDIDATE_COMMIT_INPUT,,}"
+          if [[ ! "$candidate" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "candidate_commit must be one full 40-hex Git commit." >&2
+            exit 1
+          fi
+
+          echo "commit=$candidate" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ steps.candidate.outputs.commit }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Assert exact clean source and native runner
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+          EXPECTED_UNAME: ${{ matrix.expected_uname }}
+        run: |
+          set -euo pipefail
+
+          actual_commit="$(git rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
+          [[ "$actual_commit" == "$CANDIDATE_COMMIT" ]] || {
+            echo "Checked-out HEAD $actual_commit does not match candidate $CANDIDATE_COMMIT." >&2
+            exit 1
+          }
+          [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || {
+            echo "Candidate checkout is not clean." >&2
+            git status --short >&2
+            exit 1
+          }
+          git fetch --no-tags --depth=1 origin main
+          main_commit="$(git rev-parse FETCH_HEAD | tr '[:upper:]' '[:lower:]')"
+          [[ "$main_commit" == "$CANDIDATE_COMMIT" ]] || {
+            echo "Selected candidate $CANDIDATE_COMMIT is not the current origin/main commit $main_commit." >&2
+            exit 1
+          }
+          [[ "$(uname -m)" == "$EXPECTED_UNAME" ]] || {
+            echo "Expected native runner $EXPECTED_UNAME; got $(uname -m)." >&2
+            exit 1
+          }
+
+      - name: Prepare the native release runner
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /opt/hostedtoolcache \
+            /usr/share/swift \
+            /usr/local/lib/node_modules \
+            /usr/share/miniconda \
+            /usr/lib/jvm \
+            /usr/local/share/powershell
+          sudo apt-get clean
+          sudo docker image prune -af
+          sudo swapoff -a || true
+          sudo rm -f /mnt/goblins-os-candidate.swap
+          sudo fallocate -l 16G /mnt/goblins-os-candidate.swap
+          sudo chmod 600 /mnt/goblins-os-candidate.swap
+          sudo mkswap /mnt/goblins-os-candidate.swap
+          sudo swapon /mnt/goblins-os-candidate.swap
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jq ripgrep
+          df -h /
+          free -h
+
+      - name: Compute non-promotional image references
+        id: image
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/$owner/goblins-os"
+          candidate_tag="$image:candidate-$CANDIDATE_COMMIT-$TARGET_ARCH"
+
+          case "$candidate_tag" in
+            "$image:x86_64"|"$image:aarch64"|"$image:latest"|"$image:stable")
+              echo "Refusing to update a release-channel tag: $candidate_tag" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "candidate_tag=$candidate_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build and publish the commit-scoped candidate image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: os/bootc/Containerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.image.outputs.candidate_tag }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.candidate.outputs.commit }}
+          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
+          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
+
+      - name: Verify and pin the published image digest
+        id: immutable
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+          CANDIDATE_TAG: ${{ steps.image.outputs.candidate_tag }}
+          IMAGE_NAME: ${{ steps.image.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_IMAGE_ARCH: ${{ matrix.image_arch }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "BuildKit did not return a valid sha256 image digest: $IMAGE_DIGEST" >&2
+            exit 1
+          fi
+
+          tag_digest="sha256:$(docker buildx imagetools inspect --raw "$CANDIDATE_TAG" | sha256sum | awk '{print $1}')"
+          [[ "$tag_digest" == "$IMAGE_DIGEST" ]] || {
+            echo "Published tag resolves to $tag_digest, expected $IMAGE_DIGEST." >&2
+            exit 1
+          }
+
+          immutable_ref="$IMAGE_NAME@$IMAGE_DIGEST"
+          immutable_digest="sha256:$(docker buildx imagetools inspect --raw "$immutable_ref" | sha256sum | awk '{print $1}')"
+          [[ "$immutable_digest" == "$IMAGE_DIGEST" ]] || {
+            echo "Immutable registry ref resolves to $immutable_digest, expected $IMAGE_DIGEST." >&2
+            exit 1
+          }
+          docker pull --platform "$TARGET_PLATFORM" "$immutable_ref"
+
+          actual_arch="$(docker image inspect --format '{{.Architecture}}' "$immutable_ref")"
+          [[ "$actual_arch" == "$EXPECTED_IMAGE_ARCH" ]] || {
+            echo "Candidate image architecture is $actual_arch, expected $EXPECTED_IMAGE_ARCH." >&2
+            exit 1
+          }
+
+          actual_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$immutable_ref")"
+          [[ "$actual_revision" == "$CANDIDATE_COMMIT" ]] || {
+            echo "Candidate image revision is $actual_revision, expected $CANDIDATE_COMMIT." >&2
+            exit 1
+          }
+
+          echo "digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "ref=$immutable_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the exact candidate source and installed-root contracts
+        shell: bash
+        env:
+          IMMUTABLE_IMAGE_REF: ${{ steps.immutable.outputs.ref }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -w /workspace \
+            "$IMMUTABLE_IMAGE_REF" \
+            /usr/libexec/goblins-os/goblins-os-verify --source-root /workspace \
+            | tee /tmp/goblins-candidate-source-verify.log
+          grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
+            /tmp/goblins-candidate-source-verify.log
+          docker run --rm "$IMMUTABLE_IMAGE_REF" \
+            /usr/libexec/goblins-os/goblins-os-verify --installed-root / \
+            | tee /tmp/goblins-candidate-installed-verify.log
+          grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
+            /tmp/goblins-candidate-installed-verify.log
+
+      - name: Run the exact candidate install and services self-test
+        shell: bash
+        env:
+          IMMUTABLE_IMAGE_REF: ${{ steps.immutable.outputs.ref }}
+        run: |
+          set -euo pipefail
+          printf 'FROM %s AS goblins-os\n' "$IMMUTABLE_IMAGE_REF" \
+            > /tmp/goblins-candidate-selftest.Dockerfile
+          cat os/bootc/selftest.suffix.Dockerfile \
+            >> /tmp/goblins-candidate-selftest.Dockerfile
+          docker buildx build \
+            --file /tmp/goblins-candidate-selftest.Dockerfile \
+            --target selftest \
+            --output type=cacheonly \
+            .
+
+      - name: Build the digest-bound shippable installer ISO
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+          IMMUTABLE_IMAGE_REF: ${{ steps.immutable.outputs.ref }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          GOBLINS_OS_CONTAINER_RUNTIME=docker \
+          GOBLINS_OS_ARCH="$TARGET_ARCH" \
+          GOBLINS_OS_IMAGE="$IMMUTABLE_IMAGE_REF" \
+          GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 \
+          GOBLINS_OS_SHIPPABLE_RELEASE=1 \
+          GOBLINS_OS_BIB_SOURCE_IMAGE="$IMMUTABLE_IMAGE_REF" \
+          GOBLINS_OS_DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS=180 \
+          GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT" \
+            os/iso/build-iso.sh
+
+      - name: Generate exact-candidate release evidence
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+          IMMUTABLE_IMAGE_REF: ${{ steps.immutable.outputs.ref }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          evidence_dir="$PWD/os/signoff-proofs/sbom/$TARGET_ARCH"
+          mkdir -p "$evidence_dir"
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -v "$evidence_dir:/out" \
+            -w /workspace \
+            "$IMMUTABLE_IMAGE_REF" \
+            /usr/libexec/goblins-os/goblins-os-verify \
+            --source-root /workspace \
+            --release-evidence /out \
+            --arch "$TARGET_ARCH" \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --image-ref "$IMMUTABLE_IMAGE_REF"
+          . ./os/hardware-gate/rpm-sbom-arch.sh
+          rpm_sbom_arch_matches "$evidence_dir/rpm-packages.tsv" "$TARGET_ARCH"
+          . ./os/hardware-gate/release-evidence.sh
+          goblins_os_release_evidence_hashes_match "$evidence_dir"
+
+      - name: Verify artifact provenance and checksums
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+          CANDIDATE_TAG: ${{ steps.image.outputs.candidate_tag }}
+          IMAGE_DIGEST: ${{ steps.immutable.outputs.digest }}
+          IMMUTABLE_IMAGE_REF: ${{ steps.immutable.outputs.ref }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+
+          iso_dir="$PWD/os/iso/output/$TARGET_ARCH"
+          iso="$iso_dir/bootiso/goblins-os-$TARGET_ARCH.iso"
+          checksum="$iso.sha256"
+          iso_manifest="$iso_dir/manifest-goblins-os-$TARGET_ARCH.json"
+          bib_manifest="$iso_dir/manifest-anaconda-iso.json"
+          evidence_manifest="$PWD/os/signoff-proofs/sbom/$TARGET_ARCH/release-evidence-manifest.json"
+
+          for artifact in "$iso" "$checksum" "$iso_manifest" "$bib_manifest" "$evidence_manifest"; do
+            [[ -s "$artifact" ]] || {
+              echo "Required candidate artifact is missing or empty: $artifact" >&2
+              exit 1
+            }
+          done
+
+          (cd "$(dirname "$iso")" && sha256sum -c "$(basename "$checksum")")
+          iso_sha256="$(sha256sum "$iso" | awk '{print $1}')"
+          jq -e \
+            --arg arch "$TARGET_ARCH" \
+            --arg commit "$CANDIDATE_COMMIT" \
+            --arg image "$IMMUTABLE_IMAGE_REF" \
+            '.architecture == $arch
+             and .candidate_commit == $commit
+             and .image == $image
+             and .builder_source_image == $image
+             and .native_host_arch == $arch
+             and .container_engine_arch == $arch
+             and .installer_config == "os/iso/config.toml"
+             and .installer_branding_applied == true
+             and (.installer_branding_image | test("@sha256:[0-9a-f]{64}$"))
+             and .installer_branding_ownership_helper_image == .installer_branding_image
+             and (.builder_image | test("@sha256:[0-9a-f]{64}$"))
+             and .builder_output_ownership_helper_image == .builder_image
+             and .installer_payload_source_kind == "release-registry"
+             and .installer_payload_source_local_only == false
+             and .shippable_release == true' \
+            "$iso_manifest" >/dev/null
+          . ./os/iso/manifest-provenance.sh
+          if ! bib_image_ref="$(goblins_os_bib_manifest_payload_ref "$bib_manifest")"; then
+            echo "BIB manifest must contain exactly one bootc installer payload image reference." >&2
+            exit 1
+          fi
+          [[ "$bib_image_ref" == "$IMMUTABLE_IMAGE_REF" ]] || {
+            echo "BIB payload $bib_image_ref does not match candidate image $IMMUTABLE_IMAGE_REF." >&2
+            exit 1
+          }
+          jq -e \
+            --arg arch "$TARGET_ARCH" \
+            --arg commit "$CANDIDATE_COMMIT" \
+            --arg image "$IMMUTABLE_IMAGE_REF" \
+            '.architecture == $arch
+             and .candidate_commit == $commit
+             and .image_ref == $image
+             and .image_digest_pinned == true' \
+            "$evidence_manifest" >/dev/null
+
+          iso_manifest_sha256="$(sha256sum "$iso_manifest" | awk '{print $1}')"
+          bib_manifest_sha256="$(sha256sum "$bib_manifest" | awk '{print $1}')"
+          evidence_manifest_sha256="$(sha256sum "$evidence_manifest" | awk '{print $1}')"
+          cargo_packages_sha256="$(jq -er '.cargo_packages_sha256' "$evidence_manifest")"
+          rpm_packages_sha256="$(jq -er '.rpm_packages_sha256' "$evidence_manifest")"
+
+          output_dir="$PWD/candidate-output/$TARGET_ARCH"
+          mkdir -p "$output_dir"
+          jq -n \
+            --arg architecture "$TARGET_ARCH" \
+            --arg platform "$TARGET_PLATFORM" \
+            --arg candidate_commit "$CANDIDATE_COMMIT" \
+            --arg candidate_tag "$CANDIDATE_TAG" \
+            --arg image_digest "$IMAGE_DIGEST" \
+            --arg immutable_image_ref "$IMMUTABLE_IMAGE_REF" \
+            --arg iso_sha256 "$iso_sha256" \
+            --arg iso_manifest_sha256 "$iso_manifest_sha256" \
+            --arg bib_manifest_sha256 "$bib_manifest_sha256" \
+            --arg evidence_manifest_sha256 "$evidence_manifest_sha256" \
+            --arg cargo_packages_sha256 "$cargo_packages_sha256" \
+            --arg rpm_packages_sha256 "$rpm_packages_sha256" \
+            --arg source_repository "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --arg workflow_run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --argjson workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              schema: "goblins-os-candidate-image-ref-v2",
+              product: "Goblins OS",
+              architecture: $architecture,
+              platform: $platform,
+              candidate_commit: $candidate_commit,
+              candidate_tag: $candidate_tag,
+              candidate_tag_authoritative: false,
+              image_digest: $image_digest,
+              immutable_image_ref: $immutable_image_ref,
+              oci_revision: $candidate_commit,
+              iso_sha256: $iso_sha256,
+              iso_manifest_sha256: $iso_manifest_sha256,
+              bib_manifest_sha256: $bib_manifest_sha256,
+              release_evidence_manifest_sha256: $evidence_manifest_sha256,
+              cargo_packages_sha256: $cargo_packages_sha256,
+              rpm_packages_sha256: $rpm_packages_sha256,
+              installer_config: "os/iso/config.toml",
+              source_repository: $source_repository,
+              workflow_run: $workflow_run,
+              workflow_run_attempt: $workflow_run_attempt,
+              workflow_name: "candidate-artifacts",
+              exact_candidate_gates: {
+                source_verifier: "pass",
+                installed_root_verifier: "pass",
+                services_selftest: "pass"
+              },
+              non_promotional: true
+            }' > "$output_dir/image-ref.json"
+          jq -e \
+            --arg arch "$TARGET_ARCH" \
+            --arg commit "$CANDIDATE_COMMIT" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg image "$IMMUTABLE_IMAGE_REF" \
+            --arg iso_sha256 "$iso_sha256" \
+            --arg iso_manifest_sha256 "$iso_manifest_sha256" \
+            --arg bib_manifest_sha256 "$bib_manifest_sha256" \
+            --arg evidence_manifest_sha256 "$evidence_manifest_sha256" \
+            --arg cargo_packages_sha256 "$cargo_packages_sha256" \
+            --arg rpm_packages_sha256 "$rpm_packages_sha256" \
+            '.architecture == $arch
+             and .schema == "goblins-os-candidate-image-ref-v2"
+             and .candidate_commit == $commit
+             and .image_digest == $digest
+             and .immutable_image_ref == $image
+             and .candidate_tag_authoritative == false
+             and .oci_revision == $commit
+             and .iso_sha256 == $iso_sha256
+             and .iso_manifest_sha256 == $iso_manifest_sha256
+             and .bib_manifest_sha256 == $bib_manifest_sha256
+             and .release_evidence_manifest_sha256 == $evidence_manifest_sha256
+             and .cargo_packages_sha256 == $cargo_packages_sha256
+             and .rpm_packages_sha256 == $rpm_packages_sha256
+             and .installer_config == "os/iso/config.toml"
+             and .workflow_name == "candidate-artifacts"
+             and (.workflow_run_attempt | type == "number" and . >= 1)
+             and .exact_candidate_gates.source_verifier == "pass"
+             and .exact_candidate_gates.installed_root_verifier == "pass"
+             and .exact_candidate_gates.services_selftest == "pass"
+             and .non_promotional == true' \
+            "$output_dir/image-ref.json" >/dev/null
+
+          . ./os/hardware-gate/secret-scan.sh
+          goblins_os_artifact_secret_scan "$PWD"
+
+      - name: Upload digest-bound candidate artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: goblins-os-candidate-${{ steps.candidate.outputs.commit }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso
+            os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso.sha256
+            os/iso/output/${{ matrix.arch }}/manifest-goblins-os-${{ matrix.arch }}.json
+            os/iso/output/${{ matrix.arch }}/manifest-anaconda-iso.json
+            os/signoff-proofs/sbom/${{ matrix.arch }}/*
+            candidate-output/${{ matrix.arch }}/image-ref.json
+
+      - name: Upload lightweight immutable image reference
+        id: image-reference-artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: goblins-os-candidate-ref-${{ steps.candidate.outputs.commit }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 90
+          path: candidate-output/${{ matrix.arch }}/image-ref.json
+
+      - name: Summarize the immutable candidate
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+          IMMUTABLE_IMAGE_REF: ${{ steps.immutable.outputs.ref }}
+          IMAGE_REFERENCE_ARTIFACT_URL: ${{ steps.image-reference-artifact.outputs.artifact-url }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          {
+            printf '### Goblins OS candidate (%s)\n\n' "$TARGET_ARCH"
+            printf -- '- Commit: `%s`\n' "$CANDIDATE_COMMIT"
+            printf -- '- Immutable image: `%s`\n' "$IMMUTABLE_IMAGE_REF"
+            printf -- '- Lightweight metadata: %s\n' "$IMAGE_REFERENCE_ARTIFACT_URL"
+            printf -- '- Stable promotion: **not performed**\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log out of GHCR
+        if: always()
+        shell: bash
+        run: docker logout ghcr.io >/dev/null 2>&1 || true

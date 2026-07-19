@@ -1,13 +1,10 @@
-# Goblins OS — shippable dual-arch release media.
+# Compatibility entrypoint for producing shippable candidate media.
 #
-# Unlike build.yml (which produces local-payload CI artifacts), this workflow
-# publishes the per-architecture bootc image to GHCR and builds the installer
-# ISO from that real, pullable release ref (GOBLINS_OS_SHIPPABLE_RELEASE=1), so
-# the ISO manifest records shippable_release=true and a nonlocal payload source.
-# Runs on native x86_64 and aarch64 runners. The display-backed 28-shot
-# screenshot run and close-signoff still require a GPU display machine (the
-# hardware gate's real-hardware core) and are produced separately.
-name: release
+# This workflow delegates to the one digest-bound candidate implementation. It
+# does not move a release-channel image, create a Git tag or GitHub Release,
+# write generated evidence to Git, update the website, or promote stable.
+name: candidate-release-media
+run-name: candidate release media · ${{ github.sha }}
 
 on:
   workflow_dispatch:
@@ -16,106 +13,11 @@ permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  GOBLINS_OS_CANDIDATE_COMMIT: ${{ github.sha }}
-
 jobs:
-  shippable-iso:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-24.04
-            expected_uname: x86_64
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-            expected_uname: aarch64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Assert native runner architecture
-        run: test "$(uname -m)" = "${{ matrix.expected_uname }}"
-      - name: Free disk and add swap
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-            /opt/hostedtoolcache /usr/share/swift /usr/local/lib/node_modules \
-            /usr/share/miniconda /usr/lib/jvm /usr/local/share/powershell \
-            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
-          sudo apt-get clean || true
-          sudo docker image prune -af || true
-          sudo swapoff -a || true
-          sudo rm -f /swapfile /mnt/swapfile || true
-          sudo fallocate -l 16G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          df -h /
-          free -h
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - name: Compute lowercase GHCR release ref
-        id: ref
-        run: |
-          owner='${{ github.repository_owner }}'
-          owner="${owner,,}"
-          echo "ref=ghcr.io/${owner}/goblins-os:${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the Goblins OS image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: os/bootc/Containerfile
-          load: true
-          tags: localhost/goblins-os:${{ matrix.arch }}
-          cache-from: type=gha,scope=goblins-os-bootc-${{ matrix.arch }}
-          cache-to: type=gha,scope=goblins-os-bootc-${{ matrix.arch }},mode=max,ignore-error=true
-      - name: Publish the image to GHCR (real pullable release ref)
-        run: |
-          docker tag localhost/goblins-os:${{ matrix.arch }} '${{ steps.ref.outputs.ref }}'
-          docker push '${{ steps.ref.outputs.ref }}'
-      - name: Build the shippable installer ISO from the published ref
-        run: |
-          GOBLINS_OS_CONTAINER_RUNTIME=docker \
-          GOBLINS_OS_ARCH=${{ matrix.arch }} \
-          GOBLINS_OS_IMAGE=localhost/goblins-os:${{ matrix.arch }} \
-          GOBLINS_OS_SHIPPABLE_RELEASE=1 \
-          GOBLINS_OS_BIB_SOURCE_IMAGE='${{ steps.ref.outputs.ref }}' \
-          GOBLINS_OS_BIB_AUTH_FILE="$HOME/.docker/config.json" \
-          GOBLINS_OS_DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS=180 \
-          os/iso/build-iso.sh
-      - name: Generate release evidence (SBOM) from the built image
-        run: |
-          mkdir -p os/signoff-proofs/sbom/${{ matrix.arch }}
-          docker run --rm \
-            -v "$PWD:/workspace:ro" \
-            -v "$PWD/os/signoff-proofs/sbom/${{ matrix.arch }}:/out" \
-            -w /workspace \
-            localhost/goblins-os:${{ matrix.arch }} \
-            /usr/libexec/goblins-os/goblins-os-verify \
-            --source-root /workspace --release-evidence /out --arch ${{ matrix.arch }} \
-            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT"
-          docker run --rm \
-            -v "$PWD/os/signoff-proofs/sbom/${{ matrix.arch }}:/out" \
-            -w /out localhost/goblins-os:${{ matrix.arch }} sh rpm-packages.command
-          . ./os/hardware-gate/rpm-sbom-arch.sh
-          rpm_sbom_arch_matches os/signoff-proofs/sbom/${{ matrix.arch }}/rpm-packages.tsv ${{ matrix.arch }}
-      - name: Scan generated evidence for secrets
-        run: |
-          . ./os/hardware-gate/secret-scan.sh
-          goblins_os_artifact_secret_scan "$PWD"
-      - name: Show ISO manifest (shippable_release must be true)
-        run: cat os/iso/output/${{ matrix.arch }}/manifest-goblins-os-${{ matrix.arch }}.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: goblins-os-shippable-${{ matrix.arch }}
-          path: |
-            os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso
-            os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso.sha256
-            os/iso/output/${{ matrix.arch }}/manifest-goblins-os-${{ matrix.arch }}.json
-            os/iso/output/${{ matrix.arch }}/manifest-anaconda-iso.json
-            os/signoff-proofs/sbom/${{ matrix.arch }}/*
+  candidate-artifacts:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/candidate-artifacts.yml
+    with:
+      candidate_commit: ${{ github.sha }}

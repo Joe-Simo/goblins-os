@@ -12,6 +12,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use sha2::{Digest, Sha256};
 use syn::visit::Visit;
 
 const BINARIES: &[&str] = &[
@@ -286,6 +287,7 @@ struct Config {
     quiet: bool,
     release_arch: Option<String>,
     candidate_commit: Option<String>,
+    image_ref: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -307,6 +309,7 @@ enum VerifyError {
     MissingValue(String),
     InvalidArchitecture(String),
     InvalidCandidateCommit(String),
+    InvalidImageRef(String),
 }
 
 fn main() {
@@ -330,8 +333,17 @@ fn run() -> Result<(), Box<dyn Error>> {
             .candidate_commit
             .as_deref()
             .ok_or("release evidence requires --candidate-commit")?;
-        let manifest =
-            write_release_evidence(&config.source, arch, candidate_commit, &config.root)?;
+        let image_ref = config
+            .image_ref
+            .as_deref()
+            .ok_or("release evidence requires --image-ref")?;
+        let manifest = write_release_evidence(
+            &config.source,
+            arch,
+            candidate_commit,
+            image_ref,
+            &config.root,
+        )?;
         if !config.quiet {
             println!(
                 "goblins_os_release_evidence arch={} output={} manifest={}",
@@ -399,6 +411,7 @@ impl Config {
         let mut release_evidence_output = None;
         let mut release_arch = None;
         let mut candidate_commit = None;
+        let mut image_ref = None;
         let mut quiet = false;
 
         while let Some(arg) = args.next() {
@@ -445,6 +458,12 @@ impl Config {
                             .ok_or_else(|| VerifyError::MissingValue(arg.clone()))?,
                     );
                 }
+                "--image-ref" => {
+                    image_ref = Some(
+                        args.next()
+                            .ok_or_else(|| VerifyError::MissingValue(arg.clone()))?,
+                    );
+                }
                 "--quiet" => quiet = true,
                 "--help" | "-h" => return Err(VerifyError::Usage),
                 _ => return Err(VerifyError::UnknownArgument(arg)),
@@ -463,6 +482,10 @@ impl Config {
             if !candidate_commit_is_valid(&candidate_commit) {
                 return Err(VerifyError::InvalidCandidateCommit(candidate_commit));
             }
+            let image_ref = image_ref.ok_or(VerifyError::Usage)?;
+            if !image_ref_is_valid(&image_ref) {
+                return Err(VerifyError::InvalidImageRef(image_ref));
+            }
             let source = match source_root {
                 Some(root) => root,
                 None => env::current_dir().map_err(|_| VerifyError::Usage)?,
@@ -475,6 +498,7 @@ impl Config {
                 quiet,
                 release_arch: Some(arch),
                 candidate_commit: Some(candidate_commit.to_ascii_lowercase()),
+                image_ref: Some(image_ref),
             });
         }
 
@@ -492,6 +516,7 @@ impl Config {
                 quiet,
                 release_arch: None,
                 candidate_commit: None,
+                image_ref: None,
             });
         }
 
@@ -505,6 +530,7 @@ impl Config {
                 quiet,
                 release_arch: None,
                 candidate_commit: None,
+                image_ref: None,
             }),
             (None, Some(root)) => Ok(Self {
                 mode: Mode::Installed,
@@ -514,6 +540,7 @@ impl Config {
                 quiet,
                 release_arch: None,
                 candidate_commit: None,
+                image_ref: None,
             }),
             (None, None) => {
                 let current = env::current_dir().map_err(|_| VerifyError::Usage)?;
@@ -526,6 +553,7 @@ impl Config {
                         quiet,
                         release_arch: None,
                         candidate_commit: None,
+                        image_ref: None,
                     })
                 } else {
                     Ok(Self {
@@ -536,6 +564,7 @@ impl Config {
                         quiet,
                         release_arch: None,
                         candidate_commit: None,
+                        image_ref: None,
                     })
                 }
             }
@@ -568,7 +597,7 @@ impl fmt::Display for VerifyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter.write_str(
-                "usage: goblins-os-verify [--source-root <path> | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64|x86_64> --candidate-commit <40-hex-commit>] [--quiet]",
+                "usage: goblins-os-verify [--source-root <path> | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64|x86_64> --candidate-commit <40-hex-commit> --image-ref <container-image-ref>] [--quiet]",
             ),
             Self::UnknownArgument(arg) => write!(formatter, "unknown argument {arg}"),
             Self::MissingValue(arg) => write!(formatter, "missing value for {arg}"),
@@ -579,6 +608,10 @@ impl fmt::Display for VerifyError {
             Self::InvalidCandidateCommit(commit) => write!(
                 formatter,
                 "invalid candidate commit {commit}; expected exactly 40 hexadecimal characters"
+            ),
+            Self::InvalidImageRef(image_ref) => write!(
+                formatter,
+                "invalid image ref {image_ref}; expected a nonempty container image reference without whitespace"
             ),
         }
     }
@@ -1653,7 +1686,7 @@ fn source_checks(root: &Path) -> Vec<Check> {
     checks.push(contains_check(
         root.join(".github/workflows/build.yml"),
         "image-workflow-uses-buildx-builder",
-        "docker/setup-buildx-action@v3",
+        "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
     ));
     checks.push(contains_check(
         root.join(".github/workflows/build.yml"),
@@ -1967,7 +2000,12 @@ fn source_checks(root: &Path) -> Vec<Check> {
     checks.push(contains_check(
         root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
         "goblins-switch-qemu-input-honesty",
-        "Point selection needs live qemu proof before pointer injection is enabled.",
+        "Secure pointer control is not available yet.",
+    ));
+    checks.push(contains_check(
+        root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
+        "goblins-switch-point-status-stays-concise",
+        "Selection is paused until secure pointer control is available.",
     ));
     checks.push(contains_check(
         root.join("os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js"),
@@ -2655,10 +2693,28 @@ fn candidate_commit_is_valid(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn image_ref_is_valid(value: &str) -> bool {
+    !value.is_empty() && !value.chars().any(char::is_whitespace)
+}
+
+fn image_ref_is_digest_pinned(value: &str) -> bool {
+    let Some((name, digest)) = value.rsplit_once("@sha256:") else {
+        return false;
+    };
+    image_ref_is_valid(value)
+        && !name.is_empty()
+        && !name.contains('@')
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn write_release_evidence(
     source: &Path,
     arch: &str,
     candidate_commit: &str,
+    image_ref: &str,
     output: &Path,
 ) -> Result<PathBuf, Box<dyn Error>> {
     if !SUPPORTED_RELEASE_ARCHES.contains(&arch) {
@@ -2667,8 +2723,23 @@ fn write_release_evidence(
     if !candidate_commit_is_valid(candidate_commit) {
         return Err("candidate commit must be exactly 40 hexadecimal characters".into());
     }
+    if !image_ref_is_valid(image_ref) {
+        return Err("image ref must be nonempty and contain no whitespace".into());
+    }
 
     fs::create_dir_all(output)?;
+    for generated_name in [
+        "release-evidence-manifest.json",
+        "cargo-lock-packages.tsv",
+        "rpm-packages.command",
+        "rpm-packages.tsv",
+        "rpm-packages.not-generated.txt",
+    ] {
+        let generated_path = output.join(generated_name);
+        if generated_path.exists() || generated_path.is_symlink() {
+            fs::remove_file(generated_path)?;
+        }
+    }
     let cargo_lock = fs::read_to_string(source.join("Cargo.lock"))?;
     let mut packages = cargo_lock_packages(&cargo_lock);
     if packages.is_empty() {
@@ -2681,19 +2752,27 @@ fn write_release_evidence(
             .then_with(|| left.source.cmp(&right.source))
     });
 
-    fs::write(
-        output.join("cargo-lock-packages.tsv"),
-        cargo_lock_packages_tsv(&packages),
-    )?;
+    let cargo_packages_path = output.join("cargo-lock-packages.tsv");
+    fs::write(&cargo_packages_path, cargo_lock_packages_tsv(&packages))?;
+    let cargo_packages_sha256 = sha256_path(&cargo_packages_path)?;
     fs::write(output.join("rpm-packages.command"), rpm_packages_command())?;
     let rpm_status = write_rpm_packages_if_available(output)?;
+    let rpm_packages_path = output.join("rpm-packages.tsv");
+    let rpm_packages_sha256 = if rpm_packages_path.is_file() {
+        Some(sha256_path(&rpm_packages_path)?)
+    } else {
+        None
+    };
     let manifest = output.join("release-evidence-manifest.json");
     fs::write(
         &manifest,
         release_evidence_manifest(
             arch,
             &candidate_commit.to_ascii_lowercase(),
+            image_ref,
             packages.len(),
+            &cargo_packages_sha256,
+            rpm_packages_sha256.as_deref(),
             &rpm_status,
         ),
     )?;
@@ -2770,8 +2849,13 @@ fn tsv_field(value: &str) -> String {
     value.replace(['\t', '\n', '\r'], " ")
 }
 
+fn sha256_path(path: &Path) -> Result<String, Box<dyn Error>> {
+    let digest = Sha256::digest(fs::read(path)?);
+    Ok(format!("{digest:x}"))
+}
+
 fn rpm_packages_command() -> &'static str {
-    "#!/usr/bin/env sh\nset -eu\ntmp=\"${TMPDIR:-/tmp}/goblins-os-rpm-packages.$$\"\ntrap 'rm -f \"$tmp\"' EXIT\nrpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{ARCH}\\t%{LICENSE}\\n' | LC_ALL=C sort > \"$tmp\"\n{\n  printf 'name\\tversion_release\\tarch\\tlicense\\n'\n  cat \"$tmp\"\n} > rpm-packages.tsv\n"
+    "#!/usr/bin/env sh\nset -eu\ntmp=\"${TMPDIR:-/tmp}/goblins-os-rpm-packages.$$\"\ntrap 'rm -f \"$tmp\"' EXIT\nrpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{ARCH}\\t%{LICENSE}\\n' | LC_ALL=C sort > \"$tmp\"\n{\n  printf 'name\\tversion_release\\tarch\\tlicense\\n'\n  cat \"$tmp\"\n} > rpm-packages.tsv\nrm -f rpm-packages.not-generated.txt\n"
 }
 
 fn write_rpm_packages_if_available(output: &Path) -> Result<String, Box<dyn Error>> {
@@ -2789,9 +2873,17 @@ fn write_rpm_packages_if_available(output: &Path) -> Result<String, Box<dyn Erro
             tsv.push_str(&lines.join("\n"));
             tsv.push('\n');
             fs::write(output.join("rpm-packages.tsv"), tsv)?;
+            let stale = output.join("rpm-packages.not-generated.txt");
+            if stale.exists() {
+                fs::remove_file(stale)?;
+            }
             Ok("generated from rpm database".to_string())
         }
         Ok(result) => {
+            let stale = output.join("rpm-packages.tsv");
+            if stale.exists() {
+                fs::remove_file(stale)?;
+            }
             let stderr = String::from_utf8_lossy(&result.stderr);
             let status = format!(
                 "not generated: rpm query exited with status {}",
@@ -2807,6 +2899,10 @@ fn write_rpm_packages_if_available(output: &Path) -> Result<String, Box<dyn Erro
             Ok(status)
         }
         Err(error) => {
+            let stale = output.join("rpm-packages.tsv");
+            if stale.exists() {
+                fs::remove_file(stale)?;
+            }
             let status = "not generated: rpm command unavailable on this host".to_string();
             fs::write(
                 output.join("rpm-packages.not-generated.txt"),
@@ -2822,19 +2918,29 @@ fn write_rpm_packages_if_available(output: &Path) -> Result<String, Box<dyn Erro
 fn release_evidence_manifest(
     arch: &str,
     candidate_commit: &str,
+    image_ref: &str,
     cargo_package_count: usize,
+    cargo_packages_sha256: &str,
+    rpm_packages_sha256: Option<&str>,
     rpm_status: &str,
 ) -> String {
+    let rpm_packages_sha256 = rpm_packages_sha256
+        .map(|value| format!("\"{}\"", json_escape(value)))
+        .unwrap_or_else(|| "null".to_string());
     format!(
         concat!(
             "{{\n",
-            "  \"schema\": \"goblins-os-release-evidence-v2\",\n",
+            "  \"schema\": \"goblins-os-release-evidence-v4\",\n",
             "  \"architecture\": \"{}\",\n",
             "  \"candidate_commit\": \"{}\",\n",
+            "  \"image_ref\": \"{}\",\n",
+            "  \"image_digest_pinned\": {},\n",
             "  \"cargo_lock\": \"Cargo.lock\",\n",
             "  \"cargo_package_count\": {},\n",
             "  \"cargo_packages_tsv\": \"cargo-lock-packages.tsv\",\n",
+            "  \"cargo_packages_sha256\": \"{}\",\n",
             "  \"rpm_packages_tsv\": \"rpm-packages.tsv\",\n",
+            "  \"rpm_packages_sha256\": {},\n",
             "  \"rpm_command_file\": \"rpm-packages.command\",\n",
             "  \"rpm_status\": \"{}\",\n",
             "  \"asset_provenance\": \"os/release/asset-provenance.toml\",\n",
@@ -2845,7 +2951,11 @@ fn release_evidence_manifest(
         ),
         json_escape(arch),
         json_escape(candidate_commit),
+        json_escape(image_ref),
+        image_ref_is_digest_pinned(image_ref),
         cargo_package_count,
+        json_escape(cargo_packages_sha256),
+        rpm_packages_sha256,
         json_escape(rpm_status)
     )
 }
@@ -7313,7 +7423,7 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
             "close-signoff-generates-rpm-sbom-in-image",
-            "rpm-packages.command",
+            "generate_image_release_evidence",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -7589,6 +7699,226 @@ fn secret_hygiene_checks(root: &Path) -> Vec<Check> {
     ]
 }
 
+fn toml_required_string<'a>(table: &'a toml::Table, key: &str) -> Result<&'a str, String> {
+    table
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| format!("installer branding provenance requires string field {key}"))
+}
+
+fn lowercase_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn exact_digest_ref(value: &str, repository: &str) -> bool {
+    value
+        .strip_prefix(&format!("{repository}@sha256:"))
+        .is_some_and(|digest| lowercase_hex(digest, 64))
+}
+
+fn github_actions_run_url_is_canonical(value: &str) -> bool {
+    value
+        .strip_prefix("https://github.com/Joe-Simo/goblins-os/actions/runs/")
+        .is_some_and(|run_id| {
+            !run_id.is_empty() && run_id.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+fn iso_date_is_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+        && value[5..7]
+            .parse::<u8>()
+            .is_ok_and(|month| (1..=12).contains(&month))
+        && value[8..10]
+            .parse::<u8>()
+            .is_ok_and(|day| (1..=31).contains(&day))
+}
+
+fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, String> {
+    const TOOL_REPOSITORY: &str = "ghcr.io/joe-simo/goblins-os-installer-branding-tool";
+    let provenance_path = root.join("os/release/installer-branding-tool.toml");
+    let provenance_text = fs::read_to_string(&provenance_path)
+        .map_err(|error| format!("cannot read {}: {error}", provenance_path.display()))?;
+    let document = toml::from_str::<toml::Value>(&provenance_text)
+        .map_err(|error| format!("invalid {}: {error}", provenance_path.display()))?;
+    let table = document
+        .as_table()
+        .ok_or_else(|| "installer branding provenance root must be a table".to_string())?;
+    if table.get("schema").and_then(toml::Value::as_integer) != Some(1) {
+        return Err("installer branding provenance schema must be 1".to_string());
+    }
+
+    let image_ref = toml_required_string(table, "image_ref")?;
+    if !exact_digest_ref(image_ref, TOOL_REPOSITORY) {
+        return Err(
+            "installer branding index must pin the canonical GHCR repository by digest".to_string(),
+        );
+    }
+    let source_commit = toml_required_string(table, "source_commit")?;
+    if !lowercase_hex(source_commit, 40) {
+        return Err(
+            "installer branding source_commit must be 40 lowercase hex characters".to_string(),
+        );
+    }
+    let workflow_run = toml_required_string(table, "workflow_run")?;
+    if !github_actions_run_url_is_canonical(workflow_run) {
+        return Err(
+            "installer branding workflow_run must be a canonical Goblins OS Actions run"
+                .to_string(),
+        );
+    }
+    if table
+        .get("workflow_run_attempt")
+        .and_then(toml::Value::as_integer)
+        .is_none_or(|attempt| attempt <= 0)
+    {
+        return Err("installer branding workflow_run_attempt must be positive".to_string());
+    }
+    let base_image = toml_required_string(table, "base_image")?;
+    if !image_ref_is_digest_pinned(base_image) {
+        return Err("installer branding base_image must be digest pinned".to_string());
+    }
+    let public_pull_verified_on = toml_required_string(table, "public_pull_verified_on")?;
+    if !iso_date_is_valid(public_pull_verified_on) {
+        return Err("installer branding public_pull_verified_on must use YYYY-MM-DD".to_string());
+    }
+    if toml_required_string(table, "inventory_path_in_image")?
+        != "/usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv"
+    {
+        return Err("installer branding inventory path is not canonical".to_string());
+    }
+
+    let containerfile_path = root.join("os/iso/branding-tool.Containerfile");
+    let recorded_containerfile_sha = toml_required_string(table, "containerfile_sha256")?;
+    if !lowercase_hex(recorded_containerfile_sha, 64) {
+        return Err("installer branding containerfile_sha256 must be lowercase SHA256".to_string());
+    }
+    let actual_containerfile_sha = sha256_path(&containerfile_path)
+        .map_err(|error| format!("cannot hash {}: {error}", containerfile_path.display()))?;
+    if actual_containerfile_sha != recorded_containerfile_sha {
+        return Err(format!(
+            "installer branding Containerfile hash drifted: expected {recorded_containerfile_sha}, got {actual_containerfile_sha}"
+        ));
+    }
+    let containerfile = fs::read_to_string(&containerfile_path)
+        .map_err(|error| format!("cannot read {}: {error}", containerfile_path.display()))?;
+    let declared_base_image = containerfile
+        .lines()
+        .find_map(|line| line.strip_prefix("ARG FEDORA_IMAGE="))
+        .ok_or_else(|| {
+            "installer branding Containerfile lacks ARG FEDORA_IMAGE=<digest>".to_string()
+        })?;
+    if declared_base_image != base_image {
+        return Err(
+            "installer branding Containerfile base image differs from provenance".to_string(),
+        );
+    }
+
+    let architectures = table
+        .get("architectures")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "installer branding provenance requires architectures".to_string())?;
+    let actual_arches = architectures
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let expected_arches = ["aarch64", "x86_64"].into_iter().collect::<BTreeSet<_>>();
+    if actual_arches != expected_arches {
+        return Err(
+            "installer branding provenance must contain exactly aarch64 and x86_64".to_string(),
+        );
+    }
+    let mut native_refs = BTreeSet::new();
+    for arch in ["aarch64", "x86_64"] {
+        let arch_table = architectures
+            .get(arch)
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| format!("installer branding provenance lacks {arch} table"))?;
+        let native_ref = toml_required_string(arch_table, "native_image_ref")?;
+        if !exact_digest_ref(native_ref, TOOL_REPOSITORY) {
+            return Err(format!(
+                "installer branding {arch} image is not an exact GHCR digest"
+            ));
+        }
+        native_refs.insert(native_ref);
+        let inventory_sha = toml_required_string(arch_table, "rpm_inventory_sha256")?;
+        if !lowercase_hex(inventory_sha, 64) {
+            return Err(format!(
+                "installer branding {arch} inventory hash is invalid"
+            ));
+        }
+        if arch_table
+            .get("rpm_package_count")
+            .and_then(toml::Value::as_integer)
+            .is_none_or(|count| count <= 0)
+        {
+            return Err(format!(
+                "installer branding {arch} package count must be positive"
+            ));
+        }
+    }
+    if native_refs.len() != 2 {
+        return Err(
+            "installer branding native architecture image refs must be distinct".to_string(),
+        );
+    }
+
+    let propagation = [
+        (
+            "os/iso/build-iso.sh",
+            format!(
+                "INSTALLER_BRANDING_IMAGE=\"${{GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-{image_ref}}}\""
+            ),
+        ),
+        (
+            ".github/workflows/build.yml",
+            format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
+        ),
+        (
+            ".github/workflows/candidate-artifacts.yml",
+            format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
+        ),
+        (
+            ".github/workflows/hardware-gate-capture.yml",
+            format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
+        ),
+        (
+            ".github/workflows/aarch64-verification-iso.yml",
+            format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
+        ),
+    ];
+    for (relative, expected) in propagation {
+        let content = fs::read_to_string(root.join(relative))
+            .map_err(|error| format!("cannot read {relative}: {error}"))?;
+        if !content.contains(&expected) {
+            return Err(format!(
+                "installer branding index is not propagated exactly to {relative}"
+            ));
+        }
+    }
+
+    Ok(format!(
+        "reviewed installer branding index {image_ref} is hash-bound and propagated; source {source_commit}; run {workflow_run}"
+    ))
+}
+
+fn installer_branding_tool_provenance_check(root: &Path) -> Check {
+    match verify_installer_branding_tool_provenance(root) {
+        Ok(detail) => ready("installer-branding-tool-provenance", &detail),
+        Err(detail) => blocked("installer-branding-tool-provenance", &detail),
+    }
+}
+
 fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
     vec![
         contains_check(
@@ -7717,6 +8047,82 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "#0b0b0f",
         ),
         contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-verifies-goblins-sidebar-assets",
+            "cmp --silent \"$BRAND/sidebar-bg.png\" \"$PIX/sidebar-bg.png\"",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-rejects-legacy-fedora-accent",
+            "installer stylesheet still contains the legacy Fedora accent",
+        ),
+        absent_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-does-not-install-live-packages",
+            "dnf -y install",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-verifies-embedded-media-checksum",
+            "checkisomd5 --verbose",
+        ),
+        contains_check(
+            root.join("os/iso/branding-tool.Containerfile"),
+            "installer-branding-tool-records-rpm-inventory",
+            "rpm-packages.tsv",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-builds-on-native-architectures",
+            "ubuntu-24.04-arm",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-index-records-workflow-attempt",
+            "workflow_run_attempt: $workflow_run_attempt",
+        ),
+        installer_branding_tool_provenance_check(root),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-documents-installer-branding-tool-rotation",
+            "Rotating the immutable installer-branding tool",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/release-evidence.sh"),
+            "release-evidence-requires-hash-sealed-v4-schema",
+            "goblins-os-release-evidence-v4",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-pins-privileged-bib-image",
+            "bootc-image-builder@sha256:",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-forbids-release-auth-file-exposure",
+            "shippable release media forbids GOBLINS_OS_BIB_AUTH_FILE",
+        ),
+        absent_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-does-not-mount-registry-token-into-builder",
+            "GOBLINS_OS_BIB_AUTH_FILE",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-forbids-skipping-release-branding",
+            "shippable release media cannot skip Goblins installer branding",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-requires-native-host-and-engine-for-release",
+            "requires a native $ARCH host and container engine",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-records-release-tool-provenance",
+            "\"installer_branding_image\": \"$INSTALLER_BRANDING_IMAGE\"",
+        ),
+        contains_check(
             root.join("os/iso/build-iso.sh"),
             "iso-builder-container-runtime-selector",
             "GOBLINS_OS_CONTAINER_RUNTIME",
@@ -7778,23 +8184,23 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-direct-registry-build-action",
-            "docker/build-push-action@v7",
+            "hardware-gate-requires-digest-pinned-candidate-image",
+            "candidate_image_ref",
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-direct-registry-build-action-push",
-            "push: true",
+            "hardware-gate-pulls-selected-candidate-image",
+            "docker pull \"$GOBLINS_OS_CANDIDATE_IMAGE_REF\"",
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-buildx-builder-action",
-            "docker/setup-buildx-action@v3",
+            "hardware-gate-verifies-candidate-oci-revision",
+            "org.opencontainers.image.revision",
         ),
-        contains_check(
+        absent_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-buildkit-gha-cache-scope",
-            "type=gha,scope=goblins-os-bootc-${{ matrix.arch }}",
+            "hardware-gate-does-not-publish-channel-images",
+            "docker/build-push-action",
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
@@ -7884,7 +8290,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-release-image-ref",
-            "RELEASE_IMAGE=<registry>/<namespace>/goblins-os:$ARCH",
+            "RELEASE_IMAGE=<registry>/<namespace>/goblins-os@sha256:<64-hex-digest>",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -9109,7 +9515,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-requires-capture-run-dir-reset-check",
-            "capture harness resets dated run dir before capture",
+            "capture harness resets only the exact validated dated run dir",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -9333,8 +9739,13 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-serves-the-capture-model",
-            "ollama pull llama3.2:1b",
+            "hardware-gate-serves-the-pinned-capture-model",
+            "docker exec goblins-proof-ollama ollama pull",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-verifies-capture-model-manifest",
+            "GOBLINS_OS_PROOF_OLLAMA_MODEL_MANIFEST_SHA256",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -10214,7 +10625,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join(".github/workflows/build.yml"),
             "installer-iso-workflow-builds-docker-image",
-            "docker/build-push-action@v7",
+            "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
         ),
         contains_check(
             root.join(".github/workflows/build.yml"),
@@ -10358,8 +10769,18 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
-            "hardware-gate-iso-sha-verify",
-            "sha256sum -c",
+            "hardware-gate-iso-sha-verify-is-directory-relative",
+            "sha_dir/$artifact",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/run-external-gate.sh"),
+            "hardware-gate-iso-sha-verify-rejects-path-escape",
+            "artifact\" != */*",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/run-external-gate.sh"),
+            "hardware-gate-iso-sha-verify-compares-digest",
+            "actual\" == \"$expected",
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
@@ -11304,7 +11725,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join(".github/workflows/build.yml"),
             "ci-rpm-evidence-generation",
-            "rpm-packages.command",
+            "goblins_os_release_evidence_hashes_match",
         ),
         contains_check(
             root.join(".github/workflows/build.yml"),
@@ -11318,13 +11739,188 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join(".github/workflows/release.yml"),
-            "release-workflow-buildx-builder-action",
-            "docker/setup-buildx-action@v3",
+            "release-workflow-delegates-to-canonical-candidate-builder",
+            "uses: ./.github/workflows/candidate-artifacts.yml",
         ),
         contains_check(
-            root.join(".github/workflows/release.yml"),
-            "release-workflow-buildkit-gha-cache-scope",
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-buildx-builder-action",
+            "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-buildkit-gha-cache-scope",
             "type=gha,scope=goblins-os-bootc-${{ matrix.arch }}",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-uses-buildkit-registry-digest",
+            "steps.build.outputs.digest",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-binds-bib-to-immutable-image",
+            "GOBLINS_OS_BIB_SOURCE_IMAGE=\"$IMMUTABLE_IMAGE_REF\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-runs-exact-source-verifier",
+            "--source-root /workspace",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-runs-exact-installed-root-verifier",
+            "--installed-root /",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-runs-packaged-selftest",
+            "--target selftest",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-verifies-exact-bib-payload-image",
+            "bib_image_ref\" == \"$IMMUTABLE_IMAGE_REF",
+        ),
+        contains_check(
+            root.join("os/iso/manifest-provenance.sh"),
+            "bib-manifest-parser-bounds-json-embedded-image-token",
+            "JSON-escaped kickstart payload",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-records-image-provenance",
+            "--image-ref \"$IMMUTABLE_IMAGE_REF\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-requires-current-main",
+            "is not the current origin/main commit",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-uploads-lightweight-digest-metadata",
+            "goblins-os-candidate-ref-${{ steps.candidate.outputs.commit }}-${{ matrix.arch }}",
+        ),
+        absent_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-does-not-write-repository-contents",
+            "contents: write",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-records-immutable-image-reference",
+            "Image digest reference",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-proof-records-immutable-image-reference",
+            "\"image_ref\":image_ref",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-proof-uses-exact-candidate-tooling",
+            "Capture tooling checkout $SOURCE_HEAD does not match candidate $CANDIDATE_COMMIT.",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-proof-validates-safe-calendar-date",
+            "RUN_DATE must be a real calendar date in YYYY-MM-DD form.",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-proof-verifies-iso-checksum",
+            "Capture ISO checksum mismatch",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-proof-canonicalizes-external-evidence",
+            "GOBLINS_OS_CAPTURE_RELEASE_EVIDENCE_DIR",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-proof-requires-selected-image-digest",
+            "GOBLINS_OS_CAPTURE_EXPECTED_IMAGE_REF",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-verification-iso.yml"),
+            "aarch64-native-packaging-gate-proof",
+            "goblins-os-native-packaging-gate-v1",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-verification-iso.yml"),
+            "aarch64-native-packaging-gate-records-workflow-attempt",
+            "workflow_run_attempt: $workflow_run_attempt",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "aarch64-capture-propagates-native-gate-workflow-attempt",
+            "GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_ATTEMPT",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "aarch64-signoff-records-native-gate-workflow-attempt",
+            "Native packaging gate run attempt:",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-authenticates-native-gate-workflow-attempt",
+            ".github/workflows/aarch64-verification-iso.yml",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-verification-iso.yml"),
+            "aarch64-hardware-consumer-reruns-exact-source-verifier",
+            "goblins-os-aarch64-source-verify.log",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "x86-hardware-consumer-reruns-exact-source-verifier",
+            "goblins-os-x86_64-source-verify.log",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "native-packaging-gate-records-source-verifier",
+            "\"source_verifier\": \"pass\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-validates-native-packaging-gate",
+            "native_packaging_gate_proof_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/compose-signoff-rows.sh"),
+            "dual-architecture-signoff-row-composition",
+            "Current project completion status: complete",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-pins-ollama-runtime-image",
+            "ollama/ollama@sha256:",
+        ),
+        absent_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "hardware-gate-does-not-run-remote-ollama-installer",
+            "ollama.com/install.sh",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "x86-hardware-capture-requires-complete-signoff",
+            "GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE=1",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-fail-closed-completion-mode",
+            "requires a complete signoff row",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/run-external-gate.sh"),
+            "external-gate-pulls-exact-candidate-image",
+            "Pulling and verifying exact candidate image",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/run-external-gate.sh"),
+            "external-gate-verifies-exact-candidate-revision",
+            "org.opencontainers.image.revision",
         ),
     ]
 }
@@ -17634,6 +18230,11 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "goblins-wm-snap-assist-render-rejects-one-window-fallback",
             "return false;",
         ),
+        contains_check(
+            root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/extension.js"),
+            "goblins-wm-snap-assist-disambiguates-duplicate-windows",
+            "`${base} — Window ${index}`",
+        ),
         // Color picker — portal eyedropper helper, packaged + keybound, copying via
         // wl-clipboard with an honest no-clipboard fallback.
         contains_check(
@@ -18098,11 +18699,12 @@ mod tests {
     use super::{
         candidate_commit_is_valid, capability_groupadd_targets, cargo_lock_packages,
         client_path_binding_inventory, contains_realish_openai_key, desktop_field,
-        first_executable_initialization, imports_shared_core_initializer, install_files,
-        is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
-        ordered_contains_check, permission_inventory, rg_secret_scan_hit,
-        should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
-        tmpfiles_capability_entries, write_release_evidence, CheckState,
+        first_executable_initialization, image_ref_is_digest_pinned, image_ref_is_valid,
+        imports_shared_core_initializer, install_files, is_allowed_dummy_secret,
+        is_suspicious_secret_line, native_design_system_checks, ordered_contains_check,
+        permission_inventory, rg_secret_scan_hit, sha256_path, should_skip_secret_scan_path,
+        source_manifest_classifies_top_level, stable_id, tmpfiles_capability_entries,
+        verify_installer_branding_tool_provenance, write_release_evidence, CheckState,
         ForbiddenClientTokenVisitor, APPLICATIONS, AUTOSTART, BINARIES, DCONF_FILES,
         GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS,
         NAUTILUS_SCRIPTS, POLISH_INTERACTION_PROOF, POLISH_INTERACTION_SCREENSHOTS,
@@ -18333,6 +18935,84 @@ paths = [
     }
 
     #[test]
+    fn installer_branding_provenance_accepts_bound_fixture_and_rejects_hash_drift() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-branding-provenance-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let write_fixture = |relative: &str, content: &str| {
+            let destination = root.join(relative);
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::write(destination, content).unwrap();
+        };
+        let repository = "ghcr.io/joe-simo/goblins-os-installer-branding-tool";
+        let image_ref = format!("{repository}@sha256:{}", "1".repeat(64));
+        let base_image = format!("docker.io/library/fedora@sha256:{}", "2".repeat(64));
+        let containerfile = format!("ARG FEDORA_IMAGE={base_image}\nFROM ${{FEDORA_IMAGE}}\n");
+        let containerfile_path = root.join("os/iso/branding-tool.Containerfile");
+        write_fixture("os/iso/branding-tool.Containerfile", &containerfile);
+        let containerfile_sha = sha256_path(&containerfile_path).unwrap();
+        let provenance = format!(
+            concat!(
+                "schema = 1\n",
+                "image_ref = \"{}\"\n",
+                "source_commit = \"{}\"\n",
+                "workflow_run = \"https://github.com/Joe-Simo/goblins-os/actions/runs/123\"\n",
+                "workflow_run_attempt = 1\n",
+                "base_image = \"{}\"\n",
+                "containerfile_sha256 = \"{}\"\n",
+                "public_pull_verified_on = \"2026-07-19\"\n",
+                "inventory_path_in_image = \"/usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv\"\n",
+                "[architectures.x86_64]\n",
+                "native_image_ref = \"{}@sha256:{}\"\n",
+                "rpm_inventory_sha256 = \"{}\"\n",
+                "rpm_package_count = 246\n",
+                "[architectures.aarch64]\n",
+                "native_image_ref = \"{}@sha256:{}\"\n",
+                "rpm_inventory_sha256 = \"{}\"\n",
+                "rpm_package_count = 245\n"
+            ),
+            image_ref,
+            "3".repeat(40),
+            base_image,
+            containerfile_sha,
+            repository,
+            "4".repeat(64),
+            "5".repeat(64),
+            repository,
+            "6".repeat(64),
+            "7".repeat(64),
+        );
+        write_fixture("os/release/installer-branding-tool.toml", &provenance);
+        write_fixture(
+            "os/iso/build-iso.sh",
+            &format!(
+                "INSTALLER_BRANDING_IMAGE=\"${{GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-{image_ref}}}\"\n"
+            ),
+        );
+        for workflow in [
+            ".github/workflows/build.yml",
+            ".github/workflows/candidate-artifacts.yml",
+            ".github/workflows/hardware-gate-capture.yml",
+            ".github/workflows/aarch64-verification-iso.yml",
+        ] {
+            write_fixture(
+                workflow,
+                &format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}\n"),
+            );
+        }
+
+        assert!(verify_installer_branding_tool_provenance(&root).is_ok());
+        fs::write(&containerfile_path, format!("{containerfile}# drift\n")).unwrap();
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("Containerfile hash drifted"));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn parses_cargo_lock_package_fields_for_release_evidence() {
         let packages = cargo_lock_packages(
             r#"
@@ -18375,6 +19055,16 @@ version = "0.1.0"
         let output = root.join("sbom/aarch64");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&output).unwrap();
+        for generated_name in [
+            "release-evidence-manifest.json",
+            "cargo-lock-packages.tsv",
+            "rpm-packages.command",
+            "rpm-packages.tsv",
+            "rpm-packages.not-generated.txt",
+        ] {
+            fs::write(output.join(generated_name), "stale\n").unwrap();
+        }
         fs::write(
             source.join("Cargo.lock"),
             r#"
@@ -18390,8 +19080,10 @@ checksum = "abc123"
         .unwrap();
 
         let candidate_commit = "0123456789abcdef0123456789abcdef01234567";
+        let image_ref = "ghcr.io/joe-simo/goblins-os@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let manifest =
-            write_release_evidence(&source, "aarch64", candidate_commit, &output).unwrap();
+            write_release_evidence(&source, "aarch64", candidate_commit, image_ref, &output)
+                .unwrap();
         let cargo_tsv = fs::read_to_string(output.join("cargo-lock-packages.tsv")).unwrap();
         let rpm_command = fs::read_to_string(output.join("rpm-packages.command")).unwrap();
         let manifest_text = fs::read_to_string(manifest).unwrap();
@@ -18402,11 +19094,64 @@ checksum = "abc123"
         assert!(rpm_command.contains("name\\tversion_release\\tarch\\tlicense"));
         assert!(manifest_text.contains("\"architecture\": \"aarch64\""));
         assert!(manifest_text.contains(&format!("\"candidate_commit\": \"{candidate_commit}\"")));
+        assert!(manifest_text.contains(&format!("\"image_ref\": \"{image_ref}\"")));
+        assert!(manifest_text.contains("\"image_digest_pinned\": true"));
+        assert!(manifest_text.contains("\"schema\": \"goblins-os-release-evidence-v4\""));
         assert!(manifest_text.contains("\"cargo_package_count\": 1"));
-        assert!(
-            output.join("rpm-packages.tsv").is_file()
-                || output.join("rpm-packages.not-generated.txt").is_file()
+        let cargo_sha = sha256_path(&output.join("cargo-lock-packages.tsv")).unwrap();
+        assert!(manifest_text.contains(&format!("\"cargo_packages_sha256\": \"{cargo_sha}\"")));
+        let has_rpm = output.join("rpm-packages.tsv").is_file();
+        let has_rpm_blocker = output.join("rpm-packages.not-generated.txt").is_file();
+        assert_ne!(has_rpm, has_rpm_blocker);
+        if has_rpm {
+            let rpm_sha = sha256_path(&output.join("rpm-packages.tsv")).unwrap();
+            assert!(manifest_text.contains(&format!("\"rpm_packages_sha256\": \"{rpm_sha}\"")));
+            assert!(manifest_text.contains("\"rpm_status\": \"generated from rpm database\""));
+        } else {
+            assert!(manifest_text.contains("\"rpm_packages_sha256\": null"));
+            assert!(
+                !fs::read_to_string(output.join("rpm-packages.not-generated.txt"))
+                    .unwrap()
+                    .contains("stale")
+            );
+        }
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn release_evidence_clears_stale_outputs_before_cargo_error() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-release-evidence-error-{}",
+            std::process::id()
+        ));
+        let source = root.join("source");
+        let output = root.join("sbom/x86_64");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&output).unwrap();
+        let generated = [
+            "release-evidence-manifest.json",
+            "cargo-lock-packages.tsv",
+            "rpm-packages.command",
+            "rpm-packages.tsv",
+            "rpm-packages.not-generated.txt",
+        ];
+        for generated_name in generated {
+            fs::write(output.join(generated_name), "stale\n").unwrap();
+        }
+
+        let result = write_release_evidence(
+            &source,
+            "x86_64",
+            "0123456789abcdef0123456789abcdef01234567",
+            "ghcr.io/joe-simo/goblins-os@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            &output,
         );
+        assert!(result.is_err());
+        for generated_name in generated {
+            assert!(!output.join(generated_name).exists());
+        }
 
         fs::remove_dir_all(&root).unwrap();
     }
@@ -18420,6 +19165,24 @@ checksum = "abc123"
         assert!(!candidate_commit_is_valid(
             "0123456789abcdef0123456789abcdef0123456g"
         ));
+    }
+
+    #[test]
+    fn release_evidence_image_ref_validation_distinguishes_digest_pins() {
+        let digest_ref = "ghcr.io/joe-simo/goblins-os@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert!(image_ref_is_valid(digest_ref));
+        assert!(image_ref_is_digest_pinned(digest_ref));
+        assert!(image_ref_is_valid("localhost/goblins-os:aarch64"));
+        assert!(!image_ref_is_digest_pinned("localhost/goblins-os:aarch64"));
+        assert!(!image_ref_is_digest_pinned(
+            "ghcr.io/joe-simo/goblins-os@sha256:01234567"
+        ));
+        let uppercase_digest = format!("ghcr.io/joe-simo/goblins-os@sha256:{}", "A".repeat(64));
+        assert!(!image_ref_is_digest_pinned(&uppercase_digest));
+        assert!(!image_ref_is_digest_pinned(
+            "ghcr.io/joe-simo/goblins-os@tag@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!image_ref_is_valid("ghcr.io/joe-simo/goblins os:aarch64"));
     }
 
     #[test]

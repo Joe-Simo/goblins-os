@@ -185,7 +185,7 @@ export default class GoblinsSwitchControl extends Extension {
         this._panel?.grab_key_focus();
         this._pointColumn = 6;
         this._pointRow = 4;
-        this._enterPointScan('Point scan is active. Selection stays paused until pointer injection is verified.');
+        this._enterPointScan('Point scan is active. Selection is paused until secure pointer control is available.');
     }
 
     hide() {
@@ -265,7 +265,7 @@ export default class GoblinsSwitchControl extends Extension {
 
         const mode = settingString(this._settings, 'mode', 'item');
         if (mode === 'point') {
-            this._enterPointScan('Point scan is active. Space selects the current point; Escape turns Switch Control off.');
+            this._enterPointScan('Point scan is active. Selection is paused until secure pointer control is available.');
         } else {
             this._enterItemScan();
         }
@@ -499,12 +499,16 @@ export default class GoblinsSwitchControl extends Extension {
         this._crosshairY.set_size(2, monitor.height);
         this._animateActor(this._crosshairX);
         this._animateActor(this._crosshairY);
-        this._setStatus('Point scan', `${this._fallbackDetail || 'Point scan is active.'} Space is held until qemu proves gated pointer injection.`);
+        this._setStatus(
+            'Point scan',
+            this._fallbackDetail ||
+                'Point scan is active. Selection is paused until secure pointer control is available.'
+        );
     }
 
     _selectCurrent() {
         if (this._scanTargets.length === 0) {
-            this._setStatus('Selection paused', 'Point selection needs live qemu proof before pointer injection is enabled.');
+            this._setStatus('Selection paused', 'Secure pointer control is not available yet.');
             return;
         }
 

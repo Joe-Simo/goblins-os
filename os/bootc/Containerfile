@@ -172,6 +172,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       exfatprogs \
       udisks2 \
       rsync \
+      ripgrep \
       pipewire \
       pipewire-alsa \
       pipewire-pulseaudio \
@@ -252,6 +253,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       exfatprogs \
       udisks2 \
       rsync \
+      ripgrep \
       wl-clipboard \
       ibus \
       ibus-libpinyin \
@@ -304,6 +306,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v fsck.exfat \
     && command -v udisksctl \
     && command -v rsync \
+    && command -v rg \
     && test -f /usr/lib/systemd/system/udisks2.service \
     && command -v ibus \
     && command -v ibus-daemon \

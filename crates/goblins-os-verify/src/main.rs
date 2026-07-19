@@ -7695,6 +7695,12 @@ fn secret_hygiene_checks(root: &Path) -> Vec<Check> {
             "shipping-status-active-secret-assignment-scan",
             "OPENAI_ACCOUNT_CLIENT_SECRET",
         ),
+        container_package_lockstep_check(root, "source-secret-scan-ripgrep-packaged", "ripgrep"),
+        container_contains_check(
+            root,
+            "source-secret-scan-rg-command-available",
+            "command -v rg",
+        ),
         source_secret_scan_check(root),
     ]
 }
@@ -14777,7 +14783,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/bootc/Containerfile"),
             "bootc-rpm-asserts-firewalld",
-            "firewalld \\\n      dnsmasq \\\n      ntfs-3g \\\n      exfatprogs \\\n      udisks2 \\\n      rsync \\\n      wl-clipboard",
+            "firewalld \\\n      dnsmasq \\\n      ntfs-3g \\\n      exfatprogs \\\n      udisks2 \\\n      rsync \\\n      ripgrep \\\n      wl-clipboard",
         ),
         contains_check(
             root.join("os/bootc/Containerfile"),

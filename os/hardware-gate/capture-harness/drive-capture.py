@@ -658,6 +658,7 @@ class IncrementalEventReader:
     def __init__(self, path):
         self.reader = IncrementalFileReader(path, EVENT_MAX_STREAM_BYTES)
         self.pending = b""
+        self.queued_events = []
         self.expected_sequence = 1
 
     def close(self):
@@ -694,7 +695,7 @@ class IncrementalEventReader:
         ):
             raise CaptureChannelError("capture event stream contains invalid event values")
 
-    def poll(self):
+    def _read_new_events(self):
         self.pending += self.reader.read_available()
         if len(self.pending) > EVENT_MAX_RECORD_BYTES and b"\n" not in self.pending:
             raise CaptureChannelError("capture event record exceeded its limit")
@@ -713,12 +714,34 @@ class IncrementalEventReader:
                 raise CaptureChannelError("capture event stream contains invalid JSON") from error
             if not isinstance(event, dict) or type(event.get("sequence")) is not int:
                 raise CaptureChannelError("capture event stream contains an invalid event")
+            if self.expected_sequence > EVENT_MAX_COUNT:
+                raise CaptureChannelError("capture event count limit reached")
             if event["sequence"] != self.expected_sequence:
                 raise CaptureChannelError("capture event sequence is missing or reordered")
             self._validate(event)
             self.expected_sequence += 1
             events.append(event)
         return events
+
+    def _queue_new_events(self):
+        events = self._read_new_events()
+        if len(self.queued_events) + len(events) > EVENT_MAX_COUNT:
+            raise CaptureChannelError("capture pending event count limit reached")
+        self.queued_events.extend(events)
+
+    def poll(self):
+        self._queue_new_events()
+        events = self.queued_events
+        self.queued_events = []
+        return events
+
+    def take_matching(self, kind, name):
+        """Remove one matching event while retaining every other event in order."""
+        self._queue_new_events()
+        for index, event in enumerate(self.queued_events):
+            if event.get("kind") == kind and event.get("name") == name:
+                return self.queued_events.pop(index)
+        return None
 
     def diagnostic_tail(self):
         return self.reader.diagnostic_tail()
@@ -1382,10 +1405,9 @@ def serial_contains_now(needle):
 def wait_helper_event(event_reader, helper_name, timeout):
     started = time.monotonic()
     while time.monotonic() - started < timeout:
-        for event in event_reader.poll():
-            if event.get("kind") == "helper" and event.get("name") == helper_name:
-                print(f"authenticated helper download observed: {helper_name}", flush=True)
-                return
+        if event_reader.take_matching("helper", helper_name) is not None:
+            print(f"authenticated helper download observed: {helper_name}", flush=True)
+            return
         time.sleep(0.25)
     fail(
         f"authenticated helper download {helper_name!r} did not appear within "
@@ -1700,6 +1722,8 @@ def _response_status(response):
 
 
 def _capture_channel_self_test():
+    global SERIALLOG
+
     token = "a" * 64
     with tempfile.TemporaryDirectory(prefix="goblins-capture-channel-test.") as scratch:
         os.chmod(scratch, 0o700)
@@ -1818,6 +1842,75 @@ def _capture_channel_self_test():
             assert event_reader.poll() == []
         finally:
             event_reader.close()
+
+        coalesced_firstboot_path = os.path.join(scratch, "coalesced-firstboot-events.jsonl")
+        coalesced_firstboot_store = CaptureEventStore(coalesced_firstboot_path)
+        try:
+            coalesced_firstboot_store.append(
+                {"kind": "helper", "name": "firstboot-unlock.sh"}
+            )
+            coalesced_firstboot_store.append(
+                {"kind": "helper", "name": "core-proof-operation.sh"}
+            )
+            coalesced_firstboot_store.append(
+                {
+                    "kind": "ready",
+                    "name": "FIRSTBOOT_UNLOCK",
+                    "values": {"status": "pass"},
+                }
+            )
+        finally:
+            coalesced_firstboot_store.close()
+        coalesced_serial_path = os.path.join(scratch, "coalesced-firstboot-serial.log")
+        _create_private_leaf(
+            coalesced_serial_path,
+            b"GOBLINS_HWGATE_FIRSTBOOT_UNLOCK_DONE\n",
+        )
+        coalesced_firstboot_reader = IncrementalEventReader(coalesced_firstboot_path)
+        original_seriallog = SERIALLOG
+        SERIALLOG = coalesced_serial_path
+        try:
+            wait_helper_event(coalesced_firstboot_reader, "firstboot-unlock.sh", 0.5)
+            assert wait_firstboot_unlock_result(
+                0.5, coalesced_firstboot_reader, 0
+            )
+            assert coalesced_firstboot_reader.poll() == []
+        finally:
+            SERIALLOG = original_seriallog
+            coalesced_firstboot_reader.close()
+
+        coalesced_orchestrator_path = os.path.join(
+            scratch, "coalesced-orchestrator-events.jsonl"
+        )
+        coalesced_orchestrator_store = CaptureEventStore(coalesced_orchestrator_path)
+        try:
+            coalesced_orchestrator_store.append(
+                {"kind": "helper", "name": "orchestrator.sh"}
+            )
+            coalesced_orchestrator_store.append(
+                {"kind": "ready", "name": "ORCH_START", "values": {}}
+            )
+            coalesced_orchestrator_store.append(
+                {"kind": "ready", "name": "06-onboarding", "values": {}}
+            )
+        finally:
+            coalesced_orchestrator_store.close()
+        coalesced_orchestrator_reader = IncrementalEventReader(
+            coalesced_orchestrator_path
+        )
+        try:
+            wait_helper_event(coalesced_orchestrator_reader, "orchestrator.sh", 0.5)
+            remaining = coalesced_orchestrator_reader.poll()
+            assert [
+                (event["sequence"], event["kind"], event["name"])
+                for event in remaining
+            ] == [
+                (2, "ready", "ORCH_START"),
+                (3, "ready", "06-onboarding"),
+            ]
+            assert coalesced_orchestrator_reader.poll() == []
+        finally:
+            coalesced_orchestrator_reader.close()
 
         bounded_store_path = os.path.join(scratch, "bounded-events.jsonl")
         bounded_store = CaptureEventStore(bounded_store_path, maximum_bytes=32)

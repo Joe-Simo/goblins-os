@@ -11843,6 +11843,39 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-event-reader-bounds-retained-events",
+            "if len(self.queued_events) + len(events) > EVENT_MAX_COUNT:",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-helper-wait-uses-selective-event-removal",
+            "event_reader.take_matching(\"helper\", helper_name)",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-event-reader-removes-only-selected-event",
+            "return self.queued_events.pop(index)",
+        ),
+        ordered_contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-channel-selftest-retains-coalesced-firstboot-success",
+            "wait_helper_event(coalesced_firstboot_reader, \"firstboot-unlock.sh\", 0.5)",
+            "assert wait_firstboot_unlock_result(",
+        ),
+        ordered_contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-channel-selftest-retains-coalesced-orchestrator-events",
+            "wait_helper_event(coalesced_orchestrator_reader, \"orchestrator.sh\", 0.5)",
+            "remaining = coalesced_orchestrator_reader.poll()",
+        ),
+        ordered_contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-channel-selftest-preserves-orchestrator-event-order",
+            "(2, \"ready\", \"ORCH_START\"),",
+            "(3, \"ready\", \"06-onboarding\"),",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-bounds-existing-serial-log-before-firstboot",
             "safe_file_size(SERIALLOG, SERIAL_MAX_BYTES)",
         ),

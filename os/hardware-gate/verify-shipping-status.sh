@@ -586,13 +586,13 @@ check_bib_manifest_payload_ref() {
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return 1
   fi
-  if rg -q 'bootc switch --mutate-in-place --transport registry (host\.docker\.internal|localhost[:/]|127\.|0\.0\.0\.0[:/]|goblins-os:|docker\.io/library/goblins-os:)' "$path"; then
-    echo "[FAIL] $label: installer payload tracks a local-only Docker/test registry"
+  if ! actual_ref="$(goblins_os_bib_manifest_payload_ref "$path")"; then
+    echo "[FAIL] $label: manifest must contain exactly one bootc installer payload image reference"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return 1
   fi
-  if ! actual_ref="$(goblins_os_bib_manifest_payload_ref "$path")"; then
-    echo "[FAIL] $label: manifest must contain exactly one bootc installer payload image reference"
+  if goblins_os_image_ref_is_local_only "$actual_ref"; then
+    echo "[FAIL] $label: installer payload tracks a local-only Docker/test registry"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return 1
   fi
@@ -603,6 +603,43 @@ check_bib_manifest_payload_ref() {
   fi
   echo "[PASS] $label"
   return 0
+}
+
+installer_local_ref_classifier_passes() {
+  local digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  local ref
+  local local_refs=(
+    "10.0.0.1:5000/org/goblins-os@$digest"
+    "172.17.0.1:5000/org/goblins-os@$digest"
+    "192.168.1.5:5000/org/goblins-os@$digest"
+    "169.254.1.1:5000/org/goblins-os@$digest"
+    "127.0.0.1:5000/org/goblins-os@$digest"
+    "100.64.0.1:5000/org/goblins-os@$digest"
+    "192.0.2.1:5000/org/goblins-os@$digest"
+    "[fd00::1]:5000/org/goblins-os@$digest"
+    "[fe80::1]:5000/org/goblins-os@$digest"
+    "[::1]:5000/org/goblins-os@$digest"
+    "localhost.:5000/org/goblins-os@$digest"
+    "host.docker.internal:5000/org/goblins-os@$digest"
+    "registry:5000/org/goblins-os@$digest"
+  )
+  local public_refs=(
+    "ghcr.io/joe-simo/goblins-os@$digest"
+    "quay.io/example/goblins-os@$digest"
+    "docker.io/library/goblins-os@$digest"
+    "example/goblins-os@$digest"
+    "8.8.8.8:5000/example/goblins-os@$digest"
+    "[2606:4700:4700::1111]:5000/example/goblins-os@$digest"
+  )
+
+  for ref in "${local_refs[@]}"; do
+    goblins_os_image_ref_is_local_only "$ref" || return 1
+  done
+  for ref in "${public_refs[@]}"; do
+    if goblins_os_image_ref_is_local_only "$ref"; then
+      return 1
+    fi
+  done
 }
 
 source_secret_scan() {
@@ -2625,7 +2662,9 @@ check "architecture contract rejects aarch64 emulation baseline" "rg -q 'do not 
 check "ISO builder supports GOBLINS_OS_ARCH" "rg -q 'GOBLINS_OS_ARCH' os/iso/build-iso.sh"
 check "ISO builder writes architecture ISO names" "rg -q 'goblins-os-\\\$ARCH.iso' os/iso/build-iso.sh"
 check "ISO builder host runtime is Docker-only" "rg -q \"expected docker\" os/iso/build-iso.sh && ! rg -q 'docker or podman' os/iso/build-iso.sh && ! rg -q 'GOBLINS_OS_PODMAN_SUDO' os/iso/build-iso.sh && ! rg -q 'run_podman_builder' os/iso/build-iso.sh"
-check "ISO builder uses Docker local registry handoff" "rg -q 'GOBLINS_OS_CONTAINER_RUNTIME' os/iso/build-iso.sh && rg -q 'host.docker.internal' os/iso/build-iso.sh && rg -q 'docker push' os/iso/build-iso.sh && ! rg -q -- '--rm -it' os/iso/build-iso.sh"
+check "ISO builder uses an isolated Docker local registry handoff with explicit BIB egress" "rg -Fq -- '--internal' os/iso/build-iso.sh && rg -Fq -- '--label org.goblins-os.purpose=installer-registry-handoff' os/iso/build-iso.sh && rg -Fq -- '--label org.goblins-os.purpose=installer-network-preflight' os/iso/build-iso.sh && rg -Fq -- '-p \"127.0.0.1:\$DOCKER_REGISTRY_PORT:5000\"' os/iso/build-iso.sh && rg -Fq 'builder_image=\"\$DOCKER_REGISTRY_NAME:5000/goblins-os:\$ARCH\"' os/iso/build-iso.sh && rg -Fq -- '--network \"name=bridge,gw-priority=1\"' os/iso/build-iso.sh && rg -Fq -- '--network \"\$DOCKER_REGISTRY_NETWORK\"' os/iso/build-iso.sh && rg -Fq 'requires Docker 28 or newer on both client and server' os/iso/build-iso.sh && rg -Fq 'if ! docker create' os/iso/build-iso.sh && rg -Fq '.GwPriority' os/iso/build-iso.sh && rg -Fq 'assert_dedicated_registry_network_membership true' os/iso/build-iso.sh && rg -Fq 'probe_docker_registry_from_builder_network \"\${bib_network_args[@]}\"' os/iso/build-iso.sh && rg -Fq '\"\${network_args[@]}\"' os/iso/build-iso.sh && rg -Fq 'trap cleanup_registry_probe EXIT' os/iso/build-iso.sh && rg -Fq 'completed during that second instead of reporting a false timeout' os/iso/build-iso.sh && rg -Fq 'docker run --rm --pull=never' os/iso/build-iso.sh && rg -q 'docker push' os/iso/build-iso.sh && ! rg -q -- '--rm -it' os/iso/build-iso.sh"
+check "ISO builder scopes local registry override routes without weakening remote pulls" "rg -Fq 'host-gateway is intentionally available only for this explicit override' os/iso/build-iso.sh && rg -Fq 'bib_host_args=(--add-host=host.docker.internal:host-gateway)' os/iso/build-iso.sh && rg -Fq 'uses container loopback and cannot reach a host registry from BIB' os/iso/build-iso.sh && rg -Fq 'uses an unsupported local registry alias' os/iso/build-iso.sh && rg -Fq 'LOCAL_REGISTRY_IMAGE=\"registry:2\"' os/iso/build-iso.sh"
+check "installer local-ref classifier rejects non-public routes without blocking public registries" "installer_local_ref_classifier_passes"
 check "ISO builder separates local Docker handoff from digest-pinned shippable source" "rg -q 'GOBLINS_OS_BIB_SOURCE_IMAGE' os/iso/build-iso.sh && rg -q 'GOBLINS_OS_SHIPPABLE_RELEASE' os/iso/build-iso.sh && rg -q 'shippable release media requires a digest-pinned installer payload ref' os/iso/build-iso.sh"
 check "ISO builder can skip local image export for shippable registry source" "rg -q 'GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD' os/iso/build-iso.sh && rg -q 'Skipping local Docker image build' os/iso/build-iso.sh && rg -q 'requires GOBLINS_OS_BIB_SOURCE_IMAGE' os/iso/build-iso.sh"
 check "ISO builder supports explicit installer config" "rg -q 'GOBLINS_OS_ISO_CONFIG' os/iso/build-iso.sh && rg -q '\"installer_config\": \"[$]CONFIG_LABEL\"' os/iso/build-iso.sh"
@@ -2987,7 +3026,7 @@ check "release evidence hash-seals exact Cargo and RPM inventories" "rg -Fq 'gob
 check "native aarch64 proof binds the exact verification artifacts and workflow attempt" "rg -q 'verification_iso_sha256' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'release_evidence_manifest_sha256' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'workflow_run_attempt' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Native packaging gate run attempt:' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "final gate retains exact candidate workflow metadata" "rg -q 'os/signoff-proofs/candidate/[$]arch/image-ref[.]json' os/hardware-gate/verify-shipping-status.sh && rg -q 'candidate_artifact_metadata_passes' os/hardware-gate/verify-shipping-status.sh && rg -q 'workflow_run == [$]run' os/hardware-gate/runbook.md"
 check "hardware proof consumers rerun the exact digest source verifier" "rg -q 'goblins-os-x86_64-source-verify[.]log' .github/workflows/hardware-gate-capture.yml && rg -q 'goblins-os-aarch64-source-verify[.]log' .github/workflows/aarch64-verification-iso.yml && rg -q -- '--source-root /workspace' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q '\"source_verifier\": \"pass\"' os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
-check "BIB provenance parser handles JSON-embedded kickstart and is shared by every proof route" "test -f os/iso/manifest-provenance.sh && rg -Fq 'JSON-escaped kickstart payload' os/iso/manifest-provenance.sh && rg -Fq 'rg -o --no-filename' os/iso/manifest-provenance.sh && rg -Fq 'goblins_os_bib_manifest_payload_ref' os/hardware-gate/run-external-gate.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/verify-shipping-status.sh .github/workflows/candidate-artifacts.yml && ! rg -q 'sed -nE .*bootc[ ]switch --mutate-in-place' os/hardware-gate/run-external-gate.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/verify-shipping-status.sh .github/workflows/candidate-artifacts.yml"
+check "BIB provenance parser handles JSON-embedded kickstart and is shared by every proof route" "test -f os/iso/manifest-provenance.sh && rg -Fq 'JSON-escaped kickstart payload' os/iso/manifest-provenance.sh && rg -Fq 'rg -o --no-filename' os/iso/manifest-provenance.sh && rg -Fq 'goblins_os_bib_manifest_payload_ref' os/hardware-gate/run-external-gate.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/verify-shipping-status.sh .github/workflows/candidate-artifacts.yml && rg -Fq 'goblins_os_image_ref_is_local_only' os/iso/manifest-provenance.sh os/iso/build-iso.sh os/hardware-gate/run-external-gate.sh os/hardware-gate/verify-shipping-status.sh && ! rg -q 'sed -nE .*bootc[ ]switch --mutate-in-place' os/hardware-gate/run-external-gate.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/verify-shipping-status.sh .github/workflows/candidate-artifacts.yml"
 check "x86 hardware capture fails unless close-signoff is complete" "rg -q 'GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE=1' .github/workflows/hardware-gate-capture.yml && rg -q 'REQUIRE_COMPLETE=\"[$]CAPTURE_REQUIRE_COMPLETE\"' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'requires a complete signoff row' os/hardware-gate/close-signoff.sh"
 check "aarch64 local capture imports exact native Linux packaging proof" "rg -q 'goblins-os-native-packaging-gate-v1' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'native_packaging_gate_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'native-packaging-gate.json' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh"
 check "architecture signoff rows compose without overwriting either proof track" "test -f os/hardware-gate/compose-signoff-rows.sh && rg -q 'x86_64-signoff-row.md' os/hardware-gate/compose-signoff-rows.sh && rg -q 'aarch64-signoff-row.md' os/hardware-gate/compose-signoff-rows.sh && rg -q 'SIGNOFF_ROW_OUTPUT' os/hardware-gate/close-signoff.sh os/hardware-gate/capture-harness/run-capture.sh"

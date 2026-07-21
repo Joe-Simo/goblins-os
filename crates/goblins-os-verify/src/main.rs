@@ -8557,8 +8557,179 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
-            "iso-builder-docker-local-registry-handoff",
-            "host.docker.internal",
+            "iso-builder-local-registry-uses-internal-bridge",
+            "--internal",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-labels-dedicated-registry-bridge",
+            "--label org.goblins-os.purpose=installer-registry-handoff",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-local-registry-host-port-is-loopback-only",
+            "-p \"127.0.0.1:$DOCKER_REGISTRY_PORT:5000\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-local-registry-uses-container-dns",
+            "builder_image=\"$DOCKER_REGISTRY_NAME:5000/goblins-os:$ARCH\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-probes-local-registry-on-builder-network",
+            "probe_docker_registry_from_builder_network",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-local-registry-route-retains-explicit-egress",
+            "--network \"name=bridge,gw-priority=1\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-requires-dual-network-capable-docker",
+            "requires Docker 28 or newer on both client and server",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-validates-both-docker-versions",
+            "docker_versions_support_dual_network",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-tests-dual-network-create",
+            "if ! docker create",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-verifies-gateway-priority",
+            ".GwPriority",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-is-ephemeral",
+            "--label org.goblins-os.purpose=installer-network-preflight",
+        ),
+        ordered_contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-precedes-local-image-build",
+            "    require_docker_dual_network_capability\n",
+            "DOCKER_BUILDKIT=1 docker build",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-reuses-existing-local-registry-image-scope",
+            "LOCAL_REGISTRY_IMAGE=\"registry:2\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-attaches-to-internal-registry-network",
+            "--network \"$DOCKER_REGISTRY_NETWORK\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-probe-reuses-builder-network-arguments",
+            "probe_docker_registry_from_builder_network \"${bib_network_args[@]}\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-probe-applies-forwarded-network-arguments",
+            "\"${network_args[@]}\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-validates-live-registry-network-endpoint",
+            "lacks the exact live endpoint for $DOCKER_REGISTRY_NETWORK",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-requires-exact-post-start-registry-membership",
+            "assert_dedicated_registry_network_membership true",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-preloads-route-probe-image",
+            "docker pull --platform \"$DOCKER_PLATFORM\" \"$BIB\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-route-probe-does-not-pull-inside-deadline",
+            "docker run --rm --pull=never",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-bounds-local-registry-route-probe",
+            "BIB registry route probe timed out after ${DOCKER_REGISTRY_PROBE_TIMEOUT_SECS}s",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-registry-probe-cleans-up-on-exit",
+            "trap cleanup_registry_probe EXIT",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-registry-probe-cleanup-is-bounded",
+            "bounded_stop_process",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-registry-probe-rechecks-final-deadline",
+            "completed during that second instead of reporting a false timeout",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-validates-local-registry-network-membership",
+            "refusing to expose the unauthenticated build registry to it",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-host-gateway-is-explicit-override-only",
+            "host-gateway is intentionally available only for this explicit override",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-explicit-host-registry-adds-host-gateway",
+            "bib_host_args=(--add-host=host.docker.internal:host-gateway)",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-rejects-container-loopback-source",
+            "uses container loopback and cannot reach a host registry from BIB",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-rejects-unsupported-local-alias",
+            "uses an unsupported local registry alias",
+        ),
+        contains_check(
+            root.join("os/iso/manifest-provenance.sh"),
+            "installer-local-ref-classifier-is-shared",
+            "goblins_os_image_ref_is_local_only",
+        ),
+        contains_check(
+            root.join("os/iso/manifest-provenance.sh"),
+            "installer-local-ref-classifier-rejects-non-global-ip-literals",
+            "address.is_global",
+        ),
+        contains_check(
+            root.join("os/iso/manifest-provenance.sh"),
+            "installer-local-ref-classifier-normalizes-trailing-dot-aliases",
+            "normalized_host=\"${normalized_host%.}\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-regresses-local-ref-classification",
+            "installer_local_ref_classifier_passes",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-uses-shared-local-ref-classifier",
+            "goblins_os_image_ref_is_local_only \"$actual_ref\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/run-external-gate.sh"),
+            "external-gate-uses-shared-local-ref-classifier",
+            "goblins_os_image_ref_is_local_only \"$bib_image_ref\"",
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),

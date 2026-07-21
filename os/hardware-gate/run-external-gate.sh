@@ -385,12 +385,12 @@ verify_iso_artifacts() {
       exit 1
     fi
     require_file "$ARCH BIB manifest" "$bib_manifest_path"
-    if rg -q 'bootc switch --mutate-in-place --transport registry (host\.docker\.internal|localhost[:/]|127\.|0\.0\.0\.0[:/]|goblins-os:|docker\.io/library/goblins-os:)' "$bib_manifest_path"; then
-      warn "$ARCH BIB manifest still points at a local Docker/test registry; refusing display-backed release proof."
-      exit 1
-    fi
     if ! bib_image_ref="$(goblins_os_bib_manifest_payload_ref "$bib_manifest_path")"; then
       warn "$ARCH BIB manifest must contain exactly one bootc installer payload image reference."
+      exit 1
+    fi
+    if goblins_os_image_ref_is_local_only "$bib_image_ref"; then
+      warn "$ARCH BIB manifest still points at a local Docker/test registry; refusing display-backed release proof."
       exit 1
     fi
     if [ "$bib_image_ref" != "$BIB_SOURCE_IMAGE" ]; then

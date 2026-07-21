@@ -35,11 +35,18 @@
 #                      local registry port for Docker BIB handoff (default 5002)
 #   GOBLINS_OS_DOCKER_REGISTRY_NAME
 #                      local registry container name (default goblins-os-registry)
+#   GOBLINS_OS_DOCKER_REGISTRY_NETWORK
+#                      dedicated internal Docker bridge used only by the local
+#                      registry and BIB (default goblins-os-bib-<registry-port>)
+#   GOBLINS_OS_DOCKER_REGISTRY_PROBE_TIMEOUT_SECS
+#                      maximum seconds for the BIB-network registry readiness
+#                      probe (default 20)
 #   GOBLINS_OS_BIB_STORAGE_VOLUME
 #                      Docker volume for bootc-image-builder storage
 #   GOBLINS_OS_BIB_SOURCE_IMAGE
 #                      source image passed to bootc-image-builder. If omitted,
-#                      Docker local testing uses host.docker.internal:<port>.
+#                      Docker local testing uses the dedicated registry container
+#                      DNS name on its isolated bridge network.
 #                      Shippable release media must use a real pullable registry
 #                      ref, because Anaconda ISO installs track this ref for
 #                      post-install bootc updates.
@@ -56,6 +63,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+. "$REPO_ROOT/os/iso/manifest-provenance.sh"
 CONFIG="${GOBLINS_OS_ISO_CONFIG:-$REPO_ROOT/os/iso/config.toml}"
 case "$CONFIG" in
   /*) ;;
@@ -73,6 +81,9 @@ CONTAINER_RUNTIME="${GOBLINS_OS_CONTAINER_RUNTIME:-docker}"
 ALLOW_EMULATED_DOCKER="${GOBLINS_OS_ALLOW_EMULATED_DOCKER:-0}"
 DOCKER_REGISTRY_PORT="${GOBLINS_OS_DOCKER_REGISTRY_PORT:-5002}"
 DOCKER_REGISTRY_NAME="${GOBLINS_OS_DOCKER_REGISTRY_NAME:-goblins-os-registry}"
+DOCKER_REGISTRY_NETWORK="${GOBLINS_OS_DOCKER_REGISTRY_NETWORK:-goblins-os-bib-$DOCKER_REGISTRY_PORT}"
+DOCKER_REGISTRY_PROBE_TIMEOUT_SECS="${GOBLINS_OS_DOCKER_REGISTRY_PROBE_TIMEOUT_SECS:-20}"
+LOCAL_REGISTRY_IMAGE="registry:2"
 BIB_STORAGE_VOLUME="${GOBLINS_OS_BIB_STORAGE_VOLUME:-goblins-os-bib-storage-$DOCKER_REGISTRY_PORT}"
 BIB_SOURCE_IMAGE_OVERRIDE="${GOBLINS_OS_BIB_SOURCE_IMAGE:-}"
 SKIP_LOCAL_IMAGE_BUILD="${GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD:-0}"
@@ -122,6 +133,85 @@ require_command() {
   fi
 }
 
+require_docker_dns_label() {
+  local label="$1"
+  local value="$2"
+
+  if [ "${#value}" -gt 63 ] \
+    || [[ ! "$value" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+    echo "error: $label must be a lowercase Docker DNS label (1-63 characters; letters, digits, and interior hyphens only)." >&2
+    exit 1
+  fi
+}
+
+require_docker_object_name() {
+  local label="$1"
+  local value="$2"
+
+  if [ "${#value}" -gt 128 ] \
+    || [[ ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    echo "error: $label must be a Docker object name (1-128 letters, digits, dots, underscores, or hyphens; no leading punctuation)." >&2
+    exit 1
+  fi
+}
+
+require_bounded_positive_integer() {
+  local label="$1"
+  local value="$2"
+  local maximum="$3"
+
+  if [[ ! "$value" =~ ^[1-9][0-9]{0,4}$ ]] \
+    || [ "$((10#$value))" -gt "$maximum" ]; then
+    echo "error: $label must be an integer from 1 through $maximum." >&2
+    exit 1
+  fi
+}
+
+docker_version_major() {
+  local version="$1"
+
+  if [[ "$version" =~ ^([0-9]{1,4})\. ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+docker_versions_support_dual_network() {
+  local client_major server_major
+
+  client_major="$(docker_version_major "$1")" || return 1
+  server_major="$(docker_version_major "$2")" || return 1
+  [ "$((10#$client_major))" -ge 28 ] \
+    && [ "$((10#$server_major))" -ge 28 ]
+}
+
+require_docker_dual_network_versions() {
+  local client_version server_version
+
+  client_version="$(docker version --format '{{.Client.Version}}')" || {
+    echo "error: cannot read the Docker client version for the BIB dual-network preflight." >&2
+    exit 1
+  }
+  server_version="$(docker version --format '{{.Server.Version}}')" || {
+    echo "error: cannot read the Docker server version for the BIB dual-network preflight." >&2
+    exit 1
+  }
+  if ! docker_versions_support_dual_network "$client_version" "$server_version"; then
+    echo "error: the local-registry BIB route requires Docker 28 or newer on both client and server (client=$client_version server=$server_version)." >&2
+    exit 1
+  fi
+}
+
+require_bounded_positive_integer GOBLINS_OS_DOCKER_REGISTRY_PORT "$DOCKER_REGISTRY_PORT" 65535
+require_docker_dns_label GOBLINS_OS_DOCKER_REGISTRY_NAME "$DOCKER_REGISTRY_NAME"
+require_docker_object_name GOBLINS_OS_DOCKER_REGISTRY_NETWORK "$DOCKER_REGISTRY_NETWORK"
+require_docker_object_name GOBLINS_OS_BIB_STORAGE_VOLUME "$BIB_STORAGE_VOLUME"
+require_bounded_positive_integer \
+  GOBLINS_OS_DOCKER_REGISTRY_PROBE_TIMEOUT_SECS \
+  "$DOCKER_REGISTRY_PROBE_TIMEOUT_SECS" \
+  120
+
 if [[ ! "$CANDIDATE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
   echo "error: GOBLINS_OS_CANDIDATE_COMMIT must be the exact 40-hex source commit used to build this ISO." >&2
   exit 1
@@ -139,13 +229,46 @@ if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --is-inside-w
   fi
 fi
 
-image_ref_is_local_only() {
-  case "$1" in
-    localhost/*|localhost:*|127.*|0.0.0.0:*|host.docker.internal:*|goblins-os:*|docker.io/library/goblins-os:*)
+classify_bib_source_route() {
+  local ref="$1"
+  local authority first_component
+
+  if [ -z "$ref" ] || [[ "$ref" =~ [[:space:]] ]] || [[ "$ref" == -* ]]; then
+    printf '%s\n' invalid
+    return 0
+  fi
+  if [[ "$ref" != */* ]]; then
+    printf '%s\n' unsupported-local
+    return 0
+  fi
+  first_component="${ref%%/*}"
+  case "$first_component" in
+    *.*|*:*|localhost) authority="$first_component" ;;
+    *)
+      printf '%s\n' release-registry
       return 0
       ;;
+  esac
+
+  case "$authority" in
+    "$DOCKER_REGISTRY_NAME":5000)
+      printf '%s\n' managed-registry
+      ;;
+    host.docker.internal|host.docker.internal:*)
+      printf '%s\n' host-gateway
+      ;;
+    localhost|localhost:*|*.localhost|*.localhost:*|127.*|0.0.0.0|0.0.0.0:*|'[::1]'|'[::1]':*)
+      printf '%s\n' container-loopback
+      ;;
+    host.containers.internal|host.containers.internal:*|gateway.docker.internal|gateway.docker.internal:*|*.local|*.local:*|*.docker.internal|*.docker.internal:*)
+      printf '%s\n' unsupported-local
+      ;;
     *)
-      return 1
+      if [[ "$authority" =~ ^[A-Za-z0-9_-]+:[0-9]+$ ]]; then
+        printf '%s\n' unsupported-local
+      else
+        printf '%s\n' release-registry
+      fi
       ;;
   esac
 }
@@ -160,7 +283,7 @@ require_shippable_source_ref() {
   if [ "$SHIPPABLE_RELEASE" != "1" ]; then
     return 0
   fi
-  if image_ref_is_local_only "$ref"; then
+  if goblins_os_image_ref_is_local_only "$ref"; then
     echo "error: shippable release media cannot track local/test-only installer payload ref: $ref" >&2
     echo "       Push the bootc image to a real release registry and set GOBLINS_OS_BIB_SOURCE_IMAGE to that pullable ref." >&2
     exit 1
@@ -404,30 +527,334 @@ EOF
   echo "==> Manifest: $MANIFEST_PATH"
 }
 
+assert_dedicated_registry_network_membership() {
+  local require_registry="${1:-false}"
+  local member members registry_members
+
+  if ! members="$(
+    docker network inspect \
+      --format '{{range .Containers}}{{println .Name}}{{end}}' \
+      "$DOCKER_REGISTRY_NETWORK"
+  )"; then
+    echo "error: cannot inspect dedicated registry network $DOCKER_REGISTRY_NETWORK." >&2
+    exit 1
+  fi
+
+  registry_members=0
+  while IFS= read -r member; do
+    [ -z "$member" ] && continue
+    if [ "$member" != "$DOCKER_REGISTRY_NAME" ]; then
+      echo "error: dedicated registry network $DOCKER_REGISTRY_NETWORK has unexpected container $member attached; refusing to expose the unauthenticated build registry to it." >&2
+      exit 1
+    fi
+    registry_members=$((registry_members + 1))
+  done <<< "$members"
+  if [ "$require_registry" = "true" ] && [ "$registry_members" -ne 1 ]; then
+    echo "error: dedicated registry network $DOCKER_REGISTRY_NETWORK must contain exactly the running registry container $DOCKER_REGISTRY_NAME." >&2
+    exit 1
+  fi
+}
+
+ensure_docker_registry_network() {
+  local driver internal purpose
+
+  if docker network inspect "$DOCKER_REGISTRY_NETWORK" >/dev/null 2>&1; then
+    driver="$(docker network inspect --format '{{.Driver}}' "$DOCKER_REGISTRY_NETWORK")"
+    internal="$(docker network inspect --format '{{.Internal}}' "$DOCKER_REGISTRY_NETWORK")"
+    purpose="$(docker network inspect --format '{{index .Labels "org.goblins-os.purpose"}}' "$DOCKER_REGISTRY_NETWORK")"
+    if [ "$driver" != "bridge" ] \
+      || [ "$internal" != "true" ] \
+      || [ "$purpose" != "installer-registry-handoff" ]; then
+      echo "error: existing Docker network $DOCKER_REGISTRY_NETWORK does not satisfy the dedicated internal registry bridge contract." >&2
+      exit 1
+    fi
+  else
+    docker network create \
+      --driver bridge \
+      --internal \
+      --label org.goblins-os.purpose=installer-registry-handoff \
+      "$DOCKER_REGISTRY_NETWORK" >/dev/null
+  fi
+  assert_dedicated_registry_network_membership
+}
+
 ensure_docker_registry() {
+  local container_image endpoint_network_id expected_network_id network_count
+  local port_binding purpose running
+
+  ensure_docker_registry_network
+  expected_network_id="$(docker network inspect --format '{{.Id}}' "$DOCKER_REGISTRY_NETWORK")"
   if docker container inspect "$DOCKER_REGISTRY_NAME" >/dev/null 2>&1; then
+    container_image="$(docker inspect --format '{{.Config.Image}}' "$DOCKER_REGISTRY_NAME")"
+    network_count="$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$DOCKER_REGISTRY_NAME")"
+    endpoint_network_id="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$DOCKER_REGISTRY_NETWORK\"}}{{.NetworkID}}{{end}}" "$DOCKER_REGISTRY_NAME")"
+    port_binding="$(docker inspect --format '{{range (index .HostConfig.PortBindings "5000/tcp")}}{{println .HostIp .HostPort}}{{end}}' "$DOCKER_REGISTRY_NAME")"
+    purpose="$(docker inspect --format '{{index .Config.Labels "org.goblins-os.purpose"}}' "$DOCKER_REGISTRY_NAME")"
+    if [ "$container_image" != "$LOCAL_REGISTRY_IMAGE" ] \
+      || [ "$network_count" != "1" ] \
+      || [ -z "$endpoint_network_id" ] \
+      || [ "$endpoint_network_id" != "$expected_network_id" ] \
+      || [ "$port_binding" != "127.0.0.1 $DOCKER_REGISTRY_PORT" ] \
+      || [ "$purpose" != "installer-local-registry" ]; then
+      echo "error: existing Docker container $DOCKER_REGISTRY_NAME does not satisfy the isolated, loopback-only installer registry contract; remove that exact container explicitly before retrying." >&2
+      exit 1
+    fi
     if [ "$(docker inspect -f '{{.State.Running}}' "$DOCKER_REGISTRY_NAME")" != "true" ]; then
       docker start "$DOCKER_REGISTRY_NAME" >/dev/null
     fi
   else
     docker run -d \
       --name "$DOCKER_REGISTRY_NAME" \
+      --network "$DOCKER_REGISTRY_NETWORK" \
+      --label org.goblins-os.purpose=installer-local-registry \
       -p "127.0.0.1:$DOCKER_REGISTRY_PORT:5000" \
-      registry:2 >/dev/null
+      "$LOCAL_REGISTRY_IMAGE" >/dev/null
   fi
+  network_count="$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$DOCKER_REGISTRY_NAME")"
+  endpoint_network_id="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$DOCKER_REGISTRY_NETWORK\"}}{{.NetworkID}}{{end}}" "$DOCKER_REGISTRY_NAME")"
+  running="$(docker inspect --format '{{.State.Running}}' "$DOCKER_REGISTRY_NAME")"
+  if [ "$running" != "true" ] \
+    || [ "$network_count" != "1" ] \
+    || [ -z "$endpoint_network_id" ] \
+    || [ "$endpoint_network_id" != "$expected_network_id" ]; then
+    echo "error: running registry $DOCKER_REGISTRY_NAME lacks the exact live endpoint for $DOCKER_REGISTRY_NETWORK." >&2
+    exit 1
+  fi
+  assert_dedicated_registry_network_membership true
 }
+
+bounded_docker_remove() {
+  local container_name="$1"
+  local remove_pid tick
+
+  (docker rm -f "$container_name" >/dev/null 2>&1 || true) &
+  remove_pid=$!
+  for tick in 1 2 3 4 5; do
+    if ! kill -0 "$remove_pid" 2>/dev/null; then
+      wait "$remove_pid" >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 1
+  done
+  if kill -0 "$remove_pid" 2>/dev/null; then
+    kill "$remove_pid" >/dev/null 2>&1 || true
+  fi
+  wait "$remove_pid" >/dev/null 2>&1 || true
+}
+
+bounded_docker_network_remove() {
+  local network_name="$1"
+  local remove_pid tick
+
+  (docker network rm "$network_name" >/dev/null 2>&1 || true) &
+  remove_pid=$!
+  for tick in 1 2 3 4 5; do
+    if ! kill -0 "$remove_pid" 2>/dev/null; then
+      wait "$remove_pid" >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 1
+  done
+  if kill -0 "$remove_pid" 2>/dev/null; then
+    kill "$remove_pid" >/dev/null 2>&1 || true
+  fi
+  wait "$remove_pid" >/dev/null 2>&1 || true
+}
+
+bounded_stop_process() {
+  local process_id="$1"
+  local tick
+
+  kill "$process_id" >/dev/null 2>&1 || true
+  for tick in 1 2 3 4 5; do
+    if ! kill -0 "$process_id" 2>/dev/null; then
+      wait "$process_id" >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 1
+  done
+  kill -9 "$process_id" >/dev/null 2>&1 || true
+  wait "$process_id" >/dev/null 2>&1 || true
+}
+
+require_docker_dual_network_capability() (
+  local network_count bridge_priority registry_network_id expected_registry_network_id
+
+  preflight_name="goblins-os-network-preflight-$ARCH-$$"
+  preflight_network="goblins-os-network-preflight-net-$ARCH-$$"
+  cleanup_network_preflight() {
+    if [ -n "${preflight_name:-}" ]; then
+      bounded_docker_remove "$preflight_name"
+    fi
+    if [ -n "${preflight_network:-}" ]; then
+      bounded_docker_network_remove "$preflight_network"
+    fi
+  }
+  trap cleanup_network_preflight EXIT
+  trap 'exit 130' HUP INT TERM
+
+  # Reject unsupported clients and daemons before creating any Docker object.
+  require_docker_dual_network_versions
+  bounded_docker_remove "$preflight_name"
+  bounded_docker_network_remove "$preflight_network"
+  # Reuse the registry image already in this script's trust boundary; do not
+  # introduce another mutable helper image for capability detection.
+  docker pull "$LOCAL_REGISTRY_IMAGE" >/dev/null
+  docker network create \
+    --driver bridge \
+    --internal \
+    --label org.goblins-os.purpose=installer-network-preflight \
+    "$preflight_network" >/dev/null
+  if ! docker create \
+    --name "$preflight_name" \
+    --network "name=bridge,gw-priority=1" \
+    --network "$preflight_network" \
+    --entrypoint /bin/true \
+    "$LOCAL_REGISTRY_IMAGE" >/dev/null; then
+    echo "error: Docker rejected the repeated --network/gw-priority contract required by the local-registry BIB route." >&2
+    exit 1
+  fi
+
+  network_count="$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$preflight_name")"
+  bridge_priority="$(docker inspect --format '{{with index .NetworkSettings.Networks "bridge"}}{{.GwPriority}}{{end}}' "$preflight_name")"
+  registry_network_id="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$preflight_network\"}}{{.NetworkID}}{{end}}" "$preflight_name")"
+  expected_registry_network_id="$(docker network inspect --format '{{.Id}}' "$preflight_network")"
+  if [ "$network_count" != "2" ] \
+    || [ "$bridge_priority" != "1" ] \
+    || [ -z "$registry_network_id" ] \
+    || [ "$registry_network_id" != "$expected_registry_network_id" ]; then
+    echo "error: Docker did not preserve the exact two-network BIB contract with bridge gw-priority=1 and the internal registry endpoint." >&2
+    exit 1
+  fi
+)
+
+probe_docker_registry_from_builder_network() (
+  local status second
+  local network_args=("$@")
+
+  probe_name="goblins-os-registry-probe-$ARCH-$$"
+  probe_log=""
+  probe_pid=""
+  cleanup_registry_probe() {
+    if [ -n "${probe_pid:-}" ]; then
+      bounded_stop_process "$probe_pid"
+    fi
+    if [ -n "${probe_name:-}" ]; then
+      bounded_docker_remove "$probe_name"
+    fi
+    if [ -n "${probe_log:-}" ]; then
+      rm -f -- "$probe_log"
+    fi
+  }
+  trap cleanup_registry_probe EXIT
+  trap 'exit 130' HUP INT TERM
+
+  bounded_docker_remove "$probe_name"
+  probe_log="$(mktemp "${TMPDIR:-/tmp}/goblins-os-registry-probe.XXXXXX")"
+  # Pull outside the readiness deadline so that the probe measures only the
+  # exact container-DNS route that the builder will use, not registry-image
+  # download latency from the Docker daemon.
+  docker pull --platform "$DOCKER_PLATFORM" "$BIB" >/dev/null
+  echo "==> Verifying the BIB route to http://$DOCKER_REGISTRY_NAME:5000/v2/"
+  (
+    docker run --rm --pull=never \
+      --name "$probe_name" \
+      --platform "$DOCKER_PLATFORM" \
+      "${network_args[@]}" \
+      -e REGISTRY_PROBE_HOST="$DOCKER_REGISTRY_NAME" \
+      -e REGISTRY_PROBE_PORT=5000 \
+      --entrypoint /bin/bash \
+      "$BIB" \
+      -lc 'set -euo pipefail
+exec 3<>"/dev/tcp/$REGISTRY_PROBE_HOST/$REGISTRY_PROBE_PORT"
+printf "GET /v2/ HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n" "$REGISTRY_PROBE_HOST" >&3
+IFS= read -r status <&3
+exec 3>&-
+printf -v carriage_return "\r"
+status="${status%$carriage_return}"
+if [ "$status" != "HTTP/1.1 200 OK" ]; then
+  echo "registry readiness probe returned unexpected status: $status" >&2
+  exit 1
+fi' \
+      >"$probe_log" 2>&1
+  ) &
+  probe_pid=$!
+
+  second=0
+  while [ "$second" -lt "$DOCKER_REGISTRY_PROBE_TIMEOUT_SECS" ]; do
+    if ! kill -0 "$probe_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+    second=$((second + 1))
+  done
+
+  # Recheck after the final sleep so a one-second deadline accepts a probe that
+  # completed during that second instead of reporting a false timeout.
+  if kill -0 "$probe_pid" 2>/dev/null; then
+    cat "$probe_log" >&2 || true
+    echo "error: BIB registry route probe timed out after ${DOCKER_REGISTRY_PROBE_TIMEOUT_SECS}s on Docker network $DOCKER_REGISTRY_NETWORK." >&2
+    exit 1
+  fi
+  status=0
+  wait "$probe_pid" || status=$?
+  probe_pid=""
+  if [ "$status" -ne 0 ]; then
+    cat "$probe_log" >&2 || true
+    echo "error: BIB cannot reach the local registry through Docker network $DOCKER_REGISTRY_NETWORK." >&2
+    exit 1
+  fi
+)
 
 run_docker_builder() {
   local registry_image builder_image bib_pull_local bib_output_dir
-  local image_arch
+  local image_arch source_route
+  local bib_host_args=()
+  local bib_network_args=()
 
   require_command docker
+  if [ -n "$BIB_SOURCE_IMAGE_OVERRIDE" ]; then
+    builder_image="$BIB_SOURCE_IMAGE_OVERRIDE"
+    source_route="$(classify_bib_source_route "$builder_image")"
+  else
+    builder_image="$DOCKER_REGISTRY_NAME:5000/goblins-os:$ARCH"
+    source_route="managed-registry"
+  fi
+  case "$source_route" in
+    invalid)
+      echo "error: GOBLINS_OS_BIB_SOURCE_IMAGE must be one nonempty container image reference without whitespace or leading options." >&2
+      exit 1
+      ;;
+    container-loopback)
+      echo "error: GOBLINS_OS_BIB_SOURCE_IMAGE=$builder_image uses container loopback and cannot reach a host registry from BIB." >&2
+      echo "       Use host.docker.internal:<port>/<image> for an explicit host registry, $DOCKER_REGISTRY_NAME:5000/<image> for the managed registry, or a fully qualified remote registry." >&2
+      exit 1
+      ;;
+    unsupported-local)
+      echo "error: GOBLINS_OS_BIB_SOURCE_IMAGE=$builder_image uses an unsupported local registry alias." >&2
+      echo "       Supported local routes are host.docker.internal:<port>/<image> and $DOCKER_REGISTRY_NAME:5000/<image>; otherwise use a fully qualified remote registry." >&2
+      exit 1
+      ;;
+  esac
+  if [ "$SKIP_LOCAL_IMAGE_BUILD" = "1" ] && [ -z "$BIB_SOURCE_IMAGE_OVERRIDE" ]; then
+    echo "error: GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 requires GOBLINS_OS_BIB_SOURCE_IMAGE to a pullable image reference." >&2
+    exit 1
+  fi
+  require_shippable_source_ref "$builder_image"
+  if [ "$source_route" = "managed-registry" ]; then
+    # Validate Docker's exact dual-network contract before an expensive bootc
+    # image build or any persistent registry/network object is created.
+    require_docker_dual_network_capability
+    bib_network_args=(
+      --network "name=bridge,gw-priority=1"
+      --network "$DOCKER_REGISTRY_NETWORK"
+    )
+  elif [ "$source_route" = "host-gateway" ]; then
+    # host-gateway is intentionally available only for this explicit override.
+    bib_host_args=(--add-host=host.docker.internal:host-gateway)
+  fi
   verify_docker_emulation_runtime
   if [ "$SKIP_LOCAL_IMAGE_BUILD" = "1" ]; then
-    if [ -z "$BIB_SOURCE_IMAGE_OVERRIDE" ]; then
-      echo "error: GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 requires GOBLINS_OS_BIB_SOURCE_IMAGE to a real pullable registry ref." >&2
-      exit 1
-    fi
     echo "==> Skipping local Docker image build; bootc-image-builder will pull $BIB_SOURCE_IMAGE_OVERRIDE"
   else
     image_arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE" 2>/dev/null || true)"
@@ -442,29 +869,41 @@ run_docker_builder() {
   fi
 
   if [ -n "$BIB_SOURCE_IMAGE_OVERRIDE" ]; then
-    builder_image="$BIB_SOURCE_IMAGE_OVERRIDE"
     registry_image=""
-    if image_ref_is_local_only "$builder_image"; then
-      bib_pull_local=1
-      BIB_SOURCE_KIND="explicit-local-registry"
-      BIB_SOURCE_LOCAL_ONLY="true"
-    else
-      bib_pull_local=0
-      BIB_SOURCE_KIND="release-registry"
-      BIB_SOURCE_LOCAL_ONLY="false"
-    fi
+    case "$source_route" in
+      managed-registry)
+        ensure_docker_registry
+        probe_docker_registry_from_builder_network "${bib_network_args[@]}"
+        bib_pull_local=1
+        BIB_SOURCE_KIND="explicit-local-registry"
+        BIB_SOURCE_LOCAL_ONLY="true"
+        ;;
+      host-gateway)
+        bib_pull_local=1
+        BIB_SOURCE_KIND="explicit-local-registry"
+        BIB_SOURCE_LOCAL_ONLY="true"
+        ;;
+      release-registry)
+        bib_pull_local=0
+        BIB_SOURCE_KIND="release-registry"
+        BIB_SOURCE_LOCAL_ONLY="false"
+        ;;
+      *)
+        echo "error: unsupported internal BIB source route: $source_route" >&2
+        exit 1
+        ;;
+    esac
   else
     ensure_docker_registry
     registry_image="localhost:$DOCKER_REGISTRY_PORT/goblins-os:$ARCH"
-    builder_image="host.docker.internal:$DOCKER_REGISTRY_PORT/goblins-os:$ARCH"
     echo "==> Publishing $IMAGE to local Docker registry as $registry_image"
     docker tag "$IMAGE" "$registry_image"
     docker push "$registry_image"
+    probe_docker_registry_from_builder_network "${bib_network_args[@]}"
     bib_pull_local=1
     BIB_SOURCE_KIND="docker-local-registry"
     BIB_SOURCE_LOCAL_ONLY="true"
   fi
-  require_shippable_source_ref "$builder_image"
   require_shippable_tool_ref BIB_IMAGE "$BIB"
   require_shippable_branding_tool_ref
   BIB_SOURCE_IMAGE_USED="$builder_image"
@@ -494,7 +933,8 @@ run_docker_builder() {
   fi
   docker run --rm --privileged --pull=missing \
     --platform "$DOCKER_PLATFORM" \
-    --add-host=host.docker.internal:host-gateway \
+    ${bib_host_args[@]+"${bib_host_args[@]}"} \
+    ${bib_network_args[@]+"${bib_network_args[@]}"} \
     ${bib_auth_mounts[@]+"${bib_auth_mounts[@]}"} \
     -e BIB_SOURCE_IMAGE="$builder_image" \
     -e BIB_PULL_LOCAL="$bib_pull_local" \

@@ -38,6 +38,9 @@
 #   GOBLINS_OS_DOCKER_REGISTRY_NETWORK
 #                      dedicated internal Docker bridge used only by the local
 #                      registry and BIB (default goblins-os-bib-<registry-port>)
+#   GOBLINS_OS_DOCKER_EGRESS_NETWORK
+#                      dedicated non-internal Docker bridge used only for BIB
+#                      internet egress (default goblins-os-bib-egress-<registry-port>)
 #   GOBLINS_OS_DOCKER_REGISTRY_PROBE_TIMEOUT_SECS
 #                      maximum seconds for the BIB-network registry readiness
 #                      probe (default 20)
@@ -82,6 +85,7 @@ ALLOW_EMULATED_DOCKER="${GOBLINS_OS_ALLOW_EMULATED_DOCKER:-0}"
 DOCKER_REGISTRY_PORT="${GOBLINS_OS_DOCKER_REGISTRY_PORT:-5002}"
 DOCKER_REGISTRY_NAME="${GOBLINS_OS_DOCKER_REGISTRY_NAME:-goblins-os-registry}"
 DOCKER_REGISTRY_NETWORK="${GOBLINS_OS_DOCKER_REGISTRY_NETWORK:-goblins-os-bib-$DOCKER_REGISTRY_PORT}"
+DOCKER_EGRESS_NETWORK="${GOBLINS_OS_DOCKER_EGRESS_NETWORK:-goblins-os-bib-egress-$DOCKER_REGISTRY_PORT}"
 DOCKER_REGISTRY_PROBE_TIMEOUT_SECS="${GOBLINS_OS_DOCKER_REGISTRY_PROBE_TIMEOUT_SECS:-20}"
 LOCAL_REGISTRY_IMAGE="registry:2"
 BIB_STORAGE_VOLUME="${GOBLINS_OS_BIB_STORAGE_VOLUME:-goblins-os-bib-storage-$DOCKER_REGISTRY_PORT}"
@@ -155,6 +159,18 @@ require_docker_object_name() {
   fi
 }
 
+require_user_defined_network_name() {
+  local label="$1"
+  local value="$2"
+
+  case "$value" in
+    bridge|host|none)
+      echo "error: $label must name a user-defined Docker network, not the built-in '$value' network." >&2
+      exit 1
+      ;;
+  esac
+}
+
 require_bounded_positive_integer() {
   local label="$1"
   local value="$2"
@@ -206,11 +222,18 @@ require_docker_dual_network_versions() {
 require_bounded_positive_integer GOBLINS_OS_DOCKER_REGISTRY_PORT "$DOCKER_REGISTRY_PORT" 65535
 require_docker_dns_label GOBLINS_OS_DOCKER_REGISTRY_NAME "$DOCKER_REGISTRY_NAME"
 require_docker_object_name GOBLINS_OS_DOCKER_REGISTRY_NETWORK "$DOCKER_REGISTRY_NETWORK"
+require_docker_object_name GOBLINS_OS_DOCKER_EGRESS_NETWORK "$DOCKER_EGRESS_NETWORK"
+require_user_defined_network_name GOBLINS_OS_DOCKER_REGISTRY_NETWORK "$DOCKER_REGISTRY_NETWORK"
+require_user_defined_network_name GOBLINS_OS_DOCKER_EGRESS_NETWORK "$DOCKER_EGRESS_NETWORK"
 require_docker_object_name GOBLINS_OS_BIB_STORAGE_VOLUME "$BIB_STORAGE_VOLUME"
 require_bounded_positive_integer \
   GOBLINS_OS_DOCKER_REGISTRY_PROBE_TIMEOUT_SECS \
   "$DOCKER_REGISTRY_PROBE_TIMEOUT_SECS" \
   120
+if [ "$DOCKER_EGRESS_NETWORK" = "$DOCKER_REGISTRY_NETWORK" ]; then
+  echo "error: GOBLINS_OS_DOCKER_EGRESS_NETWORK and GOBLINS_OS_DOCKER_REGISTRY_NETWORK must name distinct Docker networks." >&2
+  exit 1
+fi
 
 if [[ ! "$CANDIDATE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
   echo "error: GOBLINS_OS_CANDIDATE_COMMIT must be the exact 40-hex source commit used to build this ISO." >&2
@@ -527,6 +550,48 @@ EOF
   echo "==> Manifest: $MANIFEST_PATH"
 }
 
+assert_dedicated_egress_network_membership() {
+  local member members
+
+  if ! members="$(
+    docker network inspect \
+      --format '{{range .Containers}}{{println .Name}}{{end}}' \
+      "$DOCKER_EGRESS_NETWORK"
+  )"; then
+    echo "error: cannot inspect dedicated BIB egress network $DOCKER_EGRESS_NETWORK." >&2
+    exit 1
+  fi
+
+  while IFS= read -r member; do
+    [ -z "$member" ] && continue
+    echo "error: dedicated BIB egress network $DOCKER_EGRESS_NETWORK has unexpected container $member attached; refusing to share the builder egress boundary." >&2
+    exit 1
+  done <<< "$members"
+}
+
+ensure_docker_egress_network() {
+  local driver internal purpose scope
+
+  if ! docker network inspect "$DOCKER_EGRESS_NETWORK" >/dev/null 2>&1; then
+    docker network create \
+      --driver bridge \
+      --label org.goblins-os.purpose=installer-builder-egress \
+      "$DOCKER_EGRESS_NETWORK" >/dev/null
+  fi
+  driver="$(docker network inspect --format '{{.Driver}}' "$DOCKER_EGRESS_NETWORK")"
+  internal="$(docker network inspect --format '{{.Internal}}' "$DOCKER_EGRESS_NETWORK")"
+  scope="$(docker network inspect --format '{{.Scope}}' "$DOCKER_EGRESS_NETWORK")"
+  purpose="$(docker network inspect --format '{{index .Labels "org.goblins-os.purpose"}}' "$DOCKER_EGRESS_NETWORK")"
+  if [ "$driver" != "bridge" ] \
+    || [ "$internal" != "false" ] \
+    || [ "$scope" != "local" ] \
+    || [ "$purpose" != "installer-builder-egress" ]; then
+    echo "error: Docker network $DOCKER_EGRESS_NETWORK does not satisfy the dedicated non-internal BIB egress bridge contract with local scope." >&2
+    exit 1
+  fi
+  assert_dedicated_egress_network_membership
+}
+
 assert_dedicated_registry_network_membership() {
   local require_registry="${1:-false}"
   local member members registry_members
@@ -556,24 +621,25 @@ assert_dedicated_registry_network_membership() {
 }
 
 ensure_docker_registry_network() {
-  local driver internal purpose
+  local driver internal purpose scope
 
-  if docker network inspect "$DOCKER_REGISTRY_NETWORK" >/dev/null 2>&1; then
-    driver="$(docker network inspect --format '{{.Driver}}' "$DOCKER_REGISTRY_NETWORK")"
-    internal="$(docker network inspect --format '{{.Internal}}' "$DOCKER_REGISTRY_NETWORK")"
-    purpose="$(docker network inspect --format '{{index .Labels "org.goblins-os.purpose"}}' "$DOCKER_REGISTRY_NETWORK")"
-    if [ "$driver" != "bridge" ] \
-      || [ "$internal" != "true" ] \
-      || [ "$purpose" != "installer-registry-handoff" ]; then
-      echo "error: existing Docker network $DOCKER_REGISTRY_NETWORK does not satisfy the dedicated internal registry bridge contract." >&2
-      exit 1
-    fi
-  else
+  if ! docker network inspect "$DOCKER_REGISTRY_NETWORK" >/dev/null 2>&1; then
     docker network create \
       --driver bridge \
       --internal \
       --label org.goblins-os.purpose=installer-registry-handoff \
       "$DOCKER_REGISTRY_NETWORK" >/dev/null
+  fi
+  driver="$(docker network inspect --format '{{.Driver}}' "$DOCKER_REGISTRY_NETWORK")"
+  internal="$(docker network inspect --format '{{.Internal}}' "$DOCKER_REGISTRY_NETWORK")"
+  scope="$(docker network inspect --format '{{.Scope}}' "$DOCKER_REGISTRY_NETWORK")"
+  purpose="$(docker network inspect --format '{{index .Labels "org.goblins-os.purpose"}}' "$DOCKER_REGISTRY_NETWORK")"
+  if [ "$driver" != "bridge" ] \
+    || [ "$internal" != "true" ] \
+    || [ "$scope" != "local" ] \
+    || [ "$purpose" != "installer-registry-handoff" ]; then
+    echo "error: Docker network $DOCKER_REGISTRY_NETWORK does not satisfy the dedicated internal registry bridge contract with local scope." >&2
+    exit 1
   fi
   assert_dedicated_registry_network_membership
 }
@@ -582,6 +648,7 @@ ensure_docker_registry() {
   local container_image endpoint_network_id expected_network_id network_count
   local port_binding purpose running
 
+  ensure_docker_egress_network
   ensure_docker_registry_network
   expected_network_id="$(docker network inspect --format '{{.Id}}' "$DOCKER_REGISTRY_NETWORK")"
   if docker container inspect "$DOCKER_REGISTRY_NAME" >/dev/null 2>&1; then
@@ -621,6 +688,7 @@ ensure_docker_registry() {
     exit 1
   fi
   assert_dedicated_registry_network_membership true
+  assert_dedicated_egress_network_membership
 }
 
 bounded_docker_remove() {
@@ -678,54 +746,131 @@ bounded_stop_process() {
 }
 
 require_docker_dual_network_capability() (
-  local network_count bridge_priority registry_network_id expected_registry_network_id
+  local network_count egress_priority registry_priority
+  local egress_network_id registry_network_id
+  local expected_egress_network_id expected_registry_network_id
+  local egress_driver registry_driver egress_internal registry_internal
+  local egress_scope registry_scope egress_purpose registry_purpose cleanup_failed
+  local preflight_name="goblins-os-network-preflight-$ARCH-$$"
+  local preflight_egress_network="goblins-os-network-preflight-egress-$ARCH-$$"
+  local preflight_registry_network="goblins-os-network-preflight-registry-$ARCH-$$"
+  local preflight_container_id=""
+  local preflight_egress_network_id=""
+  local preflight_registry_network_id=""
+  local preflight_container_created=0
+  local preflight_egress_network_created=0
+  local preflight_registry_network_created=0
 
-  preflight_name="goblins-os-network-preflight-$ARCH-$$"
-  preflight_network="goblins-os-network-preflight-net-$ARCH-$$"
   cleanup_network_preflight() {
-    if [ -n "${preflight_name:-}" ]; then
-      bounded_docker_remove "$preflight_name"
+    cleanup_failed=0
+    if [ "$preflight_container_created" = "1" ]; then
+      bounded_docker_remove "$preflight_container_id"
+      if docker container inspect "$preflight_container_id" >/dev/null 2>&1; then
+        echo "error: Docker dual-network preflight container cleanup did not complete for exact ID $preflight_container_id ($preflight_name)." >&2
+        cleanup_failed=1
+      else
+        preflight_container_created=0
+      fi
     fi
-    if [ -n "${preflight_network:-}" ]; then
-      bounded_docker_network_remove "$preflight_network"
+    if [ "$preflight_registry_network_created" = "1" ]; then
+      bounded_docker_network_remove "$preflight_registry_network_id"
+      if docker network inspect "$preflight_registry_network_id" >/dev/null 2>&1; then
+        echo "error: Docker dual-network preflight registry-network cleanup did not complete for exact ID $preflight_registry_network_id ($preflight_registry_network)." >&2
+        cleanup_failed=1
+      else
+        preflight_registry_network_created=0
+      fi
     fi
+    if [ "$preflight_egress_network_created" = "1" ]; then
+      bounded_docker_network_remove "$preflight_egress_network_id"
+      if docker network inspect "$preflight_egress_network_id" >/dev/null 2>&1; then
+        echo "error: Docker dual-network preflight egress-network cleanup did not complete for exact ID $preflight_egress_network_id ($preflight_egress_network)." >&2
+        cleanup_failed=1
+      else
+        preflight_egress_network_created=0
+      fi
+    fi
+    [ "$cleanup_failed" -eq 0 ]
   }
   trap cleanup_network_preflight EXIT
   trap 'exit 130' HUP INT TERM
 
   # Reject unsupported clients and daemons before creating any Docker object.
   require_docker_dual_network_versions
-  bounded_docker_remove "$preflight_name"
-  bounded_docker_network_remove "$preflight_network"
+  if docker container inspect "$preflight_name" >/dev/null 2>&1 \
+    || docker network inspect "$preflight_egress_network" >/dev/null 2>&1 \
+    || docker network inspect "$preflight_registry_network" >/dev/null 2>&1; then
+    echo "error: Docker dual-network preflight found a preexisting exact-name object; refusing to remove an object this invocation did not create." >&2
+    exit 1
+  fi
   # Reuse the registry image already in this script's trust boundary; do not
   # introduce another mutable helper image for capability detection.
   docker pull "$LOCAL_REGISTRY_IMAGE" >/dev/null
-  docker network create \
-    --driver bridge \
-    --internal \
-    --label org.goblins-os.purpose=installer-network-preflight \
-    "$preflight_network" >/dev/null
-  if ! docker create \
+  preflight_egress_network_id="$(
+    docker network create \
+      --driver bridge \
+      --label org.goblins-os.purpose=installer-network-preflight-egress \
+      "$preflight_egress_network"
+  )"
+  preflight_egress_network_created=1
+  preflight_registry_network_id="$(
+    docker network create \
+      --driver bridge \
+      --internal \
+      --label org.goblins-os.purpose=installer-network-preflight-registry \
+      "$preflight_registry_network"
+  )"
+  preflight_registry_network_created=1
+  if ! preflight_container_id="$(docker create \
     --name "$preflight_name" \
-    --network "name=bridge,gw-priority=1" \
-    --network "$preflight_network" \
+    --network "name=$preflight_egress_network,gw-priority=1" \
+    --network "$preflight_registry_network" \
     --entrypoint /bin/true \
-    "$LOCAL_REGISTRY_IMAGE" >/dev/null; then
-    echo "error: Docker rejected the repeated --network/gw-priority contract required by the local-registry BIB route." >&2
+    "$LOCAL_REGISTRY_IMAGE")"; then
+    echo "error: Docker rejected the two-user-defined-network/gw-priority contract required by the local-registry BIB route." >&2
+    exit 1
+  fi
+  preflight_container_created=1
+
+  network_count="$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$preflight_name")"
+  egress_priority="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$preflight_egress_network\"}}{{.GwPriority}}{{end}}" "$preflight_name")"
+  registry_priority="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$preflight_registry_network\"}}{{.GwPriority}}{{end}}" "$preflight_name")"
+  egress_network_id="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$preflight_egress_network\"}}{{.NetworkID}}{{end}}" "$preflight_name")"
+  registry_network_id="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$preflight_registry_network\"}}{{.NetworkID}}{{end}}" "$preflight_name")"
+  expected_egress_network_id="$(docker network inspect --format '{{.Id}}' "$preflight_egress_network")"
+  expected_registry_network_id="$(docker network inspect --format '{{.Id}}' "$preflight_registry_network")"
+  egress_driver="$(docker network inspect --format '{{.Driver}}' "$preflight_egress_network")"
+  registry_driver="$(docker network inspect --format '{{.Driver}}' "$preflight_registry_network")"
+  egress_internal="$(docker network inspect --format '{{.Internal}}' "$preflight_egress_network")"
+  registry_internal="$(docker network inspect --format '{{.Internal}}' "$preflight_registry_network")"
+  egress_scope="$(docker network inspect --format '{{.Scope}}' "$preflight_egress_network")"
+  registry_scope="$(docker network inspect --format '{{.Scope}}' "$preflight_registry_network")"
+  egress_purpose="$(docker network inspect --format '{{index .Labels "org.goblins-os.purpose"}}' "$preflight_egress_network")"
+  registry_purpose="$(docker network inspect --format '{{index .Labels "org.goblins-os.purpose"}}' "$preflight_registry_network")"
+  if [ "$network_count" != "2" ] \
+    || [ "$egress_priority" != "1" ] \
+    || [ "$registry_priority" != "0" ] \
+    || [ "$egress_driver" != "bridge" ] \
+    || [ "$registry_driver" != "bridge" ] \
+    || [ "$egress_internal" != "false" ] \
+    || [ "$registry_internal" != "true" ] \
+    || [ "$egress_scope" != "local" ] \
+    || [ "$registry_scope" != "local" ] \
+    || [ "$egress_purpose" != "installer-network-preflight-egress" ] \
+    || [ "$registry_purpose" != "installer-network-preflight-registry" ] \
+    || [ -z "$egress_network_id" ] \
+    || [ -z "$registry_network_id" ] \
+    || [ "$egress_network_id" = "$registry_network_id" ] \
+    || [ "$expected_egress_network_id" != "$preflight_egress_network_id" ] \
+    || [ "$expected_registry_network_id" != "$preflight_registry_network_id" ] \
+    || [ "$egress_network_id" != "$expected_egress_network_id" ] \
+    || [ "$registry_network_id" != "$expected_registry_network_id" ]; then
+    echo "error: Docker did not preserve the exact two-user-defined-network BIB contract with non-internal egress gw-priority=1 and the isolated registry endpoint." >&2
     exit 1
   fi
 
-  network_count="$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$preflight_name")"
-  bridge_priority="$(docker inspect --format '{{with index .NetworkSettings.Networks "bridge"}}{{.GwPriority}}{{end}}' "$preflight_name")"
-  registry_network_id="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$preflight_network\"}}{{.NetworkID}}{{end}}" "$preflight_name")"
-  expected_registry_network_id="$(docker network inspect --format '{{.Id}}' "$preflight_network")"
-  if [ "$network_count" != "2" ] \
-    || [ "$bridge_priority" != "1" ] \
-    || [ -z "$registry_network_id" ] \
-    || [ "$registry_network_id" != "$expected_registry_network_id" ]; then
-    echo "error: Docker did not preserve the exact two-network BIB contract with bridge gw-priority=1 and the internal registry endpoint." >&2
-    exit 1
-  fi
+  cleanup_network_preflight
+  trap - EXIT HUP INT TERM
 )
 
 probe_docker_registry_from_builder_network() (
@@ -801,9 +946,11 @@ fi' \
   probe_pid=""
   if [ "$status" -ne 0 ]; then
     cat "$probe_log" >&2 || true
-    echo "error: BIB cannot reach the local registry through Docker network $DOCKER_REGISTRY_NETWORK." >&2
+    echo "error: BIB cannot reach the local registry through egress network $DOCKER_EGRESS_NETWORK and registry network $DOCKER_REGISTRY_NETWORK." >&2
     exit 1
   fi
+  assert_dedicated_registry_network_membership true
+  assert_dedicated_egress_network_membership
 )
 
 run_docker_builder() {
@@ -841,18 +988,25 @@ run_docker_builder() {
     exit 1
   fi
   require_shippable_source_ref "$builder_image"
-  if [ "$source_route" = "managed-registry" ]; then
-    # Validate Docker's exact dual-network contract before an expensive bootc
-    # image build or any persistent registry/network object is created.
-    require_docker_dual_network_capability
-    bib_network_args=(
-      --network "name=bridge,gw-priority=1"
-      --network "$DOCKER_REGISTRY_NETWORK"
-    )
-  elif [ "$source_route" = "host-gateway" ]; then
-    # host-gateway is intentionally available only for this explicit override.
-    bib_host_args=(--add-host=host.docker.internal:host-gateway)
-  fi
+  case "$source_route" in
+    managed-registry)
+      # Validate Docker's exact dual-network contract before an expensive bootc
+      # image build or any persistent registry/network object is created.
+      require_docker_dual_network_capability
+      bib_network_args=(
+        --network "name=$DOCKER_EGRESS_NETWORK,gw-priority=1"
+        --network "$DOCKER_REGISTRY_NETWORK"
+      )
+      ;;
+    host-gateway)
+      # host-gateway is intentionally available only for this explicit override.
+      bib_host_args=(--add-host=host.docker.internal:host-gateway)
+      ;;
+    release-registry)
+      # Public remote images intentionally use Docker's normal network only;
+      # they create and attach neither managed local network.
+      ;;
+  esac
   verify_docker_emulation_runtime
   if [ "$SKIP_LOCAL_IMAGE_BUILD" = "1" ]; then
     echo "==> Skipping local Docker image build; bootc-image-builder will pull $BIB_SOURCE_IMAGE_OVERRIDE"
@@ -931,6 +1085,12 @@ run_docker_builder() {
     echo "==> Using registry auth file for the bootc-image-builder source pull"
     bib_auth_mounts=(-v "${GOBLINS_OS_BIB_AUTH_FILE}:/run/containers/0/auth.json:ro" -e "REGISTRY_AUTH_FILE=/run/containers/0/auth.json")
   fi
+  if [ "$source_route" = "managed-registry" ]; then
+    # Recheck immediately before the privileged builder attaches; setup between
+    # the readiness probe and this point must not widen either network boundary.
+    assert_dedicated_registry_network_membership true
+    assert_dedicated_egress_network_membership
+  fi
   docker run --rm --privileged --pull=missing \
     --platform "$DOCKER_PLATFORM" \
     ${bib_host_args[@]+"${bib_host_args[@]}"} \
@@ -945,6 +1105,13 @@ run_docker_builder() {
     --entrypoint /bin/bash \
     "$BIB" \
     -lc 'set -euo pipefail; mkdir -p /var/lib/containers/storage/overlay; if [ "$BIB_PULL_LOCAL" = "1" ]; then podman pull --tls-verify=false "$BIB_SOURCE_IMAGE"; else podman pull "$BIB_SOURCE_IMAGE"; fi; bootc-image-builder --verbose build --type anaconda-iso --rootfs "$BIB_ROOTFS" --output /output "$BIB_SOURCE_IMAGE"'
+
+  if [ "$source_route" = "managed-registry" ]; then
+    # --rm must restore both managed networks to their expected idle state:
+    # only the registry remains on the internal bridge, and egress is empty.
+    assert_dedicated_registry_network_membership true
+    assert_dedicated_egress_network_membership
+  fi
 
   # The privileged builder writes /output as root. Reuse the same reviewed,
   # digest-pinned image without privileges to reclaim ownership; introducing a

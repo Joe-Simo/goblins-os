@@ -8567,6 +8567,41 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
+            "iso-builder-declares-dedicated-egress-network",
+            "GOBLINS_OS_DOCKER_EGRESS_NETWORK",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-labels-dedicated-egress-bridge",
+            "--label org.goblins-os.purpose=installer-builder-egress",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-requires-distinct-managed-networks",
+            "must name distinct Docker networks",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-rejects-built-in-network-names",
+            "must name a user-defined Docker network",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-validates-non-internal-egress-network",
+            "dedicated non-internal BIB egress bridge contract",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-validates-local-network-scope",
+            "scope=\"$(docker network inspect --format '{{.Scope}}'",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-rejects-unexpected-egress-members",
+            "refusing to share the builder egress boundary",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
             "iso-builder-local-registry-host-port-is-loopback-only",
             "-p \"127.0.0.1:$DOCKER_REGISTRY_PORT:5000\"",
         ),
@@ -8582,7 +8617,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
-            "iso-builder-local-registry-route-retains-explicit-egress",
+            "iso-builder-local-registry-route-uses-user-defined-egress",
+            "--network \"name=$DOCKER_EGRESS_NETWORK,gw-priority=1\"",
+        ),
+        absent_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-never-mixes-built-in-bridge-with-user-defined-network",
             "--network \"name=bridge,gw-priority=1\"",
         ),
         contains_check(
@@ -8598,7 +8638,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/iso/build-iso.sh"),
             "iso-builder-capability-tests-dual-network-create",
-            "if ! docker create",
+            "if ! preflight_container_id=\"$(docker create",
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
@@ -8607,8 +8647,113 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
-            "iso-builder-capability-preflight-is-ephemeral",
-            "--label org.goblins-os.purpose=installer-network-preflight",
+            "iso-builder-capability-requires-egress-priority-one",
+            "|| [ \"$egress_priority\" != \"1\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-requires-registry-priority-zero",
+            "|| [ \"$registry_priority\" != \"0\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-creates-user-defined-egress",
+            "--label org.goblins-os.purpose=installer-network-preflight-egress",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-creates-internal-registry-network",
+            "--label org.goblins-os.purpose=installer-network-preflight-registry",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-checks-both-internal-flags",
+            "|| [ \"$egress_internal\" != \"false\" ] \\\n    || [ \"$registry_internal\" != \"true\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-checks-distinct-network-ids",
+            "|| [ \"$egress_network_id\" = \"$registry_network_id\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-checks-egress-network-id",
+            "|| [ \"$egress_network_id\" != \"$expected_egress_network_id\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-checks-registry-network-id",
+            "|| [ \"$registry_network_id\" != \"$expected_registry_network_id\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-binds-egress-create-id",
+            "|| [ \"$expected_egress_network_id\" != \"$preflight_egress_network_id\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-binds-registry-create-id",
+            "|| [ \"$expected_registry_network_id\" != \"$preflight_registry_network_id\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-requires-local-scopes",
+            "|| [ \"$egress_scope\" != \"local\" ] \\\n    || [ \"$registry_scope\" != \"local\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-proves-two-network-count",
+            "if [ \"$network_count\" != \"2\" ]",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-verifies-container-cleanup",
+            "preflight container cleanup did not complete",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-verifies-egress-cleanup",
+            "preflight egress-network cleanup did not complete",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-verifies-registry-cleanup",
+            "preflight registry-network cleanup did not complete",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-fails-closed-on-name-collision",
+            "refusing to remove an object this invocation did not create",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-tracks-container-ownership",
+            "preflight_container_created=1",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-tracks-egress-network-ownership",
+            "preflight_egress_network_created=1",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-tracks-registry-network-ownership",
+            "preflight_registry_network_created=1",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-cleans-exact-container-id",
+            "bounded_docker_remove \"$preflight_container_id\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-cleans-exact-egress-id",
+            "bounded_docker_network_remove \"$preflight_egress_network_id\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-preflight-cleans-exact-registry-id",
+            "bounded_docker_network_remove \"$preflight_registry_network_id\"",
         ),
         ordered_contains_check(
             root.join("os/iso/build-iso.sh"),
@@ -8645,6 +8790,26 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/iso/build-iso.sh"),
             "iso-builder-requires-exact-post-start-registry-membership",
             "assert_dedicated_registry_network_membership true",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-requires-empty-dedicated-egress-membership",
+            "assert_dedicated_egress_network_membership",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-post-build-network-checks-are-managed-route-only",
+            "if [ \"$source_route\" = \"managed-registry\" ]; then\n    # --rm must restore both managed networks",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-pre-build-network-checks-are-managed-route-only",
+            "if [ \"$source_route\" = \"managed-registry\" ]; then\n    # Recheck immediately before the privileged builder attaches",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-public-registry-route-is-network-neutral",
+            "Public remote images intentionally use Docker's normal network only;\n      # they create and attach neither managed local network.",
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),

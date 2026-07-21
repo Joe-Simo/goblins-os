@@ -2691,20 +2691,17 @@ fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<
 struct TextShortcutsLiveLedgerState {
     focused_field_callback: bool,
     process_key_event_callback: bool,
-    text_input_v3_commit: bool,
-    render_intent_visible: bool,
-    style_class: bool,
-    font_family: bool,
+    ibus_commit_delivered: bool,
+    candidate_popup_published: bool,
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 impl TextShortcutsLiveLedgerState {
-    fn rendered_accept_bubble(self) -> bool {
-        self.render_intent_visible && self.style_class && self.font_family
-    }
-
     fn runtime_ready(self) -> bool {
-        self.focused_field_callback && self.process_key_event_callback && self.text_input_v3_commit
+        self.focused_field_callback
+            && self.process_key_event_callback
+            && self.ibus_commit_delivered
+            && self.candidate_popup_published
     }
 }
 
@@ -2713,16 +2710,41 @@ fn text_shortcuts_live_ledger_state(path: &str) -> TextShortcutsLiveLedgerState 
     let Ok(ledger) = std::fs::read_to_string(path) else {
         return TextShortcutsLiveLedgerState::default();
     };
-
-    TextShortcutsLiveLedgerState {
-        focused_field_callback: ledger.contains("\"callback\":\"focus-in\""),
-        process_key_event_callback: ledger.contains("\"callback\":\"process-key-event\""),
-        text_input_v3_commit: ledger.contains("\"commit-text\""),
-        render_intent_visible: ledger.contains("\"event\":\"render-intent\"")
-            && ledger.contains("\"action\":\"show-candidate\""),
-        style_class: ledger.contains("\"style_class\":\"gos-text-shortcuts-candidate\""),
-        font_family: ledger.contains("\"font_family\":\"Inter\""),
+    let mut state = TextShortcutsLiveLedgerState::default();
+    for record in ledger
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+    {
+        let event = record.get("event").and_then(serde_json::Value::as_str);
+        let callback = record.get("callback").and_then(serde_json::Value::as_str);
+        if event == Some("callback") && callback == Some("focus-in") {
+            state.focused_field_callback = true;
+        }
+        if event == Some("callback") && callback == Some("process-key-event") {
+            state.process_key_event_callback = true;
+        }
+        if event == Some("operations")
+            && record
+                .get("operation_types")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|operations| {
+                    operations
+                        .iter()
+                        .any(|operation| operation.as_str() == Some("commit-text"))
+                })
+        {
+            state.ibus_commit_delivered = true;
+        }
+        if event == Some("native-candidate-popup")
+            && record.get("renderer").and_then(serde_json::Value::as_str)
+                == Some("native-ibus-lookup-table")
+            && record.get("action").and_then(serde_json::Value::as_str) == Some("show-candidate")
+            && record.get("published").and_then(serde_json::Value::as_bool) == Some(true)
+        {
+            state.candidate_popup_published = true;
+        }
     }
+    state
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -2741,7 +2763,6 @@ fn write_text_shortcuts_live_render_proof(
     state: TextShortcutsLiveLedgerState,
 ) -> std::io::Result<()> {
     let entry_text = entry_text.replace(['\n', '\r'], " ");
-    let rendered = state.rendered_accept_bubble();
     let runtime_ready = state.runtime_ready();
     std::fs::write(
         path,
@@ -2751,21 +2772,21 @@ fn write_text_shortcuts_live_render_proof(
                 "entry_text={entry_text}\n",
                 "focused_field_callback={focused}\n",
                 "process_key_event_callback={process_key}\n",
-                "text_input_v3_commit={commit}\n",
-                "rendered_accept_bubble={rendered}\n",
-                "style_class=gos-text-shortcuts-candidate\n",
-                "font_family=Inter\n",
-                "rendered_bubble_ready_claim={rendered}\n",
-                "live_overlay_claim={live_overlay}\n",
+                "ibus_commit_delivered={commit}\n",
+                "candidate_popup_published={popup}\n",
+                "renderer=native-ibus-lookup-table\n",
+                "cursor_anchor=ibus-input-context\n",
+                "synthetic_overlay=false\n",
+                "native_candidate_popup_ready_claim={popup}\n",
+                "live_overlay_claim={popup}\n",
                 "runtime_ready_claim={runtime_ready}\n",
                 "core_readiness_flip=live\n",
             ),
             entry_text = entry_text,
             focused = bool_word(state.focused_field_callback),
             process_key = bool_word(state.process_key_event_callback),
-            commit = bool_word(state.text_input_v3_commit),
-            rendered = bool_word(rendered),
-            live_overlay = bool_word(state.render_intent_visible),
+            commit = bool_word(state.ibus_commit_delivered),
+            popup = bool_word(state.candidate_popup_published),
             runtime_ready = bool_word(runtime_ready),
         ),
     )
@@ -2929,22 +2950,34 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
         }
 
         center.append(&entry);
+        if mode == TextShortcutsProofMode::LiveRuntimeRender {
+            if let Some(path) = proof_file.clone() {
+                write_text_shortcuts_live_render_proof(
+                    &path,
+                    entry.text().as_str(),
+                    TextShortcutsLiveLedgerState::default(),
+                )
+                .ok();
+            }
+            let entry = entry.clone();
+            let proof_path = proof_file.clone();
+            let events_path = proof_events_file.clone();
+            let _ = gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
+                let state = events_path
+                    .as_deref()
+                    .map(text_shortcuts_live_ledger_state)
+                    .unwrap_or_default();
+                if let Some(path) = &proof_path {
+                    let _ =
+                        write_text_shortcuts_live_render_proof(path, entry.text().as_str(), state);
+                }
+                gtk::glib::ControlFlow::Continue
+            });
+        }
         if matches!(
             mode,
-            TextShortcutsProofMode::Candidate
-                | TextShortcutsProofMode::CandidateRender
-                | TextShortcutsProofMode::LiveRuntimeRender
+            TextShortcutsProofMode::Candidate | TextShortcutsProofMode::CandidateRender
         ) {
-            if mode == TextShortcutsProofMode::LiveRuntimeRender {
-                if let Some(path) = proof_file.clone() {
-                    write_text_shortcuts_live_render_proof(
-                        &path,
-                        entry.text().as_str(),
-                        TextShortcutsLiveLedgerState::default(),
-                    )
-                    .ok();
-                }
-            }
             let candidate = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             candidate.add_css_class("gos-text-shortcuts-candidate");
             candidate.append(&label("on my way", &["gos-text-shortcuts-candidate-text"]));
@@ -2954,30 +2987,6 @@ fn run_text_shortcuts_proof_window(mode: TextShortcutsProofMode) -> ShellResult<
             hint.append(&label("Esc", &["gos-text-shortcuts-keycap"]));
             candidate.append(&spacer());
             candidate.append(&hint);
-            if mode == TextShortcutsProofMode::LiveRuntimeRender {
-                candidate.set_visible(false);
-                let candidate_box = candidate.clone();
-                let entry = entry.clone();
-                let proof_path = proof_file.clone();
-                let events_path = proof_events_file.clone();
-                let _ = gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
-                    let state = events_path
-                        .as_deref()
-                        .map(text_shortcuts_live_ledger_state)
-                        .unwrap_or_default();
-                    if state.rendered_accept_bubble() {
-                        candidate_box.set_visible(true);
-                    }
-                    if let Some(path) = &proof_path {
-                        let _ = write_text_shortcuts_live_render_proof(
-                            path,
-                            entry.text().as_str(),
-                            state,
-                        );
-                    }
-                    gtk::glib::ControlFlow::Continue
-                });
-            }
             center.append(&candidate);
         }
         root.append(&center);
@@ -3437,6 +3446,8 @@ window.gos-windowed .gos-top-bar {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+    use super::text_shortcuts_live_ledger_state;
     use super::{
         engine_display, engine_route_disclosure, launch_local_action, local_action_command,
         openai_login_destination_from_response, shell_request_timeout, standalone_target_from_args,
@@ -3582,6 +3593,31 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+    #[test]
+    fn live_text_shortcuts_ledger_requires_the_native_ibus_popup() {
+        let path = std::env::temp_dir().join(format!(
+            "goblins-text-shortcuts-native-popup-ledger-{}.jsonl",
+            std::process::id()
+        ));
+        let records = concat!(
+            "{\"event\":\"callback\",\"callback\":\"focus-in\"}\n",
+            "{\"event\":\"callback\",\"callback\":\"process-key-event\"}\n",
+            "{\"event\":\"operations\",\"operation_types\":[\"commit-text\"]}\n",
+            "{\"event\":\"native-candidate-popup\",\"renderer\":\"native-ibus-lookup-table\",",
+            "\"action\":\"show-candidate\",\"published\":true}\n",
+        );
+        std::fs::write(&path, records).unwrap();
+        let state = text_shortcuts_live_ledger_state(path.to_str().unwrap());
+        std::fs::remove_file(path).unwrap();
+
+        assert!(state.focused_field_callback);
+        assert!(state.process_key_event_callback);
+        assert!(state.ibus_commit_delivered);
+        assert!(state.candidate_popup_published);
+        assert!(state.runtime_ready());
     }
 
     #[test]

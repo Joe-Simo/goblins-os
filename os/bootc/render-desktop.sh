@@ -22,7 +22,8 @@ CORE_PROOF_SOCKET=/run/goblins-os-core/release-proof/control.sock
 CORE_PROOF_URL=http://localhost
 
 core_proof_curl() {
-  curl --unix-socket "$CORE_PROOF_SOCKET" "$@"
+  setpriv --regid=goblins-core-release-proof --clear-groups -- \
+    curl --unix-socket "$CORE_PROOF_SOCKET" "$@"
 }
 
 RENDER_STATE_DIR=${GOBLINS_OS_RENDER_STATE_DIR:-/tmp/goblins-os-render-state}

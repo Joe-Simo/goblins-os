@@ -13,10 +13,13 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import select
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Callable
 
 
@@ -35,9 +38,18 @@ ACCEPT_BUBBLE_RENDER_INTENT_SURFACE = "goblins-textshortcuts-accept-bubble-rende
 ACCEPT_BUBBLE_STYLE_CLASS = "gos-text-shortcuts-candidate"
 ACCEPT_BUBBLE_TEXT_STYLE_CLASS = "gos-text-shortcuts-candidate-text"
 ACCEPT_BUBBLE_HINT_STYLE_CLASS = "gos-text-shortcuts-candidate-hint"
+NATIVE_IBUS_LOOKUP_RENDERER = "native-ibus-lookup-table"
+NATIVE_IBUS_LOOKUP_HINT = "Space or Return to accept · Esc to dismiss"
+PROOF_EXPECTED_REPLACEMENT_SHA256 = (
+    "d629610f5bde8438bf5902966cc16a8d447d516a833d994881c39bb7faac9195"
+)
 TEXT_SHORTCUTS_CONFIG_DIR = "goblins-os"
 TEXT_SHORTCUTS_CONFIG_FILE = "text-shortcuts.json"
 MAX_SHORTCUTS = 500
+MAX_TEXT_SHORTCUTS_TABLE_BYTES = 48 * 1024
+SENSITIVE_INPUT_PURPOSES = frozenset({8, 9})
+IBUS_INPUT_HINT_PRIVATE_FALLBACK = 1 << 11
+IBUS_INPUT_HINT_HIDDEN_TEXT_FALLBACK = 1 << 12
 BUBBLE_LAYOUT_GAP = 8
 BUBBLE_LAYOUT_MARGIN = 12
 BUBBLE_LAYOUT_HEIGHT = 44
@@ -45,6 +57,56 @@ BUBBLE_LAYOUT_MIN_WIDTH = 196
 BUBBLE_LAYOUT_MAX_WIDTH = 360
 BUBBLE_LAYOUT_HORIZONTAL_PADDING = 112
 BUBBLE_LAYOUT_CHARACTER_WIDTH = 8
+IBUS_KEY_BACKSPACE = 0xFF08
+IBUS_KEY_TAB = 0xFF09
+IBUS_KEY_RETURN = 0xFF0D
+IBUS_KEY_ESCAPE = 0xFF1B
+IBUS_KEY_LEFT = 0xFF51
+IBUS_KEY_UP = 0xFF52
+IBUS_KEY_RIGHT = 0xFF53
+IBUS_KEY_DOWN = 0xFF54
+IBUS_KEY_DELETE = 0xFFFF
+IBUS_CAP_LOOKUP_TABLE_FALLBACK = 1 << 2
+IBUS_CAP_SURROUNDING_TEXT_FALLBACK = 1 << 5
+RUNTIME_STATUS_SCHEMA = "goblins-os.text-shortcuts-runtime-status.v1"
+RUNTIME_STATUS_PATH = "/run/goblins-os-session/text-shortcuts-runtime-status.json"
+RUNTIME_STATUS_MAX_BYTES = 4096
+RUNTIME_HEALTH_INTERVAL_SECONDS = 2
+RUNTIME_RESTART_BASE_SECONDS = 0.25
+RUNTIME_RESTART_MAX_SECONDS = 5.0
+RUNTIME_REQUEST_MAX_BYTES = 64 * 1024
+RUNTIME_RESPONSE_MAX_BYTES = 64 * 1024
+RUNTIME_TEXT_MAX_CHARACTERS = 64 * 1024
+RUNTIME_TEXT_MAX_BYTES = 64 * 1024
+SURROUNDING_TEXT_MAX_CHARACTERS = 64 * 1024
+SURROUNDING_TEXT_MAX_BYTES = 64 * 1024
+
+
+def _bounded_utf8_text(
+    value: Any,
+    *,
+    allow_empty: bool,
+    max_characters: int,
+    max_bytes: int,
+) -> bool:
+    if not isinstance(value, str) or (not allow_empty and not value):
+        return False
+    if len(value) > max_characters or "\x00" in value:
+        return False
+    try:
+        encoded = value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        return False
+    return len(encoded) <= max_bytes
+
+
+def _runtime_text_is_safe(value: Any, *, allow_empty: bool = False) -> bool:
+    return _bounded_utf8_text(
+        value,
+        allow_empty=allow_empty,
+        max_characters=RUNTIME_TEXT_MAX_CHARACTERS,
+        max_bytes=RUNTIME_TEXT_MAX_BYTES,
+    )
 
 
 def _runtime_binary() -> str:
@@ -97,9 +159,11 @@ def capability_payload(runtime_self_test_argv: list[str] | None = None) -> dict[
 
 def _table_path() -> str | None:
     config_home = os.environ.get("XDG_CONFIG_HOME")
+    if config_home and not os.path.isabs(config_home):
+        return None
     if not config_home:
         home = os.environ.get("HOME")
-        if not home:
+        if not home or not os.path.isabs(home):
             return None
         config_home = os.path.join(home, ".config")
     if not config_home:
@@ -118,9 +182,17 @@ def _sanitize_shortcuts(raw: Any) -> list[dict[str, str]]:
     replacements: dict[str, str] = {}
     for entry in raw:
         if not isinstance(entry, dict):
+            return []
+        replace_value = entry.get("replace")
+        with_value = entry.get("with")
+        if not isinstance(replace_value, str) or not isinstance(with_value, str):
+            return []
+        if not _runtime_text_is_safe(replace_value) or not _runtime_text_is_safe(
+            with_value
+        ):
             continue
-        replace = str(entry.get("replace", "")).strip()
-        with_text = str(entry.get("with", "")).strip()
+        replace = replace_value.strip()
+        with_text = with_value.strip()
         if not replace or not with_text or replace == with_text:
             continue
         if replace not in replacements:
@@ -137,16 +209,45 @@ def _table_snapshot(path: str | None = None) -> tuple[str, list[dict[str, str]]]
     if table_path is None:
         return ("no-config-home", [])
     try:
-        with open(table_path, "rb") as table_file:
-            raw_bytes = table_file.read()
+        descriptor = os.open(
+            table_path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
     except FileNotFoundError:
         return ("missing", [])
     except OSError:
         return ("unreadable", [])
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            return ("unsafe-file", [])
+        chunks: list[bytes] = []
+        remaining = MAX_TEXT_SHORTCUTS_TABLE_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw_bytes = b"".join(chunks)
+    except OSError:
+        return ("unreadable", [])
+    finally:
+        os.close(descriptor)
+    if len(raw_bytes) > MAX_TEXT_SHORTCUTS_TABLE_BYTES:
+        return ("too-large", [])
+    if not raw_bytes:
+        return ("empty", [])
     fingerprint = hashlib.sha256(raw_bytes).hexdigest()
     try:
         raw_shortcuts = json.loads(raw_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
         return (fingerprint, [])
     return (fingerprint, _sanitize_shortcuts(raw_shortcuts))
 
@@ -155,6 +256,9 @@ class ShortcutTableBridge:
     def __init__(self, path: str | None = None) -> None:
         self._path = path
         self._fingerprint: str | None = None
+
+    def invalidate(self) -> None:
+        self._fingerprint = None
 
     def maybe_changed_request(self) -> dict[str, Any] | None:
         fingerprint, shortcuts = _table_snapshot(self._path)
@@ -168,12 +272,15 @@ def _candidate_metadata_from_response(response: dict[str, Any]) -> dict[str, Any
     candidate = response.get("candidate")
     if not isinstance(candidate, dict):
         return None
+    trigger = candidate.get("trigger")
     replacement = candidate.get("replacement")
     accept_on = candidate.get("accept_on")
     dismiss_key = candidate.get("dismiss_key")
     rendered_bubble_ready_claim = candidate.get("rendered_bubble_ready_claim")
     if (
-        not isinstance(replacement, str)
+        not isinstance(trigger, str)
+        or not trigger
+        or not isinstance(replacement, str)
         or not replacement
         or not isinstance(accept_on, str)
         or accept_on != "word-boundary"
@@ -435,15 +542,32 @@ class CandidateMetadataState:
                 "candidate-visible",
             )
             return
-        self.current = None
-        if previous is not None:
+        operations = response.get("operations", [])
+        operation_types: set[str] = set()
+        if isinstance(operations, list):
+            operation_types = {
+                operation.get("type")
+                for operation in operations
+                if isinstance(operation, dict)
+                and isinstance(operation.get("type"), str)
+            }
+        runtime_unavailable = response.get("runtime_available") is False
+        if previous is not None and (
+            runtime_unavailable or "hide-preedit-text" in operation_types
+        ):
+            self.current = None
             self.last_overlay_intent = _candidate_overlay_intent(
                 "hide-candidate",
                 previous,
-                _candidate_clear_reason(response),
+                "runtime-unavailable"
+                if runtime_unavailable
+                else _candidate_clear_reason(response),
             )
-        else:
-            self.last_overlay_intent = None
+            return
+        # Key releases and other pass-through responses intentionally omit the
+        # candidate. Preserve the current native lookup table until the runtime
+        # explicitly hides preedit or the bridge reports that it is unavailable.
+        self.last_overlay_intent = None
 
     def clear(self, reason: str = "cleared") -> None:
         previous = self.current
@@ -459,16 +583,18 @@ class CandidateMetadataState:
 
 
 class CandidateBubbleRenderIntentSink:
-    def publish(self, intent: dict[str, Any]) -> None:
+    def publish(self, intent: dict[str, Any]) -> bool:
         del intent
+        return True
 
 
 class RecordingCandidateBubbleRenderIntentSink(CandidateBubbleRenderIntentSink):
     def __init__(self) -> None:
         self.records: list[dict[str, Any]] = []
 
-    def publish(self, intent: dict[str, Any]) -> None:
+    def publish(self, intent: dict[str, Any]) -> bool:
         self.records.append(intent)
+        return True
 
 
 class RedactedAdapterCallbackLedger(CandidateBubbleRenderIntentSink):
@@ -508,7 +634,79 @@ class RedactedAdapterCallbackLedger(CandidateBubbleRenderIntentSink):
             }
         )
 
-    def publish(self, intent: dict[str, Any]) -> None:
+    def table_reload(self, shortcut_count: int) -> None:
+        self._record(
+            {
+                "event": "table-reload",
+                "callback": "table-changed",
+                "shortcut_count": max(0, int(shortcut_count)),
+                "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
+                "redacted": True,
+            }
+        )
+
+    def content_purpose(self, sensitive_purpose: bool) -> None:
+        self._record(
+            {
+                "event": "content-purpose",
+                "callback": "set-content-type",
+                "sensitive_purpose": bool(sensitive_purpose),
+                "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
+                "redacted": True,
+            }
+        )
+
+    def cursor_location(self, has_cursor_rect: bool) -> None:
+        self._record(
+            {
+                "event": "cursor-location",
+                "callback": "set-cursor-location",
+                "has_cursor_rect": bool(has_cursor_rect),
+                "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
+                "redacted": True,
+            }
+        )
+
+    def capabilities(self, lookup_table: bool, surrounding_text: bool) -> None:
+        self._record(
+            {
+                "event": "client-capabilities",
+                "callback": "set-capabilities",
+                "lookup_table": bool(lookup_table),
+                "surrounding_text": bool(surrounding_text),
+                "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
+                "redacted": True,
+            }
+        )
+
+    def native_candidate_popup(
+        self,
+        *,
+        action: str,
+        published: bool,
+        generation: int,
+        has_cursor_rect: bool,
+        lookup_table_capability: bool,
+        expected_replacement: bool,
+        hint_published: bool,
+    ) -> None:
+        self._record(
+            {
+                "event": "native-candidate-popup",
+                "renderer": NATIVE_IBUS_LOOKUP_RENDERER,
+                "action": action,
+                "published": bool(published),
+                "generation": max(1, int(generation)),
+                "has_cursor_rect": bool(has_cursor_rect),
+                "lookup_table_capability": bool(lookup_table_capability),
+                "expected_replacement": bool(expected_replacement),
+                "hint_published": bool(hint_published),
+                "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
+                "redacted": True,
+            }
+        )
+
+    def publish(self, intent: dict[str, Any]) -> bool:
         self._record(
             {
                 "event": "render-intent",
@@ -528,6 +726,7 @@ class RedactedAdapterCallbackLedger(CandidateBubbleRenderIntentSink):
                 "redacted": True,
             }
         )
+        return True
 
     def payload(self) -> dict[str, Any]:
         callbacks = [
@@ -547,6 +746,19 @@ class RedactedAdapterCallbackLedger(CandidateBubbleRenderIntentSink):
         render_intent_count = sum(
             1 for record in self.records if record.get("event") == "render-intent"
         )
+        table_reload_count = sum(
+            1 for record in self.records if record.get("event") == "table-reload"
+        )
+        sensitive_purpose_seen = any(
+            record.get("event") == "content-purpose"
+            and record.get("sensitive_purpose") is True
+            for record in self.records
+        )
+        native_candidate_popup_count = sum(
+            1
+            for record in self.records
+            if record.get("event") == "native-candidate-popup"
+        )
         return {
             "status": "pass",
             "surface": ADAPTER_CALLBACK_LEDGER_SURFACE,
@@ -556,6 +768,9 @@ class RedactedAdapterCallbackLedger(CandidateBubbleRenderIntentSink):
             "callbacks_exercised": callbacks_exercised,
             "operation_types": operation_types,
             "render_intent_count": render_intent_count,
+            "table_reload_count": table_reload_count,
+            "sensitive_purpose_seen": sensitive_purpose_seen,
+            "native_candidate_popup_count": native_candidate_popup_count,
             "value_redacted": True,
             "no_typed_text_logged": True,
             "rendered_bubble_ready_claim": False,
@@ -572,6 +787,128 @@ class RedactedAdapterCallbackLedger(CandidateBubbleRenderIntentSink):
         with open(self.path, "a", encoding="utf-8") as ledger_file:
             ledger_file.write(json.dumps(record, sort_keys=True, separators=(",", ":")))
             ledger_file.write("\n")
+
+
+class NativeIbusLookupRenderer(CandidateBubbleRenderIntentSink):
+    """Publishes one real candidate through the session's native IBus panel.
+
+    IBus and GNOME Shell own cursor anchoring, monitor clamping, text scaling,
+    accessibility, theme, and reduced-motion behavior. This class never creates
+    a second GTK window and never logs replacement text.
+    """
+
+    def __init__(
+        self,
+        engine: Any,
+        ibus: Any,
+        proof_ledger: RedactedAdapterCallbackLedger | None = None,
+        has_cursor_rect: Callable[[], bool] | None = None,
+        lookup_table_capability: Callable[[], bool] | None = None,
+    ) -> None:
+        self._engine = engine
+        self._ibus = ibus
+        self._proof_ledger = proof_ledger
+        self._has_cursor_rect = has_cursor_rect or (lambda: False)
+        self._lookup_table_capability = lookup_table_capability or (lambda: False)
+        self._lookup_table: Any | None = None
+        self._generation = 0
+
+    def publish(self, intent: dict[str, Any]) -> bool:
+        action = intent.get("action")
+        replacement = intent.get("replacement")
+        if action not in {"show-candidate", "hide-candidate"}:
+            raise ValueError("unsupported native IBus candidate action")
+        if action == "show-candidate" and (
+            not isinstance(replacement, str) or not replacement
+        ):
+            raise ValueError("native IBus candidate requires replacement text")
+
+        self._generation += 1
+        generation = self._generation
+        expected_replacement = bool(
+            isinstance(replacement, str)
+            and hashlib.sha256(replacement.encode("utf-8")).hexdigest()
+            == PROOF_EXPECTED_REPLACEMENT_SHA256
+        )
+        if self._proof_ledger is not None:
+            self._proof_ledger.publish(intent)
+
+        hint_published = False
+        published = False
+        try:
+            if action == "show-candidate":
+                lookup_table = self._ibus.LookupTable.new(1, 0, False, False)
+                lookup_table.append_candidate(
+                    self._ibus.Text.new_from_string(replacement)
+                )
+                lookup_table.append_label(self._ibus.Text.new_from_string("Space"))
+                orientation = getattr(
+                    getattr(self._ibus, "Orientation", object()),
+                    "SYSTEM",
+                    None,
+                )
+                if orientation is not None:
+                    lookup_table.set_orientation(orientation)
+                self._engine.update_lookup_table(lookup_table, True)
+                self._lookup_table = lookup_table
+                published = True
+                try:
+                    self._engine.update_auxiliary_text(
+                        self._ibus.Text.new_from_string(NATIVE_IBUS_LOOKUP_HINT),
+                        True,
+                    )
+                    hint_published = True
+                except Exception:  # pragma: no cover - optional native hint.
+                    hint_published = False
+            else:
+                published, hint_published = self._hide_native()
+                if not published:
+                    raise RuntimeError("native IBus lookup table did not hide")
+        except Exception:
+            if self._proof_ledger is not None:
+                self._proof_ledger.native_candidate_popup(
+                    action=action,
+                    published=False,
+                    generation=generation,
+                    has_cursor_rect=self._has_cursor_rect(),
+                    lookup_table_capability=self._lookup_table_capability(),
+                    expected_replacement=expected_replacement,
+                    hint_published=hint_published,
+                )
+            raise
+
+        if self._proof_ledger is not None:
+            self._proof_ledger.native_candidate_popup(
+                action=action,
+                published=published,
+                generation=generation,
+                has_cursor_rect=self._has_cursor_rect(),
+                lookup_table_capability=self._lookup_table_capability(),
+                expected_replacement=expected_replacement,
+                hint_published=hint_published,
+            )
+        return True
+
+    def force_hide(self) -> bool:
+        """Retryable lifecycle hide that does not depend on candidate metadata."""
+        published, _hint_published = self._hide_native()
+        return published
+
+    def _hide_native(self) -> tuple[bool, bool]:
+        published = False
+        hint_published = False
+        try:
+            self._engine.hide_lookup_table()
+            self._lookup_table = None
+            published = True
+        except Exception:  # pragma: no cover - defensive GI boundary.
+            published = False
+        try:
+            self._engine.hide_auxiliary_text()
+            hint_published = True
+        except Exception:  # pragma: no cover - optional native hint.
+            hint_published = False
+        return published, hint_published
 
 
 def _proof_event_sink_from_env() -> RedactedAdapterCallbackLedger | None:
@@ -592,21 +929,30 @@ class CandidateBubbleRenderIntentController:
         self._anchor_provider = anchor_provider or (lambda: None)
         self._monitor_provider = monitor_provider or (lambda: None)
 
-    def emit_state(self, candidate_state: CandidateMetadataState | None) -> None:
+    def emit_state(self, candidate_state: CandidateMetadataState | None) -> bool:
         if candidate_state is None:
-            return
-        self.emit_overlay_intent(candidate_state.last_overlay_intent)
+            return True
+        return self.emit_overlay_intent(candidate_state.last_overlay_intent)
 
     def clear(self, candidate_state: CandidateMetadataState, reason: str) -> None:
         candidate_state.clear(reason)
         self.emit_state(candidate_state)
+        force_hide = getattr(self._sink, "force_hide", None)
+        if callable(force_hide):
+            try:
+                force_hide()
+            except Exception:  # pragma: no cover - defensive GI boundary.
+                print(
+                    "goblins-textshortcuts-ibus: forced candidate hide failed",
+                    file=sys.stderr,
+                )
 
-    def emit_overlay_intent(self, overlay_intent: dict[str, Any] | None) -> None:
+    def emit_overlay_intent(self, overlay_intent: dict[str, Any] | None) -> bool:
         if overlay_intent is None:
-            return
+            return True
         frame = _candidate_bubble_frame_from_intent(overlay_intent)
         if frame is None:
-            return
+            return False
         layout = self._layout_for_frame(frame)
         record = {
             "surface": ACCEPT_BUBBLE_RENDER_INTENT_SURFACE,
@@ -630,12 +976,13 @@ class CandidateBubbleRenderIntentController:
             "runtime_ready_claim": False,
         }
         try:
-            self._sink.publish(record)
-        except Exception as error:  # pragma: no cover - defensive GI boundary.
+            return self._sink.publish(record) is not False
+        except Exception:  # pragma: no cover - defensive GI boundary.
             print(
-                f"goblins-textshortcuts-ibus: render intent sink failed: {error}",
+                "goblins-textshortcuts-ibus: render intent sink failed",
                 file=sys.stderr,
             )
+            return False
 
     def _layout_for_frame(self, frame: dict[str, Any]) -> dict[str, Any] | None:
         if frame.get("action") == "hide-candidate":
@@ -647,46 +994,225 @@ class CandidateBubbleRenderIntentController:
         return _candidate_bubble_layout_from_frame(frame, anchor, monitor)
 
 
+class RuntimeStatusPublisher:
+    """Publishes one redacted, fixed-path liveness record for the session bridge."""
+
+    def __init__(self, path: str = RUNTIME_STATUS_PATH) -> None:
+        self._path = path
+        self._instance_id = secrets.token_hex(16)
+        self._focus_generation = 0
+        self._runtime_generation = 0
+        self._sequence = 0
+        self._focused = False
+        self._enabled = False
+        self._surrounding_text_supported = False
+        self._snapshot_valid = False
+        self._child_alive = False
+        self._last_response_ok = False
+        self._publish()
+
+    def set_focused(self, focused: bool) -> None:
+        focused = bool(focused)
+        if focused and not self._focused:
+            self._focus_generation += 1
+        self._focused = focused
+        if not focused:
+            self._snapshot_valid = False
+            self._last_response_ok = False
+        self._publish()
+
+    def set_enabled(self, enabled: bool) -> None:
+        self._enabled = bool(enabled)
+        if not self._enabled:
+            self._snapshot_valid = False
+            self._last_response_ok = False
+        self._publish()
+
+    def set_surrounding_text_supported(self, supported: bool) -> None:
+        self._surrounding_text_supported = bool(supported)
+        if not self._surrounding_text_supported:
+            self._snapshot_valid = False
+            self._last_response_ok = False
+        self._publish()
+
+    def set_snapshot_valid(self, valid: bool) -> None:
+        self._snapshot_valid = bool(valid)
+        if not self._snapshot_valid:
+            self._last_response_ok = False
+        self._publish()
+
+    def runtime_transport(
+        self,
+        child_alive: bool,
+        response_ok: bool,
+        runtime_generation: int,
+    ) -> None:
+        generation_changed = runtime_generation != self._runtime_generation
+        self._child_alive = bool(child_alive)
+        self._runtime_generation = max(0, int(runtime_generation))
+        if generation_changed or not child_alive or not response_ok:
+            self._last_response_ok = False
+        self._publish()
+
+    def protocol_ready(self, runtime_generation: int) -> None:
+        if (
+            self._focused
+            and self._enabled
+            and self._surrounding_text_supported
+            and self._snapshot_valid
+            and self._child_alive
+            and runtime_generation == self._runtime_generation
+            and runtime_generation > 0
+        ):
+            self._last_response_ok = True
+        self._publish()
+
+    def is_focused(self) -> bool:
+        return self._focused
+
+    def _publish(self) -> None:
+        self._sequence += 1
+        payload = {
+            "schema": RUNTIME_STATUS_SCHEMA,
+            "instance_id": self._instance_id,
+            "focus_generation": self._focus_generation,
+            "runtime_generation": self._runtime_generation,
+            "sequence": self._sequence,
+            "monotonic_ns": time.monotonic_ns(),
+            "focused": self._focused,
+            "enabled": self._enabled,
+            "surrounding_text_supported": self._surrounding_text_supported,
+            "snapshot_valid": self._snapshot_valid,
+            "child_alive": self._child_alive,
+            "last_response_ok": self._last_response_ok,
+        }
+        raw = (json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
+        if len(raw) > RUNTIME_STATUS_MAX_BYTES:
+            return
+        parent = os.path.dirname(self._path)
+        name = os.path.basename(self._path)
+        if not parent or not name:
+            return
+        directory_flags = os.O_RDONLY | os.O_CLOEXEC
+        if hasattr(os, "O_DIRECTORY"):
+            directory_flags |= os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            directory_flags |= os.O_NOFOLLOW
+        try:
+            directory = os.open(parent, directory_flags)
+        except OSError:
+            return
+        temporary = f".{name}.tmp-{secrets.token_hex(16)}"
+        descriptor = -1
+        try:
+            metadata = os.fstat(directory)
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o007
+            ):
+                return
+            file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+            if hasattr(os, "O_NOFOLLOW"):
+                file_flags |= os.O_NOFOLLOW
+            descriptor = os.open(
+                temporary,
+                file_flags,
+                0o600,
+                dir_fd=directory,
+            )
+            os.fchmod(descriptor, 0o600)
+            view = memoryview(raw)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("short runtime-status write")
+                view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = -1
+            os.rename(
+                temporary,
+                name,
+                src_dir_fd=directory,
+                dst_dir_fd=directory,
+            )
+            os.fsync(directory)
+        except OSError:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except OSError:
+                pass
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            os.close(directory)
+
+
 class RuntimeBridge:
     def __init__(
         self,
         argv: list[str] | None = None,
         response_timeout: float = RESPONSE_TIMEOUT_SECONDS,
+        health_callback: Callable[[bool, bool, int], None] | None = None,
     ) -> None:
         self._argv = argv or _runtime_argv()
         self._response_timeout = response_timeout
-        self._process: subprocess.Popen[str] | None = None
-        self._disabled = False
+        self._process: subprocess.Popen[bytes] | None = None
+        self._health_callback = health_callback
+        self._failure_count = 0
+        self._next_restart_at = 0.0
+        self._runtime_generation = 0
+        self._last_response_ok = False
 
     def send(self, request: dict[str, Any]) -> dict[str, Any]:
-        if self._disabled:
+        if time.monotonic() < self._next_restart_at:
+            self._publish_health(False, False)
             return _passthrough_response()
         process = self._ensure_process()
         if process is None or process.stdin is None or process.stdout is None:
             return _passthrough_response()
         try:
-            process.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
-            process.stdin.flush()
-            readable, _, _ = select.select(
-                [process.stdout], [], [], self._response_timeout
+            if select.select([process.stdout], [], [], 0)[0]:
+                self._mark_failed("runtime emitted unsolicited response bytes")
+                return _passthrough_response()
+            payload = (
+                json.dumps(request, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                + b"\n"
             )
-            if not readable:
-                self._disable("runtime did not answer before timeout")
+            if len(payload) > RUNTIME_REQUEST_MAX_BYTES:
+                self._mark_failed("runtime request exceeds the fixed size limit")
                 return _passthrough_response()
-            line = process.stdout.readline()
-            if not line:
-                self._disable("runtime closed stdout")
+            self._write_request_frame(process.stdin, payload)
+            frame = self._read_response_frame(process.stdout)
+            response = json.loads(frame.decode("utf-8"))
+            if not _runtime_response_valid_for_request(request, response):
+                self._mark_failed("runtime returned an invalid response object")
                 return _passthrough_response()
-            response = json.loads(line)
-            if not isinstance(response, dict):
-                self._disable("runtime returned non-object JSON")
-                return _passthrough_response()
+            self._failure_count = 0
+            self._next_restart_at = 0.0
+            self._last_response_ok = True
+            self._publish_health(True, True)
             return response
-        except (BrokenPipeError, OSError, json.JSONDecodeError) as error:
-            self._disable(f"runtime bridge failed: {error}")
+        except (
+            BrokenPipeError,
+            OSError,
+            UnicodeDecodeError,
+            UnicodeEncodeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            self._mark_failed(f"runtime bridge failed: {error}")
             return _passthrough_response()
 
     def close(self) -> None:
+        self._close_process()
+        self._last_response_ok = False
+        self._publish_health(False, False)
+
+    def _close_process(self) -> None:
         process = self._process
         self._process = None
         if process is None:
@@ -698,31 +1224,311 @@ class RuntimeBridge:
             process.kill()
             process.wait(timeout=0.5)
 
-    def _ensure_process(self) -> subprocess.Popen[str] | None:
+    def _ensure_process(self) -> subprocess.Popen[bytes] | None:
         if self._process is not None and self._process.poll() is None:
             return self._process
+        if self._process is not None:
+            self._mark_failed("runtime child exited")
+            return None
+        if time.monotonic() < self._next_restart_at:
+            return None
         try:
             self._process = subprocess.Popen(
                 self._argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
+                bufsize=0,
             )
         except OSError as error:
-            self._disable(f"could not start runtime: {error}")
+            self._mark_failed(f"could not start runtime: {error}")
             return None
+        self._runtime_generation += 1
+        os.set_blocking(self._process.stdin.fileno(), False)
+        os.set_blocking(self._process.stdout.fileno(), False)
+        self._publish_health(True, False)
         return self._process
 
-    def _disable(self, message: str) -> None:
+    def _mark_failed(self, message: str) -> None:
         print(f"goblins-textshortcuts-ibus: {message}", file=sys.stderr)
-        self._disabled = True
-        self.close()
+        self._close_process()
+        self._last_response_ok = False
+        self._failure_count = min(self._failure_count + 1, 8)
+        backoff = min(
+            RUNTIME_RESTART_BASE_SECONDS * (2 ** (self._failure_count - 1)),
+            RUNTIME_RESTART_MAX_SECONDS,
+        )
+        self._next_restart_at = time.monotonic() + backoff
+        self._publish_health(False, False)
+
+    def _write_request_frame(self, stdin: Any, payload: bytes) -> None:
+        deadline = time.monotonic() + self._response_timeout
+        descriptor = stdin.fileno()
+        offset = 0
+        while offset < len(payload):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise OSError("runtime request write did not complete before timeout")
+            _, writable, _ = select.select([], [stdin], [], remaining)
+            if not writable:
+                raise OSError("runtime request write did not complete before timeout")
+            try:
+                written = os.write(descriptor, payload[offset:])
+            except BlockingIOError:
+                continue
+            if written <= 0:
+                raise OSError("runtime request pipe closed before the request completed")
+            offset += written
+
+    def _read_response_frame(self, stdout: Any) -> bytes:
+        deadline = time.monotonic() + self._response_timeout
+        response = bytearray()
+        descriptor = stdout.fileno()
+        while True:
+            newline = response.find(b"\n")
+            if newline >= 0:
+                if newline > RUNTIME_RESPONSE_MAX_BYTES:
+                    raise OSError("runtime response exceeds the fixed size limit")
+                if response[newline + 1 :]:
+                    raise OSError("runtime returned extra response framing")
+                if select.select([stdout], [], [], 0)[0]:
+                    extra = os.read(descriptor, 1)
+                    if extra:
+                        raise OSError("runtime returned extra response framing")
+                return bytes(response[:newline])
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise OSError("runtime did not complete one response before timeout")
+            readable, _, _ = select.select([stdout], [], [], remaining)
+            if not readable:
+                raise OSError("runtime did not complete one response before timeout")
+            try:
+                chunk = os.read(descriptor, 4096)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                raise OSError("runtime closed stdout before one complete response")
+            response.extend(chunk)
+            if len(response) > RUNTIME_RESPONSE_MAX_BYTES:
+                raise OSError("runtime response exceeds the fixed size limit")
+
+    def _publish_health(self, child_alive: bool, response_ok: bool) -> None:
+        if self._health_callback is not None:
+            self._health_callback(
+                bool(child_alive),
+                bool(response_ok),
+                self._runtime_generation,
+            )
+
+    def runtime_generation(self) -> int:
+        return self._runtime_generation
+
+    def last_response_ok(self) -> bool:
+        return self._last_response_ok
 
 
 def _passthrough_response() -> dict[str, Any]:
-    return {"handled": False, "operations": [], "error": None}
+    return {
+        "handled": False,
+        # If the child runtime fails while a candidate is visible, clear the
+        # native lookup table while returning the key fail-open. The defensive
+        # preedit hide also cleans up stale state from an older adapter version.
+        "operations": [{"type": "hide-preedit-text"}],
+        "error": None,
+        "runtime_available": False,
+    }
+
+
+def _strict_runtime_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validated_runtime_response_operations(
+    response: Any,
+    *,
+    allow_synthetic_passthrough: bool = False,
+) -> list[dict[str, Any]] | None:
+    """Decode the child response without coercion before any GI-side mutation."""
+    if not isinstance(response, dict):
+        return None
+    allowed_keys = {"handled", "operations", "candidate", "error"}
+    synthetic = "runtime_available" in response
+    if synthetic:
+        if not allow_synthetic_passthrough or response.get("runtime_available") is not False:
+            return None
+        allowed_keys.add("runtime_available")
+    if set(response) - allowed_keys or not {"handled", "operations"}.issubset(response):
+        return None
+    handled = response.get("handled")
+    operations = response.get("operations")
+    candidate = response.get("candidate")
+    error = response.get("error")
+    if not isinstance(handled, bool) or not isinstance(operations, list):
+        return None
+    if len(operations) > 3:
+        return None
+    if error is not None:
+        if (
+            not _runtime_text_is_safe(error)
+            or handled
+            or operations
+            or candidate is not None
+            or synthetic
+        ):
+            return None
+        return []
+
+    operation_types: list[str] = []
+    for operation in operations:
+        if not isinstance(operation, dict) or not isinstance(operation.get("type"), str):
+            return None
+        operation_type = operation["type"]
+        operation_types.append(operation_type)
+        if operation_type == "hide-preedit-text":
+            if set(operation) != {"type"}:
+                return None
+        elif operation_type == "delete-surrounding-text":
+            if set(operation) != {
+                "type",
+                "offset",
+                "n_chars",
+                "expected_text",
+            }:
+                return None
+            expected_text = operation.get("expected_text")
+            offset = operation.get("offset")
+            n_chars = operation.get("n_chars")
+            if (
+                not _runtime_text_is_safe(expected_text)
+                or not _strict_runtime_int(offset)
+                or not _strict_runtime_int(n_chars)
+                or offset != -len(expected_text)
+                or n_chars != len(expected_text)
+            ):
+                return None
+        elif operation_type == "commit-text":
+            if set(operation) != {"type", "text"}:
+                return None
+            if not _runtime_text_is_safe(operation.get("text")):
+                return None
+        else:
+            return None
+
+    if operation_types not in (
+        [],
+        ["hide-preedit-text"],
+        ["delete-surrounding-text", "commit-text", "hide-preedit-text"],
+    ):
+        return None
+
+    if candidate is not None:
+        if not isinstance(candidate, dict) or set(candidate) != {
+            "trigger",
+            "replacement",
+            "accept_on",
+            "dismiss_key",
+            "rendered_bubble_ready_claim",
+        }:
+            return None
+        if (
+            not _runtime_text_is_safe(candidate.get("trigger"))
+            or not _runtime_text_is_safe(candidate.get("replacement"))
+            or candidate.get("accept_on") != "word-boundary"
+            or candidate.get("dismiss_key") != "Escape"
+            or candidate.get("rendered_bubble_ready_claim") is not False
+            or handled
+            or operations
+        ):
+            return None
+
+    if synthetic and (
+        handled
+        or operation_types != ["hide-preedit-text"]
+        or set(response) != {
+            "handled",
+            "operations",
+            "error",
+            "runtime_available",
+        }
+    ):
+        return None
+    return operations
+
+
+def _runtime_response_valid_for_request(request: Any, response: Any) -> bool:
+    operations = _validated_runtime_response_operations(response)
+    if operations is None or response.get("error") is not None:
+        return False
+    if not isinstance(request, dict) or not isinstance(request.get("type"), str):
+        return False
+    request_type = request["type"]
+    operation_types = [operation["type"] for operation in operations]
+    handled = response["handled"]
+    candidate = response.get("candidate")
+    if request_type == "health":
+        return not handled and not operations and candidate is None
+    if request_type in {
+        "focus-in",
+        "focus-out",
+        "reset",
+        "content-purpose-changed",
+        "table-changed",
+    }:
+        return (
+            not handled
+            and candidate is None
+            and operation_types in ([], ["hide-preedit-text"])
+        )
+    if request_type == "accept-candidate":
+        return candidate is None and (
+            (not handled and not operations)
+            or (
+                handled
+                and operation_types
+                == ["delete-surrounding-text", "commit-text", "hide-preedit-text"]
+            )
+        )
+    if request_type != "key":
+        return False
+    if not operations:
+        if candidate is None:
+            return not handled
+        unicode_value = request.get("unicode")
+        return bool(
+            not handled
+            and request.get("pressed") is True
+            and request.get("command_modifier_active") is False
+            and isinstance(unicode_value, str)
+            and len(unicode_value) == 1
+            and _request_boundary(request) is None
+            and candidate["trigger"].endswith(unicode_value)
+        )
+    if operation_types == ["hide-preedit-text"]:
+        return (not handled) or (
+            handled
+            and request.get("pressed") is True
+            and request.get("keyval") == IBUS_KEY_ESCAPE
+        )
+    if operation_types == [
+        "delete-surrounding-text",
+        "commit-text",
+        "hide-preedit-text",
+    ]:
+        forwards_boundary = request.get("keyval") in {IBUS_KEY_TAB, IBUS_KEY_RETURN}
+        return handled != forwards_boundary
+    return False
+
+
+def _runtime_response_ok(response: dict[str, Any]) -> bool:
+    return bool(
+        _validated_runtime_response_operations(
+            response,
+            allow_synthetic_passthrough=True,
+        )
+        is not None
+        and response.get("error") is None
+        and response.get("runtime_available") is not False
+    )
 
 
 def _key_request(keyval: int, state: int, ibus: Any) -> dict[str, Any]:
@@ -744,8 +1550,15 @@ def _unicode_for_keyval(keyval: int, ibus: Any) -> str | None:
             return None
         codepoint = ord(unicode_value)
     else:
-        codepoint = int(unicode_value)
-    if codepoint < 0x20 or codepoint > 0x10FFFF:
+        try:
+            codepoint = int(unicode_value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if (
+        codepoint < 0x20
+        or 0xD800 <= codepoint <= 0xDFFF
+        or codepoint > 0x10FFFF
+    ):
         return None
     return chr(codepoint)
 
@@ -770,6 +1583,446 @@ def _content_purpose_request(event_type: str, purpose: int) -> dict[str, Any]:
     return {"type": event_type, "purpose": int(purpose)}
 
 
+def _input_hint_mask(ibus: Any, name: str, fallback: int) -> int:
+    input_hints = getattr(ibus, "InputHints", None)
+    value = getattr(input_hints, name, fallback)
+    try:
+        mask = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return mask if 0 < mask <= 0xFFFFFFFF else fallback
+
+
+def _effective_content_purpose(purpose: Any, hints: Any, ibus: Any) -> int:
+    """Map private/hidden input to the existing fail-closed password contract."""
+    try:
+        if isinstance(purpose, bool) or isinstance(hints, bool):
+            raise TypeError("boolean content type")
+        purpose_value = int(purpose)
+        hints_value = int(hints)
+        if (
+            purpose_value < 0
+            or hints_value < 0
+            or purpose_value > 0xFFFFFFFF
+            or hints_value > 0xFFFFFFFF
+        ):
+            raise ValueError("content type outside guint32 range")
+    except (TypeError, ValueError, OverflowError):
+        return min(SENSITIVE_INPUT_PURPOSES)
+    sensitive_hints = _input_hint_mask(
+        ibus,
+        "PRIVATE",
+        IBUS_INPUT_HINT_PRIVATE_FALLBACK,
+    ) | _input_hint_mask(
+        ibus,
+        "HIDDEN_TEXT",
+        IBUS_INPUT_HINT_HIDDEN_TEXT_FALLBACK,
+    )
+    if purpose_value in SENSITIVE_INPUT_PURPOSES or hints_value & sensitive_hints:
+        return min(SENSITIVE_INPUT_PURPOSES)
+    return purpose_value
+
+
+SurroundingTextSnapshot = tuple[str, int, int]
+
+
+class FocusBoundSurroundingTextCache:
+    """Owns only validated callback snapshots from the current focus lifetime."""
+
+    def __init__(self) -> None:
+        self._focus_generation = 0
+        self._focused = False
+        self._snapshot_generation = -1
+        self._snapshot: SurroundingTextSnapshot | None = None
+
+    def begin_focus(self) -> None:
+        self._focus_generation += 1
+        self._focused = True
+        self.invalidate()
+
+    def end_focus(self) -> None:
+        self._focus_generation += 1
+        self._focused = False
+        self.invalidate()
+
+    def observe(self, snapshot: SurroundingTextSnapshot) -> bool:
+        if not self._focused:
+            self.invalidate()
+            return False
+        self._snapshot = snapshot
+        self._snapshot_generation = self._focus_generation
+        return True
+
+    def current(self) -> SurroundingTextSnapshot | None:
+        if (
+            not self._focused
+            or self._snapshot_generation != self._focus_generation
+        ):
+            return None
+        return self._snapshot
+
+    def invalidate(self) -> None:
+        self._snapshot_generation = -1
+        self._snapshot = None
+
+
+def _ibus_text_value(text: Any) -> str | None:
+    if isinstance(text, str):
+        return text
+    getter = getattr(text, "get_text", None)
+    if callable(getter):
+        try:
+            value = getter()
+        except (TypeError, ValueError, RuntimeError):
+            return None
+        return value if isinstance(value, str) else None
+    value = getattr(text, "text", None)
+    return value if isinstance(value, str) else None
+
+
+def _normalize_surrounding_text(
+    text: Any,
+    cursor_pos: Any,
+    anchor_pos: Any,
+) -> SurroundingTextSnapshot | None:
+    value = _ibus_text_value(text)
+    if (
+        not _bounded_utf8_text(
+            value,
+            allow_empty=True,
+            max_characters=SURROUNDING_TEXT_MAX_CHARACTERS,
+            max_bytes=SURROUNDING_TEXT_MAX_BYTES,
+        )
+        or isinstance(cursor_pos, bool)
+        or isinstance(anchor_pos, bool)
+        or not isinstance(cursor_pos, int)
+        or not isinstance(anchor_pos, int)
+        or cursor_pos < 0
+        or anchor_pos < 0
+        or cursor_pos > len(value)
+        or anchor_pos > len(value)
+    ):
+        return None
+    return (value, cursor_pos, anchor_pos)
+
+
+def _snapshot_after_insert(
+    snapshot: SurroundingTextSnapshot,
+    value: str,
+) -> SurroundingTextSnapshot | None:
+    text, cursor_pos, anchor_pos = snapshot
+    if cursor_pos != anchor_pos or len(value) != 1:
+        return None
+    next_text = f"{text[:cursor_pos]}{value}{text[cursor_pos:]}"
+    if not _bounded_utf8_text(
+        next_text,
+        allow_empty=True,
+        max_characters=SURROUNDING_TEXT_MAX_CHARACTERS,
+        max_bytes=SURROUNDING_TEXT_MAX_BYTES,
+    ):
+        return None
+    return (
+        next_text,
+        cursor_pos + 1,
+        cursor_pos + 1,
+    )
+
+
+def _snapshot_after_backspace(
+    snapshot: SurroundingTextSnapshot,
+) -> SurroundingTextSnapshot | None:
+    text, cursor_pos, anchor_pos = snapshot
+    if cursor_pos != anchor_pos or cursor_pos == 0:
+        return None
+    next_text = f"{text[: cursor_pos - 1]}{text[cursor_pos:]}"
+    return (
+        next_text,
+        cursor_pos - 1,
+        cursor_pos - 1,
+    )
+
+
+def _request_boundary(request: dict[str, Any]) -> str | None:
+    if request.get("pressed") is not True:
+        return None
+    keyval = request.get("keyval")
+    if keyval == IBUS_KEY_RETURN:
+        return "\n"
+    if keyval == IBUS_KEY_TAB:
+        return "\t"
+    value = request.get("unicode")
+    if not isinstance(value, str) or len(value) != 1:
+        return None
+    if value.isspace() or value in ".,;:!?)]}":
+        return value
+    return None
+
+
+def _replacement_operations(response: dict[str, Any]) -> list[dict[str, Any]]:
+    operations = response.get("operations")
+    if not isinstance(operations, list):
+        return []
+    return [operation for operation in operations if isinstance(operation, dict)]
+
+
+def _response_has_destructive_replacement(response: dict[str, Any]) -> bool:
+    operation_types = {
+        operation.get("type") for operation in _replacement_operations(response)
+    }
+    return bool(
+        operation_types.intersection(
+            {"delete-surrounding-text", "commit-text"}
+        )
+    )
+
+
+def _fail_open_replacement_response(response: dict[str, Any]) -> dict[str, Any]:
+    fail_open = dict(response)
+    fail_open["handled"] = False
+    fail_open["operations"] = [{"type": "hide-preedit-text"}]
+    fail_open["candidate"] = None
+    return fail_open
+
+
+class SurroundingTextCommitGuard:
+    """Binds a replacement to one continuous, capability-backed text edit."""
+
+    def __init__(self) -> None:
+        self._supported = False
+        self._expected_snapshot: SurroundingTextSnapshot | None = None
+        self._tracked_word = ""
+        self._candidate_trigger: str | None = None
+        self._candidate_replacement: str | None = None
+        self._candidate_anchor: SurroundingTextSnapshot | None = None
+        self._candidate_anchor_confirmed = False
+        self._commit_anchor: SurroundingTextSnapshot | None = None
+        self._generation = 0
+
+    def set_supported(self, supported: bool) -> bool:
+        supported = bool(supported)
+        lost_support = self._supported and not supported
+        self._supported = supported
+        if lost_support:
+            self.reset()
+        return lost_support
+
+    def reset(self) -> None:
+        self._expected_snapshot = None
+        self._tracked_word = ""
+        self._clear_candidate()
+
+    def observe_surrounding(self, snapshot: SurroundingTextSnapshot | None) -> bool:
+        if self._expected_snapshot is None:
+            return False
+        if snapshot != self._expected_snapshot:
+            self.reset()
+            return True
+        if self._candidate_anchor == snapshot:
+            self._candidate_anchor_confirmed = True
+        return False
+
+    def prepare_key(
+        self,
+        request: dict[str, Any],
+        snapshot: SurroundingTextSnapshot | None,
+    ) -> bool:
+        self._commit_anchor = None
+        if request.get("pressed") is not True:
+            return False
+        keyval = request.get("keyval")
+        if request.get("command_modifier_active") is True or keyval in {
+            IBUS_KEY_LEFT,
+            IBUS_KEY_UP,
+            IBUS_KEY_RIGHT,
+            IBUS_KEY_DOWN,
+            IBUS_KEY_DELETE,
+            IBUS_KEY_ESCAPE,
+        }:
+            self.reset()
+            return False
+
+        if keyval == IBUS_KEY_BACKSPACE:
+            if not self._can_continue(snapshot):
+                had_tracking = bool(self._tracked_word or self._expected_snapshot)
+                self.reset()
+                return had_tracking or not self._supported
+            expected = _snapshot_after_backspace(snapshot)
+            if expected is None:
+                self.reset()
+                return True
+            self._tracked_word = self._tracked_word[:-1]
+            self._expected_snapshot = expected
+            self._clear_candidate()
+            return False
+
+        boundary = _request_boundary(request)
+        if boundary is not None:
+            if not self._tracked_word:
+                self.reset()
+                return False
+            if not self._can_continue(snapshot):
+                self.reset()
+                return True
+            if (
+                self._candidate_trigger == self._tracked_word
+                and self._candidate_anchor == snapshot
+                and self._candidate_anchor_confirmed
+            ):
+                self._commit_anchor = snapshot
+                return False
+            self.reset()
+            return True
+
+        value = request.get("unicode")
+        if not isinstance(value, str) or len(value) != 1:
+            return False
+        if not self._supported or snapshot is None or snapshot[1] != snapshot[2]:
+            self.reset()
+            return True
+        reset_runtime = self._expected_snapshot is not None and snapshot != self._expected_snapshot
+        if reset_runtime:
+            self.reset()
+        expected = _snapshot_after_insert(snapshot, value)
+        if expected is None:
+            self.reset()
+            return True
+        self._tracked_word += value
+        self._expected_snapshot = expected
+        self._clear_candidate()
+        return reset_runtime
+
+    def prepare_candidate_accept(
+        self,
+        snapshot: SurroundingTextSnapshot | None,
+    ) -> bool:
+        self._commit_anchor = None
+        if (
+            self._can_continue(snapshot)
+            and self._candidate_trigger == self._tracked_word
+            and self._candidate_anchor == snapshot
+            and self._candidate_anchor_confirmed
+        ):
+            self._commit_anchor = snapshot
+            return True
+        self.reset()
+        return False
+
+    def validate_response(
+        self,
+        request: dict[str, Any] | None,
+        response: dict[str, Any],
+        snapshot: SurroundingTextSnapshot | None,
+    ) -> dict[str, Any]:
+        if _response_has_destructive_replacement(response):
+            if self._valid_replacement_transaction(request, response, snapshot):
+                self.reset()
+                return response
+            self.reset()
+            return _fail_open_replacement_response(response)
+
+        candidate = response.get("candidate")
+        if isinstance(candidate, dict):
+            trigger = candidate.get("trigger")
+            replacement = candidate.get("replacement")
+            if (
+                not isinstance(trigger, str)
+                or not trigger
+                or not isinstance(replacement, str)
+                or not replacement
+                or trigger != self._tracked_word
+                or self._expected_snapshot is None
+            ):
+                self.reset()
+                return _fail_open_replacement_response(response)
+            self._generation += 1
+            self._candidate_trigger = trigger
+            self._candidate_replacement = replacement
+            self._candidate_anchor = self._expected_snapshot
+            self._candidate_anchor_confirmed = False
+
+        if response.get("runtime_available") is False or response.get("error") is not None:
+            self.reset()
+            return response
+
+        if request is not None:
+            boundary = _request_boundary(request)
+            if boundary is not None:
+                if response.get("handled") is False and snapshot is not None:
+                    self._expected_snapshot = _snapshot_after_insert(snapshot, boundary)
+                else:
+                    self._expected_snapshot = None
+                self._tracked_word = ""
+                self._clear_candidate()
+        return response
+
+    def _can_continue(self, snapshot: SurroundingTextSnapshot | None) -> bool:
+        return bool(
+            self._supported
+            and snapshot is not None
+            and snapshot[1] == snapshot[2]
+            and self._expected_snapshot == snapshot
+        )
+
+    def _valid_replacement_transaction(
+        self,
+        request: dict[str, Any] | None,
+        response: dict[str, Any],
+        snapshot: SurroundingTextSnapshot | None,
+    ) -> bool:
+        if response.get("error") is not None:
+            return False
+        operations = _replacement_operations(response)
+        if [operation.get("type") for operation in operations] != [
+            "delete-surrounding-text",
+            "commit-text",
+            "hide-preedit-text",
+        ]:
+            return False
+        delete = operations[0]
+        trigger = delete.get("expected_text")
+        if not isinstance(trigger, str) or not trigger:
+            return False
+        trigger_chars = len(trigger)
+        boundary = _request_boundary(request) if request is not None else None
+        expected_commit = self._candidate_replacement
+        if (
+            expected_commit is not None
+            and boundary is not None
+            and request.get("keyval") not in {IBUS_KEY_TAB, IBUS_KEY_RETURN}
+        ):
+            expected_commit = f"{expected_commit}{boundary}"
+        if (
+            isinstance(delete.get("offset"), bool)
+            or isinstance(delete.get("n_chars"), bool)
+            or delete.get("offset") != -trigger_chars
+            or delete.get("n_chars") != trigger_chars
+            or not isinstance(operations[1].get("text"), str)
+            or expected_commit is None
+            or operations[1].get("text") != expected_commit
+            or trigger != self._tracked_word
+            or trigger != self._candidate_trigger
+            or not self._candidate_anchor_confirmed
+            or snapshot is None
+            or snapshot != self._expected_snapshot
+            or snapshot != self._candidate_anchor
+            or snapshot != self._commit_anchor
+        ):
+            return False
+        text, cursor_pos, anchor_pos = snapshot
+        return (
+            cursor_pos == anchor_pos
+            and cursor_pos >= trigger_chars
+            and text[cursor_pos - trigger_chars : cursor_pos] == trigger
+        )
+
+    def _clear_candidate(self) -> None:
+        self._candidate_trigger = None
+        self._candidate_replacement = None
+        self._candidate_anchor = None
+        self._candidate_anchor_confirmed = False
+        self._commit_anchor = None
+
+
 def _send_table_changed_if_needed(
     table_bridge: ShortcutTableBridge,
     runtime_bridge: RuntimeBridge,
@@ -777,17 +2030,25 @@ def _send_table_changed_if_needed(
     text_factory: Callable[[str], Any],
     candidate_state: CandidateMetadataState | None = None,
     render_controller: CandidateBubbleRenderIntentController | None = None,
-) -> None:
+    proof_ledger: RedactedAdapterCallbackLedger | None = None,
+) -> tuple[bool, bool]:
     request = table_bridge.maybe_changed_request()
     if request is None:
-        return
-    _apply_response_operations_with_render_intent(
+        return (False, True)
+    response = runtime_bridge.send(request)
+    if not _runtime_response_ok(response):
+        table_bridge.invalidate()
+    if proof_ledger is not None:
+        shortcuts = request.get("shortcuts", [])
+        proof_ledger.table_reload(len(shortcuts) if isinstance(shortcuts, list) else 0)
+    applied = _apply_response_operations_with_render_intent(
         target,
-        runtime_bridge.send(request),
+        response,
         text_factory,
         candidate_state,
         render_controller,
     )
+    return (True, applied)
 
 
 def _apply_response_operations(
@@ -795,31 +2056,41 @@ def _apply_response_operations(
     response: dict[str, Any],
     text_factory: Callable[[str], Any],
     candidate_state: CandidateMetadataState | None = None,
-) -> None:
+) -> bool:
+    operations = _validated_runtime_response_operations(
+        response,
+        allow_synthetic_passthrough=True,
+    )
+    if operations is None:
+        return False
+    prepared_text: dict[int, Any] = {}
+    for index, operation in enumerate(operations):
+        if operation["type"] != "commit-text":
+            continue
+        try:
+            value = text_factory(operation["text"])
+        except Exception:  # pragma: no cover - defensive GI boundary.
+            return False
+        if value is None:
+            return False
+        prepared_text[index] = value
+    try:
+        for index, operation in enumerate(operations):
+            operation_type = operation.get("type")
+            if operation_type == "hide-preedit-text":
+                target.hide_preedit_text()
+            elif operation_type == "delete-surrounding-text":
+                target.delete_surrounding_text(
+                    operation["offset"],
+                    operation["n_chars"],
+                )
+            elif operation_type == "commit-text":
+                target.commit_text(prepared_text[index])
+    except Exception:  # pragma: no cover - defensive GI boundary.
+        return False
     if candidate_state is not None:
         candidate_state.observe_response(response)
-    operations = response.get("operations", [])
-    if not isinstance(operations, list):
-        return
-    for operation in operations:
-        if not isinstance(operation, dict):
-            continue
-        operation_type = operation.get("type")
-        if operation_type == "update-preedit-text":
-            target.update_preedit_text(
-                text_factory(str(operation.get("text", ""))),
-                int(operation.get("cursor_pos", 0)),
-                bool(operation.get("visible", False)),
-            )
-        elif operation_type == "hide-preedit-text":
-            target.hide_preedit_text()
-        elif operation_type == "delete-surrounding-text":
-            target.delete_surrounding_text(
-                int(operation.get("offset", 0)),
-                int(operation.get("n_chars", 0)),
-            )
-        elif operation_type == "commit-text":
-            target.commit_text(text_factory(str(operation.get("text", ""))))
+    return True
 
 
 def _apply_response_operations_with_render_intent(
@@ -828,10 +2099,12 @@ def _apply_response_operations_with_render_intent(
     text_factory: Callable[[str], Any],
     candidate_state: CandidateMetadataState | None = None,
     render_controller: CandidateBubbleRenderIntentController | None = None,
-) -> None:
-    _apply_response_operations(target, response, text_factory, candidate_state)
+) -> bool:
+    if not _apply_response_operations(target, response, text_factory, candidate_state):
+        return False
     if render_controller is not None:
-        render_controller.emit_state(candidate_state)
+        return render_controller.emit_state(candidate_state)
+    return True
 
 
 def _run_self_test() -> None:
@@ -859,6 +2132,13 @@ def _run_self_test() -> None:
                 return ""
             return chr(keyval)
 
+    class FakeSurrogateIbus:
+        ModifierType = FakeModifierType
+
+        @staticmethod
+        def keyval_to_unicode(_keyval: int) -> int:
+            return 0xD800
+
     assert _key_request(ord("o"), 0, FakeIbus) == {
         "type": "key",
         "keyval": ord("o"),
@@ -876,18 +2156,86 @@ def _run_self_test() -> None:
     assert _key_request(ord("o"), FakeModifierType.RELEASE_MASK, FakeIbus)[
         "pressed"
     ] is False
+    assert _candidate_click_request(0, 1) == {"type": "accept-candidate"}
+    assert _candidate_click_request(1, 1) is None
+    assert _candidate_click_request(0, 3) is None
+    assert _candidate_click_request(True, 1) is None
     assert _key_request(ord("w"), FakeModifierType.CONTROL_MASK, FakeIbus)[
         "command_modifier_active"
     ] is True
     assert _key_request(0xFF0D, 0, FakeIbus)["unicode"] is None
     assert _key_request(0xFF0D, 0, FakeStringIbus)["unicode"] is None
+    assert _key_request(0x0100D800, 0, FakeSurrogateIbus)["unicode"] is None
     assert _content_purpose_request("content-purpose-changed", 9) == {
         "type": "content-purpose-changed",
         "purpose": 9,
     }
+    assert _effective_content_purpose(0, 0, FakeIbus) == 0
+    assert (
+        _effective_content_purpose(
+            0,
+            IBUS_INPUT_HINT_PRIVATE_FALLBACK,
+            FakeIbus,
+        )
+        == 8
+    )
+    assert (
+        _effective_content_purpose(
+            0,
+            IBUS_INPUT_HINT_HIDDEN_TEXT_FALLBACK,
+            FakeIbus,
+        )
+        == 8
+    )
+    assert _effective_content_purpose(0, "invalid", FakeIbus) == 8
+    assert _effective_content_purpose(True, 0, FakeIbus) == 8
+    assert _effective_content_purpose(0x100000000, 0, FakeIbus) == 8
+    assert _effective_content_purpose(0, 0x100000000, FakeIbus) == 8
+    assert _runtime_text_is_safe("on my way")
+    assert _runtime_text_is_safe("line one\nline two")
+    assert not _runtime_text_is_safe("x\x00y")
+    assert not _runtime_text_is_safe("x\ud800y")
+    assert not _runtime_text_is_safe("x" * (RUNTIME_TEXT_MAX_CHARACTERS + 1))
+    bounded_surrounding = "x" * SURROUNDING_TEXT_MAX_CHARACTERS
+    assert _normalize_surrounding_text(
+        bounded_surrounding,
+        len(bounded_surrounding),
+        len(bounded_surrounding),
+    ) == (
+        bounded_surrounding,
+        len(bounded_surrounding),
+        len(bounded_surrounding),
+    )
+    assert (
+        _normalize_surrounding_text(
+            f"{bounded_surrounding}x",
+            len(bounded_surrounding) + 1,
+            len(bounded_surrounding) + 1,
+        )
+        is None
+    )
+    multibyte_surrounding = "é" * ((SURROUNDING_TEXT_MAX_BYTES // 2) + 1)
+    assert _normalize_surrounding_text(
+        multibyte_surrounding,
+        len(multibyte_surrounding),
+        len(multibyte_surrounding),
+    ) is None
+    callback_snapshot: SurroundingTextSnapshot = ("typed here", 10, 10)
+    snapshot_cache = FocusBoundSurroundingTextCache()
+    assert snapshot_cache.current() is None
+    snapshot_cache.begin_focus()
+    assert snapshot_cache.observe(callback_snapshot) is True
+    assert snapshot_cache.current() == callback_snapshot
+    snapshot_cache.end_focus()
+    assert snapshot_cache.current() is None
+    snapshot_cache.begin_focus()
+    assert snapshot_cache.current() is None
+    snapshot_cache.invalidate()
+    assert snapshot_cache.current() is None
     assert _candidate_metadata_from_response(
         {
             "candidate": {
+                "trigger": "omw",
                 "replacement": "on my way",
                 "accept_on": "word-boundary",
                 "dismiss_key": "Escape",
@@ -903,6 +2251,7 @@ def _run_self_test() -> None:
     assert _candidate_metadata_from_response(
         {
             "candidate": {
+                "trigger": "omw",
                 "replacement": "on my way",
                 "accept_on": "word-boundary",
                 "dismiss_key": "Escape",
@@ -910,6 +2259,135 @@ def _run_self_test() -> None:
             }
         }
     ) is None
+
+    def guard_key(value: str) -> dict[str, Any]:
+        return {
+            "type": "key",
+            "keyval": ord(value),
+            "unicode": value,
+            "pressed": True,
+            "command_modifier_active": False,
+        }
+
+    def guard_candidate_response() -> dict[str, Any]:
+        return {
+            "handled": False,
+            "operations": [],
+            "candidate": {
+                "trigger": "omw",
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            },
+            "error": None,
+        }
+
+    def guard_commit_response() -> dict[str, Any]:
+        return {
+            "handled": True,
+            "operations": [
+                {
+                    "type": "delete-surrounding-text",
+                    "offset": -3,
+                    "n_chars": 3,
+                    "expected_text": "omw",
+                },
+                {"type": "commit-text", "text": "on my way "},
+                {"type": "hide-preedit-text"},
+            ],
+            "candidate": None,
+            "error": None,
+        }
+
+    guard = SurroundingTextCommitGuard()
+    assert guard.set_supported(True) is False
+    guard_snapshot: SurroundingTextSnapshot = (" and omw", 0, 0)
+    for character in "omw":
+        request = guard_key(character)
+        assert guard.prepare_key(request, guard_snapshot) is False
+        guard_snapshot = _snapshot_after_insert(guard_snapshot, character)
+        assert guard_snapshot is not None
+        response = (
+            guard_candidate_response()
+            if character == "w"
+            else {"handled": False, "operations": [], "error": None}
+        )
+        assert guard.validate_response(request, response, guard_snapshot) is response
+        assert guard.observe_surrounding(guard_snapshot) is False
+    boundary_request = guard_key(" ")
+    assert guard.prepare_key(boundary_request, guard_snapshot) is False
+    commit_response = guard_commit_response()
+    assert (
+        guard.validate_response(boundary_request, commit_response, guard_snapshot)
+        is commit_response
+    )
+
+    swapped_replacement_guard = SurroundingTextCommitGuard()
+    swapped_replacement_guard.set_supported(True)
+    swapped_snapshot: SurroundingTextSnapshot = ("", 0, 0)
+    for character in "omw":
+        request = guard_key(character)
+        assert swapped_replacement_guard.prepare_key(request, swapped_snapshot) is False
+        swapped_snapshot = _snapshot_after_insert(swapped_snapshot, character)
+        assert swapped_snapshot is not None
+        response = (
+            guard_candidate_response()
+            if character == "w"
+            else {"handled": False, "operations": [], "error": None}
+        )
+        swapped_replacement_guard.validate_response(request, response, swapped_snapshot)
+        assert swapped_replacement_guard.observe_surrounding(swapped_snapshot) is False
+    assert swapped_replacement_guard.prepare_key(boundary_request, swapped_snapshot) is False
+    swapped_commit = guard_commit_response()
+    swapped_commit["operations"][1]["text"] = "different replacement "
+    rejected_swap = swapped_replacement_guard.validate_response(
+        boundary_request,
+        swapped_commit,
+        swapped_snapshot,
+    )
+    assert rejected_swap["handled"] is False
+    assert rejected_swap["operations"] == [{"type": "hide-preedit-text"}]
+
+    relocation_guard = SurroundingTextCommitGuard()
+    relocation_guard.set_supported(True)
+    relocation_snapshot: SurroundingTextSnapshot = (" and omw", 0, 0)
+    for character in "omw":
+        request = guard_key(character)
+        assert relocation_guard.prepare_key(request, relocation_snapshot) is False
+        relocation_snapshot = _snapshot_after_insert(relocation_snapshot, character)
+        assert relocation_snapshot is not None
+        response = (
+            guard_candidate_response()
+            if character == "w"
+            else {"handled": False, "operations": [], "error": None}
+        )
+        relocation_guard.validate_response(request, response, relocation_snapshot)
+        assert relocation_guard.observe_surrounding(relocation_snapshot) is False
+    same_trigger_elsewhere = (
+        relocation_snapshot[0],
+        len(relocation_snapshot[0]),
+        len(relocation_snapshot[0]),
+    )
+    assert relocation_snapshot[0].endswith("omw")
+    assert relocation_guard.observe_surrounding(same_trigger_elsewhere) is True
+    stale_commit = relocation_guard.validate_response(
+        boundary_request,
+        guard_commit_response(),
+        same_trigger_elsewhere,
+    )
+    assert stale_commit["handled"] is False
+    assert stale_commit["operations"] == [{"type": "hide-preedit-text"}]
+
+    unsupported_guard = SurroundingTextCommitGuard()
+    assert unsupported_guard.prepare_key(guard_key("o"), ("", 0, 0)) is True
+    unsafe_commit = unsupported_guard.validate_response(
+        boundary_request,
+        guard_commit_response(),
+        ("omw", 3, 3),
+    )
+    assert unsafe_commit["handled"] is False
+    assert unsafe_commit["operations"] == [{"type": "hide-preedit-text"}]
 
     class FakeTarget:
         def __init__(self) -> None:
@@ -933,15 +2411,9 @@ def _run_self_test() -> None:
         target,
         {
             "handled": False,
-            "operations": [
-                {
-                    "type": "update-preedit-text",
-                    "text": "on my way",
-                    "cursor_pos": 9,
-                    "visible": True,
-                }
-            ],
+            "operations": [],
             "candidate": {
+                "trigger": "omw",
                 "replacement": "on my way",
                 "accept_on": "word-boundary",
                 "dismiss_key": "Escape",
@@ -967,6 +2439,26 @@ def _run_self_test() -> None:
         "live_overlay_claim": False,
         "runtime_ready_claim": False,
     }
+    assert target.calls == []
+    # A real IBus key-release callback produces an ordinary pass-through
+    # response. It must not dismiss the candidate published by the key press.
+    _apply_response_operations(
+        target,
+        {"handled": False, "operations": []},
+        lambda text: text,
+        candidate_state,
+    )
+    assert candidate_state.current is not None
+    assert candidate_state.last_overlay_intent is None
+    # Malformed operation payloads remain fail-open and preserve the candidate.
+    _apply_response_operations(
+        target,
+        {"handled": False, "operations": None},
+        lambda text: text,
+        candidate_state,
+    )
+    assert candidate_state.current is not None
+    assert candidate_state.last_overlay_intent is None
     _apply_response_operations(
         target,
         {
@@ -1019,11 +2511,17 @@ def _run_self_test() -> None:
                     "cursor_pos": 10,
                     "visible": True,
                 },
-                {"type": "delete-surrounding-text", "offset": -3, "n_chars": 3},
+                {
+                    "type": "delete-surrounding-text",
+                    "offset": -3,
+                    "n_chars": 3,
+                    "expected_text": "omw",
+                },
                 {"type": "commit-text", "text": "On my way!"},
                 {"type": "hide-preedit-text"},
             ],
             "candidate": {
+                "trigger": "omw",
                 "replacement": "On my way!",
                 "accept_on": "word-boundary",
                 "dismiss_key": "Escape",
@@ -1032,12 +2530,213 @@ def _run_self_test() -> None:
         },
         lambda text: text,
     )
+    assert target.calls == []
+
+    valid_commit_response = {
+        "handled": True,
+        "operations": [
+            {
+                "type": "delete-surrounding-text",
+                "offset": -3,
+                "n_chars": 3,
+                "expected_text": "omw",
+            },
+            {"type": "commit-text", "text": "On my way!"},
+            {"type": "hide-preedit-text"},
+        ],
+        "candidate": None,
+        "error": None,
+    }
+    assert _runtime_response_valid_for_request(
+        guard_key(" "),
+        valid_commit_response,
+    )
+    _apply_response_operations(
+        target,
+        valid_commit_response,
+        lambda text: text,
+    )
     assert target.calls == [
-        ("update", "On my way!", 10, True),
         ("delete", -3, 3),
         ("commit", "On my way!"),
         ("hide",),
     ]
+
+    candidate_response = guard_candidate_response()
+    assert _runtime_response_valid_for_request(guard_key("w"), candidate_response)
+    assert _runtime_response_valid_for_request(
+        {"type": "health"},
+        {"handled": False, "operations": [], "error": None},
+    )
+    forwarding_commit = dict(valid_commit_response)
+    forwarding_commit["handled"] = False
+    assert _runtime_response_valid_for_request(
+        {
+            "type": "key",
+            "keyval": IBUS_KEY_RETURN,
+            "unicode": None,
+            "pressed": True,
+            "command_modifier_active": False,
+        },
+        forwarding_commit,
+    )
+    assert not _runtime_response_valid_for_request(
+        {"type": "health"},
+        {"handled": False, "operations": [], "error": "runtime error"},
+    )
+    for malformed in [
+        {
+            "handled": False,
+            "operations": [
+                {
+                    "type": "update-preedit-text",
+                    "text": "candidate",
+                    "cursor_pos": 9,
+                    "visible": True,
+                }
+            ],
+            "candidate": candidate_response["candidate"],
+        },
+        {
+            "handled": True,
+            "operations": valid_commit_response["operations"],
+            "candidate": None,
+            "error": "must never commit",
+        },
+        {
+            "handled": False,
+            "operations": [{"type": "unknown-operation"}],
+        },
+        {
+            "handled": True,
+            "operations": [
+                {
+                    "type": "delete-surrounding-text",
+                    "offset": -3,
+                    "n_chars": 3,
+                    "expected_text": "omw",
+                },
+                {"type": "commit-text", "text": "x\x00y"},
+                {"type": "hide-preedit-text"},
+            ],
+        },
+        {
+            "handled": True,
+            "operations": [
+                {
+                    "type": "delete-surrounding-text",
+                    "offset": -3,
+                    "n_chars": 3,
+                    "expected_text": "omw",
+                },
+                {"type": "commit-text", "text": "x\ud800y"},
+                {"type": "hide-preedit-text"},
+            ],
+        },
+        {
+            "handled": False,
+            "operations": [],
+            "unexpected": True,
+        },
+    ]:
+        assert _validated_runtime_response_operations(malformed) is None
+        untouched = FakeTarget()
+        _apply_response_operations(untouched, malformed, lambda text: text)
+        assert untouched.calls == []
+
+    factory_failure_target = FakeTarget()
+
+    def rejecting_text_factory(_text: str) -> Any:
+        raise ValueError("text factory rejected value")
+
+    _apply_response_operations(
+        factory_failure_target,
+        valid_commit_response,
+        rejecting_text_factory,
+    )
+    assert factory_failure_target.calls == []
+
+    def assert_failed_candidate_publication_disarms(
+        text_factory: Callable[[str], Any],
+        render_controller: CandidateBubbleRenderIntentController,
+    ) -> None:
+        publication_guard = SurroundingTextCommitGuard()
+        publication_guard.set_supported(True)
+        publication_snapshot: SurroundingTextSnapshot = ("", 0, 0)
+        publication_target = FakeTarget()
+        publication_state = CandidateMetadataState()
+        for character in "omw":
+            request = guard_key(character)
+            assert publication_guard.prepare_key(request, publication_snapshot) is False
+            publication_snapshot = _snapshot_after_insert(
+                publication_snapshot,
+                character,
+            )
+            assert publication_snapshot is not None
+            response = (
+                guard_candidate_response()
+                if character == "w"
+                else {"handled": False, "operations": [], "error": None}
+            )
+            assert (
+                publication_guard.validate_response(
+                    request,
+                    response,
+                    publication_snapshot,
+                )
+                is response
+            )
+            applied = _apply_response_operations_with_render_intent(
+                publication_target,
+                response,
+                text_factory,
+                publication_state,
+                render_controller,
+            )
+            if character == "w":
+                assert applied is False
+                publication_guard.reset()
+            else:
+                assert applied is True
+            assert publication_guard.observe_surrounding(publication_snapshot) is False
+        boundary = guard_key(" ")
+        assert publication_guard.prepare_key(boundary, publication_snapshot) is False
+        rejected = publication_guard.validate_response(
+            boundary,
+            guard_commit_response(),
+            publication_snapshot,
+        )
+        assert rejected["handled"] is False
+        assert rejected["operations"] == [{"type": "hide-preedit-text"}]
+
+    class RejectingCandidateSink(CandidateBubbleRenderIntentSink):
+        def publish(self, intent: dict[str, Any]) -> bool:
+            if intent.get("action") == "show-candidate":
+                raise RuntimeError("native candidate publication failed")
+            return True
+
+    assert_failed_candidate_publication_disarms(
+        lambda text: text,
+        CandidateBubbleRenderIntentController(sink=RejectingCandidateSink()),
+    )
+
+    recovered_target = FakeTarget()
+    recovered_candidate = CandidateMetadataState()
+    _apply_response_operations(
+        recovered_target,
+        candidate_response,
+        lambda text: text,
+        recovered_candidate,
+    )
+    assert recovered_candidate.current is not None
+    _apply_response_operations(
+        recovered_target,
+        _passthrough_response(),
+        lambda text: text,
+        recovered_candidate,
+    )
+    assert recovered_candidate.current is None
+    assert recovered_target.calls[-1:] == [("hide",)]
 
     payload = capability_payload(["/bin/false"])
     assert payload["ready"] is False
@@ -1052,13 +2751,42 @@ def _run_self_test() -> None:
             {"replace": "", "with": "drop"},
             {"replace": "drop", "with": ""},
             {"replace": "omw", "with": "on my way now"},
-            "not an entry",
         ]
     ) == [{"replace": "omw", "with": "on my way now"}]
+    assert _sanitize_shortcuts(
+        [
+            {"replace": "omw", "with": "on my way"},
+            {"replace": True, "with": 123},
+        ]
+    ) == []
+    assert _sanitize_shortcuts([{"replace": "bad\x00", "with": "value"}]) == []
+    assert _sanitize_shortcuts([{"replace": "bad", "with": "x\ud800y"}]) == []
 
     with tempfile.TemporaryDirectory() as tmpdir:
         table_path = os.path.join(tmpdir, "text-shortcuts.json")
         table_bridge = ShortcutTableBridge(table_path)
+        assert table_bridge.maybe_changed_request() == {
+            "type": "table-changed",
+            "shortcuts": [],
+        }
+        assert table_bridge.maybe_changed_request() is None
+        with open(table_path, "wb") as table_file:
+            table_file.write(b"[" + b" " * MAX_TEXT_SHORTCUTS_TABLE_BYTES)
+        os.chmod(table_path, 0o600)
+        assert table_bridge.maybe_changed_request() == {
+            "type": "table-changed",
+            "shortcuts": [],
+        }
+        assert table_bridge.maybe_changed_request() is None
+        os.chmod(table_path, 0o644)
+        assert table_bridge.maybe_changed_request() == {
+            "type": "table-changed",
+            "shortcuts": [],
+        }
+        assert table_bridge.maybe_changed_request() is None
+        with open(table_path, "wb") as table_file:
+            table_file.write(b"[" + (b"9" * 5000) + b"]")
+        os.chmod(table_path, 0o600)
         assert table_bridge.maybe_changed_request() == {
             "type": "table-changed",
             "shortcuts": [],
@@ -1072,6 +2800,7 @@ def _run_self_test() -> None:
                 ],
                 table_file,
             )
+        os.chmod(table_path, 0o600)
         assert table_bridge.maybe_changed_request() == {
             "type": "table-changed",
             "shortcuts": [
@@ -1080,6 +2809,16 @@ def _run_self_test() -> None:
             ],
         }
         assert table_bridge.maybe_changed_request() is None
+        target_path = os.path.join(tmpdir, "symlink-target.json")
+        with open(target_path, "w", encoding="utf-8") as table_file:
+            json.dump([{"replace": "omw", "with": "not accepted"}], table_file)
+        os.chmod(target_path, 0o600)
+        os.unlink(table_path)
+        os.symlink(target_path, table_path)
+        assert table_bridge.maybe_changed_request() == {
+            "type": "table-changed",
+            "shortcuts": [],
+        }
 
 
 def _key_protocol_event(character: str) -> dict[str, Any]:
@@ -1090,6 +2829,14 @@ def _key_protocol_event(character: str) -> dict[str, Any]:
         "pressed": True,
         "command_modifier_active": False,
     }
+
+
+def _candidate_click_request(index: int, button: int) -> dict[str, str] | None:
+    if type(index) is not int or type(button) is not int:
+        return None
+    if index != 0 or button != 1:
+        return None
+    return {"type": "accept-candidate"}
 
 
 def _special_key_protocol_event(keyval: int) -> dict[str, Any]:
@@ -1330,6 +3077,7 @@ def _run_candidate_bubble_render_intent_self_test() -> dict[str, Any]:
         table_path = os.path.join(tmpdir, "text-shortcuts.json")
         with open(table_path, "w", encoding="utf-8") as table_file:
             json.dump([{"replace": "omw", "with": "on my way"}], table_file)
+        os.chmod(table_path, 0o600)
 
         target = FakeTarget()
         candidate_state = CandidateMetadataState()
@@ -1346,7 +3094,29 @@ def _run_candidate_bubble_render_intent_self_test() -> dict[str, Any]:
             )
 
             type_candidate(runtime, target, candidate_state, controller)
-            assert target.calls == [("update", "on my way", 9, True)]
+            assert target.calls == []
+            before_key_release = len(sink.records)
+            release_response = runtime.send(
+                {
+                    "type": "key",
+                    "keyval": ord("w"),
+                    "unicode": None,
+                    "pressed": False,
+                    "command_modifier_active": False,
+                }
+            )
+            assert release_response.get("handled") is False
+            apply_response(
+                target,
+                release_response,
+                candidate_state,
+                controller,
+            )
+            key_release_preserved_candidate = (
+                candidate_state.current is not None
+                and len(sink.records) == before_key_release
+                and target.calls == []
+            )
             apply_response(
                 target,
                 runtime.send(_special_key_protocol_event(0xFF1B)),
@@ -1365,7 +3135,6 @@ def _run_candidate_bubble_render_intent_self_test() -> dict[str, Any]:
                 controller,
             )
             assert target.calls == [
-                ("update", "on my way", 9, True),
                 ("delete", -3, 3),
                 ("commit", "on my way "),
                 ("hide",),
@@ -1426,19 +3195,13 @@ def _run_candidate_bubble_render_intent_self_test() -> dict[str, Any]:
         anchor_provider=lambda: _rect(120, 140, 1, 22),
         monitor_provider=lambda: _rect(0, 0, 800, 600),
     )
-    _apply_response_operations_with_render_intent(
+    failing_publication_applied = _apply_response_operations_with_render_intent(
         failing_target,
         {
             "handled": False,
-            "operations": [
-                {
-                    "type": "update-preedit-text",
-                    "text": "on my way",
-                    "cursor_pos": 9,
-                    "visible": True,
-                }
-            ],
+            "operations": [],
             "candidate": {
+                "trigger": "omw",
                 "replacement": "on my way",
                 "accept_on": "word-boundary",
                 "dismiss_key": "Escape",
@@ -1449,7 +3212,47 @@ def _run_candidate_bubble_render_intent_self_test() -> dict[str, Any]:
         failing_state,
         failing_controller,
     )
-    sink_failure_fail_open = failing_target.calls == [("update", "on my way", 9, True)]
+    sink_failure_fail_open = (
+        failing_publication_applied is False
+        and failing_target.calls == []
+    )
+
+    runtime_failure_target = FakeTarget()
+    runtime_failure_state = CandidateMetadataState()
+    runtime_failure_sink = RecordingCandidateBubbleRenderIntentSink()
+    runtime_failure_controller = CandidateBubbleRenderIntentController(
+        sink=runtime_failure_sink,
+        anchor_provider=lambda: _rect(120, 140, 1, 22),
+        monitor_provider=lambda: _rect(0, 0, 800, 600),
+    )
+    apply_response(
+        runtime_failure_target,
+        {
+            "handled": False,
+            "operations": [],
+            "candidate": {
+                "trigger": "omw",
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            },
+        },
+        runtime_failure_state,
+        runtime_failure_controller,
+    )
+    apply_response(
+        runtime_failure_target,
+        _passthrough_response(),
+        runtime_failure_state,
+        runtime_failure_controller,
+    )
+    runtime_failure_cleanup = (
+        runtime_failure_target.calls == [("hide",)]
+        and runtime_failure_state.current is None
+        and runtime_failure_sink.records[-1]["action"] == "hide-candidate"
+        and runtime_failure_sink.records[-1]["reason"] == "runtime-unavailable"
+    )
 
     show_count = sum(
         1 for intent in sink.records if intent.get("action") == "show-candidate"
@@ -1475,6 +3278,8 @@ def _run_candidate_bubble_render_intent_self_test() -> dict[str, Any]:
         "focus_out_hide": focus_out_hide,
         "sensitive_hide": sensitive_hide,
         "pass_through_unchanged": pass_through_unchanged,
+        "key_release_preserved_candidate": key_release_preserved_candidate,
+        "runtime_failure_cleanup": runtime_failure_cleanup,
         "sink_failure_fail_open": sink_failure_fail_open,
         "style_class": ACCEPT_BUBBLE_STYLE_CLASS,
         "font_family": "Inter",
@@ -1490,11 +3295,361 @@ def _run_candidate_bubble_render_intent_self_test() -> dict[str, Any]:
     assert payload["focus_out_hide"] is True
     assert payload["sensitive_hide"] is True
     assert payload["pass_through_unchanged"] is True
+    assert payload["key_release_preserved_candidate"] is True
+    assert payload["runtime_failure_cleanup"] is True
     assert payload["sink_failure_fail_open"] is True
     assert all(intent["has_layout"] is True for intent in sink.records)
     assert payload["rendered_bubble_ready_claim"] is False
     assert payload["live_overlay_claim"] is False
     assert payload["runtime_ready_claim"] is False
+    return payload
+
+
+def _run_native_ibus_lookup_renderer_self_test() -> dict[str, Any]:
+    class FakeText:
+        @staticmethod
+        def new_from_string(value: str) -> str:
+            return value
+
+    class FakeLookupTable:
+        created: list["FakeLookupTable"] = []
+
+        def __init__(self) -> None:
+            self.candidates: list[str] = []
+            self.labels: list[str] = []
+            self.orientation: str | None = None
+
+        @classmethod
+        def new(
+            cls,
+            page_size: int,
+            cursor_pos: int,
+            cursor_visible: bool,
+            round_table: bool,
+        ) -> "FakeLookupTable":
+            assert (page_size, cursor_pos, cursor_visible, round_table) == (
+                1,
+                0,
+                False,
+                False,
+            )
+            table = cls()
+            cls.created.append(table)
+            return table
+
+        def append_candidate(self, text: str) -> None:
+            self.candidates.append(text)
+
+        def append_label(self, text: str) -> None:
+            self.labels.append(text)
+
+        def set_orientation(self, orientation: str) -> None:
+            self.orientation = orientation
+
+    class FakeOrientation:
+        SYSTEM = "system"
+
+    class FakeIbus:
+        LookupTable = FakeLookupTable
+        Orientation = FakeOrientation
+        Text = FakeText
+
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        def update_lookup_table(self, table: FakeLookupTable, visible: bool) -> None:
+            self.calls.append(("update-lookup-table", table, visible))
+
+        def hide_lookup_table(self) -> None:
+            self.calls.append(("hide-lookup-table",))
+
+        def update_auxiliary_text(self, text: str, visible: bool) -> None:
+            self.calls.append(("update-auxiliary-text", text, visible))
+
+        def hide_auxiliary_text(self) -> None:
+            self.calls.append(("hide-auxiliary-text",))
+
+    class FakeTarget:
+        def __init__(self) -> None:
+            self.visible_preedit_updates = 0
+
+        def update_preedit_text(
+            self,
+            text: str,
+            cursor_pos: int,
+            visible: bool,
+        ) -> None:
+            del text, cursor_pos
+            if visible:
+                self.visible_preedit_updates += 1
+
+        def hide_preedit_text(self) -> None:
+            return None
+
+        def delete_surrounding_text(self, offset: int, n_chars: int) -> None:
+            del offset, n_chars
+
+        def commit_text(self, text: str) -> None:
+            del text
+
+    class FlakyHideEngine(FakeEngine):
+        def __init__(self) -> None:
+            super().__init__()
+            self.visible = False
+            self.hide_attempts = 0
+
+        def update_lookup_table(self, table: FakeLookupTable, visible: bool) -> None:
+            super().update_lookup_table(table, visible)
+            self.visible = bool(visible)
+
+        def hide_lookup_table(self) -> None:
+            self.hide_attempts += 1
+            if self.hide_attempts <= 2:
+                raise RuntimeError("transient native hide failure")
+            self.visible = False
+            super().hide_lookup_table()
+
+    class FailingShowEngine(FakeEngine):
+        def update_lookup_table(self, table: FakeLookupTable, visible: bool) -> None:
+            del table, visible
+            raise RuntimeError("native show failure")
+
+    class TransientHideEngine(FakeEngine):
+        def __init__(self) -> None:
+            super().__init__()
+            self.visible = False
+            self.hide_attempts = 0
+
+        def update_lookup_table(self, table: FakeLookupTable, visible: bool) -> None:
+            super().update_lookup_table(table, visible)
+            self.visible = bool(visible)
+
+        def hide_lookup_table(self) -> None:
+            self.hide_attempts += 1
+            if self.hide_attempts == 1:
+                raise RuntimeError("one transient native hide failure")
+            self.visible = False
+            super().hide_lookup_table()
+
+    engine = FakeEngine()
+    ledger = RedactedAdapterCallbackLedger()
+    renderer = NativeIbusLookupRenderer(
+        engine,
+        FakeIbus,
+        ledger,
+        has_cursor_rect=lambda: True,
+        # GTK clients normally leave LOOKUP_TABLE unset so the session's IBus
+        # panel, rather than the focused application, renders the candidate.
+        lookup_table_capability=lambda: False,
+    )
+    target = FakeTarget()
+    candidate_state = CandidateMetadataState()
+    render_controller = CandidateBubbleRenderIntentController(sink=renderer)
+    candidate_response = {
+        "handled": False,
+        "operations": [],
+        "candidate": {
+            "trigger": "omw",
+            "replacement": "on my way",
+            "accept_on": "word-boundary",
+            "dismiss_key": "Escape",
+            "rendered_bubble_ready_claim": False,
+        },
+        "error": None,
+    }
+    assert _apply_response_operations_with_render_intent(
+        target,
+        candidate_response,
+        lambda text: text,
+        candidate_state,
+        render_controller,
+    )
+    assert target.visible_preedit_updates == 0
+    assert candidate_state.current is not None
+    renderer.publish(
+        {
+            "action": "hide-candidate",
+            "replacement": "on my way",
+            "reason": "committed",
+        }
+    )
+
+    flaky_engine = FlakyHideEngine()
+    flaky_renderer = NativeIbusLookupRenderer(flaky_engine, FakeIbus)
+    flaky_controller = CandidateBubbleRenderIntentController(sink=flaky_renderer)
+    flaky_state = CandidateMetadataState()
+    flaky_state.observe_response(
+        {
+            "handled": False,
+            "operations": [],
+            "candidate": {
+                "trigger": "omw",
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            },
+        }
+    )
+    flaky_controller.emit_state(flaky_state)
+    assert flaky_engine.visible is True
+    flaky_controller.clear(flaky_state, "first-clear")
+    assert flaky_state.current is None
+    assert flaky_engine.visible is True
+    flaky_controller.clear(flaky_state, "retry-clear")
+    retryable_force_hide = (
+        flaky_engine.hide_attempts == 3 and flaky_engine.visible is False
+    )
+    failing_show_state = CandidateMetadataState()
+    failing_show_state.observe_response(
+        {
+            "handled": False,
+            "operations": [],
+            "candidate": {
+                "trigger": "omw",
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            },
+        }
+    )
+    native_show_failure_reported = (
+        CandidateBubbleRenderIntentController(
+            sink=NativeIbusLookupRenderer(FailingShowEngine(), FakeIbus)
+        ).emit_state(failing_show_state)
+        is False
+    )
+
+    class OneTableChange:
+        def __init__(self) -> None:
+            self.sent = False
+
+        def maybe_changed_request(self) -> dict[str, Any] | None:
+            if self.sent:
+                return None
+            self.sent = True
+            return {"type": "table-changed", "shortcuts": []}
+
+        def invalidate(self) -> None:
+            self.sent = False
+
+    class TableChangeRuntime:
+        def send(self, request: dict[str, Any]) -> dict[str, Any]:
+            assert request == {"type": "table-changed", "shortcuts": []}
+            return {
+                "handled": False,
+                "operations": [{"type": "hide-preedit-text"}],
+                "error": None,
+            }
+
+    class HideTarget:
+        def hide_preedit_text(self) -> None:
+            return None
+
+    transient_engine = TransientHideEngine()
+    transient_renderer = NativeIbusLookupRenderer(transient_engine, FakeIbus)
+    transient_controller = CandidateBubbleRenderIntentController(
+        sink=transient_renderer
+    )
+    transient_state = CandidateMetadataState()
+    transient_state.observe_response(
+        {
+            "handled": False,
+            "operations": [],
+            "candidate": {
+                "trigger": "omw",
+                "replacement": "on my way",
+                "accept_on": "word-boundary",
+                "dismiss_key": "Escape",
+                "rendered_bubble_ready_claim": False,
+            },
+        }
+    )
+    assert transient_controller.emit_state(transient_state) is True
+    table_changed, table_applied = _send_table_changed_if_needed(
+        OneTableChange(),
+        TableChangeRuntime(),
+        HideTarget(),
+        lambda text: text,
+        transient_state,
+        transient_controller,
+    )
+    assert table_changed is True
+    assert table_applied is False
+    assert transient_state.current is None
+    assert transient_engine.visible is True
+    transient_controller.clear(transient_state, "table-change-application-failed")
+    table_change_hide_retry = (
+        transient_engine.hide_attempts == 2 and transient_engine.visible is False
+    )
+    table = FakeLookupTable.created[-1]
+    native_records = [
+        record
+        for record in ledger.records
+        if record.get("event") == "native-candidate-popup"
+    ]
+    payload = {
+        "status": "pass",
+        "surface": "goblins-textshortcuts-native-ibus-lookup-renderer",
+        "renderer": NATIVE_IBUS_LOOKUP_RENDERER,
+        "lookup_table_updates": sum(
+            1 for call in engine.calls if call[0] == "update-lookup-table"
+        ),
+        "lookup_table_hides": sum(
+            1 for call in engine.calls if call[0] == "hide-lookup-table"
+        ),
+        "auxiliary_updates": sum(
+            1 for call in engine.calls if call[0] == "update-auxiliary-text"
+        ),
+        "auxiliary_hides": sum(
+            1 for call in engine.calls if call[0] == "hide-auxiliary-text"
+        ),
+        "visible_preedit_updates": target.visible_preedit_updates,
+        "native_only_candidate_surface": bool(
+            target.visible_preedit_updates == 0
+            and any(call[0] == "update-lookup-table" for call in engine.calls)
+            and any(call[0] == "update-auxiliary-text" for call in engine.calls)
+        ),
+        "candidate_count": len(table.candidates),
+        "label_count": len(table.labels),
+        "system_orientation": table.orientation == "system",
+        "show_published": any(
+            record.get("action") == "show-candidate"
+            and record.get("published") is True
+            and record.get("has_cursor_rect") is True
+            and record.get("lookup_table_capability") is False
+            and record.get("expected_replacement") is True
+            for record in native_records
+        ),
+        "hide_published": any(
+            record.get("action") == "hide-candidate"
+            and record.get("published") is True
+            for record in native_records
+        ),
+        "retryable_force_hide": retryable_force_hide,
+        "native_show_failure_reported": native_show_failure_reported,
+        "table_change_hide_retry": table_change_hide_retry,
+        "synthetic_overlay": False,
+        "value_redacted": True,
+    }
+    assert payload["lookup_table_updates"] == 1
+    assert payload["lookup_table_hides"] == 1
+    assert payload["auxiliary_updates"] == 1
+    assert payload["auxiliary_hides"] == 1
+    assert payload["visible_preedit_updates"] == 0
+    assert payload["native_only_candidate_surface"] is True
+    assert payload["candidate_count"] == 1
+    assert payload["label_count"] == 1
+    assert payload["system_orientation"] is True
+    assert payload["show_published"] is True
+    assert payload["hide_published"] is True
+    assert payload["retryable_force_hide"] is True
+    assert payload["native_show_failure_reported"] is True
+    assert payload["table_change_hide_retry"] is True
+    assert "on my way" not in json.dumps(ledger.payload(), sort_keys=True)
+    assert "omw" not in json.dumps(ledger.payload(), sort_keys=True)
     return payload
 
 
@@ -1573,10 +3728,56 @@ def _run_gi_adapter_contract_self_test() -> dict[str, Any]:
     candidate_state = CandidateMetadataState()
     render_contract = _run_candidate_bubble_render_intent_self_test()
 
+    class FakeNativeEngine:
+        def __init__(self) -> None:
+            self.lookup_table: Any | None = None
+            self.lookup_visible = False
+            self.hidden = False
+
+        def update_lookup_table(self, table: Any, visible: bool) -> None:
+            self.lookup_table = table
+            self.lookup_visible = bool(visible)
+
+        def hide_lookup_table(self) -> None:
+            self.hidden = True
+
+        def update_auxiliary_text(self, _text: Any, _visible: bool) -> None:
+            return None
+
+        def hide_auxiliary_text(self) -> None:
+            return None
+
+    native_engine = FakeNativeEngine()
+    native_renderer = NativeIbusLookupRenderer(native_engine, IBus)
+    native_renderer.publish(
+        {
+            "action": "show-candidate",
+            "replacement": "on my way",
+            "reason": "candidate-visible",
+        }
+    )
+    native_lookup_table = native_engine.lookup_table
+    native_lookup_contract = bool(
+        native_engine.lookup_visible
+        and native_lookup_table is not None
+        and native_lookup_table.get_number_of_candidates() == 1
+        and native_lookup_table.get_candidate(0).get_text() == "on my way"
+        and native_lookup_table.get_label(0).get_text() == "Space"
+    )
+    native_renderer.publish(
+        {
+            "action": "hide-candidate",
+            "replacement": "on my way",
+            "reason": "committed",
+        }
+    )
+    native_lookup_contract = native_lookup_contract and native_engine.hidden
+
     with tempfile.TemporaryDirectory() as tmpdir:
         table_path = os.path.join(tmpdir, "text-shortcuts.json")
         with open(table_path, "w", encoding="utf-8") as table_file:
             json.dump([{"replace": "omw", "with": "on my way"}], table_file)
+        os.chmod(table_path, 0o600)
 
         table_bridge = ShortcutTableBridge(table_path)
         runtime = RuntimeBridge(response_timeout=CAPABILITY_TIMEOUT_SECONDS)
@@ -1603,12 +3804,12 @@ def _run_gi_adapter_contract_self_test() -> dict[str, Any]:
                     text_factory,
                     candidate_state,
                 )
-            preedit_update = (
+            candidate_metadata = (
                 response.get("candidate", {}).get("replacement") == "on my way"
-                and any(
-                    call[0] == "update" and call[2:] == (9, True)
-                    for call in target.calls
-                )
+                and candidate_state.current is not None
+            )
+            visible_preedit_updates = sum(
+                1 for call in target.calls if call[0] == "update"
             )
 
             _apply_response_operations(
@@ -1637,7 +3838,7 @@ def _run_gi_adapter_contract_self_test() -> dict[str, Any]:
                     if isinstance(operation, dict)
                 )
                 and [call[0] for call in target.calls]
-                == ["update", "delete", "commit", "hide"]
+                == ["delete", "commit", "hide"]
                 and ("delete", -3, 3) in target.calls
             )
 
@@ -1683,26 +3884,35 @@ def _run_gi_adapter_contract_self_test() -> dict[str, Any]:
         "ibus_text_factory": "IBus.Text.new_from_string",
         "ibus_key_unicode": True,
         "callbacks_exercised": callbacks_exercised,
-        "preedit_update": preedit_update,
+        "candidate_metadata": candidate_metadata,
+        "visible_preedit_updates": visible_preedit_updates,
+        "native_only_candidate_surface": candidate_metadata
+        and visible_preedit_updates == 0
+        and native_lookup_contract,
         "boundary_commit": boundary_commit,
         "escape_dismiss": escape_dismiss,
         "pass_through_default": pass_through_default,
         "password_refusal": password_refusal,
         "render_intent_surface": render_contract["surface"],
         "render_intent_count": render_contract["render_intent_count"],
+        "native_lookup_renderer": NATIVE_IBUS_LOOKUP_RENDERER,
+        "native_lookup_contract": native_lookup_contract,
         "rendered_bubble_ready_claim": False,
         "live_overlay_claim": False,
         "live_ibus_bus_claim": False,
         "text_input_v3_claim": False,
         "runtime_ready_claim": False,
     }
-    assert payload["preedit_update"] is True
+    assert payload["candidate_metadata"] is True
+    assert payload["visible_preedit_updates"] == 0
+    assert payload["native_only_candidate_surface"] is True
     assert payload["boundary_commit"] is True
     assert payload["escape_dismiss"] is True
     assert payload["pass_through_default"] is True
     assert payload["password_refusal"] is True
     assert payload["render_intent_surface"] == ACCEPT_BUBBLE_RENDER_INTENT_SURFACE
     assert payload["render_intent_count"] == 8
+    assert payload["native_lookup_contract"] is True
     assert payload["rendered_bubble_ready_claim"] is False
     assert payload["live_overlay_claim"] is False
     assert payload["live_ibus_bus_claim"] is False
@@ -1758,6 +3968,7 @@ def _run_adapter_callback_ledger_self_test() -> dict[str, Any]:
         table_path = os.path.join(tmpdir, "text-shortcuts.json")
         with open(table_path, "w", encoding="utf-8") as table_file:
             json.dump([{"replace": "omw", "with": "on my way"}], table_file)
+        os.chmod(table_path, 0o600)
 
         target = FakeTarget()
         candidate_state = CandidateMetadataState()
@@ -1771,6 +3982,7 @@ def _run_adapter_callback_ledger_self_test() -> dict[str, Any]:
                 lambda text: text,
                 candidate_state,
                 controller,
+                ledger,
             )
             send_and_apply(
                 "focus-in",
@@ -1802,6 +4014,7 @@ def _run_adapter_callback_ledger_self_test() -> dict[str, Any]:
                     candidate_state,
                     _key_protocol_event(character),
                 )
+            ledger.content_purpose(True)
             send_and_apply(
                 "set-content-type",
                 runtime,
@@ -1835,14 +4048,25 @@ def _run_adapter_callback_ledger_self_test() -> dict[str, Any]:
         "reset",
     }
     required_operations = {
-        "update-preedit-text",
         "delete-surrounding-text",
         "commit-text",
         "hide-preedit-text",
     }
+    payload["visible_preedit_updates"] = sum(
+        1 for call in target.calls if call[0] == "update"
+    )
+    payload["metadata_only_candidate_response"] = bool(
+        payload["visible_preedit_updates"] == 0
+        and "update-preedit-text" not in payload["operation_types"]
+    )
     assert required_callbacks.issubset(set(payload["callbacks_exercised"]))
     assert required_operations.issubset(set(payload["operation_types"]))
+    assert "update-preedit-text" not in payload["operation_types"]
+    assert payload["visible_preedit_updates"] == 0
+    assert payload["metadata_only_candidate_response"] is True
     assert payload["render_intent_count"] >= 4
+    assert payload["table_reload_count"] == 1
+    assert payload["sensitive_purpose_seen"] is True
     assert payload["value_redacted"] is True
     assert payload["no_typed_text_logged"] is True
     assert payload["rendered_bubble_ready_claim"] is False
@@ -1878,6 +4102,7 @@ def _run_overlay_intent_self_test() -> dict[str, Any]:
         table_path = os.path.join(tmpdir, "text-shortcuts.json")
         with open(table_path, "w", encoding="utf-8") as table_file:
             json.dump([{"replace": "omw", "with": "on my way"}], table_file)
+        os.chmod(table_path, 0o600)
 
         target = FakeTarget()
         candidate_state = CandidateMetadataState()
@@ -1979,6 +4204,7 @@ def _run_runtime_self_test() -> None:
         table_path = os.path.join(tmpdir, "text-shortcuts.json")
         with open(table_path, "w", encoding="utf-8") as table_file:
             json.dump([{"replace": "omw", "with": "on my way"}], table_file)
+        os.chmod(table_path, 0o600)
 
         target = FakeTarget()
         candidate_state = CandidateMetadataState()
@@ -2000,8 +4226,9 @@ def _run_runtime_self_test() -> None:
                     lambda text: text,
                     candidate_state,
                 )
-            assert target.calls == [("update", "on my way", 9, True)]
+            assert target.calls == []
             assert response.get("candidate") == {
+                "trigger": "omw",
                 "replacement": "on my way",
                 "accept_on": "word-boundary",
                 "dismiss_key": "Escape",
@@ -2026,10 +4253,7 @@ def _run_runtime_self_test() -> None:
             response = runtime.send(_special_key_protocol_event(0xFF1B))
             assert response.get("handled") is True
             _apply_response_operations(target, response, lambda text: text, candidate_state)
-            assert target.calls == [
-                ("update", "on my way", 9, True),
-                ("hide",),
-            ]
+            assert target.calls == [("hide",)]
             assert candidate_state.current is None
             assert candidate_state.last_overlay_intent == {
                 "action": "hide-candidate",
@@ -2051,7 +4275,7 @@ def _run_runtime_self_test() -> None:
                     lambda text: text,
                     candidate_state,
                 )
-            assert target.calls == [("update", "on my way", 9, True)]
+            assert target.calls == []
             assert response.get("candidate", {}).get("replacement") == "on my way"
             assert response.get("candidate", {}).get("rendered_bubble_ready_claim") is False
             assert candidate_state.current is not None
@@ -2062,7 +4286,6 @@ def _run_runtime_self_test() -> None:
             assert response.get("handled") is True
             _apply_response_operations(target, response, lambda text: text, candidate_state)
             assert target.calls == [
-                ("update", "on my way", 9, True),
                 ("delete", -3, 3),
                 ("commit", "on my way "),
                 ("hide",),
@@ -2080,6 +4303,39 @@ def _run_runtime_self_test() -> None:
             }
 
             target.calls.clear()
+            for character in "omw":
+                response = runtime.send(_key_protocol_event(character))
+                _apply_response_operations(
+                    target,
+                    response,
+                    lambda text: text,
+                    candidate_state,
+                )
+            assert candidate_state.current is not None
+            _apply_response_operations(
+                target,
+                runtime.send({"type": "reset"}),
+                lambda text: text,
+                candidate_state,
+            )
+            _apply_response_operations(
+                target,
+                runtime.send(
+                    _content_purpose_request("content-purpose-changed", 1)
+                ),
+                lambda text: text,
+                candidate_state,
+            )
+            _apply_response_operations(
+                target,
+                runtime.send(_key_protocol_event(" ")),
+                lambda text: text,
+                candidate_state,
+            )
+            assert candidate_state.current is None
+            assert not any(call[0] in {"delete", "commit"} for call in target.calls)
+
+            target.calls.clear()
             runtime.send({"type": "focus-in", "purpose": 9})
             for character in "omw ":
                 response = runtime.send(_key_protocol_event(character))
@@ -2089,6 +4345,255 @@ def _run_runtime_self_test() -> None:
             assert candidate_state.current is None
         finally:
             runtime.close()
+
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.chmod(tmpdir, 0o700)
+        status_path = os.path.join(tmpdir, "text-shortcuts-runtime-status.json")
+        publisher = RuntimeStatusPublisher(status_path)
+        publisher.set_focused(True)
+        publisher.runtime_transport(True, True, 1)
+        with open(status_path, "r", encoding="utf-8") as status_file:
+            status = json.load(status_file)
+        assert status["schema"] == RUNTIME_STATUS_SCHEMA
+        assert len(status["instance_id"]) == 32
+        assert all(character in "0123456789abcdef" for character in status["instance_id"])
+        assert status["focus_generation"] == 1
+        assert status["runtime_generation"] == 1
+        assert status["focused"] is True
+        assert status["enabled"] is False
+        assert status["surrounding_text_supported"] is False
+        assert status["snapshot_valid"] is False
+        assert status["child_alive"] is True
+        assert status["last_response_ok"] is False
+        assert stat.S_IMODE(os.stat(status_path).st_mode) == 0o600
+        publisher.protocol_ready(1)
+        with open(status_path, "r", encoding="utf-8") as status_file:
+            status = json.load(status_file)
+        assert status["last_response_ok"] is False
+        publisher.set_enabled(True)
+        publisher.set_surrounding_text_supported(True)
+        publisher.set_snapshot_valid(True)
+        publisher.protocol_ready(1)
+        with open(status_path, "r", encoding="utf-8") as status_file:
+            status = json.load(status_file)
+        assert status["last_response_ok"] is True
+        publisher.set_surrounding_text_supported(False)
+        with open(status_path, "r", encoding="utf-8") as status_file:
+            status = json.load(status_file)
+        assert status["surrounding_text_supported"] is False
+        assert status["snapshot_valid"] is False
+        assert status["last_response_ok"] is False
+        publisher.set_surrounding_text_supported(True)
+        publisher.set_snapshot_valid(True)
+        publisher.protocol_ready(1)
+        publisher.set_enabled(False)
+        with open(status_path, "r", encoding="utf-8") as status_file:
+            status = json.load(status_file)
+        assert status["enabled"] is False
+        assert status["snapshot_valid"] is False
+        assert status["last_response_ok"] is False
+        publisher.set_enabled(True)
+        publisher.set_snapshot_valid(True)
+        publisher.protocol_ready(1)
+        publisher.set_focused(False)
+        publisher.set_focused(True)
+        with open(status_path, "r", encoding="utf-8") as status_file:
+            status = json.load(status_file)
+        assert status["focus_generation"] == 2
+        assert status["snapshot_valid"] is False
+        assert status["last_response_ok"] is False
+        publisher.set_snapshot_valid(True)
+        publisher.protocol_ready(1)
+        with open(status_path, "r", encoding="utf-8") as status_file:
+            status = json.load(status_file)
+        assert status["last_response_ok"] is True
+        publisher.runtime_transport(False, False, 1)
+        with open(status_path, "r", encoding="utf-8") as status_file:
+            status = json.load(status_file)
+        assert status["child_alive"] is False
+        assert status["last_response_ok"] is False
+
+    health_events: list[tuple[bool, bool, int]] = []
+    recovery_runtime = RuntimeBridge(
+        response_timeout=CAPABILITY_TIMEOUT_SECONDS,
+        health_callback=lambda alive, ok, generation: health_events.append(
+            (alive, ok, generation)
+        ),
+    )
+    try:
+        assert _runtime_response_ok(recovery_runtime.send({"type": "health"}))
+        first_generation = recovery_runtime.runtime_generation()
+        assert first_generation > 0
+        child = recovery_runtime._process
+        assert child is not None
+        child.kill()
+        child.wait(timeout=1.0)
+        assert recovery_runtime.send({"type": "health"})["runtime_available"] is False
+        assert recovery_runtime.last_response_ok() is False
+        time.sleep(RUNTIME_RESTART_BASE_SECONDS + 0.05)
+        assert _runtime_response_ok(recovery_runtime.send({"type": "health"}))
+        assert recovery_runtime.runtime_generation() == first_generation + 1
+        assert health_events[-1] == (True, True, first_generation + 1)
+    finally:
+        recovery_runtime.close()
+
+    hanging_runtime = RuntimeBridge(
+        argv=[sys.executable, "-c", "import time; time.sleep(1)"],
+        response_timeout=0.02,
+    )
+    started_at = time.monotonic()
+    try:
+        assert hanging_runtime.send({"type": "health"})["runtime_available"] is False
+        assert time.monotonic() - started_at < 0.5
+        assert hanging_runtime.last_response_ok() is False
+    finally:
+        hanging_runtime.close()
+
+    partial_runtime = RuntimeBridge(
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import os,sys,time; sys.stdin.buffer.readline(); os.write(1,b'{'); time.sleep(1)",
+        ],
+        response_timeout=0.02,
+    )
+    started_at = time.monotonic()
+    try:
+        assert partial_runtime.send({"type": "health"})["runtime_available"] is False
+        assert time.monotonic() - started_at < 0.5
+        assert partial_runtime.last_response_ok() is False
+    finally:
+        partial_runtime.close()
+
+    oversized_runtime = RuntimeBridge(
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            (
+                "import sys,time; sys.stdin.buffer.readline(); "
+                f"sys.stdout.buffer.write(b'x'*{RUNTIME_RESPONSE_MAX_BYTES + 1}); "
+                "sys.stdout.buffer.flush(); time.sleep(1)"
+            ),
+        ],
+        response_timeout=0.5,
+    )
+    try:
+        assert oversized_runtime.send({"type": "health"})["runtime_available"] is False
+        assert oversized_runtime.last_response_ok() is False
+    finally:
+        oversized_runtime.close()
+
+    unencodable_request_runtime = RuntimeBridge(
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import sys,time; sys.stdin.buffer.readline(); time.sleep(1)",
+        ],
+        response_timeout=0.02,
+    )
+    try:
+        response = unencodable_request_runtime.send(
+            {"type": "health", "invalid": "\ud800"}
+        )
+        assert response["runtime_available"] is False
+        assert unencodable_request_runtime.last_response_ok() is False
+    finally:
+        unencodable_request_runtime.close()
+
+    huge_integer_frame = (
+        b'{"handled":false,"operations":[],"x":' + (b"9" * 5000) + b"}\n"
+    )
+    huge_integer_runtime = RuntimeBridge(
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            (
+                "import os,sys,time; sys.stdin.buffer.readline(); "
+                f"os.write(1,{huge_integer_frame!r}); time.sleep(1)"
+            ),
+        ],
+        response_timeout=0.5,
+    )
+    try:
+        response = huge_integer_runtime.send({"type": "health"})
+        assert response["runtime_available"] is False
+        assert huge_integer_runtime.last_response_ok() is False
+    finally:
+        huge_integer_runtime.close()
+
+    malformed_runtime_responses = [
+        {
+            "handled": False,
+            "operations": [
+                {
+                    "type": "update-preedit-text",
+                    "text": "candidate",
+                    "cursor_pos": 9,
+                    "visible": True,
+                }
+            ],
+        },
+        {
+            "handled": True,
+            "operations": [
+                {
+                    "type": "delete-surrounding-text",
+                    "offset": -3,
+                    "n_chars": 3,
+                    "expected_text": "omw",
+                },
+                {"type": "commit-text", "text": "must not commit"},
+                {"type": "hide-preedit-text"},
+            ],
+            "error": "child reported failure",
+        },
+        {
+            "handled": False,
+            "operations": [{"type": "unknown-operation"}],
+        },
+        # Structurally valid for a boundary key, but never for Health.
+        {
+            "handled": True,
+            "operations": [
+                {
+                    "type": "delete-surrounding-text",
+                    "offset": -3,
+                    "n_chars": 3,
+                    "expected_text": "omw",
+                },
+                {"type": "commit-text", "text": "must not commit"},
+                {"type": "hide-preedit-text"},
+            ],
+        },
+    ]
+    for malformed_response in malformed_runtime_responses:
+        frame = (json.dumps(malformed_response, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
+        malformed_runtime = RuntimeBridge(
+            argv=[
+                sys.executable,
+                "-u",
+                "-c",
+                (
+                    "import os,sys,time; sys.stdin.buffer.readline(); "
+                    f"os.write(1,{frame!r}); time.sleep(1)"
+                ),
+            ],
+            response_timeout=0.5,
+        )
+        try:
+            response = malformed_runtime.send({"type": "health"})
+            assert response["runtime_available"] is False
+            assert response["operations"] == [{"type": "hide-preedit-text"}]
+            assert malformed_runtime.last_response_ok() is False
+        finally:
+            malformed_runtime.close()
 
 
 def _run_ibus() -> int:
@@ -2102,97 +4607,480 @@ def _run_ibus() -> int:
     class GoblinsTextShortcutsEngine(IBus.Engine):
         def __init__(self) -> None:
             super().__init__()
-            self._bridge = RuntimeBridge()
+            self._runtime_status = RuntimeStatusPublisher()
+            self._bridge = RuntimeBridge(
+                health_callback=self._runtime_status.runtime_transport,
+            )
+            self._configured_runtime_generation = 0
             self._table = ShortcutTableBridge()
             self._candidate_state = CandidateMetadataState()
             self._proof_ledger = _proof_event_sink_from_env()
-            self._candidate_render = CandidateBubbleRenderIntentController(
-                sink=self._proof_ledger,
+            self._has_cursor_rect = False
+            self._lookup_table_capability = False
+            self._surrounding_text_capability = False
+            self._enabled = False
+            self._effective_purpose = min(SENSITIVE_INPUT_PURPOSES)
+            self._sensitive_content = True
+            self._surrounding_guard = SurroundingTextCommitGuard()
+            self._surrounding_text_cache = FocusBoundSurroundingTextCache()
+            self._native_candidate_popup = NativeIbusLookupRenderer(
+                self,
+                IBus,
+                self._proof_ledger,
+                has_cursor_rect=lambda: self._has_cursor_rect,
+                lookup_table_capability=lambda: self._lookup_table_capability,
             )
+            self._candidate_render = CandidateBubbleRenderIntentController(
+                sink=self._native_candidate_popup,
+            )
+            self._health_source = GLib.timeout_add_seconds(
+                RUNTIME_HEALTH_INTERVAL_SECONDS,
+                self._runtime_health_tick,
+            )
+
+        def do_enable(self) -> None:
+            self._record_callback("enable")
+            self._enabled = True
+            self._runtime_status.set_enabled(True)
+            self._surrounding_guard.reset()
+            self._invalidate_surrounding_snapshot()
+            self._refresh_content_type("enable")
+            if not self._sensitive_content:
+                self._request_surrounding_text()
+
+        def do_disable(self) -> None:
+            self._record_callback("disable")
+            self._enabled = False
+            self._sensitive_content = True
+            self._effective_purpose = min(SENSITIVE_INPUT_PURPOSES)
+            self._surrounding_text_cache.end_focus()
+            self._runtime_status.set_enabled(False)
+            self._runtime_status.set_focused(False)
+            self._clear_candidate_ui("disabled")
+            self._reset_runtime_child("disable")
 
         def do_focus_in(self) -> None:
             self._record_callback("focus-in")
-            _send_table_changed_if_needed(
-                self._table,
-                self._bridge,
-                self,
-                IBus.Text.new_from_string,
-                self._candidate_state,
-                self._candidate_render,
+            self._surrounding_text_cache.begin_focus()
+            self._runtime_status.set_focused(True)
+            self._surrounding_guard.reset()
+            self._runtime_status.set_snapshot_valid(False)
+            purpose = self._refresh_content_type("focus-in")
+            self._synchronize_runtime()
+            response = self._bridge.send(
+                _content_purpose_request("focus-in", purpose)
             )
-            response = self._bridge.send(_content_purpose_request("focus-in", self._purpose()))
-            self._record_operations("focus-in", response)
-            _apply_response_operations_with_render_intent(
-                self,
-                response,
-                IBus.Text.new_from_string,
-                self._candidate_state,
-                self._candidate_render,
-            )
+            self._apply_runtime_response("focus-in", None, response, None)
+            if not self._sensitive_content:
+                self._request_surrounding_text()
 
         def do_focus_out(self) -> None:
             self._record_callback("focus-out")
+            self._surrounding_text_cache.end_focus()
+            self._runtime_status.set_focused(False)
+            self._sensitive_content = True
+            self._effective_purpose = min(SENSITIVE_INPUT_PURPOSES)
+            self._clear_candidate_ui("focus-out")
             response = self._bridge.send({"type": "focus-out"})
-            self._record_operations("focus-out", response)
-            _apply_response_operations_with_render_intent(
-                self,
-                response,
-                IBus.Text.new_from_string,
-                self._candidate_state,
-                self._candidate_render,
-            )
+            self._apply_runtime_response("focus-out", None, response, None)
+            self._clear_candidate_ui("focus-out")
 
         def do_reset(self) -> None:
             self._record_callback("reset")
-            response = self._bridge.send({"type": "reset"})
-            self._record_operations("reset", response)
-            _apply_response_operations_with_render_intent(
-                self,
-                response,
-                IBus.Text.new_from_string,
-                self._candidate_state,
-                self._candidate_render,
-            )
+            self._invalidate_surrounding_snapshot()
+            self._clear_candidate_ui("reset")
+            self._reset_runtime_child("reset")
 
         def do_set_content_type(self, purpose: int, hints: int) -> None:
-            del hints
             self._record_callback("set-content-type")
-            response = self._bridge.send(_content_purpose_request("content-purpose-changed", purpose))
-            self._record_operations("set-content-type", response)
-            _apply_response_operations_with_render_intent(
-                self,
-                response,
-                IBus.Text.new_from_string,
-                self._candidate_state,
-                self._candidate_render,
+            effective = self._update_content_type(
+                purpose,
+                hints,
+                "sensitive-content-type",
+                invalidate_snapshot=True,
+                record=True,
             )
+            self._reset_runtime_child("content-type-changed")
+            response = self._bridge.send(
+                _content_purpose_request("content-purpose-changed", effective)
+            )
+            self._apply_runtime_response("set-content-type", None, response, None)
+            if not self._sensitive_content:
+                self._request_surrounding_text()
+
+        def do_set_cursor_location(self, x: int, y: int, width: int, height: int) -> None:
+            self._record_callback("set-cursor-location")
+            self._has_cursor_rect = all(
+                isinstance(value, int) for value in (x, y, width, height)
+            ) and width >= 0 and height > 0
+            if self._proof_ledger is not None:
+                self._proof_ledger.cursor_location(self._has_cursor_rect)
+
+        def do_set_capabilities(self, capabilities: int) -> None:
+            self._record_callback("set-capabilities")
+            capability_type = getattr(IBus, "Capabilite", None)
+            lookup_mask = int(
+                getattr(
+                    capability_type,
+                    "LOOKUP_TABLE",
+                    IBUS_CAP_LOOKUP_TABLE_FALLBACK,
+                )
+            )
+            surrounding_mask = int(
+                getattr(
+                    capability_type,
+                    "SURROUNDING_TEXT",
+                    IBUS_CAP_SURROUNDING_TEXT_FALLBACK,
+                )
+            )
+            self._lookup_table_capability = bool(int(capabilities) & lookup_mask)
+            self._surrounding_text_capability = bool(
+                int(capabilities) & surrounding_mask
+            )
+            self._runtime_status.set_surrounding_text_supported(
+                self._surrounding_text_capability
+            )
+            lost_support = self._surrounding_guard.set_supported(
+                self._surrounding_text_capability
+            )
+            if not self._surrounding_text_capability:
+                self._invalidate_surrounding_snapshot()
+            if self._proof_ledger is not None:
+                self._proof_ledger.capabilities(
+                    self._lookup_table_capability,
+                    self._surrounding_text_capability,
+                )
+            if lost_support:
+                self._clear_candidate_ui("surrounding-capability-lost")
+                self._reset_runtime_child("surrounding-capability-lost")
+            elif self._surrounding_text_capability and not self._sensitive_content:
+                self._request_surrounding_text()
+
+        def do_set_surrounding_text(
+            self,
+            text: Any,
+            cursor_index: int,
+            anchor_pos: int,
+        ) -> None:
+            self._record_callback("set-surrounding-text")
+            if (
+                not self._enabled
+                or self._sensitive_content
+                or not self._surrounding_text_capability
+                or not self._runtime_status.is_focused()
+            ):
+                self._invalidate_surrounding_snapshot()
+                self._surrounding_guard.reset()
+                return
+            snapshot = _normalize_surrounding_text(text, cursor_index, anchor_pos)
+            if snapshot is None:
+                self._invalidate_surrounding_snapshot()
+                self._clear_candidate_ui("invalid-surrounding-snapshot")
+                self._reset_runtime_child("invalid-surrounding-snapshot")
+                return
+            if not self._surrounding_text_cache.observe(snapshot):
+                self._invalidate_surrounding_snapshot()
+                self._surrounding_guard.reset()
+                return
+            self._runtime_status.set_snapshot_valid(True)
+            if self._surrounding_guard.observe_surrounding(snapshot):
+                self._clear_candidate_ui("surrounding-text-changed")
+                self._reset_runtime_child("surrounding-text-changed")
+            elif (
+                self._configured_runtime_generation
+                == self._bridge.runtime_generation()
+                and self._bridge.last_response_ok()
+            ):
+                self._runtime_status.protocol_ready(
+                    self._configured_runtime_generation
+                )
 
         def do_process_key_event(self, keyval: int, keycode: int, state: int) -> bool:
             del keycode
             self._record_callback("process-key-event")
-            _send_table_changed_if_needed(
+            self._refresh_content_type("process-key-event")
+            if (
+                not self._enabled
+                or self._sensitive_content
+                or not self._surrounding_text_capability
+            ):
+                self._runtime_status.set_snapshot_valid(False)
+                self._clear_candidate_ui("key-refused-without-safe-context")
+                return False
+            self._synchronize_runtime()
+            table_changed, table_applied = _send_table_changed_if_needed(
                 self._table,
                 self._bridge,
                 self,
                 IBus.Text.new_from_string,
                 self._candidate_state,
                 self._candidate_render,
+                self._proof_ledger,
             )
-            response = self._bridge.send(_key_request(keyval, state, IBus))
-            self._record_operations("process-key-event", response)
-            _apply_response_operations_with_render_intent(
-                self,
+            if not table_applied:
+                self._clear_candidate_ui("table-change-application-failed")
+                self._invalidate_surrounding_snapshot()
+                self._bridge.send({"type": "reset"})
+                self._request_surrounding_text()
+                return False
+            if table_changed:
+                self._surrounding_guard.reset()
+            request = _key_request(keyval, state, IBus)
+            snapshot = self._current_surrounding_text()
+            if snapshot is None:
+                self._clear_candidate_ui("surrounding-snapshot-unavailable")
+                self._reset_runtime_child("surrounding-snapshot-unavailable")
+                self._request_surrounding_text()
+                return False
+            if self._surrounding_guard.prepare_key(request, snapshot):
+                self._clear_candidate_ui("surrounding-edit-anchor-reset")
+                self._reset_runtime_child("surrounding-edit-anchor-reset")
+            response = self._bridge.send(request)
+            response = self._apply_runtime_response(
+                "process-key-event",
+                request,
                 response,
+                snapshot,
+            )
+            return bool(response.get("handled", False))
+
+        def do_candidate_clicked(self, index: int, button: int, state: int) -> None:
+            del state
+            self._record_callback("candidate-clicked")
+            self._refresh_content_type("candidate-clicked")
+            if (
+                not self._enabled
+                or self._sensitive_content
+                or not self._surrounding_text_capability
+            ):
+                self._clear_candidate_ui("candidate-click-refused")
+                return
+            request = _candidate_click_request(index, button)
+            if request is None:
+                self._clear_candidate_ui("candidate-click-invalid")
+                return
+            snapshot = self._current_surrounding_text()
+            if not self._surrounding_guard.prepare_candidate_accept(snapshot):
+                self._clear_candidate_ui("candidate-edit-anchor-invalid")
+                self._reset_runtime_child("candidate-edit-anchor-invalid")
+                return
+            response = self._bridge.send(request)
+            self._apply_runtime_response(
+                "candidate-clicked",
+                request,
+                response,
+                snapshot,
+            )
+
+        def _apply_runtime_response(
+            self,
+            callback: str,
+            request: dict[str, Any] | None,
+            response: dict[str, Any],
+            snapshot: SurroundingTextSnapshot | None,
+        ) -> dict[str, Any]:
+            effective = self._surrounding_guard.validate_response(
+                request,
+                response,
+                snapshot,
+            )
+            if effective is not response:
+                self._clear_candidate_ui("runtime-response-guard-rejected")
+                self._invalidate_surrounding_snapshot()
+                self._bridge.send({"type": "reset"})
+            elif not _runtime_response_ok(response):
+                self._clear_candidate_ui("runtime-unavailable")
+                self._invalidate_surrounding_snapshot()
+            self._record_operations(callback, effective)
+            applied = _apply_response_operations_with_render_intent(
+                self,
+                effective,
                 IBus.Text.new_from_string,
                 self._candidate_state,
                 self._candidate_render,
             )
-            return bool(response.get("handled", False))
+            if not applied:
+                self._clear_candidate_ui("runtime-operation-application-failed")
+                self._invalidate_surrounding_snapshot()
+                self._bridge.send({"type": "reset"})
+                if not _response_has_destructive_replacement(effective):
+                    effective = _passthrough_response()
+            if (
+                applied
+                and effective is response
+                and _runtime_response_ok(effective)
+                and self._configured_runtime_generation
+                == self._bridge.runtime_generation()
+            ):
+                self._runtime_status.protocol_ready(
+                    self._configured_runtime_generation
+                )
+            return effective
+
+        def _synchronize_runtime(self) -> bool:
+            if not self._enabled:
+                return False
+            generation = self._bridge.runtime_generation()
+            if (
+                generation > 0
+                and generation == self._configured_runtime_generation
+                and self._bridge.last_response_ok()
+            ):
+                return True
+            if self._configured_runtime_generation or self._candidate_state.current is not None:
+                self._clear_candidate_ui("runtime-generation-changed")
+            self._invalidate_surrounding_snapshot()
+            self._configured_runtime_generation = 0
+            self._table.invalidate()
+            self._surrounding_guard.reset()
+            table_changed, table_applied = _send_table_changed_if_needed(
+                self._table,
+                self._bridge,
+                self,
+                IBus.Text.new_from_string,
+                self._candidate_state,
+                self._candidate_render,
+                self._proof_ledger,
+            )
+            if not table_applied:
+                self._clear_candidate_ui("table-change-application-failed")
+                self._invalidate_surrounding_snapshot()
+                self._bridge.send({"type": "reset"})
+                return False
+            table_ready = table_changed and self._bridge.last_response_ok()
+            response = self._bridge.send(
+                _content_purpose_request("focus-in", self._effective_purpose)
+            )
+            self._apply_runtime_response("runtime-synchronize", None, response, None)
+            generation = self._bridge.runtime_generation()
+            if (
+                table_ready
+                and _runtime_response_ok(response)
+                and self._bridge.last_response_ok()
+                and generation > 0
+            ):
+                self._configured_runtime_generation = generation
+                self._runtime_status.protocol_ready(generation)
+                return True
+            return False
+
+        def _runtime_health_tick(self) -> bool:
+            if not self._runtime_status.is_focused() or not self._enabled:
+                return True
+            response = self._bridge.send({"type": "health"})
+            if not _runtime_response_ok(response):
+                self._configured_runtime_generation = 0
+                self._clear_candidate_ui("runtime-health-failed")
+                self._invalidate_surrounding_snapshot()
+                return True
+            if self._configured_runtime_generation != self._bridge.runtime_generation():
+                self._clear_candidate_ui("runtime-generation-changed")
+                self._synchronize_runtime()
+            else:
+                self._runtime_status.protocol_ready(
+                    self._configured_runtime_generation
+                )
+            return True
+
+        def _reset_runtime_child(self, callback: str) -> None:
+            self._clear_candidate_ui(callback)
+            self._invalidate_surrounding_snapshot()
+            response = self._bridge.send({"type": "reset"})
+            self._apply_runtime_response(callback, None, response, None)
+            self._request_surrounding_text()
+
+        def _current_surrounding_text(self) -> SurroundingTextSnapshot | None:
+            if (
+                not self._enabled
+                or self._sensitive_content
+                or not self._surrounding_text_capability
+            ):
+                self._invalidate_surrounding_snapshot()
+                return None
+            snapshot = self._surrounding_text_cache.current()
+            self._runtime_status.set_snapshot_valid(snapshot is not None)
+            return snapshot
+
+        def _request_surrounding_text(self) -> None:
+            if (
+                not self._enabled
+                or self._sensitive_content
+                or not self._surrounding_text_capability
+                or not self._runtime_status.is_focused()
+            ):
+                self._runtime_status.set_snapshot_valid(False)
+                return
+            try:
+                self.get_surrounding_text()
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                self._runtime_status.set_snapshot_valid(False)
+                return
 
         def do_destroy(self) -> None:
-            self._candidate_render.clear(self._candidate_state, "destroyed")
+            self._enabled = False
+            self._surrounding_text_cache.end_focus()
+            self._runtime_status.set_enabled(False)
+            self._runtime_status.set_focused(False)
+            if self._health_source:
+                GLib.source_remove(self._health_source)
+                self._health_source = 0
+            self._clear_candidate_ui("destroyed")
             self._bridge.close()
             super().do_destroy()
+
+        def _clear_candidate_ui(self, reason: str) -> None:
+            self._surrounding_guard.reset()
+            try:
+                self.hide_preedit_text()
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                pass
+            self._candidate_render.clear(self._candidate_state, reason)
+
+        def _update_content_type(
+            self,
+            purpose: Any,
+            hints: Any,
+            reason: str,
+            *,
+            invalidate_snapshot: bool,
+            record: bool,
+        ) -> int:
+            effective = _effective_content_purpose(purpose, hints, IBus)
+            sensitive = effective in SENSITIVE_INPUT_PURPOSES
+            sensitivity_changed = sensitive != self._sensitive_content
+            self._effective_purpose = effective
+            self._sensitive_content = sensitive
+            if record:
+                self._record_content_purpose(sensitive)
+            if sensitivity_changed or invalidate_snapshot:
+                self._surrounding_guard.reset()
+                self._invalidate_surrounding_snapshot()
+            if sensitive:
+                self._clear_candidate_ui(reason)
+            elif sensitivity_changed and self._enabled:
+                self._request_surrounding_text()
+            return effective
+
+        def _invalidate_surrounding_snapshot(self) -> None:
+            self._surrounding_text_cache.invalidate()
+            self._runtime_status.set_snapshot_valid(False)
+
+        def _refresh_content_type(self, reason: str) -> int:
+            try:
+                content_type = self.get_content_type()
+                if not isinstance(content_type, (tuple, list)) or len(content_type) != 2:
+                    raise TypeError("invalid IBus content type")
+                purpose, hints = content_type
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                purpose = min(SENSITIVE_INPUT_PURPOSES)
+                hints = 0
+            return self._update_content_type(
+                purpose,
+                hints,
+                reason,
+                invalidate_snapshot=False,
+                record=False,
+            )
 
         def _record_callback(self, callback: str) -> None:
             if self._proof_ledger is not None:
@@ -2202,12 +5090,12 @@ def _run_ibus() -> int:
             if self._proof_ledger is not None:
                 self._proof_ledger.operations(callback, response)
 
+        def _record_content_purpose(self, sensitive_purpose: bool) -> None:
+            if self._proof_ledger is not None:
+                self._proof_ledger.content_purpose(sensitive_purpose)
+
         def _purpose(self) -> int:
-            try:
-                purpose, _hints = self.get_content_type()
-                return int(purpose)
-            except (AttributeError, TypeError, ValueError):
-                return 0
+            return self._refresh_content_type("content-type-query")
 
     bus = IBus.Bus()
     if not bus.is_connected():
@@ -2229,6 +5117,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--gi-adapter-contract-self-test", action="store_true")
     parser.add_argument("--adapter-callback-ledger-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-render-intent-self-test", action="store_true")
+    parser.add_argument("--native-ibus-lookup-renderer-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-layout-self-test", action="store_true")
     parser.add_argument("--candidate-bubble-frame-self-test", action="store_true")
     parser.add_argument("--overlay-intent-self-test", action="store_true")
@@ -2246,6 +5135,9 @@ def main(argv: list[str]) -> int:
         return 0
     if args.candidate_bubble_render_intent_self_test:
         print(json.dumps(_run_candidate_bubble_render_intent_self_test(), sort_keys=True))
+        return 0
+    if args.native_ibus_lookup_renderer_self_test:
+        print(json.dumps(_run_native_ibus_lookup_renderer_self_test(), sort_keys=True))
         return 0
     if args.candidate_bubble_layout_self_test:
         print(json.dumps(_run_candidate_bubble_layout_self_test(), sort_keys=True))

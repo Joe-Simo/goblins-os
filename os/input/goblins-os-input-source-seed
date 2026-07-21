@@ -15,82 +15,224 @@ if ! command -v gsettings >/dev/null 2>&1; then
   exit 0
 fi
 
-if ! gsettings writable org.gnome.desktop.input-sources sources >/dev/null 2>&1; then
+gsettings_key_is_writable() {
+  local value
+  value="$(gsettings writable "$1" "$2" 2>/dev/null)" || return 1
+  [ "$value" = "true" ]
+}
+
+if ! gsettings_key_is_writable org.gnome.desktop.input-sources sources; then
   echo "goblins-os-input-source-seed: input source settings are unavailable; leaving input sources unchanged" >&2
   exit 0
 fi
 
-if ! gsettings writable org.freedesktop.ibus.general preload-engines >/dev/null 2>&1; then
+if ! gsettings_key_is_writable org.gnome.desktop.input-sources mru-sources; then
+  echo "goblins-os-input-source-seed: recent input source settings are unavailable; leaving input sources unchanged" >&2
+  exit 0
+fi
+
+if ! gsettings_key_is_writable org.freedesktop.ibus.general preload-engines; then
   echo "goblins-os-input-source-seed: IBus preload settings are unavailable; leaving preload unchanged" >&2
   exit 0
 fi
 
-append_input_source() {
-  python3 - "$1" "$ENGINE_KIND" "$ENGINE_ID" <<'PY'
+normalize_input_sources() {
+  python3 - "$1" "${2:-preserve}" "$ENGINE_KIND" "$ENGINE_ID" <<'PY'
 import ast
 import sys
 
-raw, kind, engine_id = sys.argv[1:4]
+raw, mode, kind, engine_id = sys.argv[1:5]
+annotation = "@a(ss) "
+if raw.startswith(annotation):
+    raw = raw[len(annotation):]
 try:
     parsed = ast.literal_eval(raw)
-except Exception:
-    parsed = []
+except (SyntaxError, ValueError) as error:
+    raise SystemExit(f"invalid input source list: {error}")
+
+if not isinstance(parsed, (list, tuple)):
+    raise SystemExit("input source value is not a list or tuple")
 
 sources = []
-if isinstance(parsed, (list, tuple)):
-    for item in parsed:
-        if (
-            isinstance(item, (list, tuple))
-            and len(item) == 2
-            and isinstance(item[0], str)
-            and isinstance(item[1], str)
-        ):
-            sources.append((item[0], item[1]))
+for item in parsed:
+    if (
+        not isinstance(item, (list, tuple))
+        or len(item) != 2
+        or not isinstance(item[0], str)
+        or not isinstance(item[1], str)
+        or not item[0]
+        or not item[1]
+        or any(ord(character) < 0x20 for value in item for character in value)
+    ):
+        raise SystemExit("input source list contains an invalid entry")
+    sources.append((item[0], item[1]))
 
-if (kind, engine_id) not in sources:
+if mode == "append" and (kind, engine_id) not in sources:
     sources.append((kind, engine_id))
-if not sources:
-    sources = [(kind, engine_id)]
+elif mode not in {"append", "preserve"}:
+    raise SystemExit("unsupported input source normalization mode")
 
-print("[" + ", ".join(f"('{kind}', '{value}')" for kind, value in sources) + "]")
+print("[" + ", ".join(f"({kind!r}, {value!r})" for kind, value in sources) + "]")
 PY
 }
 
-append_preload_engine() {
-  python3 - "$1" "$ENGINE_ID" <<'PY'
+normalize_preload_engines() {
+  python3 - "$1" "${2:-preserve}" "$ENGINE_ID" <<'PY'
 import ast
 import sys
 
-raw, engine_id = sys.argv[1:3]
+raw, mode, engine_id = sys.argv[1:4]
+annotation = "@as "
+if raw.startswith(annotation):
+    raw = raw[len(annotation):]
 try:
     parsed = ast.literal_eval(raw)
-except Exception:
-    parsed = []
+except (SyntaxError, ValueError) as error:
+    raise SystemExit(f"invalid preload engine list: {error}")
+
+if not isinstance(parsed, (list, tuple)):
+    raise SystemExit("preload engine value is not a list or tuple")
 
 engines = []
-if isinstance(parsed, (list, tuple)):
-    for item in parsed:
-        if isinstance(item, str) and item not in engines:
-            engines.append(item)
+for item in parsed:
+    if (
+        not isinstance(item, str)
+        or not item
+        or any(ord(character) < 0x20 for character in item)
+    ):
+        raise SystemExit("preload engine list contains an invalid entry")
+    engines.append(item)
 
-if engine_id not in engines:
+if mode == "append" and engine_id not in engines:
     engines.append(engine_id)
+elif mode not in {"append", "preserve"}:
+    raise SystemExit("unsupported preload engine normalization mode")
 
 print("[" + ", ".join(repr(engine) for engine in engines) + "]")
 PY
 }
 
-current_sources="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
-current_mru="$(gsettings get org.gnome.desktop.input-sources mru-sources 2>/dev/null || true)"
-current_preload="$(gsettings get org.freedesktop.ibus.general preload-engines 2>/dev/null || true)"
+if ! current_sources="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null)" \
+  || ! current_mru="$(gsettings get org.gnome.desktop.input-sources mru-sources 2>/dev/null)" \
+  || ! current_preload="$(gsettings get org.freedesktop.ibus.general preload-engines 2>/dev/null)"; then
+  echo "goblins-os-input-source-seed: input source settings could not be read; leaving every source unchanged" >&2
+  exit 1
+fi
 
-next_sources="$(append_input_source "$current_sources")"
-next_mru="$(append_input_source "$current_mru")"
-next_preload="$(append_preload_engine "$current_preload")"
+if ! canonical_sources="$(normalize_input_sources "$current_sources")" \
+  || ! canonical_mru="$(normalize_input_sources "$current_mru")" \
+  || ! canonical_preload="$(normalize_preload_engines "$current_preload")"; then
+  echo "goblins-os-input-source-seed: input source settings were malformed; leaving every source unchanged" >&2
+  exit 1
+fi
 
-gsettings set org.gnome.desktop.input-sources sources "$next_sources"
-gsettings set org.gnome.desktop.input-sources mru-sources "$next_mru"
-gsettings set org.freedesktop.ibus.general preload-engines "$next_preload"
+next_sources="$(normalize_input_sources "$canonical_sources" append)"
+next_mru="$(normalize_input_sources "$canonical_mru" append)"
+next_preload="$(normalize_preload_engines "$canonical_preload" append)"
+
+sources_touched=0
+mru_touched=0
+preload_touched=0
+
+restore_input_sources_if_unchanged() {
+  local key="$1"
+  local touched="$2"
+  local original_raw="$3"
+  local original_canonical="$4"
+  local staged="$5"
+  local actual canonical
+  if [ "$touched" != "1" ]; then
+    return 0
+  fi
+  actual="$(gsettings get org.gnome.desktop.input-sources "$key" 2>/dev/null)" || return 1
+  canonical="$(normalize_input_sources "$actual")" || return 1
+  if [ "$canonical" = "$original_canonical" ]; then
+    return 0
+  fi
+  [ "$canonical" = "$staged" ] || return 1
+  gsettings set org.gnome.desktop.input-sources "$key" "$original_raw" >/dev/null 2>&1 || return 1
+  actual="$(gsettings get org.gnome.desktop.input-sources "$key" 2>/dev/null)" || return 1
+  canonical="$(normalize_input_sources "$actual")" || return 1
+  [ "$canonical" = "$original_canonical" ]
+}
+
+restore_preload_if_unchanged() {
+  local touched="$1"
+  local original_raw="$2"
+  local original_canonical="$3"
+  local staged="$4"
+  local actual canonical
+  if [ "$touched" != "1" ]; then
+    return 0
+  fi
+  actual="$(gsettings get org.freedesktop.ibus.general preload-engines 2>/dev/null)" || return 1
+  canonical="$(normalize_preload_engines "$actual")" || return 1
+  if [ "$canonical" = "$original_canonical" ]; then
+    return 0
+  fi
+  [ "$canonical" = "$staged" ] || return 1
+  gsettings set org.freedesktop.ibus.general preload-engines "$original_raw" >/dev/null 2>&1 || return 1
+  actual="$(gsettings get org.freedesktop.ibus.general preload-engines 2>/dev/null)" || return 1
+  canonical="$(normalize_preload_engines "$actual")" || return 1
+  [ "$canonical" = "$original_canonical" ]
+}
+
+rollback_originals() {
+  local failed=0
+  if ! restore_input_sources_if_unchanged sources "$sources_touched" "$current_sources" "$canonical_sources" "$next_sources"; then
+    failed=1
+  fi
+  if ! restore_input_sources_if_unchanged mru-sources "$mru_touched" "$current_mru" "$canonical_mru" "$next_mru"; then
+    failed=1
+  fi
+  if ! restore_preload_if_unchanged "$preload_touched" "$current_preload" "$canonical_preload" "$next_preload"; then
+    failed=1
+  fi
+  return "$failed"
+}
+
+set_and_verify_input_sources() {
+  local key="$1"
+  local before="$2"
+  local expected="$3"
+  local actual canonical
+  actual="$(gsettings get org.gnome.desktop.input-sources "$key")"
+  canonical="$(normalize_input_sources "$actual")"
+  [ "$canonical" = "$before" ] || return 1
+  case "$key" in
+    sources) sources_touched=1 ;;
+    mru-sources) mru_touched=1 ;;
+    *) return 1 ;;
+  esac
+  gsettings set org.gnome.desktop.input-sources "$key" "$expected" >/dev/null
+  actual="$(gsettings get org.gnome.desktop.input-sources "$key")"
+  canonical="$(normalize_input_sources "$actual")"
+  [ "$canonical" = "$expected" ]
+}
+
+set_and_verify_preload() {
+  local before="$1"
+  local expected="$2"
+  local actual canonical
+  actual="$(gsettings get org.freedesktop.ibus.general preload-engines)"
+  canonical="$(normalize_preload_engines "$actual")"
+  [ "$canonical" = "$before" ] || return 1
+  preload_touched=1
+  gsettings set org.freedesktop.ibus.general preload-engines "$expected" >/dev/null
+  actual="$(gsettings get org.freedesktop.ibus.general preload-engines)"
+  canonical="$(normalize_preload_engines "$actual")"
+  [ "$canonical" = "$expected" ]
+}
+
+if ! set_and_verify_input_sources sources "$canonical_sources" "$next_sources" \
+  || ! set_and_verify_input_sources mru-sources "$canonical_mru" "$next_mru" \
+  || ! set_and_verify_preload "$canonical_preload" "$next_preload"; then
+  echo "goblins-os-input-source-seed: input source update failed; restoring the exact previous values" >&2
+  if ! rollback_originals; then
+    echo "goblins-os-input-source-seed: one or more previous values could not be restored" >&2
+  fi
+  exit 1
+fi
 
 mkdir -p "$(dirname "$MARKER")"
 printf 'seeded %s/%s\n' "$ENGINE_KIND" "$ENGINE_ID" > "$MARKER"

@@ -1,0 +1,103 @@
+# Re-attests a locally captured Apple-Silicon/HVF evidence seal on a GitHub-hosted
+# runner. The workflow never receives screenshots or credentials: its only input
+# is the canonical manifest of hashes produced by the exact candidate checkout.
+name: aarch64-local-display-attestation
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_commit:
+        description: "Exact lowercase 40-hex candidate commit (dispatch this workflow from the candidate branch or tag)"
+        required: true
+        type: string
+      candidate_image_ref:
+        description: "Exact digest-pinned aarch64 candidate image"
+        required: true
+        type: string
+      run_date:
+        description: "Local display-backed capture date (YYYY-MM-DD)"
+        required: true
+        type: string
+      evidence_bundle_sha256:
+        description: "SHA256 of the canonical local evidence-bundle.json"
+        required: true
+        type: string
+      evidence_bundle_base64:
+        description: "Canonical evidence-bundle.json encoded as unwrapped base64"
+        required: true
+        type: string
+
+concurrency:
+  group: aarch64-local-display-attestation-${{ inputs.candidate_commit }}-${{ inputs.run_date }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  attestations: write
+  id-token: write
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact candidate and reconstruct the canonical seal
+        env:
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_IMAGE_REF: ${{ inputs.candidate_image_ref }}
+          RUN_DATE: ${{ inputs.run_date }}
+          EVIDENCE_BUNDLE_SHA256: ${{ inputs.evidence_bundle_sha256 }}
+          EVIDENCE_BUNDLE_BASE64: ${{ inputs.evidence_bundle_base64 }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_IMAGE_REF" =~ ^ghcr\.io/joe-simo/goblins-os@sha256:[0-9a-f]{64}$ ]]
+          [[ "$EVIDENCE_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(date -u -d "$RUN_DATE" +%F 2>/dev/null)" = "$RUN_DATE"
+          test "$GITHUB_SHA" = "$CANDIDATE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          install -d -m 0700 attestation
+          python3 os/hardware-gate/capture-harness/evidence_bundle.py \
+            decode-attestation-input \
+            --base64 "$EVIDENCE_BUNDLE_BASE64" \
+            --evidence-bundle-sha256 "$EVIDENCE_BUNDLE_SHA256" \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --image-ref "$CANDIDATE_IMAGE_REF" \
+            --run-date "$RUN_DATE" \
+            --output attestation/evidence-bundle.json
+
+      - name: Create exact workflow/run attestation record
+        env:
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_IMAGE_REF: ${{ inputs.candidate_image_ref }}
+          RUN_DATE: ${{ inputs.run_date }}
+        run: |
+          set -euo pipefail
+          python3 os/hardware-gate/capture-harness/evidence_bundle.py \
+            create-attestation \
+            --seal attestation/evidence-bundle.json \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --image-ref "$CANDIDATE_IMAGE_REF" \
+            --run-date "$RUN_DATE" \
+            --workflow-run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output attestation/aarch64-local-display-attestation.json
+
+      - name: Sign and publish the exact evidence seal provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: attestation/evidence-bundle.json
+
+      - name: Upload the exact seal and run-bound attestation record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aarch64-local-display-attestation-${{ inputs.candidate_commit }}-${{ inputs.run_date }}-attempt-${{ github.run_attempt }}
+          path: attestation/
+          if-no-files-found: error
+          retention-days: 90

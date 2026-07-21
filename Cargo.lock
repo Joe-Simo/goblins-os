@@ -749,6 +749,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "socket2",
  "sysinfo",
  "tempfile",
  "tokio",
@@ -863,8 +864,12 @@ dependencies = [
 name = "goblins-os-session-bridge"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "goblins-os-textshortcuts-engine",
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -904,6 +909,7 @@ dependencies = [
 name = "goblins-os-textshortcuts-engine"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
 ]

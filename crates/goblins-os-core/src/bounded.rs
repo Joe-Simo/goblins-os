@@ -42,6 +42,9 @@ const MAX_CONCURRENT_LONG_OPERATIONS: usize = 2;
 pub(crate) const LONG_OPERATION_BUSY_MESSAGE: &str =
     "Goblins OS is finishing other AI or media work. Try again in a moment.";
 
+pub(crate) const VOICE_OPERATION_BUSY_MESSAGE: &str =
+    "Goblin voice is already listening or speaking. Try again in a moment.";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AdmissionError {
     Busy,
@@ -83,6 +86,45 @@ where
     run_blocking_with_limiter(long_operation_limiter(), task).await
 }
 
+/// Voice owns the microphone, transcript pipeline, and default speaker as one
+/// indivisible operation. Keep that resource exclusive even on machines where
+/// the general long-operation pool admits two unrelated AI/media jobs.
+pub(crate) async fn run_voice_blocking<T, F>(task: F) -> Result<T, AdmissionError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    run_voice_blocking_with_limiters(voice_operation_limiter(), long_operation_limiter(), task)
+        .await
+}
+
+async fn run_voice_blocking_with_limiters<T, F>(
+    voice_limiter: Arc<Semaphore>,
+    long_limiter: Arc<Semaphore>,
+    task: F,
+) -> Result<T, AdmissionError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let voice_permit = voice_limiter
+        .try_acquire_owned()
+        .map_err(|_| AdmissionError::Busy)?;
+    let long_permit = long_limiter
+        .try_acquire_owned()
+        .map_err(|_| AdmissionError::Busy)?;
+    match tokio::task::spawn_blocking(move || {
+        let _voice_permit = voice_permit;
+        let _long_permit = long_permit;
+        task()
+    })
+    .await
+    {
+        Ok(value) => Ok(value),
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
 fn long_operation_limiter() -> Arc<Semaphore> {
     static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
     Arc::clone(LIMITER.get_or_init(|| {
@@ -91,6 +133,11 @@ fn long_operation_limiter() -> Arc<Semaphore> {
             .unwrap_or(1);
         Arc::new(Semaphore::new(capacity))
     }))
+}
+
+fn voice_operation_limiter() -> Arc<Semaphore> {
+    static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    Arc::clone(LIMITER.get_or_init(|| Arc::new(Semaphore::new(1))))
 }
 
 async fn run_blocking_with_limiter<T, F>(
@@ -246,8 +293,8 @@ where
 mod tests {
     use super::{
         bounded_command_output, bounded_session_command_output, clamp_probe_timeout_ms,
-        run_blocking_with_limiter, AdmissionError, BoundedCommandError, PROBE_TIMEOUT_MS_DEFAULT,
-        PROBE_TIMEOUT_MS_MAX, PROBE_TIMEOUT_MS_MIN,
+        run_blocking_with_limiter, run_voice_blocking_with_limiters, AdmissionError,
+        BoundedCommandError, PROBE_TIMEOUT_MS_DEFAULT, PROBE_TIMEOUT_MS_MAX, PROBE_TIMEOUT_MS_MIN,
     };
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -355,6 +402,35 @@ mod tests {
 
         assert_eq!(result, Err(AdmissionError::Busy));
         drop(held);
+    }
+
+    #[tokio::test]
+    async fn voice_operation_admission_is_exclusive() {
+        let voice_limiter = Arc::new(Semaphore::new(1));
+        let long_limiter = Arc::new(Semaphore::new(2));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let active_voice_limiter = Arc::clone(&voice_limiter);
+        let active_long_limiter = Arc::clone(&long_limiter);
+        let active = tokio::spawn(async move {
+            run_voice_blocking_with_limiters(active_voice_limiter, active_long_limiter, move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                1
+            })
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            run_voice_blocking_with_limiters(voice_limiter, long_limiter, || 2).await,
+            Err(AdmissionError::Busy),
+        );
+        release_tx.send(()).unwrap();
+        assert_eq!(active.await.unwrap(), Ok(1));
     }
 
     #[tokio::test]

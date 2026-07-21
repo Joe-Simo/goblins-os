@@ -1,25 +1,27 @@
 //! Text Shortcuts substrate (the curated Replace→With table).
 //!
 //! The macOS "Text Replacement" altitude. Goblins owns a curated table stored as
-//! JSON at `~/.config/goblins-os/text-shortcuts.json` (NOT a gsetting — it is
-//! free-form user data), edited through this allowlisted bridge. The table needs no
-//! model and ships ready; the IBus engine that actually commits the replacement
-//! over `text-input-v3` is the deliberate, boot/login-adjacent follow-up, so this
-//! reports `engine_available` honestly and the matching logic here is exactly what
-//! that engine will use.
+//! JSON at the desktop user's `~/.config/goblins-os/text-shortcuts.json` (NOT a
+//! gsetting — it is free-form user data). The system core never reads or writes
+//! its service-account home: every table access uses two fixed, typed operations
+//! on the allowlisted session bridge, which owns the desktop user's private file.
 
-use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::Json;
-use goblins_os_textshortcuts_engine::{sanitize_shortcuts, TextShortcut};
+use goblins_os_textshortcuts_engine::{
+    sanitize_shortcuts, text_shortcuts_table_is_within_size_limit, TextShortcut,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{bounded_session_command_output, probe_timeout};
-use crate::session_bridge::{self, SessionBridgeResult};
+use crate::session_bridge::{
+    self, SessionBridgeResult, TextShortcutsBridgeResult, TextShortcutsRuntimeStatusResult,
+};
 
 const ENGINE_BINARY_PATH: &str = "/usr/libexec/goblins-os/goblins-textshortcuts-engine";
 const ENGINE_COMPONENT_PATH: &str = "/usr/share/ibus/component/goblins-textshortcuts.xml";
@@ -29,6 +31,7 @@ const TEXTSHORTCUTS_INPUT_ID: &str = "goblins-textshortcuts";
 const AUTOCORRECT_MODEL_ENV: &str = "GOBLINS_TEXTSHORTCUTS_AUTOCORRECT_MODEL";
 const AUTOCORRECT_MODEL_DIR: &str = "/usr/share/goblins-os/models/autocorrect";
 const HUNSPELL_DICTIONARY_DIRS: &[&str] = &["/usr/share/hunspell", "/usr/share/myspell"];
+const MAX_PREVIEW_TRIGGER_BYTES: usize = 256;
 
 #[derive(Serialize)]
 pub struct TextShortcutsStatus {
@@ -55,6 +58,7 @@ pub struct PreviewQuery {
 pub struct PreviewResult {
     trigger: String,
     replacement: Option<String>,
+    detail: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -77,35 +81,117 @@ pub struct TextShortcutsAutocorrectStatus {
     detail: String,
 }
 
-pub async fn text_shortcuts_status() -> Json<TextShortcutsStatus> {
-    Json(build_status(read_table()))
+pub async fn text_shortcuts_status() -> (StatusCode, Json<TextShortcutsStatus>) {
+    match session_bridge::text_shortcuts_read() {
+        TextShortcutsBridgeResult::Success(table) => (StatusCode::OK, Json(build_status(table))),
+        failure => table_failure_response(failure, TableOperation::Read),
+    }
 }
 
 pub async fn set_text_shortcuts(
     Json(request): Json<SetTextShortcutsRequest>,
 ) -> (StatusCode, Json<TextShortcutsStatus>) {
     let table = sanitize_shortcuts(request.shortcuts);
-    match write_table(&table) {
-        Ok(()) => (StatusCode::OK, Json(build_status(table))),
-        Err(_) => {
-            let mut status = build_status(read_table());
-            status.detail =
-                "Couldn't save Text Shortcuts (the configuration file is not writable)."
-                    .to_string();
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(status))
+    if !text_shortcuts_table_is_within_size_limit(&table) {
+        let mut status = build_status(Vec::new());
+        status.detail =
+            "Text Shortcuts couldn't be saved because the private table exceeds 48 KiB."
+                .to_string();
+        return (StatusCode::PAYLOAD_TOO_LARGE, Json(status));
+    }
+    match session_bridge::text_shortcuts_write(&table) {
+        TextShortcutsBridgeResult::Success(committed) => {
+            (StatusCode::OK, Json(build_status(committed)))
         }
+        failure => table_failure_response(failure, TableOperation::Write),
     }
 }
 
 /// Preview what a trigger expands to (the editor's "try it" affordance), using the
 /// exact same match the engine performs.
-pub async fn preview_text_shortcut(Query(query): Query<PreviewQuery>) -> Json<PreviewResult> {
-    let table = read_table();
-    let replacement = find_replacement(&query.trigger, &table).map(str::to_string);
-    Json(PreviewResult {
-        trigger: query.trigger,
-        replacement,
-    })
+pub async fn preview_text_shortcut(
+    Query(query): Query<PreviewQuery>,
+) -> (StatusCode, Json<PreviewResult>) {
+    if query.trigger.len() > MAX_PREVIEW_TRIGGER_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(PreviewResult {
+                trigger: String::new(),
+                replacement: None,
+                detail: "Text Shortcut preview triggers are limited to 256 bytes.".to_string(),
+            }),
+        );
+    }
+    match session_bridge::text_shortcuts_read() {
+        TextShortcutsBridgeResult::Success(table) => {
+            let replacement = find_replacement(&query.trigger, &table).map(str::to_string);
+            (
+                StatusCode::OK,
+                Json(PreviewResult {
+                    trigger: query.trigger,
+                    replacement,
+                    detail: "Previewed from your private desktop Text Shortcuts table.".to_string(),
+                }),
+            )
+        }
+        failure => {
+            let (status, detail) = table_failure(failure, TableOperation::Read);
+            (
+                status,
+                Json(PreviewResult {
+                    trigger: query.trigger,
+                    replacement: None,
+                    detail: detail.to_string(),
+                }),
+            )
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TableOperation {
+    Read,
+    Write,
+}
+
+fn table_failure_response(
+    failure: TextShortcutsBridgeResult,
+    operation: TableOperation,
+) -> (StatusCode, Json<TextShortcutsStatus>) {
+    let (status_code, detail) = table_failure(failure, operation);
+    let mut status = build_status(Vec::new());
+    status.detail = detail.to_string();
+    (status_code, Json(status))
+}
+
+fn table_failure(
+    failure: TextShortcutsBridgeResult,
+    operation: TableOperation,
+) -> (StatusCode, &'static str) {
+    match failure {
+        TextShortcutsBridgeResult::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Text Shortcuts are waiting for the private desktop session storage bridge.",
+        ),
+        TextShortcutsBridgeResult::InvalidResponse => (
+            StatusCode::BAD_GATEWAY,
+            "Text Shortcuts couldn't verify the desktop session storage response.",
+        ),
+        TextShortcutsBridgeResult::Rejected => match operation {
+            TableOperation::Read => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Text Shortcuts couldn't read the private desktop table.",
+            ),
+            TableOperation::Write => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Text Shortcuts couldn't save the private desktop table.",
+            ),
+        },
+        TextShortcutsBridgeResult::Success(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Text Shortcuts encountered an internal storage-state error.",
+        ),
+    }
 }
 
 fn build_status(shortcuts: Vec<TextShortcut>) -> TextShortcutsStatus {
@@ -136,15 +222,27 @@ fn probe_engine_status() -> TextShortcutsEngineStatus {
     )
 }
 
-/// Live readiness comes only from the real session: the allowlisted session
-/// bridge reads the active IBus engine, and the runtime loop counts as
-/// available only while the Goblins Text Shortcuts engine is actually the
-/// one receiving keystrokes. Bridge unavailable or another engine active
-/// degrades honestly to "not active".
+/// Live readiness comes only from two independent facts in the real session:
+/// the allowlisted bridge must see the Goblins IBus engine selected, and the
+/// adapter must have published a fresh heartbeat after a successful child
+/// protocol response while focused. Either probe failing degrades honestly.
 fn text_shortcuts_runtime_loop_live() -> bool {
-    matches!(
+    text_shortcuts_runtime_loop_live_from(
         session_bridge::ibus_engine(),
+        session_bridge::text_shortcuts_runtime_status(),
+    )
+}
+
+fn text_shortcuts_runtime_loop_live_from(
+    active_engine: SessionBridgeResult,
+    runtime_status: TextShortcutsRuntimeStatusResult,
+) -> bool {
+    matches!(
+        active_engine,
         SessionBridgeResult::Success(engine) if engine.trim() == TEXTSHORTCUTS_INPUT_ID
+    ) && matches!(
+        runtime_status,
+        TextShortcutsRuntimeStatusResult::Success(status) if status.ready()
     )
 }
 
@@ -178,7 +276,7 @@ fn text_shortcuts_engine_status(
         }
         if !runtime_loop_available {
             missing.push(
-                "the Goblins Text Shortcuts engine is not the active IBus engine in this session",
+                "the Goblins Text Shortcuts engine lacks an active, fresh focused runtime response in this session",
             );
         }
         format!(
@@ -250,9 +348,26 @@ fn directory_has_extension(path: &Path, extension: &str) -> bool {
 }
 
 fn text_shortcuts_input_source_configured() -> bool {
-    gsettings_get(INPUT_SOURCES_SCHEMA, "sources").is_some_and(|raw| {
-        input_sources_contains(&raw, TEXTSHORTCUTS_INPUT_KIND, TEXTSHORTCUTS_INPUT_ID)
-    })
+    // The core is a system service and deliberately has no desktop-user D-Bus
+    // session. Keep this read in the user service, behind the bridge's exact
+    // gsettings schema/key allowlist, just like the active-engine probe.
+    input_source_configured_from_bridge(session_bridge::gsettings(&[
+        "get",
+        INPUT_SOURCES_SCHEMA,
+        "sources",
+    ]))
+}
+
+fn input_source_configured_from_bridge(result: SessionBridgeResult) -> bool {
+    matches!(
+        result,
+        SessionBridgeResult::Success(raw)
+            if input_sources_contains(
+                &raw,
+                TEXTSHORTCUTS_INPUT_KIND,
+                TEXTSHORTCUTS_INPUT_ID
+            )
+    )
 }
 
 fn input_sources_contains(gvariant: &str, kind: &str, id: &str) -> bool {
@@ -293,15 +408,6 @@ fn single_quoted_strings(fragment: &str) -> Vec<String> {
     out
 }
 
-fn gsettings_get(schema: &str, key: &str) -> Option<String> {
-    let output =
-        bounded_session_command_output("gsettings", &["get", schema, key], probe_timeout()).ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
 /// The replacement for an exactly-typed trigger, if the table has one. This is the
 /// match the IBus engine performs on a word boundary. Pure + unit-tested.
 fn find_replacement<'a>(trigger: &str, table: &'a [TextShortcut]) -> Option<&'a str> {
@@ -309,35 +415,6 @@ fn find_replacement<'a>(trigger: &str, table: &'a [TextShortcut]) -> Option<&'a 
         .iter()
         .find(|entry| entry.replace() == trigger)
         .map(TextShortcut::with_text)
-}
-
-fn read_table() -> Vec<TextShortcut> {
-    let Some(path) = table_path() else {
-        return Vec::new();
-    };
-    let Ok(raw) = fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    sanitize_shortcuts(serde_json::from_str(&raw).unwrap_or_default())
-}
-
-fn write_table(table: &[TextShortcut]) -> std::io::Result<()> {
-    let path = table_path()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no config home"))?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(table)
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-    fs::write(path, json)
-}
-
-fn table_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(base.join("goblins-os").join("text-shortcuts.json"))
 }
 
 fn command_on_path(binary: &str) -> bool {
@@ -348,12 +425,43 @@ fn command_on_path(binary: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_replacement, input_sources_contains, text_shortcuts_autocorrect_status,
-        text_shortcuts_engine_status, TextShortcut,
+        find_replacement, input_source_configured_from_bridge, input_sources_contains,
+        table_failure, text_shortcuts_autocorrect_status, text_shortcuts_engine_status,
+        text_shortcuts_runtime_loop_live_from, TableOperation, TextShortcut,
     };
+    use crate::session_bridge::{
+        SessionBridgeResult, TextShortcutsBridgeResult, TextShortcutsRuntimeStatus,
+        TextShortcutsRuntimeStatusResult,
+    };
+    use axum::http::StatusCode;
 
     fn s(replace: &str, with: &str) -> TextShortcut {
         TextShortcut::new(replace, with)
+    }
+
+    fn runtime_status(
+        focused: bool,
+        enabled: bool,
+        surrounding_text_supported: bool,
+        snapshot_valid: bool,
+        child_alive: bool,
+        last_response_ok: bool,
+    ) -> TextShortcutsRuntimeStatus {
+        serde_json::from_value(serde_json::json!({
+            "schema": "goblins-os.text-shortcuts-runtime-status.v1",
+            "instance_id": "0123456789abcdef0123456789abcdef",
+            "focus_generation": 7,
+            "runtime_generation": 11,
+            "sequence": 13,
+            "monotonic_ns": 17,
+            "focused": focused,
+            "enabled": enabled,
+            "surrounding_text_supported": surrounding_text_supported,
+            "snapshot_valid": snapshot_valid,
+            "child_alive": child_alive,
+            "last_response_ok": last_response_ok,
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -371,11 +479,37 @@ mod tests {
             s("x", "x"),                // trigger == replacement → dropped
             s("", "y"),                 // empty trigger → dropped
             s("z", ""),                 // empty replacement → dropped
+            s("bad\0trigger", "value"), // NUL trigger → dropped
+            s("bad", "value\0text"),    // NUL replacement → dropped
             s("omw", "omw — updated"),  // duplicate trigger → last wins
         ]);
         assert_eq!(table.len(), 1);
         assert_eq!(table[0].replace(), "omw");
         assert_eq!(table[0].with_text(), "omw — updated");
+    }
+
+    #[test]
+    fn table_bridge_failures_have_stable_http_statuses() {
+        assert_eq!(
+            table_failure(TextShortcutsBridgeResult::Unavailable, TableOperation::Read).0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            table_failure(
+                TextShortcutsBridgeResult::InvalidResponse,
+                TableOperation::Read
+            )
+            .0,
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            table_failure(TextShortcutsBridgeResult::Rejected, TableOperation::Read).0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            table_failure(TextShortcutsBridgeResult::Rejected, TableOperation::Write).0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     #[test]
@@ -393,7 +527,9 @@ mod tests {
             .detail
             .contains("engine binary is not installed"));
         assert!(missing_all.detail.contains("input source is not enabled"));
-        assert!(missing_all.detail.contains("not the active IBus engine"));
+        assert!(missing_all
+            .detail
+            .contains("fresh focused runtime response"));
 
         let ibus_only = text_shortcuts_engine_status(true, false, false, false, false);
         assert!(!ibus_only.ready);
@@ -419,6 +555,54 @@ mod tests {
     }
 
     #[test]
+    fn runtime_loop_requires_active_engine_and_fresh_live_child_status() {
+        assert!(text_shortcuts_runtime_loop_live_from(
+            SessionBridgeResult::Success("goblins-textshortcuts".to_string()),
+            TextShortcutsRuntimeStatusResult::Success(runtime_status(
+                true, true, true, true, true, true,
+            )),
+        ));
+
+        for readiness_signals in [
+            [false, true, true, true, true, true],
+            [true, false, true, true, true, true],
+            [true, true, false, true, true, true],
+            [true, true, true, false, true, true],
+            [true, true, true, true, false, true],
+            [true, true, true, true, true, false],
+        ] {
+            let [focused, enabled, surrounding_text_supported, snapshot_valid, child_alive, last_response_ok] =
+                readiness_signals;
+            assert!(!text_shortcuts_runtime_loop_live_from(
+                SessionBridgeResult::Success("goblins-textshortcuts".to_string()),
+                TextShortcutsRuntimeStatusResult::Success(runtime_status(
+                    focused,
+                    enabled,
+                    surrounding_text_supported,
+                    snapshot_valid,
+                    child_alive,
+                    last_response_ok,
+                )),
+            ));
+        }
+
+        assert!(!text_shortcuts_runtime_loop_live_from(
+            SessionBridgeResult::Success("xkb:us::eng".to_string()),
+            TextShortcutsRuntimeStatusResult::Success(runtime_status(
+                true, true, true, true, true, true,
+            )),
+        ));
+        assert!(!text_shortcuts_runtime_loop_live_from(
+            SessionBridgeResult::Success("goblins-textshortcuts".to_string()),
+            TextShortcutsRuntimeStatusResult::Rejected("runtime heartbeat is stale".to_string()),
+        ));
+        assert!(!text_shortcuts_runtime_loop_live_from(
+            SessionBridgeResult::Unavailable,
+            TextShortcutsRuntimeStatusResult::Unavailable,
+        ));
+    }
+
+    #[test]
     fn input_source_detection_requires_the_goblins_ibus_engine() {
         assert!(input_sources_contains(
             "[('xkb', 'us'), ('ibus', 'goblins-textshortcuts')]",
@@ -434,6 +618,39 @@ mod tests {
             "@a(ss) []",
             "ibus",
             "goblins-textshortcuts"
+        ));
+    }
+
+    #[test]
+    fn input_source_readiness_accepts_configured_bridge_success() {
+        assert!(input_source_configured_from_bridge(
+            SessionBridgeResult::Success(
+                "[('xkb', 'us'), ('ibus', 'goblins-textshortcuts')]".to_string()
+            )
+        ));
+        assert!(!input_source_configured_from_bridge(
+            SessionBridgeResult::Success("[('xkb', 'us')]".to_string())
+        ));
+    }
+
+    #[test]
+    fn input_source_readiness_fails_closed_on_bridge_failure() {
+        assert!(!input_source_configured_from_bridge(
+            SessionBridgeResult::Failed("gsettings request failed".to_string())
+        ));
+    }
+
+    #[test]
+    fn input_source_readiness_fails_closed_on_malformed_bridge_success() {
+        assert!(!input_source_configured_from_bridge(
+            SessionBridgeResult::Success("not a gsettings sources value".to_string())
+        ));
+    }
+
+    #[test]
+    fn input_source_readiness_fails_closed_when_bridge_is_unavailable() {
+        assert!(!input_source_configured_from_bridge(
+            SessionBridgeResult::Unavailable
         ));
     }
 

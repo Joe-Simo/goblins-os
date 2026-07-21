@@ -363,7 +363,8 @@ RUN for client in \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/ai \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/models \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/apps /var/lib/goblins-os/apps/codex-work \
-    && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/voice/stt /var/lib/goblins-os/voice/tts /var/lib/goblins-os/voice/work \
+    && install -d -m 0750 -o goblins-os -g goblins-os /var/lib/goblins-os/voice /var/lib/goblins-os/voice/stt /var/lib/goblins-os/voice/tts \
+    && install -d -m 0700 -o goblins-os -g goblins-os /var/lib/goblins-os/voice/work \
     && install -d -o goblins-os -g goblins-os -m 0700 /var/lib/goblins-os/codex \
     && install -d -m 0700 -o goblins-os -g goblins-os /var/lib/goblins-os/secrets/openai \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/.local/bin \
@@ -425,11 +426,13 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && test -f /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /run/goblins-os-core/settings 2750 goblins-os goblins-core-settings -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /run/goblins-os-core/release-proof 2750 goblins-os goblins-core-release-proof -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
+    && grep -Fq 'd /var/lib/goblins-os/voice/work 0700 goblins-os goblins-os -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && test -x /usr/libexec/goblins-os/goblins-os-full-installer \
     && test -x /usr/libexec/goblins-os/goblins-os-session-bridge \
     && /usr/libexec/goblins-os/goblins-os-session-bridge --self-test \
     && test -f /usr/lib/systemd/user/org.goblins.OS.SessionBridge.service \
     && grep -Fq 'ExecStart=/usr/libexec/goblins-os/goblins-os-session-bridge' /usr/lib/systemd/user/org.goblins.OS.SessionBridge.service \
+    && grep -Fxq 'UMask=0077' /usr/lib/systemd/user/org.goblins.OS.SessionBridge.service \
     && test -f /usr/lib/tmpfiles.d/goblins-os-session.conf \
     && grep -Fq 'd /run/goblins-os-session 0770 goblin goblins-session-bridge -' /usr/lib/tmpfiles.d/goblins-os-session.conf \
     && grep -Fq 'Wants=org.goblins.OS.SessionBridge.service' /usr/lib/systemd/user/gnome-session@goblins-os.target.d/goblins-os.session.conf \
@@ -439,6 +442,14 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && ! grep -Fq 'goblins-os/resident' /usr/lib/systemd/system/goblins-os-model-cache.service \
     && grep -Fq 'StateDirectory=goblins-os/models goblins-os/ai goblins-os/policy' /usr/lib/systemd/system/goblins-os-core.service \
     && grep -Fq 'StateDirectoryMode=0750' /usr/lib/systemd/system/goblins-os-core.service \
+    && grep -Fxq 'UMask=0077' /usr/lib/systemd/system/goblins-os-core.service \
+    && test "$(grep -c '^ReadWritePaths=' /usr/lib/systemd/system/goblins-os-core.service)" = 1 \
+    && grep -Fxq 'ReadWritePaths=/run/goblins-os-core /var/lib/goblins-os/installer /var/lib/goblins-os/session /var/lib/goblins-os/policy /var/lib/goblins-os/ai /var/lib/goblins-os/models /var/lib/goblins-os/voice/work /var/lib/goblins-os/secrets/openai /var/lib/goblins-os/apps /var/lib/goblins-os/codex' /usr/lib/systemd/system/goblins-os-core.service \
+    && command -v nsenter \
+    && command -v findmnt \
+    && command -v setpriv \
+    && command -v sha256sum \
+    && command -v rpm \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.VisualLookup.desktop \
@@ -576,12 +587,34 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -q '"focus_out_hide": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"sensitive_hide": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"pass_through_unchanged": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"key_release_preserved_candidate": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && grep -q '"runtime_failure_cleanup": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"sink_failure_fail_open": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"style_class": "gos-text-shortcuts-candidate"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"font_family": "Inter"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
     && grep -q '"runtime_ready_claim": false' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json \
+    && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --native-ibus-lookup-renderer-self-test > /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"status": "pass"' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"surface": "goblins-textshortcuts-native-ibus-lookup-renderer"' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"renderer": "native-ibus-lookup-table"' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"lookup_table_updates": 1' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"lookup_table_hides": 1' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"auxiliary_updates": 1' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"auxiliary_hides": 1' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"visible_preedit_updates": 0' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"native_only_candidate_surface": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"candidate_count": 1' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"label_count": 1' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"system_orientation": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"show_published": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"hide_published": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"retryable_force_hide": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"native_show_failure_reported": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"table_change_hide_retry": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"synthetic_overlay": false' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
+    && grep -q '"value_redacted": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json \
     && /usr/libexec/goblins-os/goblins-textshortcuts-ibus --gi-adapter-contract-self-test > /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"status": "pass"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"surface": "goblins-textshortcuts-gi-adapter-contract"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
@@ -596,13 +629,17 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -q '"set-content-type"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"focus-out"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"reset"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
-    && grep -q '"preedit_update": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"candidate_metadata": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"visible_preedit_updates": 0' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"native_only_candidate_surface": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"boundary_commit": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"escape_dismiss": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"pass_through_default": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"password_refusal": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"render_intent_surface": "goblins-textshortcuts-accept-bubble-render-intent"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"render_intent_count": 8' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"native_lookup_renderer": "native-ibus-lookup-table"' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
+    && grep -q '"native_lookup_contract": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"rendered_bubble_ready_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"live_overlay_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
     && grep -q '"live_ibus_bus_claim": false' /tmp/goblins-textshortcuts-gi-adapter-contract.json \
@@ -616,7 +653,8 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -q '"set-content-type"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
     && grep -q '"focus-out"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
     && grep -q '"reset"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
-    && grep -q '"update-preedit-text"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"visible_preedit_updates": 0' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
+    && grep -q '"metadata_only_candidate_response": true' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
     && grep -q '"delete-surrounding-text"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
     && grep -q '"commit-text"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \
     && grep -q '"hide-preedit-text"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json \

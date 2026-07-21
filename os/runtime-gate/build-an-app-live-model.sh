@@ -30,7 +30,8 @@ BUILD_RESPONSE_PATH="${BUILD_RESPONSE_PATH:-/work/build-response.json}"
 PROOF_PATH="${PROOF_PATH:-/work/runtime-build-proof.json}"
 
 core_proof_curl() {
-  curl --unix-socket "$CORE_PROOF_SOCKET" "$@"
+  setpriv --regid=goblins-core-release-proof --clear-groups -- \
+    curl --unix-socket "$CORE_PROOF_SOCKET" "$@"
 }
 
 write_runtime_build_proof() {

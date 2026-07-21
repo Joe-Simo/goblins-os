@@ -258,7 +258,7 @@ jobs:
           goblins_os_artifact_secret_scan "$PWD"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: goblins-os-aarch64-verification-iso-${{ inputs.run_date }}
+          name: goblins-os-aarch64-verification-iso-${{ inputs.candidate_commit }}-${{ inputs.run_date }}-attempt-${{ github.run_attempt }}
           retention-days: 7
           path: |
             os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso
@@ -267,3 +267,10 @@ jobs:
             os/iso/output/aarch64/manifest-anaconda-iso.json
             os/signoff-proofs/sbom/aarch64/
             os/signoff-proofs/native-gate/aarch64/native-packaging-gate.json
+      - name: Upload the exact native packaging gate for long-lived verification
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: goblins-os-aarch64-native-packaging-gate-${{ inputs.candidate_commit }}-${{ inputs.run_date }}-attempt-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: error
+          path: os/signoff-proofs/native-gate/aarch64/native-packaging-gate.json

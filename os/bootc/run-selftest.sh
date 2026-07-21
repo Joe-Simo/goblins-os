@@ -20,7 +20,8 @@ CORE_PROOF_URL=http://localhost
 fail=0
 
 core_proof_curl() {
-  curl --connect-timeout 2 --max-time 45 --unix-socket "$CORE_PROOF_SOCKET" "$@"
+  setpriv --regid=goblins-core-release-proof --clear-groups -- \
+    curl --connect-timeout 2 --max-time 45 --unix-socket "$CORE_PROOF_SOCKET" "$@"
 }
 
 echo "═══════════════════════════════════════════════════════════════════"

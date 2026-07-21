@@ -18,6 +18,7 @@ CORE_URL=http://localhost
 RESULT_DIR=/run/goblins-hwgate-core-proof
 FIXTURE_STATE=/run/goblins-hwgate-fixture-state
 FIXTURE_BLOCK=/run/goblins-hwgate-fixture-block
+FIXTURE_RESIDENT_SOCKET=$FIXTURE_STATE/resident/resident.sock
 BODY_TMP=""
 STATUS_TMP=""
 INPUT_TMP=""
@@ -32,7 +33,6 @@ cleanup_temps() {
   if [ "$FIXTURE_SWAP_IN_PROGRESS" = true ]; then
     systemctl stop goblins-hwgate-fixture-resident.service \
       >/dev/null 2>&1 || true
-    rm -f /run/goblins-os/resident.sock || true
     systemctl stop goblins-hwgate-fixture-core.service \
       >/dev/null 2>&1 || true
     systemctl --no-block start goblins-os-core.service \
@@ -57,11 +57,16 @@ publish_static_result() {
   STATUS_TMP=""
 }
 
+core_proof_curl() {
+  setpriv --regid=goblins-core-release-proof --clear-groups -- \
+    curl --unix-socket "$CORE_SOCKET" "$@"
+}
+
 wait_for_proof_socket() {
   local attempt
   for attempt in $(seq 1 120); do
     if [ -S "$CORE_SOCKET" ] \
-      && curl --unix-socket "$CORE_SOCKET" -sf --max-time 2 "$CORE_URL/health" >/dev/null 2>&1; then
+      && core_proof_curl -sf --max-time 2 "$CORE_URL/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.25
@@ -73,7 +78,7 @@ wait_for_fixture_resident() {
   local attempt
   for attempt in $(seq 1 120); do
     if systemctl is-active --quiet goblins-hwgate-fixture-resident.service \
-      && [ -S /run/goblins-os/resident.sock ]; then
+      && [ -S "$FIXTURE_RESIDENT_SOCKET" ]; then
       return 0
     fi
     sleep 0.25
@@ -86,7 +91,6 @@ restore_production_services() {
 
   systemctl stop goblins-hwgate-fixture-resident.service \
     >/dev/null 2>&1 || restored=false
-  rm -f /run/goblins-os/resident.sock || restored=false
   systemctl stop goblins-hwgate-fixture-core.service \
     >/dev/null 2>&1 || restored=false
   systemctl start goblins-os-core.service goblins-os-resident.service \
@@ -161,7 +165,6 @@ request() {
   local timeout=30
   local code rc=0
   local curl_args=(
-    --unix-socket "$CORE_SOCKET"
     -sS
     --connect-timeout 2
     -o ""
@@ -175,7 +178,7 @@ request() {
   }
   BODY_TMP="$(mktemp "$RESULT_DIR/.${operation}.body.XXXXXX")"
   STATUS_TMP="$(mktemp "$RESULT_DIR/.${operation}.status.XXXXXX")"
-  curl_args[6]="$BODY_TMP"
+  curl_args[4]="$BODY_TMP"
 
   if [ "$operation" = "app-build" ]; then
     timeout=3900
@@ -188,7 +191,7 @@ request() {
     curl_args+=(-H 'Content-Type: application/json' --data-binary "$payload")
   fi
 
-  if ! code="$(curl "${curl_args[@]}" "$CORE_URL$route")"; then
+  if ! code="$(core_proof_curl "${curl_args[@]}" "$CORE_URL$route")"; then
     code=000
     rc=1
   fi
@@ -232,8 +235,113 @@ PY
   request policy-grant-app-builder POST /v1/policy/permissions/grant "$payload"
 }
 
+text_shortcuts_file_contract() {
+  local body generated
+  body='{"ok":false,"parent_directory":false,"parent_owner":false,"parent_mode":false,"table_regular":false,"table_owner":false,"table_mode":false,"table_single_link":false,"table_size_bounded":false,"table_read_bounded":false,"canonical_entry":false,"legacy_service_table_absent":false}'
+
+  if generated="$(python3 - <<'PY'
+import grp
+import json
+import os
+import pwd
+import stat
+import sys
+
+PARENT = "/var/home/goblin/.config/goblins-os"
+TABLE_NAME = "text-shortcuts.json"
+LEGACY = "/var/lib/goblins-os/.config/goblins-os/text-shortcuts.json"
+MAX_BYTES = 48 * 1024
+EXPECTED = [{"replace": "omw", "with": "on my way"}]
+
+result = {
+    "ok": False,
+    "parent_directory": False,
+    "parent_owner": False,
+    "parent_mode": False,
+    "table_regular": False,
+    "table_owner": False,
+    "table_mode": False,
+    "table_single_link": False,
+    "table_size_bounded": False,
+    "table_read_bounded": False,
+    "canonical_entry": False,
+    "legacy_service_table_absent": False,
+}
+parent_fd = None
+table_fd = None
+
+try:
+    goblin_uid = pwd.getpwnam("goblin").pw_uid
+    goblin_gid = grp.getgrnam("goblin").gr_gid
+    parent_fd = os.open(
+        PARENT,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    parent_metadata = os.fstat(parent_fd)
+    result["parent_directory"] = stat.S_ISDIR(parent_metadata.st_mode)
+    result["parent_owner"] = (
+        parent_metadata.st_uid == goblin_uid and parent_metadata.st_gid == goblin_gid
+    )
+    result["parent_mode"] = stat.S_IMODE(parent_metadata.st_mode) == 0o700
+
+    table_fd = os.open(
+        TABLE_NAME,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
+    )
+    table_metadata = os.fstat(table_fd)
+    result["table_regular"] = stat.S_ISREG(table_metadata.st_mode)
+    result["table_owner"] = (
+        table_metadata.st_uid == goblin_uid and table_metadata.st_gid == goblin_gid
+    )
+    result["table_mode"] = stat.S_IMODE(table_metadata.st_mode) == 0o600
+    result["table_single_link"] = table_metadata.st_nlink == 1
+    result["table_size_bounded"] = 0 < table_metadata.st_size <= MAX_BYTES
+
+    chunks = []
+    remaining = MAX_BYTES + 1
+    while remaining > 0:
+        chunk = os.read(table_fd, remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    raw = b"".join(chunks)
+    result["table_read_bounded"] = 0 < len(raw) <= MAX_BYTES
+    if result["table_read_bounded"]:
+        result["canonical_entry"] = json.loads(raw.decode("utf-8")) == EXPECTED
+except (KeyError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+    pass
+finally:
+    if table_fd is not None:
+        os.close(table_fd)
+    if parent_fd is not None:
+        os.close(parent_fd)
+
+try:
+    os.lstat(LEGACY)
+except FileNotFoundError:
+    result["legacy_service_table_absent"] = True
+except OSError:
+    pass
+
+result["ok"] = all(value for key, value in result.items() if key != "ok")
+print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+sys.exit(0 if result["ok"] else 1)
+PY
+)"; then
+    body="$generated"
+    publish_static_result text-shortcuts-file-contract 200 "$body"
+    return 0
+  fi
+
+  [ -z "$generated" ] || body="$generated"
+  publish_static_result text-shortcuts-file-contract 500 "$body"
+  return 1
+}
+
 seed_fixture_block() {
-  rm -rf "$FIXTURE_BLOCK" || return 1
+  find "$FIXTURE_BLOCK" -mindepth 1 -delete || return 1
   install -d -m 0755 -o root -g root \
     "$FIXTURE_BLOCK/nvme0n1/queue" "$FIXTURE_BLOCK/nvme0n1/device" || return 1
   printf '536870912\n' >"$FIXTURE_BLOCK/nvme0n1/size" || return 1
@@ -268,7 +376,7 @@ fixture_start() {
   systemctl reset-failed goblins-hwgate-fixture-core.service \
     goblins-hwgate-fixture-resident.service >/dev/null 2>&1 || true
 
-  if ! rm -rf "$FIXTURE_STATE"; then
+  if ! find "$FIXTURE_STATE" -mindepth 1 -delete; then
     fail_fixture_start clear-fixture-state
     return 1
   fi
@@ -291,10 +399,6 @@ fixture_start() {
   fi
   if ! seed_fixture_block; then
     fail_fixture_start seed-fixture-block
-    return 1
-  fi
-  if ! rm -f /run/goblins-os/resident.sock; then
-    fail_fixture_start clear-fixture-runtime
     return 1
   fi
   if ! install -m 0644 -o root -g root /dev/null \
@@ -342,7 +446,7 @@ fixture_start_finished() {
   if [ "$OPERATION_RESULT" = "success" ] \
     && systemctl is-active --quiet goblins-hwgate-fixture-core.service \
     && systemctl is-active --quiet goblins-hwgate-fixture-resident.service \
-    && [ -S /run/goblins-os/resident.sock ] \
+    && [ -S "$FIXTURE_RESIDENT_SOCKET" ] \
     && wait_for_proof_socket; then
     return 0
   fi
@@ -368,7 +472,11 @@ case "$OPERATION" in
   firewall-status) request firewall-status GET /v1/firewall/status ;;
   firewall-disable) request firewall-disable POST /v1/firewall/enabled '{"enabled":false}' ;;
   firewall-enable) request firewall-enable POST /v1/firewall/enabled '{"enabled":true}' ;;
+  text-shortcuts-seed) request text-shortcuts-seed POST /v1/text-shortcuts '{"shortcuts":[{"replace":"brb","with":"be right back"}]}' ;;
+  text-shortcuts-set) request text-shortcuts-set POST /v1/text-shortcuts '{"shortcuts":[{"replace":"omw","with":"on my way"}]}' ;;
   text-shortcuts-status) request text-shortcuts-status GET /v1/text-shortcuts ;;
+  text-shortcuts-preview) request text-shortcuts-preview GET '/v1/text-shortcuts/preview?trigger=omw' ;;
+  text-shortcuts-file-contract) text_shortcuts_file_contract ;;
   keyboard-shortcut-set) request keyboard-shortcut-set POST /v1/keyboard/shortcuts/binding '{"action":"window-hud","bindings":["<Super><Shift>H"]}' ;;
   keyboard-shortcut-reset) request keyboard-shortcut-reset POST /v1/keyboard/shortcuts/binding '{"action":"window-hud","reset":true}' ;;
   keyboard-modifier-set) request keyboard-modifier-set POST /v1/keyboard/modifier-remap '{"target":"caps-lock","value":"control"}' ;;

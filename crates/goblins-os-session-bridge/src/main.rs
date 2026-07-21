@@ -1,8 +1,11 @@
 use std::{
-    env, fs,
-    io::{Read, Write},
+    env,
+    ffi::CString,
+    fs::{self, OpenOptions},
+    io::{self, Read, Write},
+    os::fd::AsRawFd,
     os::unix::{
-        fs::{FileTypeExt, PermissionsExt},
+        fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -11,11 +14,27 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use goblins_os_textshortcuts_engine::{TableLoadStatus, TextShortcut, TextShortcutTableStore};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_SOCKET: &str = "/run/goblins-os-session/session-bridge.sock";
 const SOCKET_GROUP: &str = "goblins-session-bridge";
-const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const CORE_SERVICE_USER: &str = "goblins-os";
+const MAX_REQUEST_BYTES: usize = 24 * 1024 * 1024;
+const MAX_CAPTURE_WAV_BYTES: usize = 512 * 1024;
+const MAX_PLAYBACK_WAV_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CAPTURE_DURATION_SECONDS: u64 = 7;
+const MAX_PLAYBACK_DURATION_SECONDS: u64 = 90;
+const VOICE_CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
+const VOICE_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(120);
+const TEXT_SHORTCUTS_RUNTIME_STATUS_PATH: &str =
+    "/run/goblins-os-session/text-shortcuts-runtime-status.json";
+const TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA: &str = "goblins-os.text-shortcuts-runtime-status.v1";
+const TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES: usize = 4 * 1024;
+const TEXT_SHORTCUTS_RUNTIME_STATUS_MODE: u32 = 0o600;
+const TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS: u64 = 5_000_000_000;
+const TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS: u64 = 250_000_000;
 
 const KEYBOARD_SCHEMA: &str = "org.gnome.desktop.peripherals.keyboard";
 const MOUSE_SCHEMA: &str = "org.gnome.desktop.peripherals.mouse";
@@ -137,6 +156,7 @@ const WM_KEYS: &[&str] = &[
 
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 enum BridgeRequest {
     Ping,
     GSettings {
@@ -148,6 +168,11 @@ enum BridgeRequest {
     },
     Wpctl {
         args: Vec<String>,
+    },
+    VoiceAudioStatus {},
+    VoiceCapture {},
+    VoicePlayback {
+        wav_base64: String,
     },
     PermissionStoreDelete {
         table: String,
@@ -162,6 +187,11 @@ enum BridgeRequest {
         logical_monitors: Vec<DisplayConfigLogicalMonitor>,
     },
     IbusEngine,
+    TextShortcutsRuntimeStatus {},
+    TextShortcutsRead {},
+    TextShortcutsWrite {
+        shortcuts: Vec<TextShortcut>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -180,11 +210,36 @@ struct DisplayConfigMonitor {
     mode_id: String,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TextShortcutsRuntimeStatus {
+    schema: String,
+    instance_id: String,
+    focus_generation: u64,
+    runtime_generation: u64,
+    sequence: u64,
+    monotonic_ns: u64,
+    focused: bool,
+    enabled: bool,
+    surrounding_text_supported: bool,
+    snapshot_valid: bool,
+    child_alive: bool,
+    last_response_ok: bool,
+}
+
 #[derive(Serialize)]
 struct BridgeResponse {
     ok: bool,
     stdout: String,
     detail: String,
+}
+
+#[derive(Serialize)]
+struct VoiceAudioStatus {
+    capture_ready: bool,
+    playback_ready: bool,
+    capture_detail: &'static str,
+    playback_detail: &'static str,
 }
 
 fn main() {
@@ -224,8 +279,6 @@ fn run_server() -> Result<(), String> {
                 // timeout. Socket I/O is bounded so a stalled client can
                 // never pin a handler thread.
                 thread::spawn(move || {
-                    let _ = stream.set_read_timeout(Some(STREAM_IO_TIMEOUT));
-                    let _ = stream.set_write_timeout(Some(STREAM_IO_TIMEOUT));
                     let response = handle_stream(&mut stream);
                     let _ = write_response(&mut stream, &response);
                 });
@@ -236,29 +289,52 @@ fn run_server() -> Result<(), String> {
     Ok(())
 }
 
-const STREAM_IO_TIMEOUT: Duration = Duration::from_millis(2_000);
+const STREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn handle_stream(stream: &mut UnixStream) -> BridgeResponse {
-    let mut body = String::new();
-    if let Err(error) = stream
-        .take(MAX_REQUEST_BYTES as u64)
-        .read_to_string(&mut body)
-    {
-        return failure(format!("could not read request: {error}"));
-    }
-    let request = match serde_json::from_str::<BridgeRequest>(&body) {
-        Ok(request) => request,
-        Err(error) => return failure(format!("could not decode request: {error}")),
+    let peer_uid = match unix_peer_uid(stream) {
+        Ok(uid) => uid,
+        Err(()) => return failure("session bridge peer authentication failed."),
     };
-    handle_request(request)
+    let body = match read_to_end_before(
+        stream,
+        MAX_REQUEST_BYTES,
+        Instant::now() + STREAM_REQUEST_TIMEOUT,
+    ) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            return failure("session bridge request exceeds the fixed size limit.")
+        }
+        Err(_) => return failure("session bridge request did not finish before its deadline."),
+    };
+    let request = match serde_json::from_slice::<BridgeRequest>(&body) {
+        Ok(request) => request,
+        Err(_) => {
+            return failure("session bridge request did not match an allowlisted operation.");
+        }
+    };
+    handle_request(request, peer_uid)
 }
 
-fn handle_request(request: BridgeRequest) -> BridgeResponse {
+fn handle_request(request: BridgeRequest, peer_uid: u32) -> BridgeResponse {
+    if matches!(
+        &request,
+        BridgeRequest::VoiceAudioStatus {}
+            | BridgeRequest::VoiceCapture {}
+            | BridgeRequest::VoicePlayback { .. }
+    ) && resolve_user_id(CORE_SERVICE_USER) != Some(peer_uid)
+    {
+        return failure("voice operations require the authenticated core service peer.");
+    }
     match request {
         BridgeRequest::Ping => success("pong".to_string()),
         BridgeRequest::GSettings { args } => gsettings_response(args),
         BridgeRequest::OpenPreview { path, kind } => open_preview_response(&path, &kind),
         BridgeRequest::Wpctl { args } => wpctl_response(args),
+        BridgeRequest::VoiceAudioStatus {} => voice_audio_status_response(),
+        BridgeRequest::VoiceCapture {} => voice_capture_response(),
+        BridgeRequest::VoicePlayback { wav_base64 } => voice_playback_response(&wav_base64),
         BridgeRequest::PermissionStoreDelete { table, id, app } => {
             permission_store_delete_response(&table, &id, &app)
         }
@@ -270,6 +346,244 @@ fn handle_request(request: BridgeRequest) -> BridgeResponse {
             logical_monitors,
         } => display_config_apply_monitors_response(serial, method, &logical_monitors),
         BridgeRequest::IbusEngine => ibus_engine_response(),
+        BridgeRequest::TextShortcutsRuntimeStatus {} => text_shortcuts_runtime_status_response(),
+        BridgeRequest::TextShortcutsRead {} => text_shortcuts_read_response(),
+        BridgeRequest::TextShortcutsWrite { shortcuts } => text_shortcuts_write_response(shortcuts),
+    }
+}
+
+fn unix_peer_uid(stream: &UnixStream) -> Result<u32, ()> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut credentials = libc::ucred {
+            pid: 0,
+            uid: 0,
+            gid: 0,
+        };
+        let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: credentials and length are writable storage matching the sizes
+        // passed to getsockopt; stream owns a live Unix-domain descriptor.
+        let status = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut credentials as *mut libc::ucred).cast(),
+                &mut length,
+            )
+        };
+        if status == 0 && length as usize == std::mem::size_of::<libc::ucred>() {
+            Ok(credentials.uid)
+        } else {
+            Err(())
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut uid = 0;
+        let mut gid = 0;
+        // SAFETY: uid and gid are writable pointers and stream owns a live
+        // Unix-domain descriptor.
+        if unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } == 0 {
+            Ok(uid)
+        } else {
+            Err(())
+        }
+    }
+}
+
+fn resolve_user_id(name: &str) -> Option<u32> {
+    let name = CString::new(name).ok()?;
+    let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
+    let mut result = std::ptr::null_mut();
+    let mut buffer = vec![0u8; 16 * 1024];
+    // SAFETY: every pointer references valid writable storage of the supplied
+    // size, and name is NUL-terminated for the lifetime of the call.
+    let status = unsafe {
+        libc::getpwnam_r(
+            name.as_ptr(),
+            record.as_mut_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 || result.is_null() {
+        return None;
+    }
+    // SAFETY: getpwnam_r returned success and initialized our record storage.
+    Some(unsafe { record.assume_init() }.pw_uid)
+}
+
+fn text_shortcuts_runtime_status_response() -> BridgeResponse {
+    let now_ns = match monotonic_now_ns() {
+        Ok(now_ns) => now_ns,
+        Err(error) => return failure(error),
+    };
+    let status = match read_text_shortcuts_runtime_status(
+        Path::new(TEXT_SHORTCUTS_RUNTIME_STATUS_PATH),
+        now_ns,
+        effective_user_id(),
+    ) {
+        Ok(status) => status,
+        Err(error) => return failure(error),
+    };
+    match serde_json::to_string(&status) {
+        Ok(status) => success(status),
+        Err(_) => failure("Text Shortcuts runtime status could not be encoded."),
+    }
+}
+
+fn read_text_shortcuts_runtime_status(
+    path: &Path,
+    now_ns: u64,
+    expected_owner: u32,
+) -> Result<TextShortcutsRuntimeStatus, String> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| "Text Shortcuts runtime status is unavailable.".to_string())?;
+    let before = file
+        .metadata()
+        .map_err(|_| "Text Shortcuts runtime status metadata is unavailable.".to_string())?;
+    validate_text_shortcuts_runtime_status_metadata(&before, expected_owner)?;
+    if before.len() > TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES as u64 {
+        return Err("Text Shortcuts runtime status exceeds the fixed size limit.".to_string());
+    }
+
+    let mut encoded = Vec::with_capacity(before.len() as usize);
+    Read::by_ref(&mut file)
+        .take((TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut encoded)
+        .map_err(|_| "Text Shortcuts runtime status could not be read.".to_string())?;
+    if encoded.len() > TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES {
+        return Err("Text Shortcuts runtime status exceeds the fixed size limit.".to_string());
+    }
+
+    let after = file
+        .metadata()
+        .map_err(|_| "Text Shortcuts runtime status metadata is unavailable.".to_string())?;
+    validate_text_shortcuts_runtime_status_metadata(&after, expected_owner)?;
+    if before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.len() != after.len()
+        || after.len() != encoded.len() as u64
+    {
+        return Err("Text Shortcuts runtime status changed while it was read.".to_string());
+    }
+
+    let status = serde_json::from_slice::<TextShortcutsRuntimeStatus>(&encoded)
+        .map_err(|_| "Text Shortcuts runtime status is not strict v1 JSON.".to_string())?;
+    validate_text_shortcuts_runtime_status(&status, now_ns)?;
+    Ok(status)
+}
+
+fn validate_text_shortcuts_runtime_status_metadata(
+    metadata: &fs::Metadata,
+    expected_owner: u32,
+) -> Result<(), String> {
+    if !metadata.is_file()
+        || metadata.uid() != expected_owner
+        || metadata.mode() & 0o7777 != TEXT_SHORTCUTS_RUNTIME_STATUS_MODE
+    {
+        return Err(
+            "Text Shortcuts runtime status must be an owner-only regular file.".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_text_shortcuts_runtime_status(
+    status: &TextShortcutsRuntimeStatus,
+    now_ns: u64,
+) -> Result<(), String> {
+    if status.schema != TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA
+        || status.instance_id.len() != 32
+        || !status
+            .instance_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || status.focus_generation == 0
+        || status.runtime_generation == 0
+        || status.sequence == 0
+        || status.monotonic_ns == 0
+    {
+        return Err("Text Shortcuts runtime status fields are invalid.".to_string());
+    }
+    if status.monotonic_ns > now_ns.saturating_add(TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS) {
+        return Err("Text Shortcuts runtime status timestamp is in the future.".to_string());
+    }
+    if now_ns.saturating_sub(status.monotonic_ns) > TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS {
+        return Err("Text Shortcuts runtime status is stale.".to_string());
+    }
+    Ok(())
+}
+
+fn effective_user_id() -> u32 {
+    // SAFETY: geteuid has no preconditions and does not dereference pointers.
+    unsafe { libc::geteuid() }
+}
+
+fn monotonic_now_ns() -> Result<u64, String> {
+    let mut timestamp = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: timestamp points to writable storage for one timespec and
+    // CLOCK_MONOTONIC is supported by the target Unix session runtime.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timestamp) } != 0 {
+        return Err("Text Shortcuts monotonic clock is unavailable.".to_string());
+    }
+    let seconds = u64::try_from(timestamp.tv_sec)
+        .map_err(|_| "Text Shortcuts monotonic clock returned an invalid value.".to_string())?;
+    let nanoseconds = u64::try_from(timestamp.tv_nsec)
+        .map_err(|_| "Text Shortcuts monotonic clock returned an invalid value.".to_string())?;
+    if nanoseconds >= 1_000_000_000 {
+        return Err("Text Shortcuts monotonic clock returned an invalid value.".to_string());
+    }
+    seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(nanoseconds))
+        .ok_or_else(|| "Text Shortcuts monotonic clock overflowed.".to_string())
+}
+
+fn text_shortcuts_read_response() -> BridgeResponse {
+    let store = match TextShortcutTableStore::from_environment() {
+        Ok(store) => store,
+        Err(_) => return failure("Text Shortcuts private storage is unavailable."),
+    };
+    let outcome = store.load();
+    match outcome.status() {
+        TableLoadStatus::Loaded { .. } | TableLoadStatus::Missing => {
+            text_shortcuts_success(outcome.table().shortcuts())
+        }
+        TableLoadStatus::InvalidJson => failure("Text Shortcuts private table is not valid JSON."),
+        TableLoadStatus::TooLarge => {
+            failure("Text Shortcuts private table exceeds the fixed size limit.")
+        }
+        TableLoadStatus::UnsafeFile => {
+            failure("Text Shortcuts private table is not a regular file.")
+        }
+        TableLoadStatus::Unreadable => failure("Text Shortcuts private table could not be read."),
+    }
+}
+
+fn text_shortcuts_write_response(shortcuts: Vec<TextShortcut>) -> BridgeResponse {
+    let store = match TextShortcutTableStore::from_environment() {
+        Ok(store) => store,
+        Err(_) => return failure("Text Shortcuts private storage is unavailable."),
+    };
+    match store.save(shortcuts) {
+        Ok(shortcuts) => text_shortcuts_success(&shortcuts),
+        Err(error) => failure(error.to_string()),
+    }
+}
+
+fn text_shortcuts_success(shortcuts: &[TextShortcut]) -> BridgeResponse {
+    match serde_json::to_string(shortcuts) {
+        Ok(shortcuts) => success(shortcuts),
+        Err(_) => failure("Text Shortcuts private table could not be encoded."),
     }
 }
 
@@ -299,6 +613,216 @@ fn ibus_engine_response() -> BridgeResponse {
         }
         Err(BoundedCommandError::Failed) => failure("IBus is not ready in this desktop session."),
     }
+}
+
+fn voice_audio_status_response() -> BridgeResponse {
+    let (capture_tool_ready, playback_tool_ready, capture_endpoint_ready, playback_endpoint_ready) =
+        thread::scope(|scope| {
+            let capture_tool = scope.spawn(|| fixed_audio_tool_ready("arecord"));
+            let playback_tool = scope.spawn(|| fixed_audio_tool_ready("aplay"));
+            let capture_endpoint = scope.spawn(|| fixed_audio_endpoint_ready(DEFAULT_SOURCE));
+            let playback_endpoint = scope.spawn(|| fixed_audio_endpoint_ready(DEFAULT_SINK));
+            (
+                capture_tool.join().unwrap_or(false),
+                playback_tool.join().unwrap_or(false),
+                capture_endpoint.join().unwrap_or(false),
+                playback_endpoint.join().unwrap_or(false),
+            )
+        });
+    let status = VoiceAudioStatus {
+        capture_ready: capture_tool_ready && capture_endpoint_ready,
+        playback_ready: playback_tool_ready && playback_endpoint_ready,
+        capture_detail: if !capture_tool_ready {
+            "Desktop-session microphone capture runtime is not ready."
+        } else if !capture_endpoint_ready {
+            "The desktop session has no reachable default microphone."
+        } else {
+            "Desktop-session microphone and capture runtime are ready."
+        },
+        playback_detail: if !playback_tool_ready {
+            "Desktop-session audio playback runtime is not ready."
+        } else if !playback_endpoint_ready {
+            "The desktop session has no reachable default speaker."
+        } else {
+            "Desktop-session speaker and playback runtime are ready."
+        },
+    };
+    match serde_json::to_string(&status) {
+        Ok(encoded) => success(encoded),
+        Err(_) => failure("Desktop-session voice status could not be encoded."),
+    }
+}
+
+fn fixed_audio_tool_ready(binary: &str) -> bool {
+    matches!(
+        bounded_command_output(binary, &["--version".to_string()], WPCTL_TIMEOUT),
+        Ok(output) if output.status.success()
+    )
+}
+
+fn fixed_audio_endpoint_ready(target: &str) -> bool {
+    matches!(
+        bounded_command_output(
+            "wpctl",
+            &["get-volume".to_string(), target.to_string()],
+            WPCTL_TIMEOUT,
+        ),
+        Ok(output) if output.status.success()
+    )
+}
+
+fn voice_capture_response() -> BridgeResponse {
+    let mut command = Command::new("arecord");
+    command.args([
+        "-q", "-d", "6", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "wav",
+    ]);
+    let wav = match bounded_output_of(command, VOICE_CAPTURE_TIMEOUT) {
+        Ok(output) if output.status.success() => output.stdout,
+        Ok(_) => return failure("Desktop-session microphone capture failed."),
+        Err(BoundedCommandError::Missing) => {
+            return failure("Desktop-session microphone capture runtime is not ready.")
+        }
+        Err(BoundedCommandError::TimedOut) => {
+            return failure("Desktop-session microphone capture did not finish in time.")
+        }
+        Err(BoundedCommandError::Failed) => {
+            return failure("Desktop-session microphone capture could not start.")
+        }
+    };
+    if wav.is_empty() || wav.len() > MAX_CAPTURE_WAV_BYTES {
+        return failure("Desktop-session microphone capture exceeded its fixed size limit.");
+    }
+    if !valid_pcm_wave(
+        &wav,
+        MAX_CAPTURE_DURATION_SECONDS,
+        Some(PcmFormat {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            block_align: 2,
+            byte_rate: 32_000,
+        }),
+    ) {
+        return failure("Desktop-session microphone capture did not produce a valid PCM WAV.");
+    }
+    success(BASE64_STANDARD.encode(wav))
+}
+
+fn voice_playback_response(wav_base64: &str) -> BridgeResponse {
+    if wav_base64.len() > MAX_PLAYBACK_WAV_BYTES.saturating_mul(4).div_ceil(3) + 4 {
+        return failure("Voice playback audio exceeds the fixed size limit.");
+    }
+    let wav = match BASE64_STANDARD.decode(wav_base64) {
+        Ok(wav)
+            if wav.len() <= MAX_PLAYBACK_WAV_BYTES
+                && valid_pcm_wave(&wav, MAX_PLAYBACK_DURATION_SECONDS, None) =>
+        {
+            wav
+        }
+        _ => return failure("Voice playback requires one bounded PCM WAV payload."),
+    };
+    let mut command = Command::new("aplay");
+    command.arg("-q");
+    match bounded_input_output_of(command, wav, VOICE_PLAYBACK_TIMEOUT) {
+        Ok(output) if output.status.success() => success("played".to_string()),
+        Ok(_) => failure("Desktop-session audio playback failed."),
+        Err(BoundedCommandError::Missing) => {
+            failure("Desktop-session audio playback runtime is not ready.")
+        }
+        Err(BoundedCommandError::TimedOut) => {
+            failure("Desktop-session audio playback did not finish in time.")
+        }
+        Err(BoundedCommandError::Failed) => {
+            failure("Desktop-session audio playback could not start.")
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PcmFormat {
+    channels: u16,
+    sample_rate: u32,
+    bits_per_sample: u16,
+    block_align: u16,
+    byte_rate: u32,
+}
+
+fn valid_pcm_wave(
+    wav: &[u8],
+    max_duration_seconds: u64,
+    required_format: Option<PcmFormat>,
+) -> bool {
+    if wav.len() < 44 || !wav.starts_with(b"RIFF") || wav.get(8..12) != Some(b"WAVE") {
+        return false;
+    }
+    let Some(declared_size) = wav
+        .get(4..8)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_le_bytes)
+        .and_then(|size| usize::try_from(size).ok())
+        .and_then(|size| size.checked_add(8))
+    else {
+        return false;
+    };
+    if declared_size != wav.len() {
+        return false;
+    }
+
+    // Accept one canonical RIFF layout only: a single exact 16-byte PCM fmt
+    // chunk followed by one non-empty data chunk. This keeps aplay away from
+    // duplicate/ambiguous chunk graphs while retaining RIFF's one-byte pad for
+    // an odd data length.
+    if wav.get(12..16) != Some(b"fmt ")
+        || wav.get(16..20) != Some(&16u32.to_le_bytes())
+        || wav.get(36..40) != Some(b"data")
+    {
+        return false;
+    }
+    let Some(data_bytes) = wav
+        .get(40..44)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_le_bytes)
+        .and_then(|size| usize::try_from(size).ok())
+    else {
+        return false;
+    };
+    let Some(data_end) = 44usize.checked_add(data_bytes) else {
+        return false;
+    };
+    let Some(canonical_end) = data_end.checked_add(data_bytes & 1) else {
+        return false;
+    };
+    if data_bytes == 0 || canonical_end != wav.len() {
+        return false;
+    }
+
+    let audio_format = u16::from_le_bytes([wav[20], wav[21]]);
+    let channels = u16::from_le_bytes([wav[22], wav[23]]);
+    let sample_rate = u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]);
+    let byte_rate = u32::from_le_bytes([wav[28], wav[29], wav[30], wav[31]]);
+    let block_align = u16::from_le_bytes([wav[32], wav[33]]);
+    let bits_per_sample = u16::from_le_bytes([wav[34], wav[35]]);
+    let format = PcmFormat {
+        channels,
+        sample_rate,
+        bits_per_sample,
+        block_align,
+        byte_rate,
+    };
+    let expected_block_align = channels.checked_mul(bits_per_sample / 8);
+    let expected_byte_rate = sample_rate.checked_mul(u32::from(block_align));
+    if audio_format != 1
+        || !(1..=2).contains(&channels)
+        || !(8_000..=192_000).contains(&sample_rate)
+        || bits_per_sample != 16
+        || expected_block_align != Some(block_align)
+        || expected_byte_rate != Some(byte_rate)
+        || required_format.is_some_and(|required| required != format)
+    {
+        return false;
+    }
+    let max_data_bytes = u64::from(format.byte_rate).saturating_mul(max_duration_seconds);
+    data_bytes % usize::from(format.block_align) == 0 && data_bytes as u64 <= max_data_bytes
 }
 
 fn wpctl_response(args: Vec<String>) -> BridgeResponse {
@@ -944,6 +1468,65 @@ fn bounded_output_of(
     })
 }
 
+fn bounded_input_output_of(
+    mut command: Command,
+    input: Vec<u8>,
+    timeout: Duration,
+) -> Result<Output, BoundedCommandError> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                BoundedCommandError::Missing
+            } else {
+                BoundedCommandError::Failed
+            }
+        })?;
+    let mut stdin = child.stdin.take().ok_or(BoundedCommandError::Failed)?;
+    let input_writer = thread::spawn(move || stdin.write_all(&input).is_ok());
+    let stdout_reader = spawn_capped_drain(child.stdout.take());
+    let stderr_reader = spawn_capped_drain(child.stderr.take());
+    let started = Instant::now();
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    drop(input_writer);
+                    drop(stdout_reader);
+                    drop(stderr_reader);
+                    return Err(BoundedCommandError::TimedOut);
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                drop(input_writer);
+                drop(stdout_reader);
+                drop(stderr_reader);
+                return Err(BoundedCommandError::Failed);
+            }
+        }
+    };
+    if !input_writer.join().unwrap_or(false) {
+        drop(stdout_reader);
+        drop(stderr_reader);
+        return Err(BoundedCommandError::Failed);
+    }
+    Ok(Output {
+        status,
+        stdout: stdout_reader.join().unwrap_or_default(),
+        stderr: stderr_reader.join().unwrap_or_default(),
+    })
+}
+
 const CAPTURED_OUTPUT_CAP_BYTES: u64 = 8 * 1024 * 1024;
 
 fn spawn_capped_drain<R>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8>>
@@ -964,8 +1547,59 @@ where
 
 fn write_response(stream: &mut UnixStream, response: &BridgeResponse) -> Result<(), String> {
     let json = serde_json::to_vec(response).map_err(|error| error.to_string())?;
-    stream.write_all(&json).map_err(|error| error.to_string())?;
-    stream.write_all(b"\n").map_err(|error| error.to_string())
+    let deadline = Instant::now() + STREAM_RESPONSE_TIMEOUT;
+    write_all_before(stream, &json, deadline).map_err(|error| error.to_string())?;
+    write_all_before(stream, b"\n", deadline).map_err(|error| error.to_string())
+}
+
+fn write_all_before(
+    stream: &mut UnixStream,
+    mut bytes: &[u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    while !bytes.is_empty() {
+        stream.set_write_timeout(Some(remaining_before(deadline)?))?;
+        match stream.write(bytes) {
+            Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "bridge closed")),
+            Ok(written) => bytes = &bytes[written..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn read_to_end_before(
+    stream: &mut UnixStream,
+    limit: usize,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        stream.set_read_timeout(Some(remaining_before(deadline)?))?;
+        match stream.read(&mut buffer) {
+            Ok(0) => return Ok(bytes),
+            Ok(read) => {
+                if bytes.len().saturating_add(read) > limit {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "bridge request exceeded its fixed size limit",
+                    ));
+                }
+                bytes.extend_from_slice(&buffer[..read]);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn remaining_before(deadline: Instant) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "bridge deadline elapsed"))
 }
 
 fn socket_path() -> PathBuf {
@@ -1163,19 +1797,506 @@ fn self_test() -> Result<(), String> {
     {
         return Err("control-character gsettings value was accepted.".to_string());
     }
+    for request in [
+        r#"{"op":"voice-audio-status"}"#,
+        r#"{"op":"voice-capture"}"#,
+        r#"{"op":"voice-playback","wav_base64":"UklGRg=="}"#,
+    ] {
+        serde_json::from_str::<BridgeRequest>(request)
+            .map_err(|_| "typed voice bridge operation was rejected.".to_string())?;
+    }
+    for request in [
+        r#"{"op":"voice-audio-status","device":"42"}"#,
+        r#"{"op":"voice-capture","path":"/tmp/mic.wav"}"#,
+        r#"{"op":"voice-playback","path":"/tmp/reply.wav","wav_base64":"UklGRg=="}"#,
+        r#"{"op":"voice-playback","command":"sh","wav_base64":"UklGRg=="}"#,
+    ] {
+        if serde_json::from_str::<BridgeRequest>(request).is_ok() {
+            return Err("voice bridge accepted an untyped command, device, or path.".to_string());
+        }
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        ffi::CString,
+        fs,
+        io::Write,
+        os::unix::{
+            ffi::OsStrExt,
+            fs::{symlink, MetadataExt, PermissionsExt},
+        },
+        path::Path,
+        time::{Duration, Instant},
+    };
+
     use super::{
-        encode_display_config_logical_monitors, validate_display_config_logical_monitors,
-        validate_gsettings_args, validate_permission_store_delete, validate_schema_arg,
-        validate_wpctl_args, DisplayConfigLogicalMonitor, DisplayConfigMonitor, DEFAULT_SINK,
-        DEFAULT_SOURCE, FOCUS_SCHEMA, INPUT_SOURCES_SCHEMA, KEYBOARD_SCHEMA, MOUSE_SCHEMA,
+        effective_user_id, encode_display_config_logical_monitors, handle_stream, monotonic_now_ns,
+        read_text_shortcuts_runtime_status, read_to_end_before, valid_pcm_wave,
+        validate_display_config_logical_monitors, validate_gsettings_args,
+        validate_permission_store_delete, validate_schema_arg,
+        validate_text_shortcuts_runtime_status, validate_text_shortcuts_runtime_status_metadata,
+        validate_wpctl_args, BridgeRequest, DisplayConfigLogicalMonitor, DisplayConfigMonitor,
+        PcmFormat, TextShortcutsRuntimeStatus, DEFAULT_SINK, DEFAULT_SOURCE, FOCUS_SCHEMA,
+        INPUT_SOURCES_SCHEMA, KEYBOARD_SCHEMA, MAX_CAPTURE_DURATION_SECONDS,
+        MAX_PLAYBACK_DURATION_SECONDS, MAX_REQUEST_BYTES, MOUSE_SCHEMA,
         NOTIFICATION_APPLICATION_BASE_PATH, NOTIFICATION_APPLICATION_SCHEMA, SOUND_SCHEMA,
+        TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS, TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES,
+        TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS, TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA,
         TOUCHPAD_SCHEMA, WM_SCHEMA,
     };
+
+    fn pcm_wave(format: PcmFormat, data_bytes: usize) -> Vec<u8> {
+        assert!(data_bytes <= u32::MAX as usize);
+        let padded_data_bytes = data_bytes + (data_bytes & 1);
+        let riff_size = 36usize + padded_data_bytes;
+        let mut wav = Vec::with_capacity(riff_size + 8);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(riff_size as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&format.channels.to_le_bytes());
+        wav.extend_from_slice(&format.sample_rate.to_le_bytes());
+        wav.extend_from_slice(&format.byte_rate.to_le_bytes());
+        wav.extend_from_slice(&format.block_align.to_le_bytes());
+        wav.extend_from_slice(&format.bits_per_sample.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(data_bytes as u32).to_le_bytes());
+        wav.resize(44 + padded_data_bytes, 0);
+        wav
+    }
+
+    fn mono_16khz_format() -> PcmFormat {
+        PcmFormat {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            block_align: 2,
+            byte_rate: 32_000,
+        }
+    }
+
+    #[test]
+    fn voice_protocol_is_typed_and_rejects_command_device_and_path_fields() {
+        assert!(matches!(
+            serde_json::from_str::<BridgeRequest>(r#"{"op":"voice-audio-status"}"#).unwrap(),
+            BridgeRequest::VoiceAudioStatus {}
+        ));
+        assert!(matches!(
+            serde_json::from_str::<BridgeRequest>(r#"{"op":"voice-capture"}"#).unwrap(),
+            BridgeRequest::VoiceCapture {}
+        ));
+        assert!(matches!(
+            serde_json::from_str::<BridgeRequest>(
+                r#"{"op":"voice-playback","wav_base64":"UklGRg=="}"#
+            )
+            .unwrap(),
+            BridgeRequest::VoicePlayback { .. }
+        ));
+        for request in [
+            r#"{"op":"voice-audio-status","device":"42"}"#,
+            r#"{"op":"voice-capture","path":"/tmp/mic.wav"}"#,
+            r#"{"op":"voice-capture","seconds":60}"#,
+            r#"{"op":"voice-playback","path":"/tmp/reply.wav","wav_base64":"UklGRg=="}"#,
+            r#"{"op":"voice-playback","command":"sh","wav_base64":"UklGRg=="}"#,
+        ] {
+            assert!(serde_json::from_str::<BridgeRequest>(request).is_err());
+        }
+    }
+
+    #[test]
+    fn canonical_pcm_wave_enforces_format_and_duration_bounds() {
+        let format = mono_16khz_format();
+        let one_second = pcm_wave(format, format.byte_rate as usize);
+        assert!(valid_pcm_wave(
+            &one_second,
+            MAX_CAPTURE_DURATION_SECONDS,
+            Some(format),
+        ));
+        assert!(valid_pcm_wave(
+            &one_second,
+            MAX_PLAYBACK_DURATION_SECONDS,
+            None,
+        ));
+
+        let too_long = pcm_wave(
+            format,
+            format.byte_rate as usize * (MAX_CAPTURE_DURATION_SECONDS as usize + 1),
+        );
+        assert!(!valid_pcm_wave(
+            &too_long,
+            MAX_CAPTURE_DURATION_SECONDS,
+            Some(format),
+        ));
+
+        for invalid_format in [
+            PcmFormat {
+                channels: 3,
+                block_align: 6,
+                byte_rate: 96_000,
+                ..format
+            },
+            PcmFormat {
+                sample_rate: 1_000,
+                byte_rate: 2_000,
+                ..format
+            },
+            PcmFormat {
+                bits_per_sample: 8,
+                block_align: 1,
+                byte_rate: 16_000,
+                ..format
+            },
+            PcmFormat {
+                block_align: 4,
+                byte_rate: 64_000,
+                ..format
+            },
+        ] {
+            assert!(!valid_pcm_wave(
+                &pcm_wave(invalid_format, invalid_format.byte_rate as usize),
+                MAX_PLAYBACK_DURATION_SECONDS,
+                None,
+            ));
+        }
+    }
+
+    #[test]
+    fn canonical_pcm_wave_rejects_duplicate_extended_and_trailing_chunks() {
+        let format = mono_16khz_format();
+        let canonical = pcm_wave(format, format.byte_rate as usize);
+
+        let mut duplicate_format = canonical.clone();
+        duplicate_format.splice(36..36, canonical[12..36].iter().copied());
+        let size = (duplicate_format.len() - 8) as u32;
+        duplicate_format[4..8].copy_from_slice(&size.to_le_bytes());
+        assert!(!valid_pcm_wave(
+            &duplicate_format,
+            MAX_PLAYBACK_DURATION_SECONDS,
+            None,
+        ));
+
+        let mut duplicate_data = canonical.clone();
+        duplicate_data.extend_from_slice(b"data");
+        duplicate_data.extend_from_slice(&2u32.to_le_bytes());
+        duplicate_data.extend_from_slice(&[0, 0]);
+        let size = (duplicate_data.len() - 8) as u32;
+        duplicate_data[4..8].copy_from_slice(&size.to_le_bytes());
+        assert!(!valid_pcm_wave(
+            &duplicate_data,
+            MAX_PLAYBACK_DURATION_SECONDS,
+            None,
+        ));
+
+        let mut extended_format = canonical.clone();
+        extended_format[16..20].copy_from_slice(&18u32.to_le_bytes());
+        assert!(!valid_pcm_wave(
+            &extended_format,
+            MAX_PLAYBACK_DURATION_SECONDS,
+            None,
+        ));
+
+        let mut trailing = canonical;
+        trailing.extend_from_slice(b"JUNK\0\0\0\0");
+        let size = (trailing.len() - 8) as u32;
+        trailing[4..8].copy_from_slice(&size.to_le_bytes());
+        assert!(!valid_pcm_wave(
+            &trailing,
+            MAX_PLAYBACK_DURATION_SECONDS,
+            None,
+        ));
+    }
+
+    #[test]
+    fn bridge_read_deadline_rejects_trickle_input_by_total_wall_time() {
+        let (mut writer, mut reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        let sender = std::thread::spawn(move || {
+            for _ in 0..6 {
+                if writer.write_all(b"x").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        });
+        let started = Instant::now();
+        let result = read_to_end_before(&mut reader, 64, started + Duration::from_millis(110));
+        let elapsed = started.elapsed();
+        assert!(result.is_err());
+        assert!(elapsed >= Duration::from_millis(90));
+        assert!(elapsed < Duration::from_millis(500));
+        sender.join().unwrap();
+    }
+
+    fn runtime_status(monotonic_ns: u64) -> TextShortcutsRuntimeStatus {
+        TextShortcutsRuntimeStatus {
+            schema: TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA.to_string(),
+            instance_id: "0123456789abcdef0123456789abcdef".to_string(),
+            focus_generation: 7,
+            runtime_generation: 11,
+            sequence: 13,
+            monotonic_ns,
+            focused: true,
+            enabled: true,
+            surrounding_text_supported: true,
+            snapshot_valid: true,
+            child_alive: true,
+            last_response_ok: true,
+        }
+    }
+
+    fn write_runtime_status(path: &Path, encoded: &[u8]) {
+        fs::write(path, encoded).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn write_json_runtime_status(path: &Path, status: &TextShortcutsRuntimeStatus) {
+        write_runtime_status(path, &serde_json::to_vec(status).unwrap());
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_protocol_is_fixed_pathless_and_strict() {
+        let request =
+            serde_json::from_str::<BridgeRequest>(r#"{"op":"text-shortcuts-runtime-status"}"#)
+                .expect("fixed runtime status operation");
+        assert!(matches!(
+            request,
+            BridgeRequest::TextShortcutsRuntimeStatus {}
+        ));
+        for request in [
+            r#"{"op":"text-shortcuts-runtime-status","path":"/tmp/status"}"#,
+            r#"{"op":"text-shortcuts-runtime-status","raw":"{}"}"#,
+        ] {
+            assert!(serde_json::from_str::<BridgeRequest>(request).is_err());
+        }
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_accepts_fresh_owner_only_regular_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("status.json");
+        let now_ns = 20_000_000_000;
+        let status = runtime_status(now_ns - 1);
+        write_json_runtime_status(&path, &status);
+
+        assert_eq!(
+            read_text_shortcuts_runtime_status(&path, now_ns, effective_user_id()).unwrap(),
+            status
+        );
+        assert!(monotonic_now_ns().unwrap() > 0);
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_rejects_stale_and_materially_future_timestamps() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("status.json");
+        let now_ns = 20_000_000_000;
+
+        let stale = runtime_status(now_ns - TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS - 1);
+        write_json_runtime_status(&path, &stale);
+        assert!(
+            read_text_shortcuts_runtime_status(&path, now_ns, effective_user_id())
+                .unwrap_err()
+                .contains("stale")
+        );
+
+        let future = runtime_status(now_ns + TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS + 1);
+        write_json_runtime_status(&path, &future);
+        assert!(
+            read_text_shortcuts_runtime_status(&path, now_ns, effective_user_id())
+                .unwrap_err()
+                .contains("future")
+        );
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_accepts_exact_freshness_boundaries() {
+        let now_ns = 20_000_000_000;
+        assert!(validate_text_shortcuts_runtime_status(
+            &runtime_status(now_ns - TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS),
+            now_ns,
+        )
+        .is_ok());
+        assert!(validate_text_shortcuts_runtime_status(
+            &runtime_status(now_ns + TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS),
+            now_ns,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_rejects_malformed_and_unknown_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("status.json");
+        let now_ns = 20_000_000_000;
+
+        write_runtime_status(&path, b"{");
+        assert!(
+            read_text_shortcuts_runtime_status(&path, now_ns, effective_user_id())
+                .unwrap_err()
+                .contains("strict v1 JSON")
+        );
+
+        let mut value = serde_json::to_value(runtime_status(now_ns)).unwrap();
+        value["path"] = serde_json::json!("/tmp/spoof");
+        write_runtime_status(&path, &serde_json::to_vec(&value).unwrap());
+        assert!(
+            read_text_shortcuts_runtime_status(&path, now_ns, effective_user_id())
+                .unwrap_err()
+                .contains("strict v1 JSON")
+        );
+
+        let mut value = serde_json::to_value(runtime_status(now_ns)).unwrap();
+        value.as_object_mut().unwrap().remove("snapshot_valid");
+        write_runtime_status(&path, &serde_json::to_vec(&value).unwrap());
+        assert!(
+            read_text_shortcuts_runtime_status(&path, now_ns, effective_user_id())
+                .unwrap_err()
+                .contains("strict v1 JSON")
+        );
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_preserves_all_readiness_signals() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("status.json");
+        let now_ns = 20_000_000_000;
+        let mut status = runtime_status(now_ns - 1);
+        status.focused = false;
+        status.enabled = false;
+        status.surrounding_text_supported = false;
+        status.snapshot_valid = false;
+        status.child_alive = false;
+        status.last_response_ok = false;
+        write_json_runtime_status(&path, &status);
+
+        assert_eq!(
+            read_text_shortcuts_runtime_status(&path, now_ns, effective_user_id()).unwrap(),
+            status
+        );
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_rejects_invalid_identity_and_zero_generations() {
+        let now_ns = 20_000_000_000;
+        let mut uppercase = runtime_status(now_ns);
+        uppercase.instance_id = "0123456789ABCDEF0123456789ABCDEF".to_string();
+        assert!(validate_text_shortcuts_runtime_status(&uppercase, now_ns).is_err());
+
+        let mut zero_generation = runtime_status(now_ns);
+        zero_generation.runtime_generation = 0;
+        assert!(validate_text_shortcuts_runtime_status(&zero_generation, now_ns).is_err());
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_rejects_wrong_mode_and_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("status.json");
+        let now_ns = 20_000_000_000;
+        write_json_runtime_status(&path, &runtime_status(now_ns));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(
+            read_text_shortcuts_runtime_status(&path, now_ns, effective_user_id())
+                .unwrap_err()
+                .contains("owner-only regular file")
+        );
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        assert!(validate_text_shortcuts_runtime_status_metadata(
+            &metadata,
+            metadata.uid().wrapping_add(1),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_rejects_symlinks_and_oversize_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.json");
+        let link = directory.path().join("status.json");
+        let now_ns = 20_000_000_000;
+        write_json_runtime_status(&target, &runtime_status(now_ns));
+        symlink(&target, &link).unwrap();
+        assert!(read_text_shortcuts_runtime_status(&link, now_ns, effective_user_id()).is_err());
+
+        fs::remove_file(&link).unwrap();
+        write_runtime_status(
+            &link,
+            &vec![b' '; TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES + 1],
+        );
+        assert!(
+            read_text_shortcuts_runtime_status(&link, now_ns, effective_user_id())
+                .unwrap_err()
+                .contains("size limit")
+        );
+    }
+
+    #[test]
+    fn text_shortcuts_runtime_status_rejects_fifo_without_blocking() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("status.json");
+        let encoded_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: encoded_path is NUL-terminated and points to a valid pathname.
+        assert_eq!(unsafe { libc::mkfifo(encoded_path.as_ptr(), 0o600) }, 0);
+
+        let started = Instant::now();
+        assert!(
+            read_text_shortcuts_runtime_status(&path, 20_000_000_000, effective_user_id(),)
+                .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn text_shortcuts_protocol_is_typed_pathless_and_strict() {
+        let read = serde_json::from_str::<BridgeRequest>(r#"{"op":"text-shortcuts-read"}"#)
+            .expect("fixed read operation");
+        assert!(matches!(read, BridgeRequest::TextShortcutsRead {}));
+        assert!(serde_json::from_str::<BridgeRequest>(
+            r#"{"op":"text-shortcuts-read","path":"/tmp/table"}"#
+        )
+        .is_err());
+
+        let write = serde_json::from_str::<BridgeRequest>(
+            r#"{"op":"text-shortcuts-write","shortcuts":[{"replace":"omw","with":"on my way"}]}"#,
+        )
+        .expect("typed write operation");
+        match write {
+            BridgeRequest::TextShortcutsWrite { shortcuts } => {
+                assert_eq!(shortcuts.len(), 1);
+                assert_eq!(shortcuts[0].replace(), "omw");
+                assert_eq!(shortcuts[0].with_text(), "on my way");
+            }
+            _ => panic!("expected typed Text Shortcuts write"),
+        }
+        for request in [
+            r#"{"op":"text-shortcuts-write","path":"/tmp/table","shortcuts":[]}"#,
+            r#"{"op":"text-shortcuts-write","raw":"[]","shortcuts":[]}"#,
+            r#"{"op":"text-shortcuts-write","blob":"W10=","shortcuts":[]}"#,
+        ] {
+            assert!(serde_json::from_str::<BridgeRequest>(request).is_err());
+        }
+    }
+
+    #[test]
+    fn session_bridge_rejects_cap_plus_one_before_parsing() {
+        let (mut writer, mut reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        let sender = std::thread::spawn(move || {
+            use std::io::Write;
+            writer
+                .write_all(&vec![b'x'; MAX_REQUEST_BYTES + 1])
+                .unwrap();
+            writer.shutdown(std::net::Shutdown::Write).unwrap();
+        });
+        let response = handle_stream(&mut reader);
+        sender.join().unwrap();
+        assert!(!response.ok);
+        assert!(response.stdout.is_empty());
+        assert!(response.detail.contains("size limit"));
+    }
 
     #[test]
     fn gsettings_allowlist_accepts_owned_session_keys() {

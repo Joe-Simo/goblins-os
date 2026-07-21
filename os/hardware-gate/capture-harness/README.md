@@ -46,7 +46,11 @@ hardware run").
    dual-boot-preservation state) plus the gaming stack, and signals the host over
    HTTP (`/ready/<shot>`) — no in-guest screenshot tool required.
 5. `qmp-capture.py watch` tails the HTTP log and QMP-screendumps each surface to
-   `shots/<shot>.png` as it is signalled.
+   `shots/<shot>.png` as it is signalled. After the PNG is durably written, the
+   host publishes `/capture-acks/<shot>.captured` with the fully decoded PNG's
+   SHA-256 and positive dimensions; the guest keeps the signalled surface
+   unchanged until that validated acknowledgement arrives, including while the
+   host retries a duplicate framebuffer.
 6. The orchestrator also posts live proof signals over the same HTTP channel.
    The firewall proof disables and re-enables firewalld through
    `/v1/firewall/enabled`; the host writes it to
@@ -56,15 +60,34 @@ hardware run").
    `text-shortcuts-session-enable-proof.json` and only passes when the installed
    GNOME session has the Goblins IBus service, source seed, preload, active
    engine, adapter self-test, and core runtime-honesty signal in place. The live
-   Text Shortcuts keystroke contract is covered by
+   Text Shortcuts shipping contract is covered by
    `text-shortcuts-live-ibus-runtime-render-proof.json` plus
-   `32-text-shortcuts-live-ibus-runtime-render.png`; it must observe normal
-   expansion, unknown-word pass-through, password-field refusal, focused-field
-   callback, text-input-v3 commit, and the rendered accept bubble in one run.
+   `32-text-shortcuts-live-ibus-runtime-render.png`. In one installed-session
+   run it must prove secure private desktop-state write/read/preview/file
+   roundtrips, live watcher reload, QMP-keyboard expansion to `on my way.`,
+   unknown-word pass-through, zero commit before the accepting boundary, exactly
+   one `process-key-event` commit in the boundary slice with exact focused-entry
+   readback, and password-field suppression with no commit, candidate, or popup.
+   The screenshot must show the chronologically latest native IBus lookup-table
+   popup record anchored to the input context, with a positive generation and
+   record ordinal. The host must acknowledge that PNG before the guest types the
+   accepting boundary; the guest rechecks the same record at capture, then proves
+   that the latest popup transitions to `hide-candidate` with reason `committed`.
+   The proof rejects a synthetic overlay.
+
+   The candidate metadata, overlay-intent, frame, layout, and render-intent
+   self-tests are non-live build-time behavior contracts only. They do not prove
+   the installed native popup. The manifest retains them as diagnostic preflight
+   attachments, and signoff may record that those checks passed, but they cannot
+   satisfy the production popup claim. In particular,
+   `31-text-shortcuts-candidate-bubble-render.png` is a synthetic diagnostic
+   surface; only screenshot 32 and its native IBus proof count as production UI
+   evidence.
 7. The host writes `proof-manifest.json` (architecture, iso path, iso_sha256,
    captured_at, screenshot_run_dir, firewall proof filename, Text Shortcuts
-   session proof filename, Text Shortcuts live runtime/render proof filename) and runs
-   `close-signoff.sh`.
+   session proof filename, Text Shortcuts live runtime/render proof filename,
+   and the exact screenshot 32 SHA-256) and runs `close-signoff.sh`. The live
+   proof, manifest, and decoded PNG must all carry the same digest.
 
 ## Status
 

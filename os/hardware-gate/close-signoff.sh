@@ -70,6 +70,7 @@ BASE_SCREENSHOTS=(
   "02-install-network.png"
   "03-login.png"
   "04-desktop.png"
+  "05-first-boot-private-unlock.png"
   "06-onboarding.png"
   "07-home.png"
   "08-shell-home.png"
@@ -152,6 +153,14 @@ FOCUS_ARM_ROUNDTRIP_STATUS="not checked"
 APP_PRIVACY_REVOKE_STATUS="not checked"
 PREVIEW_OPEN_RENDER_STATUS="not checked"
 SCREENSHOT_ISO_SHA="not checked"
+EVIDENCE_BUNDLE_STATUS="not checked"
+EVIDENCE_BUNDLE_SHA256="not checked"
+EVIDENCE_BUNDLE_PATH="not provided"
+LOCAL_DISPLAY_ATTESTATION_STATUS="not required"
+LOCAL_DISPLAY_ATTESTATION_PATH="not provided"
+LOCAL_DISPLAY_ATTESTATION_RUN="not provided"
+LOCAL_DISPLAY_ATTESTATION_RUN_ATTEMPT="not provided"
+LOCAL_DISPLAY_ATTESTATION_ARTIFACT="not provided"
 ISO_CANDIDATE_STATUS="not checked"
 RUNTIME_ENGINE_MODE="${RUNTIME_ENGINE_MODE:-}"
 RUNTIME_ENGINE_SOURCE="${RUNTIME_ENGINE_SOURCE:-}"
@@ -419,6 +428,192 @@ proof_field_is_real() {
   ! printf '%s' "$lowered" | rg -q 'requires|external gate|not exercised|no live engine|placeholder|sample|example|dummy'
 }
 
+proof_json_passes() {
+  local proof="$1"
+  local schema="${2:-$(basename "$proof" -proof.json)}"
+
+  python3 "$REPO_ROOT/os/hardware-gate/capture-harness/proof_validation.py" \
+    --proof "$schema" "$proof"
+}
+
+evidence_bundle_passes() {
+  local run_dir="$1"
+  local run_date="${run_dir%/}"
+  run_date="${run_date##*/}"
+
+  python3 "$REPO_ROOT/os/hardware-gate/capture-harness/evidence_bundle.py" verify \
+    --repository "$REPO_ROOT" \
+    --run-dir "$run_dir" \
+    --architecture "$ARCH" \
+    --candidate-commit "$CANDIDATE_COMMIT" \
+    --image-ref "$IMAGE_PROVENANCE_REF" \
+    --run-date "$run_date"
+}
+
+local_display_attestation_fields() {
+  local run_dir="$1"
+  local run_date="${run_dir%/}"
+  run_date="${run_date##*/}"
+
+  python3 "$REPO_ROOT/os/hardware-gate/capture-harness/evidence_bundle.py" \
+    verify-attestation \
+    --seal "$run_dir/evidence-bundle.json" \
+    --record "$run_dir/aarch64-local-display-attestation.json" \
+    --candidate-commit "$CANDIDATE_COMMIT" \
+    --image-ref "$IMAGE_PROVENANCE_REF" \
+    --run-date "$run_date"
+}
+
+github_actions_run_is_successful() {
+  local run_url="$1"
+  local expected_commit="$2"
+  local expected_attempt="$3"
+  local expected_workflow_path="$4"
+  local run_id
+
+  [[ "$run_url" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || return 1
+  [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$expected_attempt" =~ ^[1-9][0-9]*$ ]] || return 1
+  run_id="${run_url##*/}"
+  python3 - "$run_id" "$run_url" "$expected_commit" "$expected_attempt" "$expected_workflow_path" <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+run_id, run_url, expected_commit, expected_attempt, expected_workflow_path = sys.argv[1:6]
+request = urllib.request.Request(
+    f"https://api.github.com/repos/Joe-Simo/goblins-os/actions/runs/{run_id}/attempts/{expected_attempt}",
+    headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "goblins-os-release-verifier",
+        "X-GitHub-Api-Version": "2022-11-28",
+    },
+)
+token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+if token:
+    request.add_header("Authorization", f"Bearer {token}")
+try:
+    with urllib.request.urlopen(request, timeout=20) as response:
+        run = json.load(response)
+except Exception:
+    raise SystemExit(1)
+
+expected = {
+    "html_url": run_url,
+    "status": "completed",
+    "conclusion": "success",
+    "head_sha": expected_commit,
+    "run_attempt": int(expected_attempt),
+    "event": "workflow_dispatch",
+    "path": expected_workflow_path,
+}
+if run.get("repository", {}).get("full_name") != "Joe-Simo/goblins-os":
+    raise SystemExit(1)
+raise SystemExit(0 if all(run.get(key) == value for key, value in expected.items()) else 1)
+PY
+}
+
+github_actions_artifact_file_matches() {
+  local run_url="$1"
+  local artifact_name="$2"
+  local local_file="$3"
+  local expected_basename="$4"
+  local run_id scratch_dir downloaded_file file_count result
+
+  command -v gh >/dev/null 2>&1 || return 1
+  [[ "$run_url" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || return 1
+  [ -s "$local_file" ] && [ ! -L "$local_file" ] || return 1
+  run_id="${run_url##*/}"
+  scratch_dir="$(mktemp -d "${TMPDIR:-/tmp}/goblins-actions-artifact.XXXXXX")" || return 1
+  if ! gh run download "$run_id" \
+    --repo Joe-Simo/goblins-os \
+    --name "$artifact_name" \
+    --dir "$scratch_dir" >/dev/null 2>&1; then
+    rm -rf "$scratch_dir"
+    return 1
+  fi
+  file_count="$(find "$scratch_dir" -type f -name "$expected_basename" -print | awk 'END { print NR + 0 }')"
+  downloaded_file="$(find "$scratch_dir" -type f -name "$expected_basename" -print -quit)"
+  result=1
+  if [ "$file_count" = "1" ] \
+    && [ -n "$downloaded_file" ] \
+    && python3 - "$local_file" "$downloaded_file" <<'PY'
+import os
+import stat
+import sys
+
+MAX_ARTIFACT_PROOF_BYTES = 16 * 1024 * 1024
+
+
+def read_stable_regular_file(path: str) -> bytes:
+    before = os.lstat(path)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_uid != os.getuid()
+        or before.st_size < 1
+        or before.st_size > MAX_ARTIFACT_PROOF_BYTES
+    ):
+        raise RuntimeError("artifact proof is not a bounded private regular file")
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        opened = os.fstat(descriptor)
+        identity = (before.st_dev, before.st_ino, before.st_mode, before.st_nlink)
+        if identity != (opened.st_dev, opened.st_ino, opened.st_mode, opened.st_nlink):
+            raise RuntimeError("artifact proof changed before it was opened")
+        chunks = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise RuntimeError("artifact proof was truncated while reading")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise RuntimeError("artifact proof grew while reading")
+        after_open = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    after_path = os.lstat(path)
+    stable_fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(before, field) != getattr(after_open, field) for field in stable_fields):
+        raise RuntimeError("artifact proof changed while reading")
+    if any(getattr(before, field) != getattr(after_path, field) for field in stable_fields):
+        raise RuntimeError("artifact proof path changed while reading")
+    return b"".join(chunks)
+
+
+try:
+    local_bytes = read_stable_regular_file(sys.argv[1])
+    downloaded_bytes = read_stable_regular_file(sys.argv[2])
+except (OSError, RuntimeError):
+    raise SystemExit(1)
+raise SystemExit(0 if local_bytes == downloaded_bytes else 1)
+PY
+  then
+    result=0
+  fi
+  rm -rf "$scratch_dir"
+  return "$result"
+}
+
+local_display_attestation_signature_passes() {
+  local seal="$1"
+
+  command -v gh >/dev/null 2>&1 || return 1
+  gh attestation verify "$seal" \
+    --repo Joe-Simo/goblins-os \
+    --signer-workflow Joe-Simo/goblins-os/.github/workflows/aarch64-local-display-attestation.yml \
+    --signer-digest "$CANDIDATE_COMMIT" \
+    --source-digest "$CANDIDATE_COMMIT" \
+    --deny-self-hosted-runners \
+    >/dev/null 2>&1
+}
+
 built_artifact_reference_is_real() {
   local value="$1"
 
@@ -444,17 +639,17 @@ screenshot_dir_matches_arch() {
 
 screenshot_file_is_valid_png() {
   local file="$1"
-  local signature
 
-  [ -s "$file" ] || return 1
-  signature="$(od -An -tx1 -N8 "$file" 2>/dev/null | tr -d ' \n')"
-  [ "$signature" = "89504e470d0a1a0a" ]
+  "$REPO_ROOT/os/hardware-gate/capture-harness/run-capture.sh" \
+    --check-png "$file"
 }
 
 screenshot_manifest_matches_iso() {
   local manifest="$1"
   local verification_evidence_manifest="$SCREENSHOT_DIR/verification-release-evidence-manifest.json"
   local recorded_evidence_manifest_sha actual_evidence_manifest_sha
+  local live_proof live_screenshot recorded_manifest_screenshot_sha
+  local recorded_proof_screenshot_sha actual_screenshot_sha
 
   [ -s "$manifest" ] || return 1
   rg -q '"architecture"[[:space:]]*:[[:space:]]*"'"$ARCH"'"' "$manifest" \
@@ -473,6 +668,7 @@ screenshot_manifest_matches_iso() {
     && rg -q '"text_shortcuts_candidate_bubble_render_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_render_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_live_ibus_runtime_render_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"'"' "$manifest" \
+    && rg -q '"text_shortcuts_live_ibus_runtime_render_screenshot_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "$manifest" \
     && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"multi_display_apply_proof"[[:space:]]*:[[:space:]]*"'"$MULTI_DISPLAY_APPLY_PROOF"'"' "$manifest" \
@@ -485,7 +681,20 @@ screenshot_manifest_matches_iso() {
   recorded_evidence_manifest_sha="$(awk -F'"' '/"verification_release_evidence_manifest_sha256"/ { print $4; exit }' "$manifest")"
   actual_evidence_manifest_sha="$(sha256_file "$verification_evidence_manifest")" || return 1
   [[ "$recorded_evidence_manifest_sha" =~ ^[0-9a-f]{64}$ ]] \
-    && [ "$recorded_evidence_manifest_sha" = "$actual_evidence_manifest_sha" ]
+    && [ "$recorded_evidence_manifest_sha" = "$actual_evidence_manifest_sha" ] \
+    || return 1
+
+  [ "$(rg -c '"text_shortcuts_live_ibus_runtime_render_screenshot_sha256"[[:space:]]*:' "$manifest")" = "1" ] \
+    || return 1
+  live_proof="$SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"
+  live_screenshot="$SCREENSHOT_DIR/32-text-shortcuts-live-ibus-runtime-render.png"
+  recorded_manifest_screenshot_sha="$(awk -F'"' '/"text_shortcuts_live_ibus_runtime_render_screenshot_sha256"/ { print $4; exit }' "$manifest")"
+  recorded_proof_screenshot_sha="$(awk -F'"' '/"screenshot_sha256"/ { print $4; exit }' "$live_proof")"
+  actual_screenshot_sha="$(sha256_file "$live_screenshot")" || return 1
+  [[ "$recorded_manifest_screenshot_sha" =~ ^[0-9a-f]{64}$ ]] \
+    && [ "$recorded_manifest_screenshot_sha" = "$recorded_proof_screenshot_sha" ] \
+    && [ "$recorded_manifest_screenshot_sha" = "$actual_screenshot_sha" ] \
+    && screenshot_file_is_valid_png "$live_screenshot"
 }
 
 screenshot_manifest_iso_sha() {
@@ -500,6 +709,7 @@ semantic_screenshot_frames_are_distinct() {
 firewall_live_toggle_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/firewall/enabled"' "$proof" \
@@ -519,9 +729,11 @@ firewall_live_toggle_proof_passes() {
 text_shortcuts_session_enable_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"proof_scope"[[:space:]]*:[[:space:]]*"session-plumbing"' "$proof" \
     && rg -q '"service"[[:space:]]*:[[:space:]]*"active"' "$proof" \
     && rg -q '"service_unit"[[:space:]]*:[[:space:]]*"org.freedesktop.IBus.session.GNOME.service"' "$proof" \
     && rg -q '"input_source_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
@@ -530,14 +742,21 @@ text_shortcuts_session_enable_proof_passes() {
     && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
     && rg -q '"adapter_self_test"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"core_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
-    && rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof"
+    && rg -q '"core_ibus_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_component_registered"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_engine_binary_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_input_source_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && { { rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+           && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"true"' "$proof"; } \
+         || { rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+              && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"false"' "$proof"; }; }
 }
 
 text_shortcuts_candidate_metadata_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -553,6 +772,7 @@ text_shortcuts_candidate_metadata_proof_passes() {
 text_shortcuts_overlay_intent_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -570,6 +790,7 @@ text_shortcuts_overlay_intent_proof_passes() {
 text_shortcuts_candidate_bubble_frame_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -596,6 +817,7 @@ text_shortcuts_candidate_bubble_frame_proof_passes() {
 text_shortcuts_candidate_bubble_layout_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -617,6 +839,7 @@ text_shortcuts_candidate_bubble_layout_proof_passes() {
 text_shortcuts_candidate_bubble_render_intent_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -632,6 +855,8 @@ text_shortcuts_candidate_bubble_render_intent_proof_passes() {
     && rg -q '"focus_out_hide"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"sensitive_hide"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"pass_through_unchanged"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"key_release_preserved_candidate"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"runtime_failure_cleanup"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"sink_failure_fail_open"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
     && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
@@ -643,6 +868,7 @@ text_shortcuts_candidate_bubble_render_intent_proof_passes() {
 text_shortcuts_candidate_bubble_render_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -666,31 +892,93 @@ text_shortcuts_candidate_bubble_render_proof_passes() {
 
 text_shortcuts_live_ibus_runtime_render_proof_passes() {
   local proof="$1"
+  local screenshot recorded_sha actual_sha
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"preview_route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts/preview"' "$proof" \
     && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-live-ibus-runtime-render"' "$proof" \
     && rg -q '"input_driver"[[:space:]]*:[[:space:]]*"qmp-keyboard"' "$proof" \
     && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
-    && rg -q '"normal_actual"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
+    && rg -q '"core_write_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"core_read_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"core_preview_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"file_contract_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"seed_write_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"seed_read_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"seed_roundtrip"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"seed_loaded"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_table_roundtrip"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_preview_roundtrip"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_contract"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_parent_contract"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_owner_mode"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_single_link"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_size_bounded"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_bounded_read"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"legacy_service_table_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"live_watcher_reload"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"post_keystroke_read_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"post_keystroke_file_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"post_keystroke_roundtrip"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"normal_actual"[[:space:]]*:[[:space:]]*"on my way\."' "$proof" \
     && rg -q '"passthrough_actual"[[:space:]]*:[[:space:]]*"hello\."' "$proof" \
     && rg -q '"password_refusal"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_sensitive_purpose"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_process_key_callback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_commit_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_candidate_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_popup_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"normal_stage_ledger_scoped"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"focused_field_callback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"text_input_v3_commit"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"rendered_accept_bubble"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"process_key_event_callback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"cursor_location_callback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"pre_boundary_commit_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"boundary_stage_ledger_scoped"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"boundary_stage_commit_count"[[:space:]]*:[[:space:]]*"1"' "$proof" \
+    && rg -q '"normal_stage_commit"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"ibus_commit_operation"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"focused_entry_readback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"ibus_commit_delivered"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"boundary_popup_action"[[:space:]]*:[[:space:]]*"hide-candidate"' "$proof" \
+    && rg -q '"boundary_popup_reason"[[:space:]]*:[[:space:]]*"committed"' "$proof" \
+    && rg -q '"candidate_intent_seen"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_ibus_candidate_published"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_generation"[[:space:]]*:[[:space:]]*"[1-9][0-9]*"' "$proof" \
+    && rg -q '"native_popup_record_ordinal"[[:space:]]*:[[:space:]]*"[1-9][0-9]*"' "$proof" \
+    && rg -q '"native_popup_generation_current"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_record_current_at_capture"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_action"[[:space:]]*:[[:space:]]*"show-candidate"' "$proof" \
+    && rg -q '"native_popup_has_cursor_rect"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_expected_replacement"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_hint_published"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"renderer"[[:space:]]*:[[:space:]]*"native-ibus-lookup-table"' "$proof" \
+    && rg -q '"cursor_anchor"[[:space:]]*:[[:space:]]*"ibus-input-context"' "$proof" \
+    && rg -q '"synthetic_overlay"[[:space:]]*:[[:space:]]*"false"' "$proof" \
     && rg -q '"screenshot"[[:space:]]*:[[:space:]]*"32-text-shortcuts-live-ibus-runtime-render\.png"' "$proof" \
-    && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
-    && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
-    && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"screenshot_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "$proof" \
+    && rg -q '"screenshot_capture_ack"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_candidate_popup_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"core_readiness_flip"[[:space:]]*:[[:space:]]*"live"' "$proof"
+    && rg -q '"core_readiness_flip"[[:space:]]*:[[:space:]]*"live"' "$proof" \
+    || return 1
+
+  [ "$(rg -c '"screenshot_sha256"[[:space:]]*:' "$proof")" = "1" ] || return 1
+  screenshot="$(dirname "$proof")/32-text-shortcuts-live-ibus-runtime-render.png"
+  recorded_sha="$(awk -F'"' '/"screenshot_sha256"/ { print $4; exit }' "$proof")"
+  actual_sha="$(sha256_file "$screenshot")" || return 1
+  [[ "$recorded_sha" =~ ^[0-9a-f]{64}$ ]] \
+    && [ "$recorded_sha" = "$actual_sha" ] \
+    && screenshot_file_is_valid_png "$screenshot"
 }
 
 keyboard_shortcuts_roundtrip_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"shortcut_route"[[:space:]]*:[[:space:]]*"/v1/keyboard/shortcuts/binding"' "$proof" \
@@ -713,6 +1001,7 @@ keyboard_shortcuts_roundtrip_proof_passes() {
 input_sources_roundtrip_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"source_route"[[:space:]]*:[[:space:]]*"/v1/input/sources"' "$proof" \
@@ -734,6 +1023,7 @@ input_sources_roundtrip_proof_passes() {
 multi_display_apply_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/displays/status"' "$proof" \
@@ -759,6 +1049,7 @@ multi_display_apply_proof_passes() {
 focus_arm_roundtrip_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/focus/status"' "$proof" \
@@ -791,6 +1082,7 @@ focus_arm_roundtrip_proof_passes() {
 app_privacy_revoke_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/app-privacy/revoke"' "$proof" \
@@ -813,6 +1105,7 @@ app_privacy_revoke_proof_passes() {
 preview_open_render_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/preview/status"' "$proof" \
@@ -845,6 +1138,7 @@ preview_open_render_proof_passes() {
 audio_output_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/audio/status"' "$proof" \
@@ -860,6 +1154,7 @@ audio_output_proof_passes() {
 runtime_build_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/apps/builds"' "$proof" \
@@ -1051,6 +1346,14 @@ fi
 
 if [ -n "$SCREENSHOT_DIR" ]; then
   log "Checking required proof screenshots in: $SCREENSHOT_DIR"
+  if ! CANONICAL_SCREENSHOT_DIR="$(
+    python3 "$REPO_ROOT/os/hardware-gate/capture-harness/proof_validation.py" \
+      --run-directory "$SCREENSHOT_DIR" "$REPO_ROOT" "$ARCH"
+  )"; then
+    fail "SCREENSHOT_DIR must be a canonical, in-repository, non-symlinked architecture/date directory."
+    exit 1
+  fi
+  SCREENSHOT_DIR="$CANONICAL_SCREENSHOT_DIR"
   if ! screenshot_dir_matches_arch "$SCREENSHOT_DIR"; then
     fail "SCREENSHOT_DIR must be architecture-specific: os/screenshots/hardware-gate/$ARCH/<date>"
     exit 1
@@ -1086,10 +1389,54 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     exit 1
   fi
   manifest="$SCREENSHOT_DIR/proof-manifest.json"
+  if ! python3 "$REPO_ROOT/os/hardware-gate/capture-harness/proof_validation.py" \
+    --manifest "$manifest" "$ARCH" "$CANDIDATE_COMMIT" "$IMAGE_PROVENANCE_REF" \
+    "$ISO_PATH" "$SCREENSHOT_DIR"; then
+    fail "Screenshot proof manifest failed its exact typed schema and duplicate-key gate: $manifest"
+    exit 1
+  fi
   if ! screenshot_manifest_matches_iso "$manifest"; then
     fail "Screenshot proof manifest missing or incoherent for this architecture verification proof: $manifest"
-    fail "Expected architecture=$ARCH, candidate_commit=$CANDIDATE_COMMIT, iso=$ISO_PATH, a 64-character iso_sha256, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF, audio_output_proof=$AUDIO_OUTPUT_PROOF, and runtime_build_proof=$RUNTIME_BUILD_PROOF."
+    fail "Expected architecture=$ARCH, candidate_commit=$CANDIDATE_COMMIT, iso=$ISO_PATH, a 64-character iso_sha256, captured_at, screenshot_run_dir=$SCREENSHOT_DIR, firewall_live_toggle_proof=$FIREWALL_LIVE_TOGGLE_PROOF, text_shortcuts_session_enable_proof=$TEXT_SHORTCUTS_SESSION_ENABLE_PROOF, text_shortcuts_candidate_metadata_proof=$TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF, text_shortcuts_overlay_intent_proof=$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF, text_shortcuts_candidate_bubble_frame_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF, text_shortcuts_candidate_bubble_layout_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF, text_shortcuts_candidate_bubble_render_intent_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF, text_shortcuts_candidate_bubble_render_proof=$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF, text_shortcuts_live_ibus_runtime_render_proof=$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF, its exact 64-character screenshot SHA256 matching the live proof and decoded PNG, keyboard_shortcuts_roundtrip_proof=$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF, input_sources_roundtrip_proof=$INPUT_SOURCES_ROUNDTRIP_PROOF, multi_display_apply_proof=$MULTI_DISPLAY_APPLY_PROOF, focus_arm_roundtrip_proof=$FOCUS_ARM_ROUNDTRIP_PROOF, app_privacy_revoke_proof=$APP_PRIVACY_REVOKE_PROOF, preview_open_render_proof=$PREVIEW_OPEN_RENDER_PROOF, audio_output_proof=$AUDIO_OUTPUT_PROOF, and runtime_build_proof=$RUNTIME_BUILD_PROOF."
     exit 1
+  fi
+  EVIDENCE_BUNDLE_PATH="$SCREENSHOT_DIR/evidence-bundle.json"
+  if EVIDENCE_BUNDLE_SHA256="$(evidence_bundle_passes "$SCREENSHOT_DIR")"; then
+    EVIDENCE_BUNDLE_STATUS="yes (canonical SHA256/size/dimension seal recomputed for all 32 PNGs and every required proof/verification JSON)"
+    log "Evidence bundle integrity passed: $EVIDENCE_BUNDLE_SHA256"
+  else
+    fail "Canonical evidence bundle is missing, unsafe, non-uniform, or no longer matches this screenshot run: $EVIDENCE_BUNDLE_PATH"
+    exit 1
+  fi
+  if [ "$ARCH" = "aarch64" ]; then
+    LOCAL_DISPLAY_ATTESTATION_PATH="$SCREENSHOT_DIR/aarch64-local-display-attestation.json"
+    if ATTESTATION_FIELDS="$(local_display_attestation_fields "$SCREENSHOT_DIR")"; then
+      read -r LOCAL_DISPLAY_ATTESTATION_RUN LOCAL_DISPLAY_ATTESTATION_RUN_ATTEMPT LOCAL_DISPLAY_ATTESTATION_ARTIFACT <<<"$ATTESTATION_FIELDS"
+      if github_actions_run_is_successful \
+        "$LOCAL_DISPLAY_ATTESTATION_RUN" \
+        "$CANDIDATE_COMMIT" \
+        "$LOCAL_DISPLAY_ATTESTATION_RUN_ATTEMPT" \
+        ".github/workflows/aarch64-local-display-attestation.yml" \
+        && github_actions_artifact_file_matches \
+          "$LOCAL_DISPLAY_ATTESTATION_RUN" \
+          "$LOCAL_DISPLAY_ATTESTATION_ARTIFACT" \
+          "$EVIDENCE_BUNDLE_PATH" \
+          "evidence-bundle.json" \
+        && github_actions_artifact_file_matches \
+          "$LOCAL_DISPLAY_ATTESTATION_RUN" \
+          "$LOCAL_DISPLAY_ATTESTATION_ARTIFACT" \
+          "$LOCAL_DISPLAY_ATTESTATION_PATH" \
+          "aarch64-local-display-attestation.json" \
+        && local_display_attestation_signature_passes "$EVIDENCE_BUNDLE_PATH"; then
+        LOCAL_DISPLAY_ATTESTATION_STATUS="yes (successful exact-candidate GitHub run; byte-identical seal/record artifact; signed exact seal subject and signer/source digest verified)"
+      else
+        LOCAL_DISPLAY_ATTESTATION_STATUS="invalid (GitHub run, artifact bytes, or signed seal provenance did not verify)"
+        warn "The aarch64 local-display attestation did not pass its exact GitHub run, uploaded-byte, and signed-subject checks."
+      fi
+    else
+      LOCAL_DISPLAY_ATTESTATION_STATUS="missing (dispatch aarch64-local-display-attestation.yml and hydrate its run-bound record)"
+      warn "The local aarch64/HVF seal still needs its GitHub-hosted signed attestation record before a complete signoff row can be written."
+    fi
   fi
   SCREENSHOT_ISO_SHA="$(screenshot_manifest_iso_sha "$manifest" | tr '[:upper:]' '[:lower:]')"
   log "Screenshot verification ISO SHA256: ${SCREENSHOT_ISO_SHA:-missing}"
@@ -1145,7 +1492,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if ! text_shortcuts_live_ibus_runtime_render_proof_passes "$SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"; then
     fail "Text Shortcuts live IBus runtime/render proof missing or failed: $SCREENSHOT_DIR/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"
-    fail "Expected 32-text-shortcuts-live-ibus-runtime-render.png plus QMP-keyboard-driven active goblins-textshortcuts IBus engine proof with focused-field callback, text-input-v3 commit, password refusal, rendered accept bubble, and core_readiness_flip=live."
+    fail "Expected 32-text-shortcuts-live-ibus-runtime-render.png plus QMP-keyboard-driven native IBus lookup-table publication, a host-acknowledged chronological popup record current at capture, zero pre-boundary commits, exactly one process-key-event boundary commit, a committed popup hide transition, focused entry readback, private-storage roundtrip, password suppression, and core_readiness_flip=live."
     exit 1
   fi
   if ! keyboard_shortcuts_roundtrip_proof_passes "$SCREENSHOT_DIR/$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"; then
@@ -1205,14 +1552,14 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
   FIREWALL_TOGGLE_STATUS="yes ($FIREWALL_LIVE_TOGGLE_PROOF: disable=200/inactive, enable=200/active)"
   TEXT_SHORTCUTS_SESSION_STATUS="yes ($TEXT_SHORTCUTS_SESSION_ENABLE_PROOF: service/source/engine active; core reports live runtime readiness)"
-  TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes (covered by $TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF + 32-text-shortcuts-live-ibus-runtime-render.png: normal expansion, pass-through, password refusal, focused-field callback, text-input-v3 commit, and rendered accept bubble)"
+  TEXT_SHORTCUTS_KEYSTROKE_STATUS="yes (covered by $TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF + 32-text-shortcuts-live-ibus-runtime-render.png: normal expansion, pass-through, password suppression, zero pre-boundary commits, one boundary commit, focused entry readback, and a host-acknowledged chronological native popup record)"
   TEXT_SHORTCUTS_CANDIDATE_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_METADATA_PROOF: candidate metadata present; rendered bubble still gated false)"
   TEXT_SHORTCUTS_OVERLAY_INTENT_STATUS="yes ($TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF: adapter show/hide overlay intents present; live overlay still gated false)"
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF: adapter accept-bubble frames present; rendered bubble still gated false)"
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF: adapter accept-bubble layouts present; rendered bubble still gated false)"
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF: adapter render intents present; rendered bubble still gated false)"
   TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_STATUS="yes ($TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF + 31-text-shortcuts-candidate-bubble-render.png: render-intent-backed candidate proof surface rendered; live overlay still gated false)"
-  TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_STATUS="yes ($TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF + 32-text-shortcuts-live-ibus-runtime-render.png: live IBus callback, text-input-v3 commit, password refusal, and rendered accept bubble proved; core readiness flip live)"
+  TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_STATUS="yes ($TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF + 32-text-shortcuts-live-ibus-runtime-render.png: chronological native IBus lookup popup current at capture, cursor anchor, zero pre-boundary commits, one process-key-event boundary commit, committed popup hide, focused readback, secure storage, password suppression, and host capture acknowledgement proved; core readiness flip live)"
   KEYBOARD_SHORTCUTS_ROUNDTRIP_STATUS="yes ($KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF: shortcut + Caps Lock writes round-tripped and restored)"
   INPUT_SOURCES_ROUNDTRIP_STATUS="yes ($INPUT_SOURCES_ROUNDTRIP_PROOF: input source set + switch writes round-tripped and restored)"
   MULTI_DISPLAY_APPLY_STATUS="yes ($MULTI_DISPLAY_APPLY_PROOF: DisplayConfig verify + temporary same-layout apply, persistent guard, and stale serial rejection proved)"
@@ -1241,6 +1588,9 @@ if [ "$LOGIC_ONLY" -eq 1 ] \
   NATIVE_ISO_MANIFEST_SHA="$(sha256_file "$ISO_MANIFEST")"
   NATIVE_BIB_MANIFEST_SHA="$(sha256_file "$BIB_MANIFEST")"
   NATIVE_EVIDENCE_MANIFEST_SHA="$(sha256_file "$SBOM_DIR/release-evidence-manifest.json")"
+  NATIVE_PACKAGING_GATE_RUN_DATE="${SCREENSHOT_DIR%/}"
+  NATIVE_PACKAGING_GATE_RUN_DATE="${NATIVE_PACKAGING_GATE_RUN_DATE##*/}"
+  NATIVE_PACKAGING_GATE_ARTIFACT="goblins-os-aarch64-native-packaging-gate-$CANDIDATE_COMMIT-$NATIVE_PACKAGING_GATE_RUN_DATE-attempt-$NATIVE_PACKAGING_GATE_RUN_ATTEMPT"
   if native_packaging_gate_proof_passes \
     "$NATIVE_PACKAGING_GATE_PROOF" \
     "$NATIVE_PACKAGING_GATE_RUN_URL" \
@@ -1251,12 +1601,22 @@ if [ "$LOGIC_ONLY" -eq 1 ] \
     "$ISO_SHA" \
     "$NATIVE_ISO_MANIFEST_SHA" \
     "$NATIVE_BIB_MANIFEST_SHA" \
-    "$NATIVE_EVIDENCE_MANIFEST_SHA"; then
+    "$NATIVE_EVIDENCE_MANIFEST_SHA" \
+    && github_actions_run_is_successful \
+      "$NATIVE_PACKAGING_GATE_RUN_URL" \
+      "$CANDIDATE_COMMIT" \
+      "$NATIVE_PACKAGING_GATE_RUN_ATTEMPT" \
+      ".github/workflows/aarch64-verification-iso.yml" \
+    && github_actions_artifact_file_matches \
+      "$NATIVE_PACKAGING_GATE_RUN_URL" \
+      "$NATIVE_PACKAGING_GATE_ARTIFACT" \
+      "$NATIVE_PACKAGING_GATE_PROOF" \
+      "native-packaging-gate.json"; then
     NATIVE_PACKAGING_GATE_ACCEPTED=1
-    NATIVE_PACKAGING_GATE_STATUS="yes ($NATIVE_PACKAGING_GATE_PROOF; $NATIVE_PACKAGING_GATE_RUN_URL; attempt $NATIVE_PACKAGING_GATE_RUN_ATTEMPT)"
+    NATIVE_PACKAGING_GATE_STATUS="yes ($NATIVE_PACKAGING_GATE_PROOF; $NATIVE_PACKAGING_GATE_RUN_URL; attempt $NATIVE_PACKAGING_GATE_RUN_ATTEMPT; byte-identical artifact $NATIVE_PACKAGING_GATE_ARTIFACT)"
     log "Native Linux packaging gate proof passed for $ARCH candidate $CANDIDATE_COMMIT."
   else
-    fail "Native packaging gate proof is invalid or not bound to $ARCH candidate $CANDIDATE_COMMIT and image $IMAGE_PROVENANCE_REF."
+    fail "Native packaging gate proof is invalid, its workflow run did not succeed, or its exact uploaded bytes do not bind $ARCH candidate $CANDIDATE_COMMIT and image $IMAGE_PROVENANCE_REF."
     exit 1
   fi
 fi
@@ -1325,6 +1685,8 @@ PROJECT_COMPLETION_STATUS="incomplete"
 if [ "$VERIFY_STATUS" = "pass" ] \
   && [ "$SELFTEST_STATUS" = "pass" ] \
   && [[ "$RELEASE_EVIDENCE_STATUS" == yes* ]] \
+  && [[ "$EVIDENCE_BUNDLE_STATUS" == yes* ]] \
+  && { [ "$ARCH" != "aarch64" ] || [[ "$LOCAL_DISPLAY_ATTESTATION_STATUS" == yes* ]]; } \
   && [[ "$GAMING_SCREENSHOT_STATUS" == yes* ]] \
   && [[ "$INSTALL_STORAGE_STATUS" == yes* ]] \
   && [[ "$MOTION_INTERACTIONS_STATUS" == yes* ]] \
@@ -1389,6 +1751,14 @@ cat > "$SIGNOFF_ROW_TEMP" <<EOF2
 - ISO: ${ISO_PATH}
 - ISO SHA256: ${ISO_SHA}
 - Screenshot proof ISO SHA256: ${SCREENSHOT_ISO_SHA}
+- Evidence bundle: ${EVIDENCE_BUNDLE_PATH}
+- Evidence bundle SHA256: ${EVIDENCE_BUNDLE_SHA256}
+- Evidence bundle integrity checked: ${EVIDENCE_BUNDLE_STATUS}
+- Local display attestation: ${LOCAL_DISPLAY_ATTESTATION_PATH}
+- Local display attestation run: ${LOCAL_DISPLAY_ATTESTATION_RUN}
+- Local display attestation run attempt: ${LOCAL_DISPLAY_ATTESTATION_RUN_ATTEMPT}
+- Local display attestation artifact: ${LOCAL_DISPLAY_ATTESTATION_ARTIFACT}
+- Local display attestation checked: ${LOCAL_DISPLAY_ATTESTATION_STATUS}
 - ISO candidate binding checked: ${ISO_CANDIDATE_STATUS}
 - Rootfs verify command: \
   ${CONTAINER_RUNTIME:-docker} run --rm ${IMAGE} /usr/libexec/goblins-os/goblins-os-verify --installed-root /

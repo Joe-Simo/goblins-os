@@ -214,7 +214,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: hardware-gate-run-${{ matrix.arch }}
+          name: hardware-gate-evidence-${{ inputs.candidate_commit }}-${{ matrix.arch }}-${{ inputs.run_date }}-attempt-${{ github.run_attempt }}
           path: |
             os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso
             os/iso/output/${{ matrix.arch }}/bootiso/goblins-os-${{ matrix.arch }}.iso.sha256
@@ -223,3 +223,5 @@ jobs:
             os/screenshots/hardware-gate/${{ matrix.arch }}/${{ inputs.run_date }}/
             os/signoff-proofs/sbom/${{ matrix.arch }}/
             os/signoff-notes.md
+          if-no-files-found: error
+          retention-days: 90

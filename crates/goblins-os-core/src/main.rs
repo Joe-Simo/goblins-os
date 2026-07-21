@@ -57,6 +57,7 @@ mod window_management;
 use std::net::SocketAddr;
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -117,9 +118,11 @@ use crate::{
     studio::{studio_file, studio_session, studio_sessions, studio_turn},
     system::{health, system_services},
     system_image::system_image_status,
-    voice::{voice_converse, voice_dictate, voice_status},
+    voice::{voice_converse, voice_dictate, voice_status, voice_storage_release_proof},
     window_management::{set_hot_corner, window_management_status},
 };
+
+const TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES: usize = 64 * 1024;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -130,6 +133,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    // Voice workspaces are intentionally persistent only as a parent
+    // capability. Remove crash/power-loss leftovers before any route can run.
+    voice::purge_stale_voice_workspaces()?;
 
     // Refresh the OS-owned OpenAI account session before expiry without ever
     // handing refresh tokens to a desktop client. The task is generation-gated
@@ -258,6 +265,10 @@ fn private_router() -> Router {
         .route("/v1/voice/converse", post(voice_converse))
         .route("/v1/voice/dictate", post(voice_dictate))
         .route(
+            "/v1/release-proof/storage/voice",
+            post(voice_storage_release_proof),
+        )
+        .route(
             "/v1/live-captions/status",
             get(live_captions::live_captions_status),
         )
@@ -322,7 +333,9 @@ fn private_router() -> Router {
         )
         .route(
             "/v1/text-shortcuts",
-            get(text_shortcuts::text_shortcuts_status).post(text_shortcuts::set_text_shortcuts),
+            get(text_shortcuts::text_shortcuts_status)
+                .post(text_shortcuts::set_text_shortcuts)
+                .layer(DefaultBodyLimit::max(TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES)),
         )
         .route(
             "/v1/text-shortcuts/preview",
@@ -421,5 +434,36 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    use super::{private_router, TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES};
+
+    #[tokio::test]
+    async fn text_shortcuts_route_rejects_bodies_above_its_private_table_envelope() {
+        let payload = format!(
+            r#"{{"shortcuts":[{{"replace":"large","with":"{}"}}]}}"#,
+            "x".repeat(TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES)
+        );
+        let response = private_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/text-shortcuts")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

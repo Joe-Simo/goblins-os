@@ -14,7 +14,11 @@ use std::{
         net::UnixStream as StdUnixStream,
     },
     path::{Path, PathBuf},
+    time::Duration,
 };
+
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 
 use axum::{
     body::Body,
@@ -24,7 +28,7 @@ use axum::{
     Router,
 };
 use tokio::{
-    net::{TcpListener, UnixListener},
+    net::{unix::SocketAddr, TcpListener, UnixListener, UnixStream},
     sync::watch,
     task::JoinSet,
 };
@@ -193,6 +197,7 @@ const RELEASE_PROOF_PERMISSIONS: &[Permission] = permissions![
     (GET, "/v1/system/hardware"),
     (GET, "/v1/system/services"),
     (GET, "/v1/text-shortcuts"),
+    (GET, "/v1/text-shortcuts/preview"),
     (POST, "/v1/ai/open-settings-panel"),
     (POST, "/v1/ai/screen-context"),
     (POST, "/v1/ai/selected-text-context"),
@@ -215,7 +220,9 @@ const RELEASE_PROOF_PERMISSIONS: &[Permission] = permissions![
     (POST, "/v1/policy/permissions/grant"),
     (POST, "/v1/preview/open"),
     (POST, "/v1/privacy"),
+    (POST, "/v1/release-proof/storage/voice"),
     (POST, "/v1/session/unlock"),
+    (POST, "/v1/text-shortcuts"),
 ];
 
 const RESIDENT_PERMISSIONS: &[Permission] = permissions![(POST, "/v1/codex/resident")];
@@ -432,6 +439,187 @@ struct BoundClientSocket {
     group_id: u32,
     listener: UnixListener,
     _guard: SocketGuard,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PeerCredentials {
+    process_id: i32,
+    user_id: u32,
+    primary_group_id: u32,
+    supplementary_group_ids: Vec<u32>,
+}
+
+impl PeerCredentials {
+    fn belongs_to_group(&self, required_group_id: u32) -> bool {
+        self.primary_group_id == required_group_id
+            || self.supplementary_group_ids.contains(&required_group_id)
+    }
+}
+
+/// Axum listener that authorizes each accepted connection from immutable
+/// credentials captured by the Linux socket layer. Filesystem DAC is the first
+/// boundary; this second boundary prevents the shared core UID (and even root)
+/// from crossing from one capability socket into another without proving the
+/// exact capability group.
+struct CapabilityListener {
+    client: ClientKind,
+    required_group_id: u32,
+    listener: UnixListener,
+}
+
+impl CapabilityListener {
+    fn new(client: ClientKind, required_group_id: u32, listener: UnixListener) -> Self {
+        Self {
+            client,
+            required_group_id,
+            listener,
+        }
+    }
+}
+
+impl axum::serve::Listener for CapabilityListener {
+    type Io = UnixStream;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            match self.listener.accept().await {
+                Ok((stream, address)) => match peer_credentials(&stream) {
+                    Ok(peer) if peer.belongs_to_group(self.required_group_id) => {
+                        return (stream, address);
+                    }
+                    Ok(peer) => {
+                        tracing::debug!(
+                            client = self.client.id(),
+                            peer_pid = peer.process_id,
+                            peer_uid = peer.user_id,
+                            peer_primary_gid = peer.primary_group_id,
+                            required_gid = self.required_group_id,
+                            "rejected capability connection without the required peer group"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::debug!(
+                            client = self.client.id(),
+                            required_gid = self.required_group_id,
+                            %error,
+                            "rejected capability connection whose peer groups could not be proven"
+                        );
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(
+                        client = self.client.id(),
+                        %error,
+                        "capability listener accept failed"
+                    );
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<Self::Addr> {
+        self.listener.local_addr()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCredentials> {
+    const MAX_SUPPLEMENTARY_GROUPS: usize = 65_536;
+
+    let descriptor = stream.as_raw_fd();
+    let mut credential = std::mem::MaybeUninit::<libc::ucred>::uninit();
+    let mut credential_length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: the descriptor is a live connected Unix stream and the output
+    // buffer and length pointer remain valid for the complete getsockopt call.
+    let result = unsafe {
+        libc::getsockopt(
+            descriptor,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            credential.as_mut_ptr().cast(),
+            &mut credential_length,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if credential_length as usize != std::mem::size_of::<libc::ucred>() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SO_PEERCRED returned an invalid credential size",
+        ));
+    }
+    // SAFETY: getsockopt succeeded and reported the complete ucred size.
+    let credential = unsafe { credential.assume_init() };
+
+    let group_size = std::mem::size_of::<libc::gid_t>();
+    let maximum_group_bytes = MAX_SUPPLEMENTARY_GROUPS * group_size;
+    let mut group_bytes: libc::socklen_t = 0;
+    // Linux reports the exact SO_PEERGROUPS buffer size through optlen. A
+    // non-empty group list returns ERANGE for this zero-length sizing query;
+    // an empty list succeeds with a zero length.
+    // SAFETY: no output buffer is supplied and the valid length pointer is the
+    // documented sizing-query form for SO_PEERGROUPS.
+    let sizing_result = unsafe {
+        libc::getsockopt(
+            descriptor,
+            libc::SOL_SOCKET,
+            libc::SO_PEERGROUPS,
+            std::ptr::null_mut(),
+            &mut group_bytes,
+        )
+    };
+    if sizing_result != 0 && io::Error::last_os_error().raw_os_error() != Some(libc::ERANGE) {
+        return Err(io::Error::last_os_error());
+    }
+    let required_bytes = group_bytes as usize;
+    if required_bytes > maximum_group_bytes || required_bytes % group_size != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SO_PEERGROUPS returned an invalid group-list size",
+        ));
+    }
+
+    let mut supplementary_group_ids = vec![0 as libc::gid_t; required_bytes / group_size];
+    if required_bytes != 0 {
+        // SAFETY: the vector has exactly `group_bytes` writable bytes and both
+        // it and the length pointer remain live for the getsockopt call.
+        let result = unsafe {
+            libc::getsockopt(
+                descriptor,
+                libc::SOL_SOCKET,
+                libc::SO_PEERGROUPS,
+                supplementary_group_ids.as_mut_ptr().cast(),
+                &mut group_bytes,
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if group_bytes as usize != required_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "SO_PEERGROUPS changed size during credential inspection",
+            ));
+        }
+    }
+
+    Ok(PeerCredentials {
+        process_id: credential.pid,
+        user_id: credential.uid,
+        primary_group_id: credential.gid,
+        supplementary_group_ids,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn peer_credentials(_stream: &UnixStream) -> io::Result<PeerCredentials> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "capability peer-group authorization requires Linux SO_PEERGROUPS",
+    ))
 }
 
 /// Bind all production capability sockets before serving any request.  A
@@ -698,7 +886,7 @@ where
     ));
     for BoundClientSocket {
         client,
-        group_id: _,
+        group_id,
         listener,
         _guard,
     } in client_sockets
@@ -712,7 +900,7 @@ where
                 socket = %client.socket_path().display(),
                 "Goblins OS core capability listener ready"
             );
-            axum::serve(listener, router)
+            axum::serve(CapabilityListener::new(client, group_id, listener), router)
                 .with_graceful_shutdown(wait_for_shutdown(receiver))
                 .await
         });
@@ -779,7 +967,7 @@ async fn wait_for_shutdown(mut receiver: watch::Receiver<bool>) {
 mod tests {
     use super::{
         capability_router, validate_expected_group_id, validate_production_directory, ClientKind,
-        ALL_CLIENTS, REQUIRED_DIRECTORY_MODE,
+        PeerCredentials, ALL_CLIENTS, REQUIRED_DIRECTORY_MODE,
     };
     use axum::{
         body::Body,
@@ -853,6 +1041,52 @@ mod tests {
                 .iter()
                 .any(|permission| permission.path == "/v1/auth/openai/callback"));
         }
+    }
+
+    #[test]
+    fn peer_group_authorization_accepts_primary_or_supplementary_membership() {
+        let primary = PeerCredentials {
+            process_id: 100,
+            user_id: 200,
+            primary_group_id: 300,
+            supplementary_group_ids: vec![400],
+        };
+        assert!(primary.belongs_to_group(300));
+        assert!(primary.belongs_to_group(400));
+    }
+
+    #[test]
+    fn peer_group_authorization_never_bypasses_for_shared_or_root_uid() {
+        for user_id in [0, super::effective_uid()] {
+            let peer = PeerCredentials {
+                process_id: 100,
+                user_id,
+                primary_group_id: 300,
+                supplementary_group_ids: vec![400, 500],
+            };
+            assert!(!peer.belongs_to_group(600));
+        }
+    }
+
+    #[test]
+    fn peer_group_authorization_rejects_an_empty_wrong_group_set() {
+        let peer = PeerCredentials {
+            process_id: 100,
+            user_id: 200,
+            primary_group_id: 300,
+            supplementary_group_ids: Vec::new(),
+        };
+        assert!(!peer.belongs_to_group(400));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_peer_credentials_are_read_from_the_connected_socket_snapshot() {
+        let (_peer, stream) = tokio::net::UnixStream::pair().unwrap();
+        let credentials = super::peer_credentials(&stream).unwrap();
+        assert_eq!(credentials.process_id, std::process::id() as i32);
+        assert_eq!(credentials.user_id, unsafe { libc::geteuid() });
+        assert!(credentials.belongs_to_group(unsafe { libc::getegid() }));
     }
 
     #[test]

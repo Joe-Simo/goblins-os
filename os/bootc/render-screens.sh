@@ -95,7 +95,8 @@ XVFB_PID=""
 INTERACTION_WID=""
 
 core_proof_curl() {
-  curl --unix-socket "$CORE_PROOF_SOCKET" "$@"
+  setpriv --regid=goblins-core-release-proof --clear-groups -- \
+    curl --unix-socket "$CORE_PROOF_SOCKET" "$@"
 }
 
 # Exercise the installed setgid capability boundary exactly as the real desktop

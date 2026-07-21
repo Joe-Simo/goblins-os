@@ -218,6 +218,11 @@ The `immutable_image_ref` digest is the release-proof identity.
 For the x86_64 display-backed capture, pass that exact digest to the read-only
 workflow and retain its exact run URL:
 
+`gh workflow run --ref` selects a branch or tag, so these dispatches use
+`main`; the immutable commit remains a separate required input. The commands
+below reject the run unless its recorded `head_sha` is that exact commit. If
+`main` moves between selection and dispatch, stop and select a new candidate.
+
 ```sh
 set -euo pipefail
 
@@ -234,9 +239,11 @@ printf '%s\n' "$X86_64_RUN_URL"
 X86_64_RUN_ID="${X86_64_RUN_URL##*/}"
 [[ "$X86_64_RUN_ID" =~ ^[0-9]+$ ]] || exit 1
 gh run watch "$X86_64_RUN_ID" --exit-status
+X86_64_RUN_ATTEMPT="$(gh run view "$X86_64_RUN_ID" --json attempt --jq '.attempt')"
+[[ "$X86_64_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
 X86_64_PROOF_DIR="$(mktemp -d "${TMPDIR:-/tmp}/goblins-os-x86_64-proof.XXXXXX")"
 gh run download "$X86_64_RUN_ID" \
-  -n hardware-gate-run-x86_64 \
+  -n "hardware-gate-evidence-$GOBLINS_OS_CANDIDATE_COMMIT-x86_64-$RUN_DATE-attempt-$X86_64_RUN_ATTEMPT" \
   -D "$X86_64_PROOF_DIR"
 X86_64_SCREENSHOT_RUN_DIR="$X86_64_PROOF_DIR/screenshots/hardware-gate/x86_64/$RUN_DATE"
 X86_64_SIGNOFF_ROW="$X86_64_SCREENSHOT_RUN_DIR/signoff-row.md"
@@ -246,7 +253,7 @@ test -s "$X86_64_SIGNOFF_ROW"
 test -s "$X86_64_PROOF_MANIFEST"
 test ! -L "$X86_64_SIGNOFF_ROW"
 test ! -L "$X86_64_PROOF_MANIFEST"
-X86_64_RUN_ATTEMPT="$(jq -er 'select(((.capture_workflow_run_attempt | type) == "number") and .capture_workflow_run_attempt >= 1) | .capture_workflow_run_attempt' "$X86_64_PROOF_MANIFEST")"
+test "$(jq -er 'select(((.capture_workflow_run_attempt | type) == "number") and .capture_workflow_run_attempt >= 1) | .capture_workflow_run_attempt' "$X86_64_PROOF_MANIFEST")" = "$X86_64_RUN_ATTEMPT"
 X86_64_RUN_METADATA="$(mktemp "${TMPDIR:-/tmp}/goblins-os-x86_64-run.XXXXXX")"
 gh api "repos/Joe-Simo/goblins-os/actions/runs/$X86_64_RUN_ID/attempts/$X86_64_RUN_ATTEMPT" > "$X86_64_RUN_METADATA"
 jq -e \
@@ -325,7 +332,7 @@ jq -e \
   "$AARCH64_RUN_METADATA" >/dev/null
 AARCH64_PROOF_DIR="$(mktemp -d "${TMPDIR:-/tmp}/goblins-os-aarch64-verification-iso.XXXXXX")"
 gh run download "$AARCH64_RUN_ID" \
-  -n "goblins-os-aarch64-verification-iso-$RUN_DATE" \
+  -n "goblins-os-aarch64-verification-iso-$GOBLINS_OS_CANDIDATE_COMMIT-$RUN_DATE-attempt-$AARCH64_RUN_ATTEMPT" \
   -D "$AARCH64_PROOF_DIR"
 AARCH64_NATIVE_GATE_PROOF="$AARCH64_PROOF_DIR/signoff-proofs/native-gate/aarch64/native-packaging-gate.json"
 AARCH64_VERIFICATION_ISO="$AARCH64_PROOF_DIR/iso/output/aarch64/bootiso/goblins-os-aarch64.iso"
@@ -395,9 +402,12 @@ jq -e \
   "$AARCH64_NATIVE_GATE_PROOF" >/dev/null
 ```
 
-This artifact is not public release media and is retained only long enough to
-feed the local HVF capture. Keep release downloads on GitHub release assets;
-keep verification ISO artifacts inside Actions.
+This verification-ISO artifact is not public release media and is retained only
+long enough to feed the local HVF capture. The workflow also uploads the exact
+`native-packaging-gate.json` as a small 90-day candidate/date/attempt-bound
+artifact; `close-signoff.sh` and final shipping verification require its bytes
+to match the local proof. Keep release downloads on GitHub release assets; keep
+verification ISO artifacts inside Actions.
 
 ```sh
 set -euo pipefail
@@ -414,9 +424,95 @@ GOBLINS_OS_CAPTURE_ISO_SHA256="$AARCH64_VERIFICATION_ISO_CHECKSUM" \
 GOBLINS_OS_CAPTURE_ISO_MANIFEST="$AARCH64_VERIFICATION_ISO_MANIFEST" \
 GOBLINS_OS_CAPTURE_BIB_MANIFEST="$AARCH64_VERIFICATION_BIB_MANIFEST" \
 GOBLINS_OS_CAPTURE_RELEASE_EVIDENCE_DIR="$AARCH64_VERIFICATION_EVIDENCE_DIR" \
-GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE=1 \
+GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE=0 \
 REPO_ROOT="$REPO_ROOT" \
 os/hardware-gate/capture-harness/run-capture.sh
+```
+
+The local capture writes `evidence-bundle.json` only after all 32 required PNGs,
+including `05-first-boot-private-unlock.png`, every required proof JSON, and the
+three copied verification manifests have been produced. The seal records each
+file's exact SHA-256 and byte size, records each PNG's dimensions, and rejects a
+run unless every PNG has the same realistic framebuffer dimensions. Symlinks,
+non-regular files, path escapes, duplicate paths, duplicate JSON keys, and
+non-canonical seal encoding are rejected.
+
+The local HVF host cannot attest itself. Reconstruct and sign the exact seal on
+a GitHub-hosted runner, then hydrate only the run-bound attestation record back
+into the capture directory:
+
+```sh
+set -euo pipefail
+
+AARCH64_SCREENSHOT_RUN_DIR="os/screenshots/hardware-gate/aarch64/$RUN_DATE"
+AARCH64_EVIDENCE_SEAL="$AARCH64_SCREENSHOT_RUN_DIR/evidence-bundle.json"
+AARCH64_EVIDENCE_SHA="$(python3 os/hardware-gate/capture-harness/evidence_bundle.py inspect \
+  --seal "$AARCH64_EVIDENCE_SEAL" \
+  --architecture aarch64 \
+  --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
+  --image-ref "$AARCH64_IMAGE_REF" \
+  --run-date "$RUN_DATE")"
+AARCH64_EVIDENCE_BASE64="$(base64 < "$AARCH64_EVIDENCE_SEAL" | tr -d '\n')"
+
+AARCH64_ATTESTATION_RUN_URL="$(gh workflow run aarch64-local-display-attestation.yml \
+  --ref main \
+  -f candidate_commit="$GOBLINS_OS_CANDIDATE_COMMIT" \
+  -f candidate_image_ref="$AARCH64_IMAGE_REF" \
+  -f run_date="$RUN_DATE" \
+  -f evidence_bundle_sha256="$AARCH64_EVIDENCE_SHA" \
+  -f evidence_bundle_base64="$AARCH64_EVIDENCE_BASE64")"
+[[ "$AARCH64_ATTESTATION_RUN_URL" =~ /actions/runs/[0-9]+$ ]]
+AARCH64_ATTESTATION_RUN_ID="${AARCH64_ATTESTATION_RUN_URL##*/}"
+gh run watch "$AARCH64_ATTESTATION_RUN_ID" --exit-status
+AARCH64_ATTESTATION_ATTEMPT="$(gh run view "$AARCH64_ATTESTATION_RUN_ID" --json attempt --jq '.attempt')"
+[[ "$AARCH64_ATTESTATION_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+AARCH64_ATTESTATION_ARTIFACT="aarch64-local-display-attestation-$GOBLINS_OS_CANDIDATE_COMMIT-$RUN_DATE-attempt-$AARCH64_ATTESTATION_ATTEMPT"
+AARCH64_ATTESTATION_DIR="$(mktemp -d "${TMPDIR:-/tmp}/goblins-os-aarch64-attestation.XXXXXX")"
+gh run download "$AARCH64_ATTESTATION_RUN_ID" \
+  --name "$AARCH64_ATTESTATION_ARTIFACT" \
+  --dir "$AARCH64_ATTESTATION_DIR"
+test -s "$AARCH64_ATTESTATION_DIR/evidence-bundle.json"
+test -s "$AARCH64_ATTESTATION_DIR/aarch64-local-display-attestation.json"
+test ! -L "$AARCH64_ATTESTATION_DIR/evidence-bundle.json"
+test ! -L "$AARCH64_ATTESTATION_DIR/aarch64-local-display-attestation.json"
+cmp "$AARCH64_EVIDENCE_SEAL" "$AARCH64_ATTESTATION_DIR/evidence-bundle.json"
+cp "$AARCH64_ATTESTATION_DIR/aarch64-local-display-attestation.json" \
+  "$AARCH64_SCREENSHOT_RUN_DIR/aarch64-local-display-attestation.json"
+gh attestation verify "$AARCH64_EVIDENCE_SEAL" \
+  --repo Joe-Simo/goblins-os \
+  --signer-workflow Joe-Simo/goblins-os/.github/workflows/aarch64-local-display-attestation.yml \
+  --signer-digest "$GOBLINS_OS_CANDIDATE_COMMIT" \
+  --source-digest "$GOBLINS_OS_CANDIDATE_COMMIT" \
+  --deny-self-hosted-runners
+```
+
+The attestation workflow needs only `contents: read`, `id-token: write`, and
+`attestations: write`; it receives no client secret. GitHub repository artifact
+attestations must be available for this public repository. After hydrating the
+record, rerun `close-signoff.sh` with the same exact candidate/image/native-gate
+variables and `REQUIRE_COMPLETE=1`. Final shipping verification independently
+requires the successful workflow attempt, byte-identical uploaded seal and
+record, and the signed seal subject from this exact signer workflow.
+
+```sh
+set -euo pipefail
+
+AARCH64_RUNTIME_PROOF="$AARCH64_SCREENSHOT_RUN_DIR/runtime-build-proof.json"
+AARCH64_RUNTIME_ENGINE_SOURCE="$(jq -er '.engine_source' "$AARCH64_RUNTIME_PROOF")"
+GOBLINS_OS_ARCH=aarch64 \
+GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT" \
+GOBLINS_OS_IMAGE="$AARCH64_IMAGE_REF" \
+GOBLINS_OS_NATIVE_PACKAGING_GATE_PROOF="$AARCH64_SCREENSHOT_RUN_DIR/native-packaging-gate.json" \
+GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_URL="$AARCH64_RUN_URL" \
+GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_ATTEMPT="$AARCH64_RUN_ATTEMPT" \
+SCREENSHOT_DIR="$AARCH64_SCREENSHOT_RUN_DIR" \
+RUNTIME_ENGINE_MODE=local-model \
+RUNTIME_ENGINE_SOURCE="$AARCH64_RUNTIME_ENGINE_SOURCE" \
+RUNTIME_ENGINE_CONFIG="$AARCH64_RUNTIME_PROOF" \
+BUILT_ARTIFACT_PATH_URL="$AARCH64_RUNTIME_PROOF" \
+SIGNOFF_ROW_OUTPUT="$AARCH64_SCREENSHOT_RUN_DIR/signoff-row.md" \
+REQUIRE_COMPLETE=1 \
+os/hardware-gate/close-signoff.sh
 ```
 
 Overlay only the architecture-scoped x86_64 screenshot proof into the same
@@ -703,9 +799,11 @@ The GitHub `candidate-artifacts` workflow builds each exact candidate under a
 commit-scoped GHCR tag, captures the registry digest, and produces shippable ISO
 and SBOM artifacts without updating a release channel or writing evidence to
 Git. The `hardware-gate-capture` and `aarch64-verification-iso` workflows consume
-that digest directly and only upload short-lived artifacts. They cannot write to
-the repository. Download and review both architecture outputs in a disposable
-exact-candidate checkout before attaching the proof to the release.
+that digest directly and only upload short-lived artifacts. The local-display
+attestation workflow uploads and signs only the canonical aarch64 evidence
+seal. None can write repository contents. Download and review both architecture
+outputs in a disposable exact-candidate checkout before attaching the proof to
+the release.
 
 ## 2) Write ISO + boot display-backed VM
 ```sh
@@ -795,6 +893,7 @@ the release media that was booted:
   "text_shortcuts_candidate_bubble_render_intent_proof": "text-shortcuts-candidate-bubble-render-intent-proof.json",
   "text_shortcuts_candidate_bubble_render_proof": "text-shortcuts-candidate-bubble-render-proof.json",
   "text_shortcuts_live_ibus_runtime_render_proof": "text-shortcuts-live-ibus-runtime-render-proof.json",
+  "text_shortcuts_live_ibus_runtime_render_screenshot_sha256": "<64-char sha256 of screenshot 32>",
   "keyboard_shortcuts_roundtrip_proof": "keyboard-shortcuts-roundtrip-proof.json",
   "input_sources_roundtrip_proof": "input-sources-roundtrip-proof.json",
   "multi_display_apply_proof": "multi-display-apply-proof.json",
@@ -806,113 +905,163 @@ the release media that was booted:
 }
 ```
 
-`close-signoff.sh` rejects missing, empty, or non-PNG screenshot files and
-rejects a manifest that does not match the current architecture ISO and SHA. It
+`close-signoff.sh` fully decodes every screenshot and rejects missing, empty,
+oversized, symlinked, multi-frame, or invalid PNG files. It also requires the
+screenshot 32 SHA-256 in its live proof and manifest to equal the actual decoded
+file, recomputes the canonical `evidence-bundle.json` covering all 32 uniform
+framebuffer PNGs and every required JSON, and rejects a manifest that does not
+match the current architecture ISO and SHA. It
 also rejects the run unless `firewall-live-toggle-proof.json` records the live
 core route disabling firewalld with HTTP 200 and observed inactive status, then
 enabling it with HTTP 200 and observed active status through the scoped systemd
 oneshot/polkit bridge.
 
 The same run must include `text-shortcuts-session-enable-proof.json`. That proof
-only covers the live session plumbing: active Fedora GNOME IBus service
+covers live session plumbing: the Fedora GNOME IBus service
 (`org.freedesktop.IBus.session.GNOME.service`), the seeded
-`goblins-textshortcuts` input source and preload engine, active IBus engine
-selection, adapter self-test, and core honesty that runtime expansion is still
-gated off. It does not ship Text Shortcuts expansion; the keystroke commit proof
-remains a separate qemu gate.
+`goblins-textshortcuts` input source and preload engine, active engine selection,
+the adapter self-test, and core confirmation that the runtime loop is available.
+It is a prerequisite, not visual or keystroke release evidence by itself.
 
-The live keystroke gate is now the runtime/render gate below. It supersedes the old text-shortcuts-live-keystroke-proof.json so the run does not depend on the
-shallow proof-only GTK readback path. The required proof is stricter: it must
-drive the installed IBus engine from a focused field, prove normal expansion,
-pass-through, password refusal, focused-field callback, Wayland text-input-v3
-commit, and a rendered Goblins accept bubble in the same display-backed session.
+The candidate metadata probe and the adapter's `--overlay-intent-self-test`,
+`--candidate-bubble-frame-self-test`, `--candidate-bubble-layout-self-test`, and
+`--candidate-bubble-render-intent-self-test` are non-live build-time behavior
+contracts. They may be retained to catch adapter regressions, but their outputs
+must not satisfy the production popup claim. The capture manifest and signoff
+may retain them as explicitly non-live diagnostic preflight attachments so
+their regression checks remain traceable. In particular,
+`31-text-shortcuts-candidate-bubble-render.png` is a synthetic diagnostic
+surface, not evidence of the production popup; only screenshot 32 and its
+native IBus proof may satisfy that release claim.
 
-The candidate metadata gate is `text-shortcuts-candidate-metadata-proof.json`.
-It launches `goblins-os-shell --text-shortcuts-proof candidate` and rejects the
-run unless the proof records `replacement=on my way`, `accept_on=word-boundary`,
-`dismiss_key=Escape`, `rendered_bubble_ready_claim=false`,
-`live_overlay_claim=false`, and `runtime_ready_claim=false`. This proves the
-candidate contract is present in the proof surface without claiming a live IBus
-overlay, focused-field callback, or Wayland text-input-v3 bubble.
-
-The overlay-intent gate is `text-shortcuts-overlay-intent-proof.json`. It runs
-the installed `goblins-textshortcuts-ibus --overlay-intent-self-test` adapter
-contract and rejects the run unless it records two candidate show intents, two
-hide intents, both Escape-dismiss and commit reasons, and
-`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
-`runtime_ready_claim=false`. This is still not rendered overlay proof; it only
-prevents the non-rendering adapter intent contract from drifting before the live
-Wayland/IBus bubble is qemu-proven.
-
-The candidate-bubble-frame gate is
-`text-shortcuts-candidate-bubble-frame-proof.json`. It runs the installed
-`goblins-textshortcuts-ibus --candidate-bubble-frame-self-test` adapter contract
-and rejects the run unless it records two show frames, two hide frames,
-dismissed and committed frames, the `gos-text-shortcuts-candidate` style
-contract, Inter font, sensitive-field refusal, and
-`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
-`runtime_ready_claim=false`. This still does not prove a live rendered accept
-bubble; it keeps the frame contract from drifting before qemu-rendered IBus
-overlay proof exists.
-
-The candidate-bubble-layout gate is
-`text-shortcuts-candidate-bubble-layout-proof.json`. It runs the installed
-`goblins-textshortcuts-ibus --candidate-bubble-layout-self-test` adapter
-contract and rejects the run unless it records the
-`goblins-textshortcuts-accept-bubble-layout` surface, the
-`goblins-textshortcuts-accept-bubble-frame` source frame surface, four layout
-records, three visible layouts, right-edge clamp, bottom-edge flip, hide-frame
-collapse, the `gos-text-shortcuts-candidate` style contract, Inter font, and
-`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
-`runtime_ready_claim=false`. This still does not prove a live rendered accept
-bubble, focused-field callback, or Wayland text-input-v3 bubble; it only keeps
-the deterministic layout contract from drifting before live overlay proof exists.
-
-The candidate-bubble-render-intent gate is
-`text-shortcuts-candidate-bubble-render-intent-proof.json`. It runs the installed
-`goblins-textshortcuts-ibus --candidate-bubble-render-intent-self-test` adapter
-contract and rejects the run unless it records the
-`goblins-textshortcuts-accept-bubble-render-intent` surface, the frame and layout
-source surfaces, eight render intents, four show intents, four hide intents,
-dismissed and committed intents, focus-out hide, sensitive-field hide,
-pass-through unchanged behavior, fail-open sink handling, the
-`gos-text-shortcuts-candidate` style contract, Inter font, and
-`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
-`runtime_ready_claim=false`. This still does not prove a live rendered accept
-bubble, focused-field callback, or Wayland text-input-v3 bubble; it only keeps
-the render-intent bridge from drifting before live overlay proof exists.
-
-The candidate-bubble-render screenshot gate is
-`text-shortcuts-candidate-bubble-render-proof.json` plus
-`31-text-shortcuts-candidate-bubble-render.png`. It launches
-`goblins-os-shell --text-shortcuts-proof candidate-render` in the installed
-display-backed VM, captures the rendered Goblins candidate proof surface, and
-rejects the run unless the proof links the screenshot to the
-`goblins-textshortcuts-accept-bubble-render-intent`,
-`goblins-textshortcuts-accept-bubble-layout`, and
-`goblins-textshortcuts-accept-bubble-frame` contracts, records the
-`gos-text-shortcuts-candidate` style contract, Inter font, and
-`rendered_candidate_surface=true`, while keeping
-`rendered_bubble_ready_claim=false`, `live_overlay_claim=false`, and
-`runtime_ready_claim=false`. This proves qemu captured the rendered proof
-surface; it still does not mark the live IBus overlay, focused-field callback,
-or Wayland text-input-v3 bubble as shipped.
-
-The final live IBus runtime/render gate is
+The Text Shortcuts release gate is
 `text-shortcuts-live-ibus-runtime-render-proof.json` plus
-`32-text-shortcuts-live-ibus-runtime-render.png`. It must run in the installed
-GNOME/Wayland session with the active `goblins-textshortcuts` IBus engine and
-host QMP keyboard input, then reject the run unless the proof records a
-focused-field callback, a Wayland `text-input-v3` commit, normal expansion to
-`onmyway.`, pass-through of `hello.`, password-purpose refusal, the rendered
-Goblins accept bubble, `gos-text-shortcuts-candidate`, Inter, and
-`core_readiness_flip=live`. This is the only gate allowed to set
-`rendered_bubble_ready_claim=true`, `live_overlay_claim=true`, and
-`runtime_ready_claim=true`. The deferred-flip review completed with the green
-2026-07-03 signoff run: core now derives `runtime_loop_available` live from
-the session bridge's read-only `ibus engine` probe (`IbusEngine` op), so the
-proof asserts the flip is real — core must report `engine_available=true`
-while the Goblins engine is genuinely the active IBus engine.
+`32-text-shortcuts-live-ibus-runtime-render.png`. It runs in the installed
+GNOME session with the active `goblins-textshortcuts` IBus engine and host QMP
+keyboard input. The only accepted candidate renderer is the native IBus
+lookup-table popup; the proof must record `synthetic_overlay=false`.
+
+Before typing, the gate writes and reads the private desktop-user shortcut table
+through `/v1/text-shortcuts`, verifies `/v1/text-shortcuts/preview`, and checks
+the bounded file contract. That contract requires a private parent directory, a
+regular owner-only table, a single link, bounded size and bounded reads, plus
+absence of the legacy service-user table. The live IBus watcher must reload the
+new table, and the same API and file checks must still pass after the keystrokes.
+
+The normal-input ledger is sliced after seed setup so an earlier seed event
+cannot satisfy the release gate. That slice must contain the focused-field,
+process-key, cursor-location, and candidate-publication records. Immediately
+before typing the accepting boundary, the gate records a second ledger offset.
+The pre-boundary slice must contain zero `commit-text` operations. The boundary
+slice must contain exactly one `commit-text` operation, and it must belong to a
+handled `process-key-event` record. The focused entry must read back exactly
+`on my way.`, while the unknown shortcut must read back exactly `hello.`. A
+password-purpose field must process the keys without producing a commit,
+candidate, or native popup.
+
+Before screenshot 32, the gate selects the chronologically last native popup
+record and requires a positive generation, a positive record ordinal, and a
+published `show-candidate` action from `native-ibus-lookup-table`, plus a real
+cursor rectangle, the expected replacement, and the published hint. Generation
+is intentionally not used to sort records because it is local to an engine
+instance and can restart. The guest holds that popup while the host settles and
+writes the QMP framebuffer. The host then publishes
+`/capture-acks/32-text-shortcuts-live-ibus-runtime-render.captured`; only after
+that acknowledgement may the guest type the accepting boundary. The guest first
+rechecks that the popup count still equals the captured ordinal and that the
+chronologically last record still has the captured generation and show state.
+After the boundary, exactly one new popup record must be published at the next
+generation with action `hide-candidate`; its paired render intent must have
+reason `committed`.
+
+Because the HTTP proof serializer writes query values as JSON strings, a passing
+artifact must contain this schema:
+
+```json
+{
+  "status": "pass",
+  "route": "/v1/text-shortcuts",
+  "preview_route": "/v1/text-shortcuts/preview",
+  "surface": "goblins-textshortcuts-live-ibus-runtime-render",
+  "input_driver": "qmp-keyboard",
+  "active_engine": "goblins-textshortcuts",
+  "seed_write_http": "200",
+  "seed_read_http": "200",
+  "seed_roundtrip": "true",
+  "seed_loaded": "true",
+  "core_write_http": "200",
+  "core_read_http": "200",
+  "core_preview_http": "200",
+  "file_contract_http": "200",
+  "core_table_roundtrip": "true",
+  "core_preview_roundtrip": "true",
+  "desktop_file_contract": "true",
+  "desktop_parent_contract": "true",
+  "desktop_file_owner_mode": "true",
+  "desktop_file_single_link": "true",
+  "desktop_file_size_bounded": "true",
+  "desktop_file_bounded_read": "true",
+  "legacy_service_table_absent": "true",
+  "live_watcher_reload": "true",
+  "post_keystroke_read_http": "200",
+  "post_keystroke_file_http": "200",
+  "post_keystroke_roundtrip": "true",
+  "normal_actual": "on my way.",
+  "passthrough_actual": "hello.",
+  "password_refusal": "true",
+  "password_sensitive_purpose": "true",
+  "password_process_key_callback": "true",
+  "password_commit_absent": "true",
+  "password_candidate_absent": "true",
+  "password_popup_absent": "true",
+  "normal_stage_ledger_scoped": "true",
+  "focused_field_callback": "true",
+  "process_key_event_callback": "true",
+  "cursor_location_callback": "true",
+  "pre_boundary_commit_absent": "true",
+  "boundary_stage_ledger_scoped": "true",
+  "boundary_stage_commit_count": "1",
+  "normal_stage_commit": "true",
+  "ibus_commit_operation": "true",
+  "focused_entry_readback": "true",
+  "ibus_commit_delivered": "true",
+  "boundary_popup_action": "hide-candidate",
+  "boundary_popup_reason": "committed",
+  "candidate_intent_seen": "true",
+  "native_ibus_candidate_published": "true",
+  "native_popup_generation": "<positive decimal>",
+  "native_popup_record_ordinal": "<positive decimal>",
+  "native_popup_generation_current": "true",
+  "native_popup_record_current_at_capture": "true",
+  "native_popup_action": "show-candidate",
+  "native_popup_has_cursor_rect": "true",
+  "native_popup_expected_replacement": "true",
+  "native_popup_hint_published": "true",
+  "renderer": "native-ibus-lookup-table",
+  "cursor_anchor": "ibus-input-context",
+  "synthetic_overlay": "false",
+  "screenshot": "32-text-shortcuts-live-ibus-runtime-render.png",
+  "screenshot_sha256": "<64-char sha256 from the validated capture acknowledgement>",
+  "screenshot_capture_ack": "true",
+  "native_candidate_popup_ready_claim": "true",
+  "live_overlay_claim": "true",
+  "runtime_ready_claim": "true",
+  "core_readiness_flip": "live"
+}
+```
+
+`native_popup_generation` and `native_popup_record_ordinal` must both match
+`^[1-9][0-9]*$`. `native_popup_generation_current=true` and
+`native_popup_record_current_at_capture=true` describe the acknowledged
+`show-candidate` record at screenshot-capture time; they do not claim it remains
+visible after acceptance. The final chronological popup must instead be the
+proved `hide-candidate` / `committed` transition. The exact focused-entry
+readback, pre-boundary commit absence, single boundary commit, captured popup
+identity, and host capture acknowledgement are all required. The host validates
+the complete PNG stream before atomically publishing its acknowledgement; the
+guest copies that exact SHA-256 into the live proof, and the proof manifest must
+repeat the digest. Both signoff validators decode the file again and require all
+three digests to match. No readiness boolean may substitute for this evidence.
 
 The keyboard-shortcuts gate is `keyboard-shortcuts-roundtrip-proof.json`. It
 posts to `/v1/keyboard/shortcuts/binding` to set the owned `window-hud` shortcut
@@ -1072,18 +1221,26 @@ After the run, open [os/signoff-notes.md](os/signoff-notes.md) and fill:
 - command used
 - release evidence path under `os/signoff-proofs/sbom/<arch>/`
 - each check pass/fail and screenshot filenames
+- canonical `evidence-bundle.json` SHA-256 and the exact workflow artifact/run attempt that carried it
+- for local aarch64/HVF, the GitHub-hosted signed attestation record and verified signer workflow
 - SBOM result, including `release-evidence-manifest.json`, `cargo-lock-packages.tsv`, and `rpm-packages.tsv`
 - gaming readiness result, including Steam absence from installed-root verifier
 - firewall toggle result, including `firewall-live-toggle-proof.json`
 - Text Shortcuts session-enable result, including `text-shortcuts-session-enable-proof.json`
-- Text Shortcuts live keystroke result, covered by `text-shortcuts-live-ibus-runtime-render-proof.json` and `32-text-shortcuts-live-ibus-runtime-render.png`
-- Text Shortcuts candidate metadata result, including `text-shortcuts-candidate-metadata-proof.json`
-- Text Shortcuts overlay intent result, including `text-shortcuts-overlay-intent-proof.json`
-- Text Shortcuts candidate bubble frame result, including `text-shortcuts-candidate-bubble-frame-proof.json`
-- Text Shortcuts candidate bubble layout result, including `text-shortcuts-candidate-bubble-layout-proof.json`
-- Text Shortcuts candidate bubble render intent result, including `text-shortcuts-candidate-bubble-render-intent-proof.json`
-- Text Shortcuts candidate bubble render screenshot result, including `text-shortcuts-candidate-bubble-render-proof.json` and `31-text-shortcuts-candidate-bubble-render.png`
-- Text Shortcuts live IBus runtime/render result, including `text-shortcuts-live-ibus-runtime-render-proof.json` and `32-text-shortcuts-live-ibus-runtime-render.png`
+- Text Shortcuts non-live diagnostic preflight results, including
+  `text-shortcuts-candidate-metadata-proof.json`,
+  `text-shortcuts-overlay-intent-proof.json`,
+  `text-shortcuts-candidate-bubble-frame-proof.json`,
+  `text-shortcuts-candidate-bubble-layout-proof.json`,
+  `text-shortcuts-candidate-bubble-render-intent-proof.json`, and
+  `text-shortcuts-candidate-bubble-render-proof.json`; these rows cannot satisfy
+  the production popup claim
+- Text Shortcuts live IBus result, including secure desktop-state roundtrips,
+  watcher reload, zero pre-boundary commits, one boundary-stage commit and
+  focused-entry readback, password suppression, the chronologically current
+  captured native lookup-table popup and its committed hide transition, plus
+  host-acknowledged `32-text-shortcuts-live-ibus-runtime-render.png`, all recorded
+  by `text-shortcuts-live-ibus-runtime-render-proof.json`
 - Keyboard shortcuts roundtrip result, including `keyboard-shortcuts-roundtrip-proof.json`
 - Input sources roundtrip result, including `input-sources-roundtrip-proof.json`
 - Multi-display apply result, including `multi-display-apply-proof.json`

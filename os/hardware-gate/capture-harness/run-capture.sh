@@ -6,7 +6,7 @@
 # install + first-boot GDM-autologin desktop, completes first boot through the
 # same core API contracts as the private/offline UI path, publishes the
 # in-session orchestrator for the verification-only user service, captures
-# the 32 required shots by QMP-screendump on each HTTP signal,
+# the 32 required shots by QMP screendump on authenticated bounded events,
 # writes proof-manifest.json, and runs close-signoff.sh.
 #
 # Honest: every shot is a real framebuffer capture of the real installed OS.
@@ -14,6 +14,48 @@
 # host-served model over 10.0.2.2. Works on a native Linux/KVM host (CI) and on
 # macOS/hvf. KVM is required for x86_64 at usable speed; aarch64 also runs on hvf.
 set -euo pipefail
+
+screenshot_file_is_valid_png() {
+  local file="$1"
+  local signature metadata width height frame_count byte_count scratch_file validator_dir
+
+  [ -f "$file" ] && [ ! -L "$file" ] || return 1
+  byte_count="$(wc -c < "$file" | tr -d '[:space:]')"
+  [[ "$byte_count" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ "$byte_count" -le $((64 * 1024 * 1024)) ] || return 1
+  signature="$(od -An -tx1 -N8 "$file" 2>/dev/null | tr -d ' \n')"
+  [ "$signature" = "89504e470d0a1a0a" ] || return 1
+  validator_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || return 1
+  python3 "$validator_dir/png_validation.py" "$file" >/dev/null 2>&1 || return 1
+
+  if command -v magick >/dev/null 2>&1; then
+    metadata="$(magick identify -quiet -format '%m %w %h %n' "$file" 2>/dev/null)" || return 1
+    magick "$file" -alpha off -resize 1x1\! null: >/dev/null 2>&1 || return 1
+  elif command -v identify >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; then
+    metadata="$(identify -quiet -format '%m %w %h %n' "$file" 2>/dev/null)" || return 1
+    convert "$file" -alpha off -resize 1x1\! null: >/dev/null 2>&1 || return 1
+  elif command -v sips >/dev/null 2>&1; then
+    width="$(sips -g pixelWidth "$file" 2>/dev/null | awk '/pixelWidth:/{print $2; exit}')"
+    height="$(sips -g pixelHeight "$file" 2>/dev/null | awk '/pixelHeight:/{print $2; exit}')"
+    scratch_file="$(mktemp "${TMPDIR:-/tmp}/goblins-png-decode.XXXXXX")" || return 1
+    if ! sips --resampleHeightWidth 1 1 -s format png \
+      "$file" --out "$scratch_file" >/dev/null 2>&1; then
+      rm -f "$scratch_file"
+      return 1
+    fi
+    rm -f "$scratch_file"
+    metadata="PNG ${width:-0} ${height:-0} 1"
+  else
+    echo "PNG validation requires ImageMagick or macOS sips." >&2
+    return 1
+  fi
+
+  read -r _ width height frame_count <<< "$metadata"
+  [[ "$metadata" =~ ^PNG\ [1-9][0-9]*\ [1-9][0-9]*\ 1$ ]] \
+    && [[ "$width" =~ ^[1-9][0-9]*$ ]] \
+    && [[ "$height" =~ ^[1-9][0-9]*$ ]] \
+    && [ "$frame_count" = "1" ]
+}
 
 normalize_semantic_screenshot_frame() {
   local source_file="$1"
@@ -202,6 +244,15 @@ PY
   return "$checker_rc"
 }
 
+if [ "${1:-}" = "--check-png" ]; then
+  if [ "$#" -ne 2 ]; then
+    echo "usage: $0 --check-png <png-file>" >&2
+    exit 2
+  fi
+  screenshot_file_is_valid_png "$2"
+  exit $?
+fi
+
 if [ "${1:-}" = "--check-semantic-screenshots" ]; then
   if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
     echo "usage: $0 --check-semantic-screenshots <screenshot-dir> [quiet]" >&2
@@ -230,6 +281,12 @@ if [ "$SCRIPT_DIR" != "$HERE" ]; then
   echo "Run the capture harness from the exact candidate checkout: $HERE/run-capture.sh" >&2
   exit 2
 fi
+proof_json_passes() {
+  local proof="$1"
+  local schema="${2:-$(basename "$proof" -proof.json)}"
+
+  python3 "$SCRIPT_DIR/proof_validation.py" --proof "$schema" "$proof"
+}
 if ! git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "REPO_ROOT must identify the exact candidate Git checkout: $REPO" >&2
   exit 2
@@ -285,9 +342,47 @@ case "$CAPTURE_REQUIRE_COMPLETE" in
     exit 2
     ;;
 esac
-BASE_WORK="${WORK_DIR:-/tmp/gos-hwgate-$ARCH}"
-WORK="$BASE_WORK"
 PORT="${HTTP_PORT:-8099}"
+if [[ ! "$PORT" =~ ^[0-9]{4,5}$ ]] || [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then
+  echo "HTTP_PORT must be an unprivileged TCP port between 1024 and 65535." >&2
+  exit 2
+fi
+WORK="$(python3 - "${WORK_DIR:-}" "$ARCH" <<'PY'
+import os
+import stat
+import sys
+import tempfile
+
+requested, architecture = sys.argv[1:]
+if requested:
+    if not os.path.isabs(requested) or os.path.normpath(requested) != requested:
+        raise SystemExit("WORK_DIR must be an absolute normalized path")
+    parent = os.path.dirname(requested)
+    if os.path.realpath(parent) != parent:
+        raise SystemExit("WORK_DIR parent must be canonical and non-symlinked")
+    if os.path.lexists(requested):
+        raise SystemExit("WORK_DIR must name a new, nonexistent directory")
+    os.mkdir(requested, 0o700)
+    work = requested
+else:
+    temporary_parent = os.path.realpath(os.environ.get("TMPDIR", "/tmp"))
+    work = tempfile.mkdtemp(
+        prefix=f"goblins-hwgate-{architecture}.", dir=temporary_parent
+    )
+    os.chmod(work, 0o700)
+metadata = os.lstat(work)
+if (
+    not stat.S_ISDIR(metadata.st_mode)
+    or stat.S_IMODE(metadata.st_mode) != 0o700
+    or metadata.st_uid != os.getuid()
+    or os.path.realpath(work) != work
+    or os.listdir(work)
+):
+    raise SystemExit("capture work directory is not a new canonical 0700 directory")
+print(work)
+PY
+)" || exit 2
+TOKEN_FILE="$WORK/capture-token"
 DATE="${RUN_DATE:?set RUN_DATE=YYYY-MM-DD (scripts cannot read the clock)}"
 if [[ ! "$DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
   || ! python3 - "$DATE" <<'PY'
@@ -325,6 +420,15 @@ QEMU_PID=""
 CAPTURE_STARTED=0
 INSTALL_MARKER_RC="${GOS_INSTALL_MARKER_EXIT_CODE:-71}"
 AARCH64_INSTALL_REBOOT_TIMEOUT="${GOS_AARCH64_INSTALL_REBOOT_TIMEOUT:-420}"
+PROCESS_TERM_TIMEOUT_SECONDS="${GOS_PROCESS_TERM_TIMEOUT_SECONDS:-10}"
+PROCESS_KILL_TIMEOUT_SECONDS="${GOS_PROCESS_KILL_TIMEOUT_SECONDS:-5}"
+for timeout_name in PROCESS_TERM_TIMEOUT_SECONDS PROCESS_KILL_TIMEOUT_SECONDS; do
+  timeout_value="${!timeout_name}"
+  if [[ ! "$timeout_value" =~ ^[1-9][0-9]*$ ]] || [ "$timeout_value" -gt 60 ]; then
+    echo "$timeout_name must be an integer between 1 and 60 seconds." >&2
+    exit 2
+  fi
+done
 
 dump_file_tail() {
   local label="$1"
@@ -397,7 +501,7 @@ copy_capture_logs() {
   fi
   mkdir -p "$target"
   local name
-  for name in qemu.log serial.log httpd.log; do
+  for name in qemu.log serial.log capture-receiver.log; do
     if [ -e "$WORK/$name" ]; then
       cp -f "$WORK/$name" "$target/$name" || true
     fi
@@ -413,16 +517,210 @@ dump_capture_logs() {
   [ -S "$WORK/qmp.sock" ] && echo "QMP socket exists: $WORK/qmp.sock" || echo "QMP socket missing: $WORK/qmp.sock"
   dump_file_tail "qemu.log" "$WORK/qemu.log"
   dump_file_tail "serial.log" "$WORK/serial.log"
-  dump_file_tail "httpd.log" "$WORK/httpd.log"
+  dump_file_tail "capture-receiver.log" "$WORK/capture-receiver.log"
+}
+
+process_has_exited() {
+  local pid="$1"
+  local state
+  if ! kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  state="$(ps -o stat= -p "$pid" 2>/dev/null || true)"
+  state="${state//[[:space:]]/}"
+  [[ "$state" = Z* ]]
+}
+
+wait_for_process_exit_bounded() {
+  local pid="$1"
+  local timeout_seconds="$2"
+  local checks=$((timeout_seconds * 10))
+  local check
+  for ((check = 0; check < checks; check += 1)); do
+    if process_has_exited "$pid"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  process_has_exited "$pid"
+}
+
+terminate_process_bounded() {
+  local label="$1"
+  local pid="$2"
+  [ -n "$pid" ] || return 0
+  if process_has_exited "$pid"; then
+    wait "$pid" 2>/dev/null || true
+    return 0
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  if wait_for_process_exit_bounded "$pid" "$PROCESS_TERM_TIMEOUT_SECONDS"; then
+    wait "$pid" 2>/dev/null || true
+    return 0
+  fi
+  echo "$label did not exit after SIGTERM within ${PROCESS_TERM_TIMEOUT_SECONDS}s; sending SIGKILL" >&2
+  kill -KILL "$pid" 2>/dev/null || true
+  if wait_for_process_exit_bounded "$pid" "$PROCESS_KILL_TIMEOUT_SECONDS"; then
+    wait "$pid" 2>/dev/null || true
+    return 0
+  fi
+  echo "$label remained alive ${PROCESS_KILL_TIMEOUT_SECONDS}s after SIGKILL; refusing an unbounded wait" >&2
+  return 1
 }
 
 cleanup() {
   local rc=$?
+  local scratch_cleanup_safe=1
   if [ "$rc" -ne 0 ] && [ "${CAPTURE_STARTED:-0}" = "1" ]; then
     dump_capture_logs
   fi
-  [ -n "${QEMU_PID:-}" ] && kill "$QEMU_PID" 2>/dev/null || true
-  [ -n "${HTTPD:-}" ] && kill "$HTTPD" 2>/dev/null || true
+  if [ -n "${QEMU_PID:-}" ]; then
+    terminate_process_bounded "QEMU" "$QEMU_PID" || scratch_cleanup_safe=0
+    QEMU_PID=""
+  fi
+  if [ -n "${HTTPD:-}" ]; then
+    terminate_process_bounded "capture event receiver" "$HTTPD" || scratch_cleanup_safe=0
+    HTTPD=""
+  fi
+  if [ -n "${TOKEN_FILE:-}" ]; then
+    python3 - "$TOKEN_FILE" <<'PY' || true
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+try:
+    metadata = os.lstat(path)
+except FileNotFoundError:
+    raise SystemExit(0)
+if stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.getuid() and metadata.st_nlink == 1:
+    os.unlink(path)
+else:
+    raise SystemExit("refusing unsafe capture-token cleanup target")
+PY
+  fi
+  if [ "$scratch_cleanup_safe" -eq 1 ] && [ -n "${WORK:-}" ]; then
+    if ! python3 - "$WORK" <<'PY'
+import os
+import re
+import stat
+import sys
+
+work = sys.argv[1]
+parent = os.path.dirname(work)
+leaf = os.path.basename(work)
+directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+parent_fd = os.open(parent, directory_flags)
+try:
+    work_fd = os.open(leaf, directory_flags, dir_fd=parent_fd)
+    try:
+        path_metadata = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        opened_metadata = os.fstat(work_fd)
+        if (
+            not stat.S_ISDIR(path_metadata.st_mode)
+            or stat.S_IMODE(path_metadata.st_mode) != 0o700
+            or path_metadata.st_uid != os.getuid()
+            or (path_metadata.st_dev, path_metadata.st_ino)
+            != (opened_metadata.st_dev, opened_metadata.st_ino)
+        ):
+            raise RuntimeError("private capture work directory changed identity")
+
+        regular_runtime_files = {
+            "capture-token",
+            "capture-receiver.ready",
+            "code.fd",
+            "core-proof-operation.sh",
+            "firstboot-unlock.sh",
+            "orchestrator.sh",
+            "scratch.qcow2",
+            "vars.fd",
+        }
+        for name in sorted(regular_runtime_files):
+            try:
+                metadata = os.stat(name, dir_fd=work_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_nlink != 1
+            ):
+                raise RuntimeError(f"refusing unsafe capture scratch leaf: {name}")
+            os.unlink(name, dir_fd=work_fd)
+
+        try:
+            qmp_metadata = os.stat("qmp.sock", dir_fd=work_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            qmp_metadata = None
+        if qmp_metadata is not None:
+            if not stat.S_ISSOCK(qmp_metadata.st_mode) or qmp_metadata.st_uid != os.getuid():
+                raise RuntimeError("refusing unsafe capture QMP socket")
+            os.unlink("qmp.sock", dir_fd=work_fd)
+
+        for name in os.listdir(work_fd):
+            if not re.fullmatch(r"frame-[a-z0-9-]{1,64}-[A-Za-z0-9._-]+[.]ppm", name):
+                continue
+            metadata = os.stat(name, dir_fd=work_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_nlink != 1
+            ):
+                raise RuntimeError(f"refusing unsafe capture framebuffer temporary: {name}")
+            os.unlink(name, dir_fd=work_fd)
+
+        try:
+            acknowledgements_fd = os.open("capture-acks", directory_flags, dir_fd=work_fd)
+        except FileNotFoundError:
+            acknowledgements_fd = None
+        if acknowledgements_fd is not None:
+            try:
+                metadata = os.fstat(acknowledgements_fd)
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or stat.S_IMODE(metadata.st_mode) != 0o700
+                    or metadata.st_uid != os.getuid()
+                ):
+                    raise RuntimeError("capture acknowledgement directory changed identity")
+                for name in os.listdir(acknowledgements_fd):
+                    if not re.fullmatch(
+                        r"(?:[a-z0-9][a-z0-9-]{0,95}[.]captured|[.][a-z0-9-]+[.][A-Za-z0-9._-]+[.]tmp)",
+                        name,
+                    ):
+                        raise RuntimeError(f"unexpected capture acknowledgement leaf: {name}")
+                    metadata = os.stat(name, dir_fd=acknowledgements_fd, follow_symlinks=False)
+                    if (
+                        not stat.S_ISREG(metadata.st_mode)
+                        or metadata.st_uid != os.getuid()
+                        or metadata.st_nlink != 1
+                    ):
+                        raise RuntimeError(f"unsafe capture acknowledgement leaf: {name}")
+                    os.unlink(name, dir_fd=acknowledgements_fd)
+            finally:
+                os.close(acknowledgements_fd)
+            os.rmdir("capture-acks", dir_fd=work_fd)
+
+        retained = sorted(os.listdir(work_fd))
+        if retained:
+            print(
+                "capture runtime scratch removed; private diagnostic files retained at "
+                f"{work}: {', '.join(retained)}"
+            )
+        else:
+            os.rmdir(leaf, dir_fd=parent_fd)
+            print(f"capture scratch removed: {work}")
+    finally:
+        os.close(work_fd)
+finally:
+    os.close(parent_fd)
+PY
+    then
+      echo "warning: could not safely remove all private capture scratch files from $WORK" >&2
+    fi
+  elif [ -n "${WORK:-}" ]; then
+    echo "warning: capture process did not stop cleanly; private scratch retained at $WORK" >&2
+  fi
+  return "$rc"
 }
 trap cleanup EXIT
 
@@ -707,7 +1005,7 @@ if [ -L "$RUN_DIR" ]; then
 else
   rm -rf "$RUN_DIR"
 fi
-mkdir -p "$WORK" "$RUN_DIR"
+mkdir -p "$RUN_DIR"
 cp "$ISO_MANIFEST" "$RUN_DIR/verification-iso-manifest.json"
 cp "$BIB_MANIFEST" "$RUN_DIR/verification-bib-manifest.json"
 if [ -s "$EVIDENCE_MANIFEST" ]; then
@@ -720,9 +1018,19 @@ fi
 
 stop_qemu() {
   if [ -n "${QEMU_PID:-}" ]; then
-    kill "$QEMU_PID" 2>/dev/null || true
-    wait "$QEMU_PID" 2>/dev/null || true
+    if ! terminate_process_bounded "QEMU" "$QEMU_PID"; then
+      return 1
+    fi
     QEMU_PID=""
+  fi
+}
+
+stop_capture_receiver() {
+  if [ -n "${HTTPD:-}" ]; then
+    if ! terminate_process_bounded "capture event receiver" "$HTTPD"; then
+      return 1
+    fi
+    HTTPD=""
   fi
 }
 
@@ -731,7 +1039,7 @@ wait_for_qemu_exit() {
   local timeout="$2"
   local start now
   start="$(date +%s)"
-  while [ -n "${QEMU_PID:-}" ] && kill -0 "$QEMU_PID" 2>/dev/null; do
+  while [ -n "${QEMU_PID:-}" ] && ! process_has_exited "$QEMU_PID"; do
     now="$(date +%s)"
     if [ $((now - start)) -ge "$timeout" ]; then
       echo "$label: QEMU did not exit within ${timeout}s"
@@ -748,14 +1056,101 @@ wait_for_qemu_exit() {
 prepare_vm_state() {
   local attempt="$1"
   echo "capture attempt $attempt: preparing fresh VM state"
-  rm -f "$WORK/qmp.sock" "$WORK/serial.log" "$WORK/qemu.log" "$WORK/scratch.qcow2" "$WORK/orchestrator.sh"
-  cp "$CODE" "$WORK/code.fd"
+  stop_capture_receiver
+  python3 - "$WORK" <<'PY'
+import os
+import re
+import stat
+import sys
+
+work = sys.argv[1]
+metadata = os.lstat(work)
+if (
+    not stat.S_ISDIR(metadata.st_mode)
+    or stat.S_IMODE(metadata.st_mode) != 0o700
+    or metadata.st_uid != os.getuid()
+):
+    raise SystemExit("private capture work directory changed identity")
+for name in (
+    "qmp.sock",
+    "serial.log",
+    "qemu.log",
+    "scratch.qcow2",
+    "orchestrator.sh",
+    "capture-events.jsonl",
+    "capture-receiver.ready",
+    "capture-receiver.log",
+    "code.fd",
+    "vars.fd",
+):
+    path = os.path.join(work, name)
+    try:
+        leaf = os.lstat(path)
+    except FileNotFoundError:
+        continue
+    if leaf.st_uid != os.getuid() or not (
+        stat.S_ISREG(leaf.st_mode) or stat.S_ISSOCK(leaf.st_mode)
+    ):
+        raise SystemExit(f"refusing unsafe capture work leaf: {name}")
+    os.unlink(path)
+ack_dir = os.path.join(work, "capture-acks")
+try:
+    ack_metadata = os.lstat(ack_dir)
+except FileNotFoundError:
+    os.mkdir(ack_dir, 0o700)
+else:
+    if (
+        not stat.S_ISDIR(ack_metadata.st_mode)
+        or stat.S_IMODE(ack_metadata.st_mode) != 0o700
+        or ack_metadata.st_uid != os.getuid()
+    ):
+        raise SystemExit("capture acknowledgement directory changed identity")
+    for name in os.listdir(ack_dir):
+        if not re.fullmatch(r"(?:[a-z0-9][a-z0-9-]{0,95}[.]captured|[.][a-z0-9-]+[.][A-Za-z0-9._-]+[.]tmp)", name):
+            raise SystemExit(f"unexpected capture acknowledgement leaf: {name}")
+        path = os.path.join(ack_dir, name)
+        leaf = os.lstat(path)
+        if not stat.S_ISREG(leaf.st_mode) or leaf.st_uid != os.getuid() or leaf.st_nlink != 1:
+            raise SystemExit(f"unsafe capture acknowledgement leaf: {name}")
+        os.unlink(path)
+PY
+  install -m 0600 "$CODE" "$WORK/code.fd"
   if [ -n "$VARS_TEMPLATE" ]; then
-    cp "$VARS_TEMPLATE" "$WORK/vars.fd"
+    install -m 0600 "$VARS_TEMPLATE" "$WORK/vars.fd"
   else
-    : > "$WORK/vars.fd"; truncate -s 67108864 "$WORK/vars.fd" 2>/dev/null || dd if=/dev/zero of="$WORK/vars.fd" bs=1m count=64 2>/dev/null
+    install -m 0600 /dev/null "$WORK/vars.fd"
+    truncate -s 67108864 "$WORK/vars.fd" 2>/dev/null || dd if=/dev/zero of="$WORK/vars.fd" bs=1m count=64 2>/dev/null
   fi
   qemu-img create -f qcow2 "$WORK/scratch.qcow2" "$SCRATCH_DISK_SIZE" >/dev/null
+  chmod 0600 "$WORK/scratch.qcow2"
+}
+
+start_capture_receiver() {
+  GOS_PORT="$PORT" \
+  GOS_CAPTURE_TOKEN_FILE="$TOKEN_FILE" \
+  GOS_CAPTURE_EVENTS="$WORK/capture-events.jsonl" \
+  GOS_CAPTURE_FIRSTBOOT_HELPER="$WORK/firstboot-unlock.sh" \
+  GOS_CAPTURE_CORE_PROOF_HELPER="$WORK/core-proof-operation.sh" \
+  GOS_ORCHESTRATOR_DEST="$WORK/orchestrator.sh" \
+  GOS_CAPTURE_ACK_DIR="$WORK/capture-acks" \
+  GOS_CAPTURE_RECEIVER_READY="$WORK/capture-receiver.ready" \
+    python3 "$HERE/drive-capture.py" --event-receiver \
+      >"$WORK/capture-receiver.log" 2>&1 &
+  HTTPD=$!
+  local check
+  for check in $(seq 1 100); do
+    if [ -f "$WORK/capture-receiver.ready" ] && kill -0 "$HTTPD" 2>/dev/null; then
+      return 0
+    fi
+    if ! kill -0 "$HTTPD" 2>/dev/null; then
+      dump_file_tail "capture-receiver.log" "$WORK/capture-receiver.log"
+      echo "capture event receiver exited before becoming ready" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "capture event receiver did not become ready within 10 seconds" >&2
+  return 1
 }
 
 start_qemu() {
@@ -781,13 +1176,15 @@ start_qemu() {
   echo "capture attempt $attempt: starting QEMU ($phase)"
   "$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp "$QEMU_SMP" -m 5120 "${PFLASH[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+    -fw_cfg "name=opt/goblins/capture-token,file=$TOKEN_FILE" \
+    -fw_cfg "name=opt/goblins/capture-port,string=$PORT" \
     -device qemu-xhci "${boot_args[@]}" \
     -device virtio-gpu-pci,id=video0 -device usb-tablet -device usb-kbd \
     "${QEMU_AUDIO[@]}" \
     -serial file:"$WORK/serial.log" -display none -qmp "unix:$WORK/qmp.sock,server,nowait" >"$WORK/qemu.log" 2>&1 &
   QEMU_PID=$!
   CAPTURE_STARTED=1
-  export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_HTTPLOG="$WORK/httpd.log" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT" GOS_QMP_DISPLAY_DEVICE=video0
+  export GOS_QMP="$WORK/qmp.sock" GOS_SERIALLOG="$WORK/serial.log" GOS_CAPTURE_EVENTS="$WORK/capture-events.jsonl" GOS_CAPTURE_WORK_DIR="$WORK" GOS_OUTDIR="$RUN_DIR" GOS_PORT="$PORT" GOS_QMP_DISPLAY_DEVICE=video0 GOS_CAPTURE_ACK_DIR="$WORK/capture-acks"
   export GOS_ORCHESTRATOR_SOURCE="$HERE/in-session-orchestrator.sh" GOS_ORCHESTRATOR_DEST="$WORK/orchestrator.sh"
 }
 
@@ -810,18 +1207,34 @@ run_driver() {
   return "$driver_rc"
 }
 
-# Serve first-boot helper and receive capture signals. The orchestrator is
-# published by drive-capture.py only after the host has recorded the post-unlock
-# log offset, so early /ready signals cannot race ahead of the screenshot tailer.
-rm -f "$WORK/orchestrator.sh" "$WORK/core-proof-operation.sh"
-( cd "$WORK" \
-    && sed "s/@GOS_PORT@/$PORT/g" "$HERE/firstboot-unlock.sh" > firstboot-unlock.sh \
-    && install -m 0644 "$HERE/core-proof-operation.sh" core-proof-operation.sh \
-    && install -d -m 0755 ready failed \
-    && install -m 0644 /dev/null ready/FIRSTBOOT_UNLOCK \
-    && install -m 0644 /dev/null failed/FIRSTBOOT_UNLOCK \
-    && python3 -m http.server "$PORT" --bind 0.0.0.0 >"$WORK/httpd.log" 2>&1 ) &
-HTTPD=$!
+# Generate one ephemeral per-run bearer without placing it in argv or logs.
+python3 - "$TOKEN_FILE" <<'PY'
+import os
+import secrets
+import sys
+
+path = sys.argv[1]
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(path, flags, 0o600)
+try:
+    token = (secrets.token_hex(32) + "\n").encode("ascii")
+    if os.write(descriptor, token) != len(token):
+        raise SystemExit("short capture-token write")
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+PY
+
+# Stage only the two immutable bootstrap helpers. The private receiver serves
+# these exact leaves and the later orchestrator; no work-directory browsing or
+# generic file serving exists.
+firstboot_temporary="$(mktemp "$WORK/.firstboot-unlock.XXXXXXXX")"
+core_proof_temporary="$(mktemp "$WORK/.core-proof-operation.XXXXXXXX")"
+sed "s/@GOS_PORT@/$PORT/g" "$HERE/firstboot-unlock.sh" >"$firstboot_temporary"
+install -m 0600 "$HERE/core-proof-operation.sh" "$core_proof_temporary"
+chmod 0600 "$firstboot_temporary"
+mv "$firstboot_temporary" "$WORK/firstboot-unlock.sh"
+mv "$core_proof_temporary" "$WORK/core-proof-operation.sh"
 
 # Phase the run with the QMP driver (waits for Anaconda, drives it, waits for the
 # desktop, dismisses onboarding, launches the orchestrator, captures on signals).
@@ -830,6 +1243,7 @@ INSTALL_TIMEOUT_RC="${GOS_INSTALL_POST_TIMEOUT_EXIT:-70}"
 attempt=1
 while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   prepare_vm_state "$attempt"
+  start_capture_receiver
   if [ "$ARCH" = aarch64 ]; then
     start_qemu "$attempt" install
     if run_driver install-marker; then
@@ -883,6 +1297,30 @@ FOCUS_ARM_ROUNDTRIP_PROOF="$RUN_DIR/focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="$RUN_DIR/app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="$RUN_DIR/preview-open-render-proof.json"
 RUNTIME_BUILD_PROOF="$RUN_DIR/runtime-build-proof.json"
+while IFS='|' read -r proof_schema proof_path; do
+  if ! proof_json_passes "$proof_path" "$proof_schema"; then
+    echo "HONESTY GUARD: invalid $proof_schema proof at $proof_path" >&2
+    exit 4
+  fi
+done <<EOF
+firewall-live-toggle|$FIREWALL_PROOF
+text-shortcuts-session-enable|$TEXT_SHORTCUTS_PROOF
+text-shortcuts-candidate-metadata|$TEXT_SHORTCUTS_CANDIDATE_PROOF
+text-shortcuts-overlay-intent|$TEXT_SHORTCUTS_OVERLAY_INTENT_PROOF
+text-shortcuts-candidate-bubble-frame|$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_FRAME_PROOF
+text-shortcuts-candidate-bubble-layout|$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_LAYOUT_PROOF
+text-shortcuts-candidate-bubble-render-intent|$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF
+text-shortcuts-candidate-bubble-render|$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF
+text-shortcuts-live-ibus-runtime-render|$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF
+keyboard-shortcuts-roundtrip|$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF
+input-sources-roundtrip|$INPUT_SOURCES_ROUNDTRIP_PROOF
+multi-display-apply|$MULTI_DISPLAY_APPLY_PROOF
+focus-arm-roundtrip|$FOCUS_ARM_ROUNDTRIP_PROOF
+app-privacy-revoke|$APP_PRIVACY_REVOKE_PROOF
+preview-open-render|$PREVIEW_OPEN_RENDER_PROOF
+audio-output|$RUN_DIR/audio-output-proof.json
+runtime-build|$RUNTIME_BUILD_PROOF
+EOF
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
@@ -892,6 +1330,7 @@ if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   exit 4
 fi
 if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"proof_scope": "session-plumbing"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"service": "active"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"service_unit": "org.freedesktop.IBus.session.GNOME.service"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"input_source_configured": "true"' "$TEXT_SHORTCUTS_PROOF" \
@@ -900,9 +1339,15 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"active_engine": "goblins-textshortcuts"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"adapter_self_test": "pass"' "$TEXT_SHORTCUTS_PROOF" \
   || ! grep -Fq '"core_http": "200"' "$TEXT_SHORTCUTS_PROOF" \
-  || ! grep -Fq '"core_engine_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
-  || ! grep -Fq '"core_runtime_loop_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
-  || ! grep -Fq '"runtime_ready_claim": "true"' "$TEXT_SHORTCUTS_PROOF"; then
+  || ! grep -Fq '"core_ibus_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"core_component_registered": "true"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"core_engine_binary_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"core_input_source_configured": "true"' "$TEXT_SHORTCUTS_PROOF" \
+  || ! grep -Fq '"runtime_ready_claim": "false"' "$TEXT_SHORTCUTS_PROOF" \
+  || { ! { grep -Fq '"core_engine_available": "true"' "$TEXT_SHORTCUTS_PROOF" \
+           && grep -Fq '"core_runtime_loop_available": "true"' "$TEXT_SHORTCUTS_PROOF"; } \
+       && ! { grep -Fq '"core_engine_available": "false"' "$TEXT_SHORTCUTS_PROOF" \
+              && grep -Fq '"core_runtime_loop_available": "false"' "$TEXT_SHORTCUTS_PROOF"; }; }; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts session-enable proof at $TEXT_SHORTCUTS_PROOF"
   exit 4
 fi
@@ -989,6 +1434,8 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT
   || ! grep -Fq '"focus_out_hide": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" \
   || ! grep -Fq '"sensitive_hide": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" \
   || ! grep -Fq '"pass_through_unchanged": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" \
+  || ! grep -Fq '"key_release_preserved_candidate": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" \
+  || ! grep -Fq '"runtime_failure_cleanup": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" \
   || ! grep -Fq '"sink_failure_fail_open": "true"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" \
   || ! grep -Fq '"style_class": "gos-text-shortcuts-candidate"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" \
   || ! grep -Fq '"font_family": "Inter"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF" \
@@ -1016,24 +1463,93 @@ if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF"
 fi
 if ! grep -Fq '"status": "pass"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"route": "/v1/text-shortcuts"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"preview_route": "/v1/text-shortcuts/preview"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"surface": "goblins-textshortcuts-live-ibus-runtime-render"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"input_driver": "qmp-keyboard"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"active_engine": "goblins-textshortcuts"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
-  || ! grep -Fq '"normal_actual": "onmyway."' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"core_write_http": "200"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"core_read_http": "200"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"core_preview_http": "200"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"file_contract_http": "200"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"seed_write_http": "200"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"seed_read_http": "200"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"seed_roundtrip": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"seed_loaded": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"core_table_roundtrip": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"core_preview_roundtrip": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"desktop_file_contract": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"desktop_parent_contract": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"desktop_file_owner_mode": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"desktop_file_single_link": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"desktop_file_size_bounded": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"desktop_file_bounded_read": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"legacy_service_table_absent": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"live_watcher_reload": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"post_keystroke_read_http": "200"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"post_keystroke_file_http": "200"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"post_keystroke_roundtrip": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"normal_actual": "on my way."' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"passthrough_actual": "hello."' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"password_refusal": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"password_sensitive_purpose": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"password_process_key_callback": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"password_commit_absent": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"password_candidate_absent": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"password_popup_absent": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"normal_stage_ledger_scoped": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"focused_field_callback": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
-  || ! grep -Fq '"text_input_v3_commit": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
-  || ! grep -Fq '"rendered_accept_bubble": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"process_key_event_callback": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"cursor_location_callback": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"pre_boundary_commit_absent": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"boundary_stage_ledger_scoped": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"boundary_stage_commit_count": "1"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"normal_stage_commit": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"ibus_commit_operation": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"focused_entry_readback": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"ibus_commit_delivered": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"boundary_popup_action": "hide-candidate"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"boundary_popup_reason": "committed"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"candidate_intent_seen": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"native_ibus_candidate_published": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! rg -q '"native_popup_generation": "[1-9][0-9]*"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! rg -q '"native_popup_record_ordinal": "[1-9][0-9]*"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"native_popup_generation_current": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"native_popup_record_current_at_capture": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"native_popup_action": "show-candidate"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"native_popup_has_cursor_rect": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"native_popup_expected_replacement": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"native_popup_hint_published": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"renderer": "native-ibus-lookup-table"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"cursor_anchor": "ibus-input-context"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"synthetic_overlay": "false"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"screenshot": "32-text-shortcuts-live-ibus-runtime-render.png"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
-  || ! grep -Fq '"style_class": "gos-text-shortcuts-candidate"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
-  || ! grep -Fq '"font_family": "Inter"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
-  || ! grep -Fq '"rendered_bubble_ready_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! rg -q '"screenshot_sha256": "[0-9a-f]{64}"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"screenshot_capture_ack": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
+  || ! grep -Fq '"native_candidate_popup_ready_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"live_overlay_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"runtime_ready_claim": "true"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
   || ! grep -Fq '"core_readiness_flip": "live"' "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" \
-  || [ ! -s "$RUN_DIR/32-text-shortcuts-live-ibus-runtime-render.png" ]; then
+  || ! screenshot_file_is_valid_png "$RUN_DIR/32-text-shortcuts-live-ibus-runtime-render.png"; then
   echo "HONESTY GUARD: missing or failing Text Shortcuts live IBus runtime/render proof at $TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"
+  exit 4
+fi
+TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_SCREENSHOT_SHA256="$(python3 - "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF" <<'PY'
+import json
+import sys
+
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8")).get("screenshot_sha256", "")
+except (OSError, json.JSONDecodeError):
+    value = ""
+print(value if isinstance(value, str) else "")
+PY
+)"
+ACTUAL_TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_SCREENSHOT_SHA256="$(
+  sha256_file "$RUN_DIR/32-text-shortcuts-live-ibus-runtime-render.png"
+)"
+if [[ ! "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_SCREENSHOT_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+  || [ "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_SCREENSHOT_SHA256" != "$ACTUAL_TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_SCREENSHOT_SHA256" ]; then
+  echo "HONESTY GUARD: Text Shortcuts live IBus proof screenshot SHA256 does not match its decoded PNG." >&2
   exit 4
 fi
 if ! grep -Fq '"status": "pass"' "$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF" \
@@ -1236,6 +1752,7 @@ stable_frame_hash() {
 
 _surface_shots=(
   04-desktop.png
+  05-first-boot-private-unlock.png
   07-home.png
   08-shell-home.png
   10-settings.png
@@ -1273,9 +1790,9 @@ fi
 # repo-relative ISO path: close-signoff and verify-shipping-status both match
 # the exact string "os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso", and the
 # committed manifest must not leak runner-absolute paths.
-python3 - "$RUN_DIR" "${RUN_DIR#"$REPO/"}" "$ARCH" "${ISO#"$REPO/"}" "$ISO_SHA" "$DATE" "$CANDIDATE_COMMIT" "$IMAGE_REF" "$NATIVE_GATE_PROOF_RELATIVE" "$CAPTURE_WORKFLOW_RUN_URL" "${CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}" "$VERIFICATION_EVIDENCE_MANIFEST_SHA" <<'PY'
+python3 - "$RUN_DIR" "${RUN_DIR#"$REPO/"}" "$ARCH" "${ISO#"$REPO/"}" "$ISO_SHA" "$DATE" "$CANDIDATE_COMMIT" "$IMAGE_REF" "$NATIVE_GATE_PROOF_RELATIVE" "$CAPTURE_WORKFLOW_RUN_URL" "${CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}" "$VERIFICATION_EVIDENCE_MANIFEST_SHA" "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_SCREENSHOT_SHA256" <<'PY'
 import json,sys
-run_dir,rel_run_dir,arch,iso,sha,date,candidate_commit,image_ref,native_gate_proof,capture_workflow_run,capture_workflow_attempt,verification_evidence_manifest_sha=sys.argv[1:13]
+run_dir,rel_run_dir,arch,iso,sha,date,candidate_commit,image_ref,native_gate_proof,capture_workflow_run,capture_workflow_attempt,verification_evidence_manifest_sha,text_shortcuts_live_ibus_runtime_render_screenshot_sha256=sys.argv[1:14]
 json.dump({"architecture":arch,"candidate_commit":candidate_commit,"image_ref":image_ref,"iso":iso,"iso_sha256":sha,
           "captured_at":date+"T00:00:00Z","screenshot_run_dir":rel_run_dir,
           "capture_workflow_run":capture_workflow_run,
@@ -1294,6 +1811,7 @@ json.dump({"architecture":arch,"candidate_commit":candidate_commit,"image_ref":i
           "text_shortcuts_candidate_bubble_render_intent_proof":"text-shortcuts-candidate-bubble-render-intent-proof.json",
           "text_shortcuts_candidate_bubble_render_proof":"text-shortcuts-candidate-bubble-render-proof.json",
           "text_shortcuts_live_ibus_runtime_render_proof":"text-shortcuts-live-ibus-runtime-render-proof.json",
+          "text_shortcuts_live_ibus_runtime_render_screenshot_sha256":text_shortcuts_live_ibus_runtime_render_screenshot_sha256,
           "keyboard_shortcuts_roundtrip_proof":"keyboard-shortcuts-roundtrip-proof.json",
           "input_sources_roundtrip_proof":"input-sources-roundtrip-proof.json",
           "multi_display_apply_proof":"multi-display-apply-proof.json",
@@ -1302,9 +1820,22 @@ json.dump({"architecture":arch,"candidate_commit":candidate_commit,"image_ref":i
           "preview_open_render_proof":"preview-open-render-proof.json",
           "audio_output_proof":"audio-output-proof.json",
           "runtime_build_proof":"runtime-build-proof.json",
+          "capture_canvas_width":5120,
+          "capture_canvas_height":2880,
+          "capture_canvas_normalization":"centered padding without resampling",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY
+python3 "$REPO/os/hardware-gate/capture-harness/evidence_bundle.py" create \
+  --repository "$REPO" \
+  --run-dir "$RUN_DIR" \
+  --architecture "$ARCH" \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  --image-ref "$IMAGE_REF" \
+  --run-date "$DATE" \
+  --capture-workflow-run "$CAPTURE_WORKFLOW_RUN_URL" \
+  --capture-workflow-run-attempt "${CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}" \
+  --output "$RUN_DIR/evidence-bundle.json"
 echo "capture complete: $RUN_DIR"
 # Close-signoff matches the committed repo-relative run dir and reads its own
 # relative paths (ISO, workflow) from the repo root.

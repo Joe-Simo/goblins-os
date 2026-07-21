@@ -18,6 +18,7 @@ FAIL_COUNT=0
 ARCHES=(aarch64 x86_64)
 EXPECTED_BIB_IMAGE="quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b"
 EXPECTED_INSTALLER_BRANDING_IMAGE="$(awk -F'"' '/^image_ref = / { print $2; exit }' os/release/installer-branding-tool.toml)"
+CORE_SERVICE_READ_WRITE_PATHS="/run/goblins-os-core /var/lib/goblins-os/installer /var/lib/goblins-os/session /var/lib/goblins-os/policy /var/lib/goblins-os/ai /var/lib/goblins-os/models /var/lib/goblins-os/voice/work /var/lib/goblins-os/secrets/openai /var/lib/goblins-os/apps /var/lib/goblins-os/codex"
 SELECTED_CANDIDATE_COMMIT="${GOBLINS_OS_CANDIDATE_COMMIT:-${GITHUB_SHA:-}}"
 CANDIDATE_SELECTION_VALID=1
 if [[ ! "$SELECTED_CANDIDATE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -60,6 +61,7 @@ REQ_SCREENSHOTS=(
   "02-install-network.png"
   "03-login.png"
   "04-desktop.png"
+  "05-first-boot-private-unlock.png"
   "06-onboarding.png"
   "07-home.png"
   "08-shell-home.png"
@@ -117,6 +119,58 @@ check() {
   fi
 }
 
+proof_json_passes() {
+  local proof="$1"
+  local schema="${2:-$(basename "$proof" -proof.json)}"
+
+  python3 "$ROOT/os/hardware-gate/capture-harness/proof_validation.py" \
+    --proof "$schema" "$proof"
+}
+
+evidence_bundle_digest() {
+  local run_dir="$1"
+  local arch="$2"
+  local image_ref="$3"
+  local run_date="${run_dir%/}"
+  run_date="${run_date##*/}"
+
+  python3 "$ROOT/os/hardware-gate/capture-harness/evidence_bundle.py" verify \
+    --repository "$ROOT" \
+    --run-dir "$run_dir" \
+    --architecture "$arch" \
+    --candidate-commit "$SELECTED_CANDIDATE_COMMIT" \
+    --image-ref "$image_ref" \
+    --run-date "$run_date"
+}
+
+aarch64_local_display_attestation_fields() {
+  local run_dir="$1"
+  local image_ref="$2"
+  local run_date="${run_dir%/}"
+  run_date="${run_date##*/}"
+
+  python3 "$ROOT/os/hardware-gate/capture-harness/evidence_bundle.py" \
+    verify-attestation \
+    --seal "$run_dir/evidence-bundle.json" \
+    --record "$run_dir/aarch64-local-display-attestation.json" \
+    --candidate-commit "$SELECTED_CANDIDATE_COMMIT" \
+    --image-ref "$image_ref" \
+    --run-date "$run_date"
+}
+
+aarch64_local_display_signature_passes() {
+  local seal="$1"
+
+  command -v gh >/dev/null 2>&1 || return 1
+  gh attestation verify "$seal" \
+    --repo Joe-Simo/goblins-os \
+    --signer-workflow Joe-Simo/goblins-os/.github/workflows/aarch64-local-display-attestation.yml \
+    --signer-digest "$SELECTED_CANDIDATE_COMMIT" \
+    --source-digest "$SELECTED_CANDIDATE_COMMIT" \
+    --deny-self-hosted-runners \
+    >/dev/null 2>&1
+}
+
 release_workflow_action_pins_are_reviewed() {
   cargo run --locked --quiet --release -p goblins-os-verify -- \
     --workflow-action-pins "$ROOT" --quiet
@@ -126,6 +180,306 @@ release_workflow_deprecated_action_pins_are_absent() {
   ! rg -q \
     '34e114876b0b11c390a56381ad16ebd13914f8d5|ea165f8d65b6e75b540449e92b4886f43607fa02|d3f86a106a0bac45b974a628896c90dbdf5c8093|8d2750c68a42422c14e847fe6c8ac0403b4cbd6f' \
     .github/workflows -g '*.yml' -g '*.yaml'
+}
+
+core_service_writable_paths_are_exact() {
+  local unit=os/systemd/goblins-os-core.service
+  [ "$(grep -c '^ProtectSystem=' "$unit" || true)" = 1 ] \
+    && grep -Fxq 'ProtectSystem=strict' "$unit" \
+    && [ "$(grep -c '^ReadWritePaths=' "$unit" || true)" = 1 ] \
+    && grep -Fxq "ReadWritePaths=$CORE_SERVICE_READ_WRITE_PATHS" "$unit"
+}
+
+hardware_core_proof_unit_is_narrowly_sandboxed() {
+  local config=os/iso/verify-config.toml
+  local unit
+  unit="$(
+    sed -n \
+      "/cat > \/etc\/systemd\/system\/goblins-hwgate-core-proof@.service <<'EOF'/,/^EOF$/p" \
+      "$config"
+  )" || return 1
+
+  [ "$(grep -c '^ProtectSystem=' <<<"$unit" || true)" = 1 ] \
+    && grep -Fxq 'ProtectSystem=strict' <<<"$unit" \
+    && [ "$(grep -c '^ProtectHome=' <<<"$unit" || true)" = 1 ] \
+    && grep -Fxq 'ProtectHome=tmpfs' <<<"$unit" \
+    && [ "$(grep -c '^BindReadOnlyPaths=' <<<"$unit" || true)" = 1 ] \
+    && grep -Fxq 'BindReadOnlyPaths=-/var/home/goblin/.config/goblins-os' <<<"$unit" \
+    && [ "$(grep -c '^ReadWritePaths=' <<<"$unit" || true)" = 1 ] \
+    && grep -Fxq 'ReadWritePaths=/run/goblins-hwgate-core-proof /run/goblins-hwgate-fixture-state /run/goblins-hwgate-fixture-block' <<<"$unit" \
+    && rg -Fq 'FIXTURE_RESIDENT_SOCKET=$FIXTURE_STATE/resident/resident.sock' os/hardware-gate/capture-harness/core-proof-operation.sh \
+    && ! rg -Fq '/run/goblins-os/resident.sock' os/hardware-gate/capture-harness/core-proof-operation.sh \
+    && rg -Fq 'Environment=GOBLINS_OS_RESIDENT_SOCKET=/run/goblins-hwgate-fixture-state/resident/resident.sock' "$config" \
+    && rg -Fq 'ExecStopPost=-+/etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation fixture-core-stopped' "$config" \
+    && rg -Fq 'find "$FIXTURE_STATE" -mindepth 1 -delete' os/hardware-gate/capture-harness/core-proof-operation.sh \
+    && rg -Fq 'find "$FIXTURE_BLOCK" -mindepth 1 -delete' os/hardware-gate/capture-harness/core-proof-operation.sh
+}
+
+firstboot_production_core_unit_proof_is_pinned() {
+  local script=os/hardware-gate/capture-harness/firstboot-unlock.sh
+  local needle
+  for needle in \
+    'prove_production_core_unit' \
+    'CORE_UNIT_FRAGMENT=/usr/lib/systemd/system/goblins-os-core.service' \
+    '--property=ActiveState' \
+    '--property=SubState' \
+    '--property=MainPID' \
+    '--property=FragmentPath' \
+    '--property=DropInPaths' \
+    '--property=ProtectSystem' \
+    '--property=ReadWritePaths' \
+    "CORE_READ_WRITE_PATHS=\"$CORE_SERVICE_READ_WRITE_PATHS\"" \
+    '[ "$active" = active ]' \
+    '[ "$substate" = running ]' \
+    '[ "$main_pid" -gt 1 ]' \
+    '[ "$fragment" = "$CORE_UNIT_FRAGMENT" ]' \
+    'CORE_TRUSTED_DROPIN=/usr/lib/systemd/system/service.d/10-timeout-abort.conf' \
+    'CORE_TRUSTED_DROPIN_SHA256=ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37' \
+    '[ "$dropins" = "$CORE_TRUSTED_DROPIN" ]' \
+    '[ "$dropin_owner_mode" = root:root:644 ]' \
+    'sha256sum "$CORE_TRUSTED_DROPIN"' \
+    '[ "$dropin_sha256" = "$CORE_TRUSTED_DROPIN_SHA256" ]' \
+    "rpm -qf --qf '%{NAME}' \"\$CORE_TRUSTED_DROPIN\"" \
+    '[ "$dropin_package" = systemd ]' \
+    '[ "$timeout_stop_failure_mode" = abort ]' \
+    '[ "$protect_system" = strict ]' \
+    '[ "$read_write_paths" = "$CORE_READ_WRITE_PATHS" ]' \
+    "stat -Lc '%d:%i' \"/proc/\$main_pid/exe\"" \
+    '[ "$running_executable" = "$installed_executable" ]' \
+    'prove_production_capability_inventory "$main_pid"' \
+    '[ "${#CORE_CAPABILITY_SLUGS[@]}" = 17 ]' \
+    '[ -z "${seen_slugs[$slug]+present}" ]' \
+    'entry_count" = 17' \
+    'goblins-os:$expected_group:2750' \
+    'goblins-os:$expected_group:660' \
+    '$4 == "00010000" && $5 == "0001" && $6 == "01" && $8 == path' \
+    '"/proc/$main_pid/net/unix"' \
+    '"socket:[$socket_inode]"' \
+    'nsenter --target "$main_pid" --mount --' \
+    'mount_is_effectively_writable "$main_pid" /run/goblins-os-core' \
+    'mount_is_effectively_writable "$main_pid" /var/lib/goblins-os/voice/work' \
+    'GOBLINS_HWGATE_CORE_PRODUCTION_UNIT status=pass identity=systemd-main-pid dropin=vendor-sha256 listeners=17 runtime_mount=rw voice_work_mount=rw' \
+    'prove_voice_storage' \
+    '/v1/release-proof/storage/voice' \
+    '.ok == true and .storage == "voice-work" and .create_new == true and .write == true and .fsync == true and .unlink == true' \
+    'GOBLINS_HWGATE_FIRSTBOOT_STAGE stage=voice-storage status=pass curl_rc=0 http_status=200 create_new=true write=true fsync=true unlink=true' \
+    'CURRENT_STAGE=core-production-unit'; do
+    grep -Fq -- "$needle" "$script" || return 1
+  done
+  local slug
+  for slug in control-center dictate file-builder focus-tick installer launcher login markup open release-proof resident screenshot-context settings shell today visual-lookup voice-control; do
+    grep -Eq "(^|[[:space:]])${slug}([[:space:]]|$)" "$script" || return 1
+    grep -Fq "d /run/goblins-os-core/$slug 2750 goblins-os goblins-core-$slug -" \
+      os/tmpfiles/goblins-os-core.conf || return 1
+  done
+  ! grep -Fq 'goblins-hwgate-fixture-core' "$script" \
+    && grep -Fq $'prove_production_core_unit\nprove_voice_storage\npost_json privacy' "$script" \
+    && grep -Fq 'systemctl restart goblins-os-core.service' os/iso/verify-config.toml \
+    && rg -Fq 'pub async fn voice_storage_release_proof()' crates/goblins-os-core/src/voice.rs \
+    && rg -Fq 'create_new(true)' crates/goblins-os-core/src/voice.rs \
+    && rg -Fq 'directory.open_dir_nofollow(name)' crates/goblins-os-core/src/voice.rs \
+    && rg -Fq '.follow(FollowSymlinks::No)' crates/goblins-os-core/src/voice.rs \
+    && rg -Fq 'metadata.mode() & 0o7777 != REQUIRED_VOICE_WORK_MODE' crates/goblins-os-core/src/voice.rs \
+    && rg -Fq 'file.sync_all()' crates/goblins-os-core/src/voice.rs \
+    && rg -Fq 'work.remove_file(name)' crates/goblins-os-core/src/voice.rs \
+    && rg -Fq 'sync_voice_work_directory(work)' crates/goblins-os-core/src/voice.rs \
+    && rg -Fq '(POST, "/v1/release-proof/storage/voice")' crates/goblins-os-core/src/control_plane.rs
+}
+
+text_shortcuts_desktop_state_contract_is_pinned() {
+  local core=crates/goblins-os-core/src/text_shortcuts.rs
+  local core_main=crates/goblins-os-core/src/main.rs
+  local client=crates/goblins-os-core/src/session_bridge.rs
+  local bridge=crates/goblins-os-session-bridge/src/main.rs
+  local engine=crates/goblins-os-textshortcuts-engine/src/lib.rs
+  local ibus=os/goblins-os-textshortcuts/goblins-textshortcuts-ibus
+  local seed=os/input/goblins-os-input-source-seed
+  local proof=os/hardware-gate/capture-harness/in-session-orchestrator.sh
+
+  rg -Fq 'session_bridge::text_shortcuts_read()' "$core" \
+    && rg -Fq 'session_bridge::text_shortcuts_write(&table)' "$core" \
+    && rg -Fq 'input_source_configured_from_bridge(session_bridge::gsettings(&[' "$core" \
+    && rg -Fq 'session_bridge::text_shortcuts_runtime_status()' "$core" \
+    && rg -Fq 'TextShortcutsRuntimeStatusResult::Success(status) if status.ready()' "$core" \
+    && ! rg -Fq 'bounded_session_command_output("gsettings"' "$core" \
+    && rg -Fq 'MAX_PREVIEW_TRIGGER_BYTES: usize = 256' "$core" \
+    && rg -Fq 'TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES: usize = 64 * 1024' "$core_main" \
+    && rg -Fq '.layer(DefaultBodyLimit::max(TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES))' "$core_main" \
+    && rg -Fq 'text_shortcuts_route_rejects_bodies_above_its_private_table_envelope' "$core_main" \
+    && ! rg -Fq 'fn table_path()' "$core" \
+    && ! rg -Fq 'fs::write(' "$core" \
+    && rg -Fq 'TextShortcutsRead' "$client" "$bridge" \
+    && rg -Fq 'TextShortcutsWrite' "$client" "$bridge" \
+    && rg -Fq 'TextShortcutsRuntimeStatus' "$client" "$bridge" \
+    && rg -Fq '/run/goblins-os-session/text-shortcuts-runtime-status.json' "$bridge" \
+    && rg -Fq 'const TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA: &str = "goblins-os.text-shortcuts-runtime-status.v1";' "$client" \
+    && rg -Fq 'const TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA: &str = "goblins-os.text-shortcuts-runtime-status.v1";' "$bridge" \
+    && rg -Fq 'const TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES: usize = 4 * 1024;' "$bridge" \
+    && rg -Fq 'const TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS: u64 = 250_000_000;' "$client" \
+    && rg -Fq 'const TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS: u64 = 250_000_000;' "$bridge" \
+    && rg -Fq '.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)' "$bridge" \
+    && rg -Fq 'metadata.mode() & 0o7777 != TEXT_SHORTCUTS_RUNTIME_STATUS_MODE' "$bridge" \
+    && rg -Fq 'TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS: u64 = 5_000_000_000' "$client" \
+    && rg -Fq 'TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS: u64 = 5_000_000_000' "$bridge" \
+    && rg -Fq 'enabled: bool,' "$client" \
+    && rg -Fq 'enabled: bool,' "$bridge" \
+    && rg -Fq 'surrounding_text_supported: bool,' "$client" \
+    && rg -Fq 'surrounding_text_supported: bool,' "$bridge" \
+    && rg -Fq 'snapshot_valid: bool,' "$client" \
+    && rg -Fq 'snapshot_valid: bool,' "$bridge" \
+    && rg -Fq '&& self.enabled' "$client" \
+    && rg -Fq '&& self.surrounding_text_supported' "$client" \
+    && rg -Fq '&& self.snapshot_valid' "$client" \
+    && rg -Fq '.take((TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES + 1) as u64)' "$bridge" \
+    && rg -Fq 'before.dev() != after.dev()' "$bridge" \
+    && rg -Fq 'before.ino() != after.ino()' "$bridge" \
+    && rg -Fq 'before.len() != after.len()' "$bridge" \
+    && rg -Fq 'after.len() != encoded.len() as u64' "$bridge" \
+    && rg -Fq 'text_shortcuts_runtime_status_protocol_is_fixed_pathless_and_strict' "$bridge" \
+    && rg -Fq 'text_shortcuts_runtime_status_rejects_stale_and_materially_future_timestamps' "$bridge" \
+    && rg -Fq 'text_shortcuts_runtime_status_rejects_malformed_and_unknown_fields' "$bridge" \
+    && rg -Fq 'text_shortcuts_runtime_status_preserves_all_readiness_signals' "$bridge" \
+    && rg -Fq 'text_shortcuts_runtime_status_rejects_wrong_mode_and_owner' "$bridge" \
+    && rg -Fq 'text_shortcuts_runtime_status_rejects_symlinks_and_oversize_files' "$bridge" \
+    && rg -Fq 'text_shortcuts_runtime_status_rejects_fifo_without_blocking' "$bridge" \
+    && rg -Fq 'runtime_loop_requires_active_engine_and_fresh_live_child_status' "$core" \
+    && rg -Fq 'deny_unknown_fields' "$bridge" \
+    && rg -Fq 'read_to_end_before(' "$bridge" \
+    && rg -Fq 'MAX_TEXT_SHORTCUTS_TABLE_BYTES: usize = 48 * 1024' "$engine" \
+    && rg -Fq 'libc::O_CLOEXEC | libc::O_NOFOLLOW' "$engine" \
+    && rg -Fq 'metadata.mode() & 0o7777 == 0o600' "$engine" \
+    && rg -Fq 'std::fs::rename(&temporary_path, &self.path)' "$engine" \
+    && rg -Fq 'MAX_TEXT_SHORTCUTS_TABLE_BYTES = 48 * 1024' "$ibus" \
+    && rg -Fq 'RUNTIME_REQUEST_MAX_BYTES = 64 * 1024' "$ibus" \
+    && rg -Fq 'RUNTIME_RESPONSE_MAX_BYTES = 64 * 1024' "$ibus" \
+    && rg -Fq 'os.set_blocking(self._process.stdin.fileno(), False)' "$ibus" \
+    && rg -Fq 'os.set_blocking(self._process.stdout.fileno(), False)' "$ibus" \
+    && rg -Fq 'def _write_request_frame' "$ibus" \
+    && rg -Fq 'def _read_response_frame' "$ibus" \
+    && rg -Fq 'runtime did not complete one response before timeout' "$ibus" \
+    && rg -Fq 'runtime returned extra response framing' "$ibus" \
+    && rg -Fq 'RUNTIME_RESTART_MAX_SECONDS = 5.0' "$ibus" \
+    && rg -Fq '"SURROUNDING_TEXT"' "$ibus" \
+    && rg -Fq 'trigger = delete.get("expected_text")' "$ibus" \
+    && rg -Fq 'def _valid_replacement_transaction' "$ibus" \
+    && rg -Fq 'operations[1].get("text") != expected_commit' "$ibus" \
+    && rg -Fq 'swapped_commit["operations"][1]["text"] = "different replacement "' "$ibus" \
+    && rg -Fq 'def _validated_runtime_response_operations' "$ibus" \
+    && rg -Fq 'def _runtime_response_valid_for_request' "$ibus" \
+    && rg -Fq 'if operations is None or response.get("error") is not None:' "$ibus" \
+    && rg -Fq 'set(response) - allowed_keys' "$ibus" \
+    && rg -Fq '["delete-surrounding-text", "commit-text", "hide-preedit-text"]' "$ibus" \
+    && ! rg -Fq 'text_factory(str(operation.get("text", "")))' "$ibus" \
+    && ! rg -Fq 'int(operation.get("cursor_pos", 0))' "$ibus" \
+    && ! rg -Fq 'bool(operation.get("visible", False))' "$ibus" \
+    && ! rg -Fq 'int(operation.get("offset", 0))' "$ibus" \
+    && ! rg -Fq 'int(operation.get("n_chars", 0))' "$ibus" \
+    && rg -Fq 'text_factory(operation["text"])' "$ibus" \
+    && rg -Fq 'operation["cursor_pos"]' "$ibus" \
+    && rg -Fq 'operation["offset"]' "$ibus" \
+    && rg -Fq 'RUNTIME_TEXT_MAX_CHARACTERS = 64 * 1024' "$ibus" \
+    && rg -Fq 'RUNTIME_TEXT_MAX_BYTES = 64 * 1024' "$ibus" \
+    && rg -Fq 'SURROUNDING_TEXT_MAX_BYTES = 64 * 1024' "$ibus" \
+    && rg -Fq 'value.encode("utf-8", errors="strict")' "$ibus" \
+    && rg -Fq '0xD800 <= codepoint <= 0xDFFF' "$ibus" \
+    && rg -Fq 'UnicodeEncodeError,' "$ibus" \
+    && rg -Fq 'ValueError,' "$ibus" \
+    && rg -Fq 'unencodable_request_runtime = RuntimeBridge(' "$ibus" \
+    && rg -Fq 'huge_integer_frame = (' "$ibus" \
+    && rg -Fq 'table_file.write(b"[" + (b"9" * 5000) + b"]")' "$ibus" \
+    && rg -Fq 'prepared_text: dict[int, Any] = {}' "$ibus" \
+    && rg -Fq 'assert factory_failure_target.calls == []' "$ibus" \
+    && rg -Fq 'class FocusBoundSurroundingTextCache' "$ibus" \
+    && rg -Fq 'self._surrounding_text_cache.observe(snapshot)' "$ibus" \
+    && rg -Fq 'snapshot = self._surrounding_text_cache.current()' "$ibus" \
+    && ! rg -Fq 'def _read_surrounding_text' "$ibus" \
+    && rg -Fq 'snapshot_cache.end_focus()' "$ibus" \
+    && rg -Fq 'return self._sink.publish(record) is not False' "$ibus" \
+    && ! rg -Fq 'render intent sink failed: {error}' "$ibus" \
+    && ! rg -Fq 'forced candidate hide failed: {error}' "$ibus" \
+    && rg -Fq 'self._clear_candidate_ui("runtime-operation-application-failed")' "$ibus" \
+    && rg -Fq 'def assert_failed_candidate_publication_disarms' "$ibus" \
+    && rg -Fq '"native_show_failure_reported": native_show_failure_reported' "$ibus" \
+    && rg -Fq '"retryable_force_hide": retryable_force_hide' "$ibus" \
+    && rg -Fq 'table_changed, table_applied = _send_table_changed_if_needed(' "$ibus" \
+    && rg -Fq 'self._clear_candidate_ui("table-change-application-failed")' "$ibus" \
+    && rg -Fq '"table_change_hide_retry": table_change_hide_retry' "$ibus" \
+    && rg -Fq 'IBUS_INPUT_HINT_PRIVATE_FALLBACK = 1 << 11' "$ibus" \
+    && rg -Fq 'IBUS_INPUT_HINT_HIDDEN_TEXT_FALLBACK = 1 << 12' "$ibus" \
+    && rg -Fq 'def _effective_content_purpose' "$ibus" \
+    && rg -Fq '_effective_content_purpose(0, "invalid", FakeIbus) == 8' "$ibus" \
+    && rg -Fq 'purpose_value > 0xFFFFFFFF' "$ibus" \
+    && rg -Fq "replace.contains('\\0')" "$engine" \
+    && rg -Fq "with_text.contains('\\0')" "$engine" \
+    && rg -Fq 'def do_disable' "$ibus" \
+    && rg -Fq 'self._runtime_status.set_enabled(False)' "$ibus" \
+    && rg -Fq 'self._clear_candidate_ui("disabled")' "$ibus" \
+    && rg -Fq 'def _clear_candidate_ui' "$ibus" \
+    && rg -Fq 'self._candidate_render.clear(self._candidate_state, reason)' "$ibus" \
+    && rg -Fq 'self._clear_candidate_ui("runtime-health-failed")' "$ibus" \
+    && rg -Fq 'self._clear_candidate_ui("runtime-generation-changed")' "$ibus" \
+    && rg -Fq 'class RuntimeStatusPublisher' "$ibus" \
+    && rg -Fq 'RUNTIME_STATUS_SCHEMA = "goblins-os.text-shortcuts-runtime-status.v1"' "$ibus" \
+    && rg -Fq 'RUNTIME_STATUS_PATH = "/run/goblins-os-session/text-shortcuts-runtime-status.json"' "$ibus" \
+    && rg -Fq 'RUNTIME_STATUS_MAX_BYTES = 4096' "$ibus" \
+    && rg -Fq '"enabled": self._enabled' "$ibus" \
+    && rg -Fq '"surrounding_text_supported": self._surrounding_text_supported' "$ibus" \
+    && rg -Fq '"snapshot_valid": self._snapshot_valid' "$ibus" \
+    && rg -Fq 'os.fchmod(descriptor, 0o600)' "$ibus" \
+    && rg -Fq 'os.fsync(descriptor)' "$ibus" \
+    && rg -Fq 'os.rename(' "$ibus" \
+    && rg -Fq 'os.fsync(directory)' "$ibus" \
+    && rg -Fq 'health_callback=self._runtime_status.runtime_transport' "$ibus" \
+    && rg -Fq 'def set_enabled' "$ibus" \
+    && rg -Fq 'def set_surrounding_text_supported' "$ibus" \
+    && rg -Fq 'def set_snapshot_valid' "$ibus" \
+    && rg -Fq 'def _runtime_health_tick' "$ibus" \
+    && rg -Fq 'partial_runtime = RuntimeBridge(' "$ibus" \
+    && rg -Fq 'oversized_runtime = RuntimeBridge(' "$ibus" \
+    && rg -Fq 'malformed_runtime_responses = [' "$ibus" \
+    && rg -Fq 'same_trigger_elsewhere =' "$ibus" \
+    && rg -Fq 'effective = self._surrounding_guard.validate_response(' "$ibus" \
+    && rg -Fq 'not os.path.isabs(config_home)' "$ibus" \
+    && rg -Fq 'not os.path.isabs(home)' "$ibus" \
+    && rg -Fq 'getattr(os, "O_NOFOLLOW", 0)' "$ibus" \
+    && rg -Fq 'metadata.st_uid != os.geteuid()' "$ibus" \
+    && rg -Fq 'stat.S_IMODE(metadata.st_mode) != 0o600' "$ibus" \
+    && rg -Fq 'not isinstance(replace_value, str)' "$ibus" \
+    && rg -Fq 'not isinstance(with_value, str)' "$ibus" \
+    && rg -Fq 'RuntimeProtocolRequest::Health => Ok(IbusRuntimeEvent::Health)' "$engine" \
+    && rg -Fq 'IbusRuntimeEvent::Health => IbusRuntimeDecision::pass_through(),' "$engine" \
+    && rg -Fq 'runtime_protocol_health_is_typed_and_does_not_mutate_edit_state' "$engine" \
+    && rg -Fq 'expected_text: expected_text.clone()' "$engine" \
+    && rg -Fq '[ "$value" = "true" ]' "$seed" \
+    && ! rg -Fq '|| true' "$seed" \
+    && rg -Fq 'parsed = ast.literal_eval(raw)' "$seed" \
+    && rg -Fq 'annotation = "@a(ss) "' "$seed" \
+    && rg -Fq 'annotation = "@as "' "$seed" \
+    && rg -Fq 'input source settings were malformed; leaving every source unchanged' "$seed" \
+    && rg -Fq 'sources.append((item[0], item[1]))' "$seed" \
+    && rg -Fq 'engines.append(item)' "$seed" \
+    && rg -Fq 'set_and_verify_input_sources()' "$seed" \
+    && rg -Fq 'current_sources="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null)"' "$seed" \
+    && rg -Fq 'current_mru="$(gsettings get org.gnome.desktop.input-sources mru-sources 2>/dev/null)"' "$seed" \
+    && rg -Fq 'current_preload="$(gsettings get org.freedesktop.ibus.general preload-engines 2>/dev/null)"' "$seed" \
+    && rg -Fq 'rollback_originals()' "$seed" \
+    && rg -Fq 'if [ "$touched" != "1" ]' "$seed" \
+    && rg -Fq '[ "$canonical" = "$staged" ] || return 1' "$seed" \
+    && rg -Fq 'restore_input_sources_if_unchanged sources "$sources_touched"' "$seed" \
+    && rg -Fq 'restore_input_sources_if_unchanged mru-sources "$mru_touched"' "$seed" \
+    && rg -Fq 'restore_preload_if_unchanged "$preload_touched"' "$seed" \
+    && rg -Fq 'set_and_verify_input_sources sources "$canonical_sources" "$next_sources"' "$seed" \
+    && rg -Fq 'set_and_verify_input_sources mru-sources "$canonical_mru" "$next_mru"' "$seed" \
+    && rg -Fq 'set_and_verify_preload "$canonical_preload" "$next_preload"' "$seed" \
+    && rg -Fq "printf 'seeded %s/%s\\n'" "$seed" \
+    && rg -Fq 'DetailedBridgeResult::TransportUnavailable' "$client" \
+    && rg -Fq 'text-shortcuts-set) request text-shortcuts-set POST /v1/text-shortcuts' os/hardware-gate/capture-harness/core-proof-operation.sh \
+    && rg -Fq "text-shortcuts-preview) request text-shortcuts-preview GET '/v1/text-shortcuts/preview?trigger=omw'" os/hardware-gate/capture-harness/core-proof-operation.sh \
+    && rg -Fq 'text-shortcuts-file-contract) text_shortcuts_file_contract' os/hardware-gate/capture-harness/core-proof-operation.sh \
+    && rg -Fq 'core_write_http=200&core_read_http=200&core_preview_http=200&file_contract_http=200' "$proof" \
+    && rg -Fq 'core_table_roundtrip=true&core_preview_roundtrip=true&desktop_file_contract=true' "$proof" \
+    && rg -Fq 'desktop_file_contract=true&desktop_parent_contract=true&desktop_file_owner_mode=true&desktop_file_single_link=true&desktop_file_size_bounded=true&desktop_file_bounded_read=true&legacy_service_table_absent=true' "$proof" \
+    && ! rg -Fq "printf '[{\"replace\":\"omw\"" "$proof"
 }
 
 fail_check() {
@@ -352,11 +706,9 @@ screenshot_run_arch() {
 
 screenshot_file_is_valid_png() {
   local file="$1"
-  local signature
 
-  [ -s "$file" ] || return 1
-  signature="$(od -An -tx1 -N8 "$file" 2>/dev/null | tr -d ' \n')"
-  [ "$signature" = "89504e470d0a1a0a" ]
+  "$ROOT/os/hardware-gate/capture-harness/run-capture.sh" \
+    --check-png "$file"
 }
 
 semantic_screenshot_frames_are_distinct() {
@@ -459,7 +811,6 @@ github_actions_artifact_file_matches() {
   local run_id scratch_dir downloaded_file file_count result
 
   command -v gh >/dev/null 2>&1 || return 1
-  command -v cmp >/dev/null 2>&1 || return 1
   [[ "$run_url" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || return 1
   [ -s "$local_file" ] && [ ! -L "$local_file" ] || return 1
   run_id="${run_url##*/}"
@@ -476,8 +827,63 @@ github_actions_artifact_file_matches() {
   result=1
   if [ "$file_count" = "1" ] \
     && [ -n "$downloaded_file" ] \
-    && [ ! -L "$downloaded_file" ] \
-    && cmp -s "$local_file" "$downloaded_file"; then
+    && python3 - "$local_file" "$downloaded_file" <<'PY'
+import os
+import stat
+import sys
+
+MAX_ARTIFACT_PROOF_BYTES = 16 * 1024 * 1024
+
+
+def read_stable_regular_file(path: str) -> bytes:
+    before = os.lstat(path)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_uid != os.getuid()
+        or before.st_size < 1
+        or before.st_size > MAX_ARTIFACT_PROOF_BYTES
+    ):
+        raise RuntimeError("artifact proof is not a bounded private regular file")
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        opened = os.fstat(descriptor)
+        identity = (before.st_dev, before.st_ino, before.st_mode, before.st_nlink)
+        if identity != (opened.st_dev, opened.st_ino, opened.st_mode, opened.st_nlink):
+            raise RuntimeError("artifact proof changed before it was opened")
+        chunks = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise RuntimeError("artifact proof was truncated while reading")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise RuntimeError("artifact proof grew while reading")
+        after_open = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    after_path = os.lstat(path)
+    stable_fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(before, field) != getattr(after_open, field) for field in stable_fields):
+        raise RuntimeError("artifact proof changed while reading")
+    if any(getattr(before, field) != getattr(after_path, field) for field in stable_fields):
+        raise RuntimeError("artifact proof path changed while reading")
+    return b"".join(chunks)
+
+
+try:
+    local_bytes = read_stable_regular_file(sys.argv[1])
+    downloaded_bytes = read_stable_regular_file(sys.argv[2])
+except (OSError, RuntimeError):
+    raise SystemExit(1)
+raise SystemExit(0 if local_bytes == downloaded_bytes else 1)
+PY
+  then
     result=0
   fi
   rm -rf "$scratch_dir"
@@ -891,7 +1297,11 @@ screenshot_manifest_is_coherent() {
   local canonical_evidence_manifest="$canonical_evidence_dir/release-evidence-manifest.json"
   local iso_sha iso_manifest_sha bib_manifest_sha evidence_manifest_sha
   local recorded_evidence_manifest_sha
+  local live_proof live_screenshot recorded_manifest_screenshot_sha
+  local recorded_proof_screenshot_sha actual_screenshot_sha
   local native_run native_attempt
+  local canonical_run_dir run_date bundle_digest artifact_name
+  local attestation_fields attestation_run attestation_attempt attestation_artifact
 
   [ -s "$manifest" ] || return 1
   [ -s "$verification_iso_manifest" ] || return 1
@@ -903,6 +1313,17 @@ screenshot_manifest_is_coherent() {
   [ "$CANDIDATE_SELECTION_VALID" -eq 1 ] || return 1
   image_ref="$(iso_manifest_image_ref "os/iso/output/$arch/manifest-goblins-os-$arch.json")"
   image_ref_is_digest_pinned "$image_ref" || return 1
+  canonical_run_dir="$(
+    python3 "$ROOT/os/hardware-gate/capture-harness/proof_validation.py" \
+      --run-directory "$run_dir" "$ROOT" "$arch"
+  )" || return 1
+  [ "$canonical_run_dir" = "$run_dir" ] || return 1
+  python3 "$ROOT/os/hardware-gate/capture-harness/proof_validation.py" \
+    --manifest "$manifest" "$arch" "$SELECTED_CANDIDATE_COMMIT" "$image_ref" \
+    "$iso_path" "$run_dir" \
+    || return 1
+  bundle_digest="$(evidence_bundle_digest "$run_dir" "$arch" "$image_ref")" || return 1
+  [[ "$bundle_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
   [ "$(manifest_candidate_commit "$verification_iso_manifest")" = "$SELECTED_CANDIDATE_COMMIT" ] || return 1
   [ "$(iso_manifest_image_ref "$verification_iso_manifest")" = "$image_ref" ] || return 1
   rg -Fq '"installer_config": "os/iso/verify-config.toml"' "$verification_iso_manifest" || return 1
@@ -925,6 +1346,7 @@ screenshot_manifest_is_coherent() {
     && rg -q '"text_shortcuts_candidate_bubble_render_intent_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_INTENT_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_candidate_bubble_render_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_CANDIDATE_BUBBLE_RENDER_PROOF"'"' "$manifest" \
     && rg -q '"text_shortcuts_live_ibus_runtime_render_proof"[[:space:]]*:[[:space:]]*"'"$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"'"' "$manifest" \
+    && rg -q '"text_shortcuts_live_ibus_runtime_render_screenshot_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "$manifest" \
     && rg -q '"keyboard_shortcuts_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$KEYBOARD_SHORTCUTS_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"input_sources_roundtrip_proof"[[:space:]]*:[[:space:]]*"'"$INPUT_SOURCES_ROUNDTRIP_PROOF"'"' "$manifest" \
     && rg -q '"multi_display_apply_proof"[[:space:]]*:[[:space:]]*"'"$MULTI_DISPLAY_APPLY_PROOF"'"' "$manifest" \
@@ -940,6 +1362,18 @@ screenshot_manifest_is_coherent() {
   recorded_evidence_manifest_sha="$(awk -F'"' '/"verification_release_evidence_manifest_sha256"/ { print $4; exit }' "$manifest")"
   [[ "$recorded_evidence_manifest_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
   [ "$recorded_evidence_manifest_sha" = "$(sha256_of_file "$verification_evidence_manifest")" ] || return 1
+  [ "$(rg -c '"text_shortcuts_live_ibus_runtime_render_screenshot_sha256"[[:space:]]*:' "$manifest")" = "1" ] \
+    || return 1
+  live_proof="$run_dir/$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF"
+  live_screenshot="$run_dir/32-text-shortcuts-live-ibus-runtime-render.png"
+  recorded_manifest_screenshot_sha="$(awk -F'"' '/"text_shortcuts_live_ibus_runtime_render_screenshot_sha256"/ { print $4; exit }' "$manifest")"
+  recorded_proof_screenshot_sha="$(awk -F'"' '/"screenshot_sha256"/ { print $4; exit }' "$live_proof")"
+  actual_screenshot_sha="$(sha256_of_file "$live_screenshot")" || return 1
+  [[ "$recorded_manifest_screenshot_sha" =~ ^[0-9a-f]{64}$ ]] \
+    && [ "$recorded_manifest_screenshot_sha" = "$recorded_proof_screenshot_sha" ] \
+    && [ "$recorded_manifest_screenshot_sha" = "$actual_screenshot_sha" ] \
+    && screenshot_file_is_valid_png "$live_screenshot" \
+    || return 1
   if [ "$arch" = "aarch64" ]; then
     rg -Fq '"native_packaging_gate_proof": "'"$run_dir"'/native-packaging-gate.json"' "$manifest" \
       || return 1
@@ -966,6 +1400,44 @@ screenshot_manifest_is_coherent() {
       "$native_attempt" \
       ".github/workflows/aarch64-verification-iso.yml" \
       || return 1
+    run_date="${run_dir%/}"
+    run_date="${run_date##*/}"
+    artifact_name="goblins-os-aarch64-native-packaging-gate-$SELECTED_CANDIDATE_COMMIT-$run_date-attempt-$native_attempt"
+    github_actions_artifact_file_matches \
+      "$native_run" \
+      "$artifact_name" \
+      "$run_dir/native-packaging-gate.json" \
+      "native-packaging-gate.json" \
+      || return 1
+    attestation_fields="$(aarch64_local_display_attestation_fields "$run_dir" "$image_ref")" \
+      || return 1
+    read -r attestation_run attestation_attempt attestation_artifact <<<"$attestation_fields"
+    [[ "$attestation_run" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] \
+      || return 1
+    [[ "$attestation_attempt" =~ ^[1-9][0-9]*$ ]] || return 1
+    run_date="${run_dir%/}"
+    run_date="${run_date##*/}"
+    [ "$attestation_artifact" = "aarch64-local-display-attestation-$SELECTED_CANDIDATE_COMMIT-$run_date-attempt-$attestation_attempt" ] \
+      || return 1
+    github_actions_run_is_successful \
+      "$attestation_run" \
+      "$SELECTED_CANDIDATE_COMMIT" \
+      "$attestation_attempt" \
+      ".github/workflows/aarch64-local-display-attestation.yml" \
+      || return 1
+    github_actions_artifact_file_matches \
+      "$attestation_run" \
+      "$attestation_artifact" \
+      "$run_dir/evidence-bundle.json" \
+      "evidence-bundle.json" \
+      || return 1
+    github_actions_artifact_file_matches \
+      "$attestation_run" \
+      "$attestation_artifact" \
+      "$run_dir/aarch64-local-display-attestation.json" \
+      "aarch64-local-display-attestation.json" \
+      || return 1
+    aarch64_local_display_signature_passes "$run_dir/evidence-bundle.json" || return 1
   elif [ "$arch" = "x86_64" ]; then
     [[ "$(manifest_capture_workflow_run "$manifest")" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] \
       || return 1
@@ -976,6 +1448,15 @@ screenshot_manifest_is_coherent() {
       "$SELECTED_CANDIDATE_COMMIT" \
       "$(manifest_capture_workflow_run_attempt "$manifest")" \
       ".github/workflows/hardware-gate-capture.yml" \
+      || return 1
+    run_date="${run_dir%/}"
+    run_date="${run_date##*/}"
+    artifact_name="hardware-gate-evidence-$SELECTED_CANDIDATE_COMMIT-x86_64-$run_date-attempt-$(manifest_capture_workflow_run_attempt "$manifest")"
+    github_actions_artifact_file_matches \
+      "$(manifest_capture_workflow_run "$manifest")" \
+      "$artifact_name" \
+      "$run_dir/evidence-bundle.json" \
+      "evidence-bundle.json" \
       || return 1
   fi
   return 0
@@ -1000,6 +1481,7 @@ print_verification_and_public_release_iso_detail() {
 firewall_live_toggle_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/firewall/enabled"' "$proof" \
@@ -1019,9 +1501,11 @@ firewall_live_toggle_proof_passes() {
 text_shortcuts_session_enable_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"proof_scope"[[:space:]]*:[[:space:]]*"session-plumbing"' "$proof" \
     && rg -q '"service"[[:space:]]*:[[:space:]]*"active"' "$proof" \
     && rg -q '"service_unit"[[:space:]]*:[[:space:]]*"org.freedesktop.IBus.session.GNOME.service"' "$proof" \
     && rg -q '"input_source_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
@@ -1030,14 +1514,21 @@ text_shortcuts_session_enable_proof_passes() {
     && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
     && rg -q '"adapter_self_test"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"core_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
-    && rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof"
+    && rg -q '"core_ibus_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_component_registered"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_engine_binary_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_input_source_configured"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+    && { { rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+           && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"true"' "$proof"; } \
+         || { rg -q '"core_engine_available"[[:space:]]*:[[:space:]]*"false"' "$proof" \
+              && rg -q '"core_runtime_loop_available"[[:space:]]*:[[:space:]]*"false"' "$proof"; }; }
 }
 
 text_shortcuts_candidate_metadata_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -1053,6 +1544,7 @@ text_shortcuts_candidate_metadata_proof_passes() {
 text_shortcuts_overlay_intent_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -1070,6 +1562,7 @@ text_shortcuts_overlay_intent_proof_passes() {
 text_shortcuts_candidate_bubble_frame_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -1096,6 +1589,7 @@ text_shortcuts_candidate_bubble_frame_proof_passes() {
 text_shortcuts_candidate_bubble_layout_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -1117,6 +1611,7 @@ text_shortcuts_candidate_bubble_layout_proof_passes() {
 text_shortcuts_candidate_bubble_render_intent_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -1132,6 +1627,8 @@ text_shortcuts_candidate_bubble_render_intent_proof_passes() {
     && rg -q '"focus_out_hide"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"sensitive_hide"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"pass_through_unchanged"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"key_release_preserved_candidate"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"runtime_failure_cleanup"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"sink_failure_fail_open"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
     && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
@@ -1143,6 +1640,7 @@ text_shortcuts_candidate_bubble_render_intent_proof_passes() {
 text_shortcuts_candidate_bubble_render_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
@@ -1166,31 +1664,93 @@ text_shortcuts_candidate_bubble_render_proof_passes() {
 
 text_shortcuts_live_ibus_runtime_render_proof_passes() {
   local proof="$1"
+  local screenshot recorded_sha actual_sha
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts"' "$proof" \
+    && rg -q '"preview_route"[[:space:]]*:[[:space:]]*"/v1/text-shortcuts/preview"' "$proof" \
     && rg -q '"surface"[[:space:]]*:[[:space:]]*"goblins-textshortcuts-live-ibus-runtime-render"' "$proof" \
     && rg -q '"input_driver"[[:space:]]*:[[:space:]]*"qmp-keyboard"' "$proof" \
     && rg -q '"active_engine"[[:space:]]*:[[:space:]]*"goblins-textshortcuts"' "$proof" \
-    && rg -q '"normal_actual"[[:space:]]*:[[:space:]]*"onmyway\."' "$proof" \
+    && rg -q '"core_write_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"core_read_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"core_preview_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"file_contract_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"seed_write_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"seed_read_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"seed_roundtrip"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"seed_loaded"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_table_roundtrip"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"core_preview_roundtrip"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_contract"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_parent_contract"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_owner_mode"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_single_link"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_size_bounded"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"desktop_file_bounded_read"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"legacy_service_table_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"live_watcher_reload"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"post_keystroke_read_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"post_keystroke_file_http"[[:space:]]*:[[:space:]]*"200"' "$proof" \
+    && rg -q '"post_keystroke_roundtrip"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"normal_actual"[[:space:]]*:[[:space:]]*"on my way\."' "$proof" \
     && rg -q '"passthrough_actual"[[:space:]]*:[[:space:]]*"hello\."' "$proof" \
     && rg -q '"password_refusal"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_sensitive_purpose"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_process_key_callback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_commit_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_candidate_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"password_popup_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"normal_stage_ledger_scoped"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"focused_field_callback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"text_input_v3_commit"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"rendered_accept_bubble"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"process_key_event_callback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"cursor_location_callback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"pre_boundary_commit_absent"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"boundary_stage_ledger_scoped"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"boundary_stage_commit_count"[[:space:]]*:[[:space:]]*"1"' "$proof" \
+    && rg -q '"normal_stage_commit"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"ibus_commit_operation"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"focused_entry_readback"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"ibus_commit_delivered"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"boundary_popup_action"[[:space:]]*:[[:space:]]*"hide-candidate"' "$proof" \
+    && rg -q '"boundary_popup_reason"[[:space:]]*:[[:space:]]*"committed"' "$proof" \
+    && rg -q '"candidate_intent_seen"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_ibus_candidate_published"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_generation"[[:space:]]*:[[:space:]]*"[1-9][0-9]*"' "$proof" \
+    && rg -q '"native_popup_record_ordinal"[[:space:]]*:[[:space:]]*"[1-9][0-9]*"' "$proof" \
+    && rg -q '"native_popup_generation_current"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_record_current_at_capture"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_action"[[:space:]]*:[[:space:]]*"show-candidate"' "$proof" \
+    && rg -q '"native_popup_has_cursor_rect"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_expected_replacement"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_popup_hint_published"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"renderer"[[:space:]]*:[[:space:]]*"native-ibus-lookup-table"' "$proof" \
+    && rg -q '"cursor_anchor"[[:space:]]*:[[:space:]]*"ibus-input-context"' "$proof" \
+    && rg -q '"synthetic_overlay"[[:space:]]*:[[:space:]]*"false"' "$proof" \
     && rg -q '"screenshot"[[:space:]]*:[[:space:]]*"32-text-shortcuts-live-ibus-runtime-render\.png"' "$proof" \
-    && rg -q '"style_class"[[:space:]]*:[[:space:]]*"gos-text-shortcuts-candidate"' "$proof" \
-    && rg -q '"font_family"[[:space:]]*:[[:space:]]*"Inter"' "$proof" \
-    && rg -q '"rendered_bubble_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"screenshot_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "$proof" \
+    && rg -q '"screenshot_capture_ack"[[:space:]]*:[[:space:]]*"true"' "$proof" \
+    && rg -q '"native_candidate_popup_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"live_overlay_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
     && rg -q '"runtime_ready_claim"[[:space:]]*:[[:space:]]*"true"' "$proof" \
-    && rg -q '"core_readiness_flip"[[:space:]]*:[[:space:]]*"live"' "$proof"
+    && rg -q '"core_readiness_flip"[[:space:]]*:[[:space:]]*"live"' "$proof" \
+    || return 1
+
+  [ "$(rg -c '"screenshot_sha256"[[:space:]]*:' "$proof")" = "1" ] || return 1
+  screenshot="$(dirname "$proof")/32-text-shortcuts-live-ibus-runtime-render.png"
+  recorded_sha="$(awk -F'"' '/"screenshot_sha256"/ { print $4; exit }' "$proof")"
+  actual_sha="$(sha256_of_file "$screenshot")" || return 1
+  [[ "$recorded_sha" =~ ^[0-9a-f]{64}$ ]] \
+    && [ "$recorded_sha" = "$actual_sha" ] \
+    && screenshot_file_is_valid_png "$screenshot"
 }
 
 keyboard_shortcuts_roundtrip_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"shortcut_route"[[:space:]]*:[[:space:]]*"/v1/keyboard/shortcuts/binding"' "$proof" \
@@ -1213,6 +1773,7 @@ keyboard_shortcuts_roundtrip_proof_passes() {
 input_sources_roundtrip_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"source_route"[[:space:]]*:[[:space:]]*"/v1/input/sources"' "$proof" \
@@ -1234,6 +1795,7 @@ input_sources_roundtrip_proof_passes() {
 multi_display_apply_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/displays/status"' "$proof" \
@@ -1259,6 +1821,7 @@ multi_display_apply_proof_passes() {
 focus_arm_roundtrip_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/focus/status"' "$proof" \
@@ -1291,6 +1854,7 @@ focus_arm_roundtrip_proof_passes() {
 app_privacy_revoke_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/app-privacy/revoke"' "$proof" \
@@ -1313,6 +1877,7 @@ app_privacy_revoke_proof_passes() {
 preview_open_render_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/preview/status"' "$proof" \
@@ -1345,6 +1910,7 @@ preview_open_render_proof_passes() {
 audio_output_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"status_route"[[:space:]]*:[[:space:]]*"/v1/audio/status"' "$proof" \
@@ -1360,6 +1926,7 @@ audio_output_proof_passes() {
 runtime_build_proof_passes() {
   local proof="$1"
 
+  proof_json_passes "$proof" || return 1
   [ -s "$proof" ] \
     && rg -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$proof" \
     && rg -q '"route"[[:space:]]*:[[:space:]]*"/v1/apps/builds"' "$proof" \
@@ -1818,9 +2385,20 @@ signoff_block_image_ref_matches() {
 signoff_block_required_proof_is_complete() {
   local block="$1"
   local arch="${2:-}"
-  local native_gate_path native_gate_run native_gate_attempt proof_native_gate_attempt signoff_ref screenshot_dir
+  local native_gate_path native_gate_run native_gate_attempt native_gate_artifact proof_native_gate_attempt signoff_ref screenshot_dir
   local native_iso_sha native_iso_manifest_sha native_bib_manifest_sha native_evidence_manifest_sha
   local capture_workflow_run capture_workflow_attempt proof_workflow_run proof_workflow_attempt
+  local evidence_bundle_path evidence_bundle_sha expected_bundle_sha image_ref
+  local local_attestation_path local_attestation_run local_attestation_attempt local_attestation_artifact
+  local expected_attestation_fields expected_attestation_run expected_attestation_attempt expected_attestation_artifact
+
+  if [ -z "$arch" ]; then
+    arch="$(printf '%s\n' "$block" | sed -n 's/^- Architecture: //p' | head -n 1)"
+  fi
+  case "$arch" in
+    aarch64|x86_64) ;;
+    *) return 1 ;;
+  esac
 
   signoff_block_contains "$block" "^- Runner: .+" || return 1
   if [ -n "$arch" ]; then
@@ -1863,6 +2441,13 @@ signoff_block_required_proof_is_complete() {
       "$native_gate_attempt" \
       ".github/workflows/aarch64-verification-iso.yml" \
       || return 1
+    native_gate_artifact="goblins-os-aarch64-native-packaging-gate-$SELECTED_CANDIDATE_COMMIT-${screenshot_dir##*/}-attempt-$native_gate_attempt"
+    github_actions_artifact_file_matches \
+      "$native_gate_run" \
+      "$native_gate_artifact" \
+      "$native_gate_path" \
+      "native-packaging-gate.json" \
+      || return 1
   fi
   signoff_block_contains "$block" "^- ISO SHA256: [a-fA-F0-9]{64}$" || return 1
   signoff_block_contains "$block" "^- Screenshot proof ISO SHA256: [a-fA-F0-9]{64}$" || return 1
@@ -1885,6 +2470,14 @@ signoff_block_required_proof_is_complete() {
   fi
   signoff_block_contains "$block" "^- Screenshot dir: .*not provided|stale screenshot|stale for this ISO|No fresh .*screenshots|missing current screenshot proof" && return 1
   screenshot_dir="$(printf '%s\n' "$block" | sed -n 's/^- Screenshot dir: //p' | head -n 1)"
+  image_ref="$(printf '%s\n' "$block" | sed -n 's/^- Image digest reference: //p' | head -n 1)"
+  evidence_bundle_path="$(printf '%s\n' "$block" | sed -n 's/^- Evidence bundle: //p' | head -n 1)"
+  evidence_bundle_sha="$(printf '%s\n' "$block" | sed -n 's/^- Evidence bundle SHA256: //p' | head -n 1)"
+  [ "$evidence_bundle_path" = "$screenshot_dir/evidence-bundle.json" ] || return 1
+  [[ "$evidence_bundle_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  expected_bundle_sha="$(evidence_bundle_digest "$screenshot_dir" "$arch" "$image_ref")" || return 1
+  [ "$evidence_bundle_sha" = "$expected_bundle_sha" ] || return 1
+  signoff_block_contains "$block" "^- Evidence bundle integrity checked: yes \(" || return 1
   screenshot_run_is_complete "$screenshot_dir" || return 1
   capture_workflow_run="$(printf '%s\n' "$block" | sed -n 's/^- Capture workflow run: //p' | head -n 1)"
   capture_workflow_attempt="$(printf '%s\n' "$block" | sed -n 's/^- Capture workflow run attempt: //p' | head -n 1)"
@@ -1901,6 +2494,19 @@ signoff_block_required_proof_is_complete() {
       "$capture_workflow_attempt" \
       ".github/workflows/hardware-gate-capture.yml" \
       || return 1
+  elif [ "$arch" = "aarch64" ]; then
+    local_attestation_path="$(printf '%s\n' "$block" | sed -n 's/^- Local display attestation: //p' | head -n 1)"
+    local_attestation_run="$(printf '%s\n' "$block" | sed -n 's/^- Local display attestation run: //p' | head -n 1)"
+    local_attestation_attempt="$(printf '%s\n' "$block" | sed -n 's/^- Local display attestation run attempt: //p' | head -n 1)"
+    local_attestation_artifact="$(printf '%s\n' "$block" | sed -n 's/^- Local display attestation artifact: //p' | head -n 1)"
+    [ "$local_attestation_path" = "$screenshot_dir/aarch64-local-display-attestation.json" ] || return 1
+    expected_attestation_fields="$(aarch64_local_display_attestation_fields "$screenshot_dir" "$image_ref")" \
+      || return 1
+    read -r expected_attestation_run expected_attestation_attempt expected_attestation_artifact <<<"$expected_attestation_fields"
+    [ "$local_attestation_run" = "$expected_attestation_run" ] || return 1
+    [ "$local_attestation_attempt" = "$expected_attestation_attempt" ] || return 1
+    [ "$local_attestation_artifact" = "$expected_attestation_artifact" ] || return 1
+    signoff_block_contains "$block" "^- Local display attestation checked: yes \(" || return 1
   fi
   signoff_block_screenshot_iso_sha_matches "$block" || return 1
   signoff_block_has_real_field "$block" "^  - mode: .+" || return 1
@@ -1984,8 +2590,8 @@ check "browser core URL is absent from the desktop session" "rg -Fq 'GOBLINS_OS_
 check "session bridge is source-gated for desktop user operations" "rg -Fq 'GOBLINS_OS_SESSION_BRIDGE_SOCKET=/run/goblins-os-session/session-bridge.sock' os/etc/goblins-os/environment && rg -Fq 'COPY os/tmpfiles/goblins-os-session.conf /usr/lib/tmpfiles.d/goblins-os-session.conf' os/bootc/Containerfile && rg -Fq 'd /run/goblins-os-session 0770 goblin goblins-session-bridge -' os/tmpfiles/goblins-os-session.conf && rg -Fq 'goblins-os-session-bridge' os/bootc/Containerfile && rg -Fq 'COPY --from=rust-build /out/ /' os/bootc/Containerfile && rg -Fq 'COPY --from=os-assets / /' os/bootc/Containerfile && rg -Fq 'goblins-os-session-bridge --self-test' os/bootc/Containerfile && rg -Fq 'groupadd --system goblins-session-bridge' os/bootc/Containerfile && rg -Fq 'SupplementaryGroups=goblins-session-bridge' os/systemd/goblins-os-core.service && rg -Fq 'ExecStart=/usr/libexec/goblins-os/goblins-os-session-bridge' os/systemd-user/org.goblins.OS.SessionBridge.service && rg -Fq 'Wants=org.goblins.OS.SessionBridge.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -Fq 'Wants=org.goblins.OS.Shell.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && ! rg -Fq 'Requires=org.goblins.OS.Shell.target' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && ! rg -Fq 'org.goblins.OS.Shell' os/gnome-session/goblins-os.session && rg -Fq 'UnixStream::connect' crates/goblins-os-core/src/session_bridge.rs && rg -Fq 'permission_store_delete_permission' crates/goblins-os-core/src/session_bridge.rs && rg -Fq 'display_config_apply_monitors' crates/goblins-os-core/src/session_bridge.rs && rg -Fq 'display_config_get_current_state' crates/goblins-os-core/src/displays.rs && rg -Fq 'non-allowlisted schema was accepted' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'PermissionStoreDelete' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'PermissionStore deletes are limited to app-keyed tables' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'DisplayConfigApplyMonitors' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'validate_display_config_logical_monitors' crates/goblins-os-session-bridge/src/main.rs"
 check "shell user service exports no browser core URL" "! rg -q 'Environment=(GOBLINS_OS|OPENAI_OS)_CORE_URL' os/systemd-user/org.goblins.OS.Shell.service"
 check "desktop clients use the capability client without URL overrides" "rg -Fq 'goblins_os_core_client' crates/goblins-os-installer/src/main.rs crates/goblins-os-login/src/main.rs crates/goblins-os-shell/src/main.rs crates/goblins-os-settings/src/main.rs crates/goblins-os-launcher/src/main.rs crates/goblins-os-control-center/src/main.rs crates/goblins-os-open/src/main.rs crates/goblins-os-file-builder/src/main.rs crates/goblins-os-resident/src/main.rs && ! rg -q '(GOBLINS_OS|OPENAI_OS)_CORE_(URL|SOCKET)' crates/goblins-os-installer/src/main.rs crates/goblins-os-login/src/main.rs crates/goblins-os-shell/src/main.rs crates/goblins-os-settings/src/main.rs crates/goblins-os-launcher/src/main.rs crates/goblins-os-control-center/src/main.rs crates/goblins-os-open/src/main.rs crates/goblins-os-file-builder/src/main.rs crates/goblins-os-resident/src/main.rs"
-check "release proof capability is server-only and root-operated" "rg -Fq 'const RELEASE_PROOF_PERMISSIONS' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'Self::ReleaseProof => \"release-proof\"' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'release_proof_is_server_only_and_default_denied_outside_its_manifest' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'resolve_expected_group_id' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'production_directory_validation_rejects_swapped_unique_group_ids' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'd /run/goblins-os-core/release-proof 2750 goblins-os goblins-core-release-proof -' os/tmpfiles/goblins-os-core.conf os/bootc/Containerfile && rg -Fq 'getent group goblins-core-release-proof' os/bootc/Containerfile && ! rg -Fq 'ReleaseProof' crates/goblins-os-core-client && ! rg -q 'release-proof:' os/bootc/Containerfile && ! rg -q '(usermod|useradd).*goblins-core-release-proof' os/bootc/Containerfile"
-check "canonical proof scripts use the release-proof Unix capability" "(for script in os/bootc/render-screens.sh os/bootc/render-desktop.sh os/bootc/run-selftest.sh os/runtime-gate/build-an-app-live-model.sh os/hardware-gate/capture-harness/firstboot-unlock.sh os/hardware-gate/capture-harness/core-proof-operation.sh; do rg -Fq '/run/goblins-os-core/release-proof/control.sock' \"\$script\" && rg -Fq 'curl' \"\$script\" && rg -Fq -- '--unix-socket' \"\$script\" || exit 1; done) && ! rg -q '(GOBLINS_OS|OPENAI_OS)_CORE_URL|127[.]0[.]0[.]1:8788|localhost:8788|8787/v1' os/bootc/render-screens.sh os/bootc/render-desktop.sh os/bootc/run-selftest.sh os/runtime-gate/build-an-app-live-model.sh os/hardware-gate/capture-harness os/iso/verify-config.toml && rg -Fq 'CORE_HEALTH_URL=http://127.0.0.1:8787/health' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "release proof capability is server-only and root-operated" "rg -Fq 'const RELEASE_PROOF_PERMISSIONS' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'Self::ReleaseProof => \"release-proof\"' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'release_proof_is_server_only_and_default_denied_outside_its_manifest' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'resolve_expected_group_id' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'production_directory_validation_rejects_swapped_unique_group_ids' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'libc::SO_PEERCRED' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'libc::SO_PEERGROUPS' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'peer_group_authorization_never_bypasses_for_shared_or_root_uid' crates/goblins-os-core/src/control_plane.rs && rg -Fq 'd /run/goblins-os-core/release-proof 2750 goblins-os goblins-core-release-proof -' os/tmpfiles/goblins-os-core.conf os/bootc/Containerfile && rg -Fq 'getent group goblins-core-release-proof' os/bootc/Containerfile && ! rg -Fq 'ReleaseProof' crates/goblins-os-core-client && ! rg -q 'release-proof:' os/bootc/Containerfile && ! rg -q '(usermod|useradd).*goblins-core-release-proof' os/bootc/Containerfile"
+check "canonical proof scripts use the release-proof Unix capability" "(for script in os/bootc/render-screens.sh os/bootc/render-desktop.sh os/bootc/run-selftest.sh os/runtime-gate/build-an-app-live-model.sh os/hardware-gate/capture-harness/firstboot-unlock.sh os/hardware-gate/capture-harness/core-proof-operation.sh; do rg -Fq '/run/goblins-os-core/release-proof/control.sock' \"\$script\" && rg -Fq 'curl' \"\$script\" && rg -Fq -- '--unix-socket' \"\$script\" && rg -Fq 'setpriv --regid=goblins-core-release-proof --clear-groups --' \"\$script\" || exit 1; done) && ! rg -q '(GOBLINS_OS|OPENAI_OS)_CORE_URL|127[.]0[.]0[.]1:8788|localhost:8788|8787/v1' os/bootc/render-screens.sh os/bootc/render-desktop.sh os/bootc/run-selftest.sh os/runtime-gate/build-an-app-live-model.sh os/hardware-gate/capture-harness os/iso/verify-config.toml && rg -Fq 'CORE_HEALTH_URL=http://127.0.0.1:8787/health' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "root proof launches preserve the core service identity" "(for script in os/bootc/render-screens.sh os/bootc/render-desktop.sh os/bootc/run-selftest.sh os/runtime-gate/build-an-app-live-model.sh; do rg -Fq 'systemd-tmpfiles --create /usr/lib/tmpfiles.d/goblins-os-core.conf' \"\$script\" && rg -Fq 'setpriv --reuid=goblins-os --regid=goblins-os --init-groups' \"\$script\" || exit 1; done)"
 check "installer proof page override bypasses completed first-boot exit" "rg -Fq 'should_exit_after_first_boot(first_boot_completed, installer_page_override_requested())' crates/goblins-os-installer/src/main.rs && rg -Fq 'GOBLINS_OS_INSTALLER_PAGE' crates/goblins-os-installer/src/main.rs"
 
@@ -2033,6 +2639,11 @@ check "hardware gate uses verification ISO config" "rg -q 'GOBLINS_OS_ISO_CONFIG
 check "aarch64 verification ISO workflow supports local HVF capture" "test -f .github/workflows/aarch64-verification-iso.yml && rg -q 'workflow_dispatch' .github/workflows/aarch64-verification-iso.yml && rg -q 'ubuntu-24.04-arm' .github/workflows/aarch64-verification-iso.yml && rg -q 'GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml' .github/workflows/aarch64-verification-iso.yml && rg -q 'goblins-os-aarch64-verification-iso' .github/workflows/aarch64-verification-iso.yml && rg -q 'retention-days: 7' .github/workflows/aarch64-verification-iso.yml"
 check "hardware gate generates release evidence for captured image" 'rg -q "Generate release evidence for the captured image" .github/workflows/hardware-gate-capture.yml && rg -q -- "--release-evidence /out" .github/workflows/hardware-gate-capture.yml && rg -q "rpm_sbom_arch_matches" .github/workflows/hardware-gate-capture.yml && rg -q "Scan generated release evidence for secrets" .github/workflows/hardware-gate-capture.yml'
 check "hardware proof workflows are artifact-only and cannot write the repository" "rg -q --fixed-strings 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q 'contents: read' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && ! rg -q 'contents: write|git push|persist_evidence' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml"
+check "hardware evidence bundle is canonical, bounded, duplicate-safe, and uniform" "test -f os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq 'goblins-os-hardware-evidence-bundle-v1' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq '05-first-boot-private-unlock.png' os/hardware-gate/capture-harness/evidence_bundle.py os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -Fq 'reject_duplicate_keys' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq 'O_NOFOLLOW' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq 'evidence screenshots do not share one framebuffer size' os/hardware-gate/capture-harness/evidence_bundle.py"
+check "signoff and shipping recompute the exact hardware evidence seal" "rg -Fq 'evidence_bundle.py\" verify' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q -- '--run-directory \"[$]SCREENSHOT_DIR\" \"[$]REPO_ROOT\" \"[$]ARCH\"' os/hardware-gate/close-signoff.sh && rg -q -- '--manifest \"[$]manifest\" \"[$]arch\" \"[$]SELECTED_CANDIDATE_COMMIT\"' os/hardware-gate/verify-shipping-status.sh"
+check "x86 hardware evidence artifact is exact-candidate/date/attempt bound" "rg -q 'hardware-gate-evidence-[$][{][{] inputs[.]candidate_commit [}][}]-[$][{][{] matrix[.]arch [}][}]-[$][{][{] inputs[.]run_date [}][}]-attempt-[$][{][{] github[.]run_attempt [}][}]' .github/workflows/hardware-gate-capture.yml && rg -Fq 'github_actions_artifact_file_matches' os/hardware-gate/verify-shipping-status.sh"
+check "aarch64 native packaging proof is exact-candidate/date/attempt artifact-bound" "rg -q 'goblins-os-aarch64-native-packaging-gate-[$][{][{] inputs[.]candidate_commit [}][}]-[$][{][{] inputs[.]run_date [}][}]-attempt-[$][{][{] github[.]run_attempt [}][}]' .github/workflows/aarch64-verification-iso.yml && rg -Fq 'NATIVE_PACKAGING_GATE_ARTIFACT' os/hardware-gate/close-signoff.sh && rg -Fq 'goblins-os-aarch64-native-packaging-gate-[$]SELECTED_CANDIDATE_COMMIT-[$]run_date-attempt-[$]native_attempt' os/hardware-gate/verify-shipping-status.sh"
+check "aarch64 local HVF seal has GitHub-hosted signed attestation" "test -f .github/workflows/aarch64-local-display-attestation.yml && rg -Fq 'actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6' .github/workflows/aarch64-local-display-attestation.yml && rg -Fq 'attestations: write' .github/workflows/aarch64-local-display-attestation.yml && rg -Fq 'id-token: write' .github/workflows/aarch64-local-display-attestation.yml && rg -Fq 'runs-on: ubuntu-24.04' .github/workflows/aarch64-local-display-attestation.yml && rg -Fq 'gh attestation verify' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -Fq 'github_actions_artifact_file_matches' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -Fq 'github_actions_run_is_successful' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -Fq -- '--signer-workflow Joe-Simo/goblins-os/.github/workflows/aarch64-local-display-attestation.yml' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -Fq -- '--deny-self-hosted-runners' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "GitHub workflows reject mutable major-version action tags" "! rg -q 'uses:[[:space:]]+[^[:space:]#]+@v[0-9]+([[:space:]#]|$)' .github/workflows"
 check "GitHub workflows use only the reviewed immutable Node 24 action pins" "release_workflow_action_pins_are_reviewed"
 check "GitHub workflows contain none of the retired Node 20 action pins" "release_workflow_deprecated_action_pins_are_absent"
@@ -2114,6 +2725,9 @@ check "installer and login product copy uses Goblins desktop naming" "rg -q 'Gob
 check "desktop metadata uses Goblins identity for OS surfaces" "rg -q 'Comment=Native Goblins OS identity gate' os/applications/org.goblins.OS.Login.desktop && rg -q 'Comment=Native recovery checks for the boot image, services, models, and Goblins identity' os/applications/org.goblins.OS.Recovery.desktop && rg -q 'Comment=Native Goblins OS policy, enterprise controls, data boundaries, and permission gates' os/applications/org.goblins.OS.Policy.desktop"
 check "OpenAI service launcher copy is Goblins-native" "rg -Fq 'unknown Goblins OS service id' crates/goblins-os-open/src/main.rs && rg -Fq 'Goblins OS service {service_id} is blocked by the active Goblins OS policy' crates/goblins-os-open/src/main.rs && ! rg -Fq 'OpenAI OS service' crates/goblins-os-open/src/main.rs && rg -Fq 'Description=Goblins OS local AI service core' os/systemd/goblins-os-core.service"
 check "core service owns policy state for permission grants" "rg -q '^StateDirectory=.*goblins-os/policy' os/systemd/goblins-os-core.service && rg -q '^StateDirectoryMode=0750$' os/systemd/goblins-os-core.service"
+check "core service writable path allowlist is exact and narrow" "core_service_writable_paths_are_exact"
+check "first boot proves the production core unit owns its socket and writable mounts" "firstboot_production_core_unit_proof_is_pinned"
+check "hardware core proof unit has exact writable roots and a read-only desktop table view" "hardware_core_proof_unit_is_narrowly_sandboxed"
 check "installer policy copy hides raw installer engine name" "rg -q 'advanced storage' crates/goblins-os-core/src/install_targets.rs && rg -q 'installer' crates/goblins-os-core/src/install_targets.rs && rg -q 'Goblins OS disk installer' crates/goblins-os-core/src/install_targets.rs && ! rg -q 'Anaconda' crates/goblins-os-core/src/install_targets.rs && ! rg -q 'bootc installer' crates/goblins-os-core/src/install_targets.rs && ! rg -q -e 'Ready for guarded bootc install preparation' -e 'bootc install was started by the Goblins OS core' -e 'could not spawn bootc install' -e 'core may spawn bootc install' crates/goblins-os-core/src/install_targets.rs"
 check "installer UI copy uses advanced storage path" "rg -q 'open advanced storage' crates/goblins-os-core/src/install_targets.rs crates/goblins-os-installer/src/main.rs && rg -q 'advanced storage' crates/goblins-os-core/src/install_targets.rs crates/goblins-os-installer/src/main.rs && ! rg -q -e 'ISO manual storage' -e 'ISO Installation Destination' -e 'Installation Destination in the ISO' -e 'manual storage from the ISO' -e 'Use Installation Destination' crates/goblins-os-core/src/install_targets.rs crates/goblins-os-installer/src/main.rs"
 check "installer docs use advanced storage language" "rg -q 'advanced storage Installation Destination' os/hardware-gate/runbook.md && rg -q 'advanced storage' \"$SHIP_DECL\" os/hardware-gate/runbook.md && rg -q 'advanced storage' os/iso/config.toml && ! rg -q -e 'uses Anaconda Installation Destination/manual storage' -e 'Anaconda manual storage summary' -e 'visible in Anaconda' -e 'to Anaconda manual storage' -e 'choose the disk/storage layout in Anaconda' \"$SHIP_DECL\" os/iso/config.toml os/hardware-gate/runbook.md"
@@ -2182,12 +2796,12 @@ check "settings input sources expose reorder and remove write controls" "rg -q '
 check "capture harness resets only the exact validated dated run dir" "rg -Fq 'rm -rf \"\$RUN_DIR\"' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'refusing to reset unexpected hardware-gate run dir' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'if [ \"\$RUN_DIR\" != \"\$RUN_ROOT/\$DATE\" ]' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq '[ \"\$(dirname \"\$RUN_DIR\")\" != \"\$RUN_ROOT\" ]' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness rejects stale GDM screenshot sets" "rg -Fq 'stable_frame_hash' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'cropping the top bar' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'macOS sips' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'Refusing stale screenshot signoff' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness waits for unique required screenshots" "rg -Fq 'REQUIRED_FRAME_SETTLE_SECONDS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'framebuffer stayed duplicate' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq \"! -name '_debug-*'\" os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'required captured surfaces are distinct' os/hardware-gate/capture-harness/run-capture.sh"
-check "capture driver uses progress-aware ready-signal timeouts" "rg -Fq 'GOS_CAPTURE_TOTAL_TIMEOUT_SECONDS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'GOS_CAPTURE_INACTIVITY_TIMEOUT_SECONDS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'last_progress = time.time()' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'EXPECTED_READY_SHOTS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'seconds_since_progress' os/hardware-gate/capture-harness/drive-capture.py"
+check "capture driver uses progress-aware ready-signal timeouts" "rg -Fq 'GOS_CAPTURE_TOTAL_TIMEOUT_SECONDS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'GOS_CAPTURE_INACTIVITY_TIMEOUT_SECONDS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'last_progress = time.monotonic()' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'EXPECTED_READY_SHOTS' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'seconds_since_progress' os/hardware-gate/capture-harness/drive-capture.py"
 check "capture harness launches current-session nonunique proof windows" "rg -Fq 'GOBLINS_OS_CAPTURE_NON_UNIQUE=1' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'GOS_SHOT_SETTLE_SECONDS' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'pkill -x \"\$base\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'pkill -f -- \"\$bin\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -Fq 'dbus-run-session -- \"\$@\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture harness bounds ready signals and shot helper cleanup" "rg -Fq 'GOS_READY_SIGNAL_TIMEOUT_SECONDS' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'GOS_SHOT_HELPER_TIMEOUT_SECONDS' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'GOBLINS_HWGATE_BOUNDED_COMMAND_TIMED_OUT' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'timeout -k 2s' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'GOBLINS_HWGATE_SHOT_SIGNALING' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture harness routes installer screenshots through fixture core" "rg -Fq 'installer_shot()' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'GOBLINS_OS_INSTALLER_CORE_WAIT_SECS' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'GOS_INSTALLER_CAPTURE_CORE_WAIT_SECS' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'installer_shot welcome 06-onboarding' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'installer_shot network 02-install-network' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'Some(\"welcome\") => \"welcome\"' crates/goblins-os-installer/src/main.rs"
 check "capture GTK apps support nonunique proof instances" "rg -Fq 'GOBLINS_OS_CAPTURE_NON_UNIQUE' crates/goblins-os-shell/src/main.rs && rg -Fq 'ApplicationFlags::NON_UNIQUE' crates/goblins-os-shell/src/main.rs && rg -Fq 'GOBLINS_OS_CAPTURE_NON_UNIQUE' crates/goblins-os-settings/src/main.rs && rg -Fq 'ApplicationFlags::NON_UNIQUE' crates/goblins-os-settings/src/main.rs && rg -Fq 'GOBLINS_OS_CAPTURE_NON_UNIQUE' crates/goblins-os-installer/src/main.rs && rg -Fq 'ApplicationFlags::NON_UNIQUE' crates/goblins-os-installer/src/main.rs"
-check "capture fixture is a fail-safe root-controlled same-socket swap" "rg -Fq 'core_proof_request fixture-start' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'core_proof_request fixture-restore' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'FIXTURE_SWAP_IN_PROGRESS=true' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'wait_for_fixture_resident' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'fail_fixture_start' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'restore_production_services' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'ExecStopPost=-/etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation %i-finished \${SERVICE_RESULT}' os/iso/verify-config.toml && rg -Fq 'StandardOutput=append:/run/goblins-hwgate-core-proof/fixture-core.log' os/iso/verify-config.toml && rg -Fq 'StandardOutput=append:/run/goblins-hwgate-core-proof/fixture-resident.log' os/iso/verify-config.toml && ! rg -q 'append:/tmp/fix(core|res)[.]log' os/iso/verify-config.toml && rg -Fq 'RuntimeMaxSec=1800' os/iso/verify-config.toml && rg -Fq 'ExecStopPost=-/etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation fixture-core-stopped' os/iso/verify-config.toml"
+check "capture fixture is a fail-safe root-controlled same-socket swap" "rg -Fq 'core_proof_request fixture-start' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'core_proof_request fixture-restore' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'FIXTURE_SWAP_IN_PROGRESS=true' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'wait_for_fixture_resident' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'fail_fixture_start' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'restore_production_services' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'ExecStopPost=-/etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation %i-finished \${SERVICE_RESULT}' os/iso/verify-config.toml && rg -Fq 'StandardOutput=append:/run/goblins-hwgate-core-proof/fixture-core.log' os/iso/verify-config.toml && rg -Fq 'StandardOutput=append:/run/goblins-hwgate-core-proof/fixture-resident.log' os/iso/verify-config.toml && ! rg -q 'append:/tmp/fix(core|res)[.]log' os/iso/verify-config.toml && rg -Fq 'RuntimeMaxSec=1800' os/iso/verify-config.toml && rg -Fq 'ExecStopPost=-+/etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation fixture-core-stopped' os/iso/verify-config.toml"
 check "capture harness disables switch overlay before screenshots" "rg -Fq 'gnome-extensions disable goblins-switch@goblins.os' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'globalThis.goblinsSwitchControl' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "hardware gate requires Input sources roundtrip proof" "rg -q 'input-sources-roundtrip-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/input-sources-roundtrip' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/input/sources' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/input/switch-next' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'test_sources=xkb-us,xkb-gb' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sources_gsettings_readback=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'switch_switched=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'restore_sources=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'Input sources roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "hardware gate requires Focus arm roundtrip proof" "rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/focus-arm-roundtrip' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/focus/status' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/focus/activate' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/focus/deactivate' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'active_mode_gsettings_readback=gate-work' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'notification_banners_after_activate=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'original_notification_banners_restored=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'mode_crud_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'Focus arm roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
@@ -2198,6 +2812,7 @@ check "hardware gate requires Audio output proof" "rg -q 'audio-output-proof.jso
 check "hardware gate audio proof reports core service diagnostics" "rg -q 'core_probe_http' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'audio_core_service_diag' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'core_restarts=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'Restart=always' os/systemd/goblins-os-core.service && rg -Fq 'StartLimitIntervalSec=0' os/systemd/goblins-os-core.service && rg -q 'GOBLINS_OS_CAPTURE_PRESENT_LEDGER' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'GOBLINS_OS_CAPTURE_PRESENT_LEDGER' crates/goblins-os-settings/src/main.rs && rg -Fq 'Restart=always' os/systemd-user/org.goblins.OS.SessionBridge.service && rg -Fq 'StartLimitIntervalSec=0' os/systemd-user/org.goblins.OS.SessionBridge.service"
 check "IME CJK engine packages are source-gated" "rg -q 'ibus-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q 'ibus-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/libpinyin.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/anthy.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/share/ibus/component/hangul.xml' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-libpinyin' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-anthy' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/libexec/ibus-engine-hangul' os/bootc/Containerfile crates/goblins-os-core/src/input.rs && rg -q '/usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so' os/bootc/Containerfile && rg -q 'CJK engine packages' crates/goblins-os-settings/src/main.rs"
 check "core audio probes WirePlumber through the session bridge" "rg -q 'Wpctl' crates/goblins-os-session-bridge/src/main.rs crates/goblins-os-core/src/session_bridge.rs && rg -q 'validate_wpctl_args' crates/goblins-os-session-bridge/src/main.rs && rg -q 'WirePlumber did not answer before the session bridge audio timeout.' crates/goblins-os-session-bridge/src/main.rs && rg -q 'org.gnome.desktop.sound' crates/goblins-os-session-bridge/src/main.rs && rg -q 'gsettings did not answer before the session bridge preference timeout.' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'pub(crate) fn wpctl' crates/goblins-os-core/src/session_bridge.rs && rg -q 'BRIDGE_IO_TIMEOUT' crates/goblins-os-core/src/session_bridge.rs && rg -q '"list-recursively"' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'session_bridge::wpctl(args)' crates/goblins-os-core/src/audio.rs && rg -q 'audio_endpoint_ready_without_volume_detail' crates/goblins-os-core/src/audio.rs && rg -Fq 'parse_wpctl_volume(suffix)' crates/goblins-os-core/src/audio.rs && rg -Fq 'session_bridge::gsettings(args)' crates/goblins-os-core/src/audio.rs && rg -Fq ', SOUND_SCHEMA])' crates/goblins-os-core/src/audio.rs && rg -q 'parse_sound_schema_snapshot' crates/goblins-os-core/src/audio.rs && rg -q 'audio_endpoint_default_volume_status' crates/goblins-os-core/src/audio.rs && rg -Fq 'wpctl(&[\"get-volume\", target.wpctl_id()])' crates/goblins-os-core/src/audio.rs && rg -q 'Audio device readiness does not wait for desktop sound preferences.' crates/goblins-os-core/src/audio.rs"
+check "voice session bridge is typed exclusive private and fail-closed" "rg -Fq 'VoiceAudioStatus {}' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'VoiceCapture {}' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'bounded_input_output_of(command, wav, VOICE_PLAYBACK_TIMEOUT)' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'voice operations require the authenticated core service peer.' crates/goblins-os-session-bridge/src/main.rs && rg -Fq 'Some(CAPTURE_PCM_FORMAT)' crates/goblins-os-core/src/session_bridge.rs && rg -Fq 'run_voice_blocking' crates/goblins-os-core/src/voice.rs crates/goblins-os-core/src/voice_control.rs && rg -Fq 'play_audio(reply_wav.path())?' crates/goblins-os-core/src/voice.rs && rg -Fq 'voice::purge_stale_voice_workspaces()?;' crates/goblins-os-core/src/main.rs && rg -Fq 'd /var/lib/goblins-os/voice/work 0700 goblins-os goblins-os -' os/tmpfiles/goblins-os-core.conf && rg -Fxq 'UMask=0077' os/systemd/goblins-os-core.service && rg -Fxq 'UMask=0077' os/systemd-user/org.goblins.OS.SessionBridge.service"
 check "core keyboard rebinding exposes allowlisted write routes" "rg -q '/v1/keyboard/shortcuts/binding' crates/goblins-os-core/src/main.rs && rg -q '/v1/keyboard/modifier-remap' crates/goblins-os-core/src/main.rs && rg -q 'shortcut_conflict' crates/goblins-os-core/src/shortcuts.rs && rg -q 'remap_caps_lock_options' crates/goblins-os-core/src/shortcuts.rs"
 check "settings keyboard reports source-gated shortcut bridge" "rg -q 'Protected shortcut writes are source-gated' crates/goblins-os-settings/src/main.rs && rg -q 'Caps Lock to Control is source-gated' crates/goblins-os-settings/src/main.rs"
 check "hardware gate requires Keyboard shortcuts roundtrip proof" "rg -q 'keyboard-shortcuts-roundtrip-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q '/proof/keyboard-shortcuts-roundtrip' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '/v1/keyboard/shortcuts/binding' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '/v1/keyboard/modifier-remap' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'shortcut_binding=%3CSuper%3E%3CShift%3EH' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'shortcut_gsettings_readback=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'modifier_gsettings_readback=ctrl:nocaps' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'roundtrip_restored=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'Keyboard shortcuts roundtrip checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
@@ -2232,11 +2847,12 @@ check "capture driver persists live firewall proof" "rg -q 'firewall-live-toggle
 check "capture driver persists Preview open/render proof" "rg -q 'preview-open-render-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'preview-open-render' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Preview open/render proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture driver persists Focus arm roundtrip proof" "rg -q 'focus-arm-roundtrip-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'focus-arm-roundtrip' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Focus arm roundtrip proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture driver persists App privacy revoke proof" "rg -q 'app-privacy-revoke-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'app-privacy-revoke' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing App privacy revoke proof' os/hardware-gate/capture-harness/run-capture.sh"
-check "capture harness proves Text Shortcuts session plumbing without runtime claim" "rg -q '/proof/text-shortcuts-session-enable' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'TEXT_SHORTCUTS_IBUS_SERVICE=org.freedesktop.IBus.session.GNOME.service' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'service_unit=\$TEXT_SHORTCUTS_IBUS_SERVICE' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'systemctl --user restart \"\$TEXT_SHORTCUTS_IBUS_SERVICE\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ibus engine goblins-textshortcuts' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ensure_textshortcuts_ibus_component' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wait_ibus_cli_ready' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wait_ibus_bus_owned' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'user_component_seeded=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'list_error=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'bus_owner=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'service_diag=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'daemon_process=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'session_env=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! test -f os/systemd-user/org.goblins.OS.IBus.service && rg -q 'Wants=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'Before=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/org.goblins.OS.InputSourcesSeed.service && ! rg -q 'org.goblins.OS.IBus.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf os/systemd-user/org.goblins.OS.InputSourcesSeed.service os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -Fq 'application.run_with_args(&[\"goblins-os-shell\", \"--text-shortcuts-proof\"]);' crates/goblins-os-shell/src/main.rs && rg -q 'systemctl --user import-environment' os/session/goblins-os-session && rg -q 'dbus-update-activation-environment --systemd' os/session/goblins-os-session && rg -q 'WAYLAND_DISPLAY' os/session/goblins-os-session && rg -q '/var/home/goblin/.local/share/ibus/component/goblins-textshortcuts.xml' os/bootc/Containerfile && rg -Fq 'core_engine_available=true&core_runtime_loop_available=true&runtime_ready_claim=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "capture harness proves Text Shortcuts session plumbing without runtime claim" "rg -q '/proof/text-shortcuts-session-enable' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'TEXT_SHORTCUTS_IBUS_SERVICE=org.freedesktop.IBus.session.GNOME.service' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'service_unit=\$TEXT_SHORTCUTS_IBUS_SERVICE' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'systemctl --user restart \"\$TEXT_SHORTCUTS_IBUS_SERVICE\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ibus engine goblins-textshortcuts' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ensure_textshortcuts_ibus_component' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wait_ibus_cli_ready' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'wait_ibus_bus_owned' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'user_component_seeded=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'list_error=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'bus_owner=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'service_diag=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'daemon_process=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'session_env=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! test -f os/systemd-user/org.goblins.OS.IBus.service && rg -q 'Wants=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'Before=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/org.goblins.OS.InputSourcesSeed.service && ! rg -q 'org.goblins.OS.IBus.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf os/systemd-user/org.goblins.OS.InputSourcesSeed.service os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -Fq 'application.run_with_args(&[\"goblins-os-shell\", \"--text-shortcuts-proof\"]);' crates/goblins-os-shell/src/main.rs && rg -q 'systemctl --user import-environment' os/session/goblins-os-session && rg -q 'dbus-update-activation-environment --systemd' os/session/goblins-os-session && rg -q 'WAYLAND_DISPLAY' os/session/goblins-os-session && rg -q '/var/home/goblin/.local/share/ibus/component/goblins-textshortcuts.xml' os/bootc/Containerfile && rg -q 'proof_scope=session-plumbing' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'core_ibus_available=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'core_component_registered=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'core_engine_binary_available=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'core_input_source_configured=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'core_engine_available=\$core_engine_available&core_runtime_loop_available=\$core_runtime_loop&runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -Fq 'core_engine_available=true&core_runtime_loop_available=true&runtime_ready_claim=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts session proof" "rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-session-enable' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts session-enable proof' os/hardware-gate/capture-harness/run-capture.sh"
-check "Text Shortcuts one-shot input source seed is source-gated" "test -x os/input/goblins-os-input-source-seed && rg -q 'input-source-seeded' os/input/goblins-os-input-source-seed && rg -q 'gsettings set org.gnome.desktop.input-sources sources' os/input/goblins-os-input-source-seed && rg -q 'gsettings set org.freedesktop.ibus.general preload-engines' os/input/goblins-os-input-source-seed && rg -q 'COPY --chmod=0755 os/input/goblins-os-input-source-seed /usr/libexec/goblins-os/goblins-os-input-source-seed' os/bootc/Containerfile && rg -q 'bash -n /usr/libexec/goblins-os/goblins-os-input-source-seed' os/bootc/Containerfile && rg -q 'Wants=org.goblins.OS.InputSourcesSeed.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'Wants=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'Before=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/org.goblins.OS.InputSourcesSeed.service"
+check "Text Shortcuts use one bounded private desktop-user state contract" "text_shortcuts_desktop_state_contract_is_pinned"
+check "Text Shortcuts one-shot input source seed is source-gated" "test -x os/input/goblins-os-input-source-seed && rg -q 'input-source-seeded' os/input/goblins-os-input-source-seed && rg -Fq '[ \"\$value\" = \"true\" ]' os/input/goblins-os-input-source-seed && ! rg -Fq '|| true' os/input/goblins-os-input-source-seed && rg -Fq 'parsed = ast.literal_eval(raw)' os/input/goblins-os-input-source-seed && rg -Fq 'annotation = \"@a(ss) \"' os/input/goblins-os-input-source-seed && rg -Fq 'annotation = \"@as \"' os/input/goblins-os-input-source-seed && rg -Fq 'input source settings were malformed; leaving every source unchanged' os/input/goblins-os-input-source-seed && rg -Fq 'sources.append((item[0], item[1]))' os/input/goblins-os-input-source-seed && rg -Fq 'engines.append(item)' os/input/goblins-os-input-source-seed && rg -Fq 'set_and_verify_input_sources()' os/input/goblins-os-input-source-seed && rg -Fq 'current_sources=\"\$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null)\"' os/input/goblins-os-input-source-seed && rg -Fq 'current_mru=\"\$(gsettings get org.gnome.desktop.input-sources mru-sources 2>/dev/null)\"' os/input/goblins-os-input-source-seed && rg -Fq 'current_preload=\"\$(gsettings get org.freedesktop.ibus.general preload-engines 2>/dev/null)\"' os/input/goblins-os-input-source-seed && rg -Fq 'rollback_originals()' os/input/goblins-os-input-source-seed && rg -Fq 'if [ \"\$touched\" != \"1\" ]' os/input/goblins-os-input-source-seed && rg -Fq '[ \"\$canonical\" = \"\$staged\" ] || return 1' os/input/goblins-os-input-source-seed && rg -Fq 'restore_input_sources_if_unchanged sources \"\$sources_touched\"' os/input/goblins-os-input-source-seed && rg -Fq 'restore_input_sources_if_unchanged mru-sources \"\$mru_touched\"' os/input/goblins-os-input-source-seed && rg -Fq 'restore_preload_if_unchanged \"\$preload_touched\"' os/input/goblins-os-input-source-seed && rg -Fq 'set_and_verify_input_sources sources \"\$canonical_sources\" \"\$next_sources\"' os/input/goblins-os-input-source-seed && rg -Fq 'set_and_verify_input_sources mru-sources \"\$canonical_mru\" \"\$next_mru\"' os/input/goblins-os-input-source-seed && rg -Fq 'set_and_verify_preload \"\$canonical_preload\" \"\$next_preload\"' os/input/goblins-os-input-source-seed && rg -Fq \"printf 'seeded %s/%s\\\\n'\" os/input/goblins-os-input-source-seed && rg -q 'COPY --chmod=0755 os/input/goblins-os-input-source-seed /usr/libexec/goblins-os/goblins-os-input-source-seed' os/bootc/Containerfile && rg -q 'bash -n /usr/libexec/goblins-os/goblins-os-input-source-seed' os/bootc/Containerfile && rg -q 'Wants=org.goblins.OS.InputSourcesSeed.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'Wants=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/gnome-session@goblins-os.target.d/goblins-os.session.conf && rg -q 'Before=org.freedesktop.IBus.session.GNOME.service' os/systemd-user/org.goblins.OS.InputSourcesSeed.service"
 check "capture harness retired superseded Text Shortcuts live keystroke proof" "! rg -q '/proof/text-shortcuts-live-keystroke|text_shortcuts_live_keystroke_proof|proof_text_shortcuts_live[[:space:]]*\\(\\)' os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -q 'text-shortcuts-live-keystroke|TEXT_SHORTCUTS_LIVE_PROOF|HONESTY GUARD: missing or failing Text Shortcuts live keystroke proof' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh"
-check "Text Shortcuts live keystrokes are covered by the runtime/render proof" "rg -q '/proof/text-shortcuts-live-ibus-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'normal_actual=onmyway\\.' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'passthrough_actual=hello\\.' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'password_refusal=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'focused_field_callback=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'text_input_v3_commit=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_accept_bubble=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '32-text-shortcuts-live-ibus-runtime-render.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh"
+check "Text Shortcuts live keystrokes are covered by secure storage, native IBus, and focused readback proof" "rg -q '/proof/text-shortcuts-live-ibus-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'normal_actual=on%20my%20way\\.' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'passthrough_actual=hello\\.' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'desktop_parent_contract=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_watcher_reload=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'post_keystroke_roundtrip=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'password_sensitive_purpose=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'password_popup_absent=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ibus_commit_operation=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'focused_entry_readback=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ibus_commit_delivered=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'native_ibus_candidate_published=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'renderer=native-ibus-lookup-table' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'synthetic_overlay=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '32-text-shortcuts-live-ibus-runtime-render.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts candidate metadata without live overlay claim" "rg -q '/proof/text-shortcuts-candidate-metadata' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-os-shell\" --text-shortcuts-proof candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'replacement=on my way' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'accept_on=word-boundary' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismiss_key=Escape' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts candidate metadata proof" "rg -q 'text-shortcuts-candidate-metadata-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-metadata' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate metadata proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts overlay intent without live overlay claim" "rg -q '/proof/text-shortcuts-overlay-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--overlay-intent-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-ibus-adapter-overlay-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'show_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hide_count=2' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'dismissed_reason=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'committed_reason=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
@@ -2245,16 +2861,16 @@ check "capture harness proves Text Shortcuts candidate bubble frame without live
 check "capture driver persists Text Shortcuts candidate bubble frame proof" "rg -q 'text-shortcuts-candidate-bubble-frame-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-bubble-frame' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-frame proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts candidate bubble layout without live render claim" "rg -q '/proof/text-shortcuts-candidate-bubble-layout' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--candidate-bubble-layout-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-accept-bubble-layout' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'frame_surface=goblins-textshortcuts-accept-bubble-frame' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'layout_count=4' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'visible_layout_count=3' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'right_edge_clamped=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'bottom_edge_flipped=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hidden_frame_collapses=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'style_class=gos-text-shortcuts-candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'font_family=Inter' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts candidate bubble layout proof" "rg -q 'text-shortcuts-candidate-bubble-layout-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-bubble-layout' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-layout proof' os/hardware-gate/capture-harness/run-capture.sh"
-check "capture harness proves Text Shortcuts candidate bubble render intent without live render claim" "rg -q '/proof/text-shortcuts-candidate-bubble-render-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--candidate-bubble-render-intent-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-accept-bubble-render-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'frame_surface=goblins-textshortcuts-accept-bubble-frame' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'layout_surface=goblins-textshortcuts-accept-bubble-layout' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'render_intent_count=8' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'show_intent_count=4' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hide_intent_count=4' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'focus_out_hide=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sensitive_hide=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'pass_through_unchanged=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sink_failure_fail_open=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'style_class=gos-text-shortcuts-candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'font_family=Inter' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "capture harness proves Text Shortcuts candidate bubble render intent without live render claim" "rg -q '/proof/text-shortcuts-candidate-bubble-render-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--candidate-bubble-render-intent-self-test' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-accept-bubble-render-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'frame_surface=goblins-textshortcuts-accept-bubble-frame' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'layout_surface=goblins-textshortcuts-accept-bubble-layout' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'render_intent_count=8' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'show_intent_count=4' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'hide_intent_count=4' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'focus_out_hide=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sensitive_hide=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'pass_through_unchanged=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'key_release_preserved_candidate=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_failure_cleanup=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sink_failure_fail_open=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'style_class=gos-text-shortcuts-candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'font_family=Inter' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "capture driver persists Text Shortcuts candidate bubble render intent proof" "rg -q 'text-shortcuts-candidate-bubble-render-intent-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-bubble-render-intent' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render-intent proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness proves Text Shortcuts candidate bubble rendered screenshot without live claim" "rg -q '/proof/text-shortcuts-candidate-bubble-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--text-shortcuts-proof candidate-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '31-text-shortcuts-candidate-bubble-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'render_intent_surface=goblins-textshortcuts-accept-bubble-render-intent' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'rendered_candidate_surface=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'style_class=gos-text-shortcuts-candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'font_family=Inter' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'rendered_bubble_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'live_overlay_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'runtime_ready_claim=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh"
 check "capture driver persists Text Shortcuts candidate bubble rendered screenshot proof" "rg -q 'text-shortcuts-candidate-bubble-render-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-candidate-bubble-render' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts candidate-bubble-render screenshot proof' os/hardware-gate/capture-harness/run-capture.sh"
-check "capture harness drives Text Shortcuts live IBus runtime/render proof" "rg -q '/proof/text-shortcuts-live-ibus-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--text-shortcuts-proof live-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'systemctl --user set-environment GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'host_focus_text_shortcuts_field runtime-render-focus' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'render_log_tail' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'ledger_tail' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'goblins-textshortcuts-live-ibus-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '32-text-shortcuts-live-ibus-runtime-render.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'focused_field_callback' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text_input_v3_commit' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'rendered_accept_bubble' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'rendered_bubble_ready_claim=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'core_readiness_flip=live' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '\"core_readiness_flip\": \"live\"' os/hardware-gate/capture-harness/run-capture.sh && ! rg -q 'live-ibus-runtime-render-not-implemented' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
+check "capture harness drives the native Text Shortcuts IBus runtime/render proof" "rg -q '/proof/text-shortcuts-live-ibus-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q -- '--text-shortcuts-proof normal' os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -q -- '--text-shortcuts-proof live-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'systemctl --user set-environment GOBLINS_TEXTSHORTCUTS_PROOF_EVENTS' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'host_focus_text_shortcuts_field runtime-render-focus' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq '| last) as \$latest_popup' os/hardware-gate/capture-harness/in-session-orchestrator.sh && ! rg -Fq 'max_by(.generation // -1)' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'stage=native-popup-settle' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'normal_ledger_file=/tmp/gate-text-shortcuts-normal-stage-events.jsonl' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'pre_boundary_ledger_file=/tmp/gate-text-shortcuts-pre-boundary-events.jsonl' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'boundary_ledger_file=/tmp/gate-text-shortcuts-boundary-stage-events.jsonl' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'wait_capture_ack \"\$1\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'sig 32-text-shortcuts-live-ibus-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'captured_generation' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'captured_ordinal' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'native_popup_record_ordinal' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'boundary_ledger_start=' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'pre_boundary_commit_absent=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'boundary_stage_ledger_scoped=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'boundary_stage_commit_count=1' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'boundary_popup_action=hide-candidate' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'boundary_popup_reason=committed' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'stage=boundary-ledger' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq '.callback == \"process-key-event\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq '(\$commit_operations | length) == 1' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'os.replace[(]temporary_ack, ack[)]' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'goblins-textshortcuts-live-ibus-runtime-render' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q '32-text-shortcuts-live-ibus-runtime-render.png' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'focused_entry_readback' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'ibus_commit_delivered' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'native_ibus_candidate_published' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh && rg -q 'renderer=native-ibus-lookup-table' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'synthetic_overlay=false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'screenshot_capture_ack=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'native_candidate_popup_ready_claim=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'live_overlay_claim=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'runtime_ready_claim=true' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q 'core_readiness_flip=live' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -q '\"core_readiness_flip\": \"live\"' os/hardware-gate/capture-harness/run-capture.sh && ! rg -q 'text_input_v3_commit|rendered_accept_bubble|rendered_bubble_ready_claim=true|live-ibus-runtime-render-not-implemented' os/hardware-gate/capture-harness/in-session-orchestrator.sh os/hardware-gate/capture-harness/run-capture.sh"
 check "capture driver persists Text Shortcuts live IBus runtime/render proof" "rg -q 'text-shortcuts-live-ibus-runtime-render-proof.json' os/hardware-gate/capture-harness/drive-capture.py os/hardware-gate/capture-harness/run-capture.sh && rg -q 'text-shortcuts-live-ibus-runtime-render' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'HONESTY GUARD: missing or failing Text Shortcuts live IBus runtime/render proof' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture harness turns Switch Control off before ordinary screenshots" "rg -Fq 'switch_control_off(){' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'gsettings set org.goblins.os.a11y.switch-control enabled false' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'goblinsSwitchControl.hide' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'this._stopScanner();' os/gnome-shell-extensions/goblins-switch@goblins.os/extension.js && rg -Fq 'switch_control_off' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "Text Shortcuts accept-bubble frame contract is source-gated" "rg -q -- '--candidate-bubble-frame-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-accept-bubble-frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-candidate-bubble-frame.json' os/bootc/Containerfile && rg -q 'show_frame_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'hide_frame_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'dismissed_frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'committed_frame' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'sensitive_field_refusal' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'gos-text-shortcuts-candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'rendered_bubble_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'live_overlay_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'runtime_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile"
 check "Text Shortcuts accept-bubble layout contract is source-gated" "rg -q -- '--candidate-bubble-layout-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-accept-bubble-layout' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-candidate-bubble-layout.json' os/bootc/Containerfile && rg -q 'layout_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'visible_layout_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'right_edge_clamped' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'bottom_edge_flipped' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'hidden_frame_collapses' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'gos-text-shortcuts-candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'font_family' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'rendered_bubble_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'live_overlay_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'runtime_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile"
-check "Text Shortcuts accept-bubble render-intent bridge is source-gated" "rg -q -- '--candidate-bubble-render-intent-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'goblins-textshortcuts-accept-bubble-render-intent' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'CandidateBubbleRenderIntentController' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -q 'CandidateBubbleRenderIntentSink' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -q '_apply_response_operations_with_render_intent' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -q 'goblins-textshortcuts-candidate-bubble-render-intent.json' os/bootc/Containerfile && rg -q 'render_intent_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'show_intent_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'hide_intent_count' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'focus_out_hide' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'sensitive_hide' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'pass_through_unchanged' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'sink_failure_fail_open' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'gos-text-shortcuts-candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'font_family' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'rendered_bubble_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'live_overlay_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'runtime_ready_claim' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile"
+check "Text Shortcuts native IBus render-intent bridge is source-gated" "rg -q -- '--candidate-bubble-render-intent-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q -- '--native-ibus-lookup-renderer-self-test' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'NativeIbusLookupRenderer' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -Fq 'self._ibus.LookupTable.new' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -q 'update_lookup_table' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -q 'do_candidate_clicked' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus && rg -q 'accept-candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus crates/goblins-os-textshortcuts-engine/src/lib.rs && rg -q 'key_release_preserved_candidate' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'runtime_failure_cleanup' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile && rg -q 'synthetic_overlay' os/goblins-os-textshortcuts/goblins-textshortcuts-ibus os/bootc/Containerfile"
 check "capture harness prints qemu diagnostics on startup failure" "rg -q 'QEMU startup diagnostics' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'qemu.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'serial.log' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'last connection error' os/hardware-gate/capture-harness/drive-capture.py"
 check "capture harness refuses human-safe release ISO for automated proof" "rg -q 'require_verification_iso' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'GOBLINS_OS_CAPTURE_ISO' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'public release ISO is intentionally human-safe' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'GOBLINS_VERIFY_INSTALL_DONE' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'goblins-hwgate-session-orchestrator' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'CAPTURE_STARTED' os/hardware-gate/capture-harness/run-capture.sh"
 check "capture driver fail-closes on serial VM stages and diagnostic frames" "rg -q 'GOS_SERIALLOG' os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'wait_serial_contains(\"ISO boot menu\"' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'observe_serial_contains(\"ISO boot handoff\"' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'continuing to framebuffer stages' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'key(\"ret\")' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'Anaconda automated kickstart progress' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq '\"kickstart install post\"' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'GOBLINS_VERIFY_INSTALL_DONE' os/hardware-gate/capture-harness/drive-capture.py os/iso/verify-config.toml && rg -Fq 'wait_stage(\"first boot desktop\"' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'diagnostic framebuffer samples' os/hardware-gate/capture-harness/drive-capture.py && rg -q '_debug-' os/hardware-gate/capture-harness/drive-capture.py && ! rg -q 'Anaconda destination disk selected' os/hardware-gate/capture-harness/drive-capture.py && ! rg -q 'click(0.937, 0.895)' os/hardware-gate/capture-harness/drive-capture.py && ! rg -q 'require_frame\\(' os/hardware-gate/capture-harness/drive-capture.py && ! rg -q 'wait_frame\\(' os/hardware-gate/capture-harness/drive-capture.py"
@@ -2262,10 +2878,10 @@ check "capture harness retries transient install boot hangs with fresh VM state"
 check "capture harness uses release-sized sparse scratch disk" "rg -q 'GOBLINS_OS_CAPTURE_DISK_SIZE:-80G' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'SCRATCH_DISK_SIZE' os/hardware-gate/capture-harness/run-capture.sh && rg -q '80G sparse scratch disk' os/hardware-gate/runbook.md"
 check "capture harness boots x86 verification ISO once then installed disk" "rg -q -- '-boot order=c,once=d' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'QEMU one-time ISO boot order' os/hardware-gate/runbook.md"
 check "capture harness restarts aarch64 disk-only after install marker" "rg -q 'aarch64:install' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'usb-storage,drive=install_iso,bootindex=1' os/hardware-gate/capture-harness/run-capture.sh && rg -q -- '-no-reboot' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'aarch64:firstboot' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'GOS_EXIT_AFTER_INSTALL_MARKER' os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/capture-harness/drive-capture.py && rg -q 'GOS_SKIP_INSTALL_PHASE' os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/capture-harness/drive-capture.py && rg -q 'install ISO is presented as USB' os/hardware-gate/runbook.md && rg -q 'scratch disk remains virtio vda' os/hardware-gate/runbook.md"
-check "capture driver completes first boot through the root release-proof capability" "rg -q 'first boot setup: completing offline path through the root release-proof capability' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'post first boot release-proof unlock' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'firstboot-unlock.sh' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'core-proof-operation.sh' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq '/run/goblins-os-core/release-proof/control.sock' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -Fq 'curl --unix-socket' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q '/v1/privacy' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q '/v1/installer/complete' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q '/v1/session/unlock' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q '/ready/FIRSTBOOT_UNLOCK' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -Fq '/failed/FIRSTBOOT_UNLOCK?stage=\$CURRENT_STAGE&rc=\$rc' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -Fq 'failure_prefix = \"/failed/FIRSTBOOT_UNLOCK?\"' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'GOBLINS_HWGATE_FIRSTBOOT_STAGE' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q 'GOBLINS_HWGATE_CORE_UNIT_STATE' os/hardware-gate/capture-harness/firstboot-unlock.sh && ! rg -q 'journalctl' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q 'first boot release-proof unlock callback' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'verification first boot -> privacy=\$firstboot_privacy_code installer=\$firstboot_installer_code session=\$firstboot_session_code' os/bootc/run-selftest.sh && rg -q 'persisted_installer_mode' os/bootc/run-selftest.sh && rg -q 'persisted_session_mode' os/bootc/run-selftest.sh"
-check "first boot signal delivery is current-attempt, two-way, and fail-closed" "rg -Fq 'install -m 0644 /dev/null ready/FIRSTBOOT_UNLOCK' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'install -m 0644 /dev/null failed/FIRSTBOOT_UNLOCK' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'success_serial_marker = \"GOBLINS_HWGATE_FIRSTBOOT_UNLOCK_DONE\"' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'http_status_code(line) == \"200\"' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'http_start_pos = os.path.getsize(HTTPLOG)' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'serial_start_pos = os.path.getsize(SERIALLOG)' os/hardware-gate/capture-harness/drive-capture.py"
+check "capture driver completes first boot through the root release-proof capability" "rg -q 'first boot setup: completing offline path through the root release-proof capability' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'post first boot release-proof unlock' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'firstboot-unlock.sh' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'core-proof-operation.sh' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq '/run/goblins-os-core/release-proof/control.sock' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -Fq 'curl --unix-socket' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q '/v1/privacy' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q '/v1/installer/complete' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q '/v1/session/unlock' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q '/ready/FIRSTBOOT_UNLOCK' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -Fq '/failed/FIRSTBOOT_UNLOCK?stage=\$CURRENT_STAGE&rc=\$rc' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -Fq 'event.get(\"kind\") == \"failed\"' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'GOBLINS_HWGATE_FIRSTBOOT_STAGE' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q 'GOBLINS_HWGATE_CORE_UNIT_STATE' os/hardware-gate/capture-harness/firstboot-unlock.sh && ! rg -q 'journalctl' os/hardware-gate/capture-harness/firstboot-unlock.sh && rg -q 'first boot release-proof unlock callback' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'verification first boot -> privacy=\$firstboot_privacy_code installer=\$firstboot_installer_code session=\$firstboot_session_code' os/bootc/run-selftest.sh && rg -q 'persisted_installer_mode' os/bootc/run-selftest.sh && rg -q 'persisted_session_mode' os/bootc/run-selftest.sh"
+check "first boot signal delivery is authenticated, current-attempt, two-way, and fail-closed" "rg -Fq 'hmac.compare_digest(authorization, expected)' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'self.expected_sequence' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'event.get(\"kind\") == \"failed\"' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'success_event_seen = event.get(\"values\") == {\"status\": \"pass\"}' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'success_serial_marker = \"GOBLINS_HWGATE_FIRSTBOOT_UNLOCK_DONE\"' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'firstboot_serial_start_pos = safe_file_size(SERIALLOG, SERIAL_MAX_BYTES)' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'start_offset=serial_start_pos' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'def _capture_channel_self_test():' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq -- '-fw_cfg \"name=opt/goblins/capture-token,file=\$TOKEN_FILE\"' os/hardware-gate/capture-harness/run-capture.sh && ! rg -Fq 'http.server' os/hardware-gate/capture-harness/run-capture.sh"
 check "hardware proof exposes only finite root operations to the desktop session" "rg -Fq 'subject.user !== \"goblin\"' os/iso/verify-config.toml && rg -Fq 'unit.match(/^goblins-hwgate-core-proof@(' os/iso/verify-config.toml && rg -Fq 'goblins-hwgate-core-proof@' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'unsupported proof operation' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'OPERATION=\"\${1:-}\"' os/hardware-gate/capture-harness/core-proof-operation.sh && rg -Fq 'download_with_wait core-proof-operation.sh /run/goblins-hwgate-root/core-proof-operation 15' os/iso/verify-config.toml && ! rg -q '(GOBLINS_OS|OPENAI_OS)_CORE_URL|127[.]0[.]0[.]1:8788|localhost:8788' os/iso/verify-config.toml os/hardware-gate/capture-harness"
-check "hardware gate session automation uses verification-only service not Alt+F2 injection" "rg -q 'goblins-hwgate-session-orchestrator.service' os/iso/verify-config.toml && rg -q '99-goblins-hwgate-session-orchestrator.conf' os/iso/verify-config.toml && rg -q 'WantedBy=default.target' os/iso/verify-config.toml && rg -q 'systemctl --global enable goblins-hwgate-session-orchestrator.service' os/iso/verify-config.toml && rg -q '/etc/xdg/autostart/goblins-hwgate-session-orchestrator.desktop' os/iso/verify-config.toml && rg -q 'Exec=/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator' os/iso/verify-config.toml && rg -q '/etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_ETC_HELPERS_INSTALLED' os/iso/verify-config.toml && ! rg -q '/usr/libexec/goblins-hwgate' os/iso/verify-config.toml && rg -q 'multi-user.target.wants/goblins-hwgate-firstboot-diagnostics.service' os/iso/verify-config.toml && rg -q 'graphical.target.wants/goblins-hwgate-session-orchestrator-starter.service' os/iso/verify-config.toml && rg -q 'goblins-hwgate-session-orchestrator-starter.service' os/iso/verify-config.toml && rg -Fq 'After=display-manager.service gdm.service systemd-user-sessions.service goblins-os-core.service' os/iso/verify-config.toml && rg -Fq 'Wants=goblins-os-core.service' os/iso/verify-config.toml && rg -Fq 'TimeoutStartSec=360' os/iso/verify-config.toml && rg -Fq 'TimeoutStartSec=3900' os/iso/verify-config.toml && rg -Fq 'for _ in \$(seq 1 120); do' os/iso/verify-config.toml && ! rg -Fq 'After=graphical.target display-manager.service' os/iso/verify-config.toml && rg -Fq 'StandardOutput=journal' os/iso/verify-config.toml && rg -Fq 'StandardError=journal' os/iso/verify-config.toml && ! rg -Fq 'exec >>/tmp/goblins-hwgate-start-session-orchestrator.log' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_CORE_START_REQUESTED' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_SESSION_BUS_READY' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED' os/iso/verify-config.toml os/hardware-gate/capture-harness/drive-capture.py && rg -q 'download_with_wait firstboot-unlock.sh /run/goblins-hwgate-root/firstboot 15' os/iso/verify-config.toml && rg -q 'download_with_wait orchestrator.sh /tmp/gos-orchestrator 600' os/iso/verify-config.toml && rg -q 'GOS_ORCHESTRATOR_DEST' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'publish_orchestrator()' os/hardware-gate/capture-harness/drive-capture.py && rg -q '\"GET /orchestrator.sh HTTP/1.1\" 200' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'first boot setup failed before helper callback; collecting VT diagnostics' os/hardware-gate/capture-harness/drive-capture.py && ! rg -q 'key[(]\"alt[+]f2\"|run_alt_f2' os/hardware-gate/capture-harness/drive-capture.py"
+check "hardware gate session automation uses verification-only service not Alt+F2 injection" "rg -q 'goblins-hwgate-session-orchestrator.service' os/iso/verify-config.toml && rg -q '99-goblins-hwgate-session-orchestrator.conf' os/iso/verify-config.toml && rg -q 'WantedBy=default.target' os/iso/verify-config.toml && rg -q 'systemctl --global enable goblins-hwgate-session-orchestrator.service' os/iso/verify-config.toml && rg -q '/etc/xdg/autostart/goblins-hwgate-session-orchestrator.desktop' os/iso/verify-config.toml && rg -q 'Exec=/etc/goblins-os/hardware-gate/goblins-hwgate-session-orchestrator' os/iso/verify-config.toml && rg -q '/etc/goblins-os/hardware-gate/goblins-hwgate-start-session-orchestrator' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_ETC_HELPERS_INSTALLED' os/iso/verify-config.toml && ! rg -q '/usr/libexec/goblins-hwgate' os/iso/verify-config.toml && rg -q 'multi-user.target.wants/goblins-hwgate-firstboot-diagnostics.service' os/iso/verify-config.toml && rg -q 'graphical.target.wants/goblins-hwgate-session-orchestrator-starter.service' os/iso/verify-config.toml && rg -q 'goblins-hwgate-session-orchestrator-starter.service' os/iso/verify-config.toml && rg -Fq 'After=display-manager.service gdm.service systemd-user-sessions.service goblins-os-core.service' os/iso/verify-config.toml && rg -Fq 'Wants=goblins-os-core.service' os/iso/verify-config.toml && rg -Fq 'TimeoutStartSec=360' os/iso/verify-config.toml && rg -Fq 'TimeoutStartSec=3900' os/iso/verify-config.toml && rg -Fq 'for _ in \$(seq 1 120); do' os/iso/verify-config.toml && ! rg -Fq 'After=graphical.target display-manager.service' os/iso/verify-config.toml && rg -Fq 'StandardOutput=journal' os/iso/verify-config.toml && rg -Fq 'StandardError=journal' os/iso/verify-config.toml && ! rg -Fq 'exec >>/tmp/goblins-hwgate-start-session-orchestrator.log' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_CORE_START_REQUESTED' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_SESSION_ORCHESTRATOR_STARTED' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_FIRSTBOOT_HELPER_DOWNLOADED' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_SESSION_BUS_READY' os/iso/verify-config.toml && rg -q 'GOBLINS_HWGATE_SESSION_ORCHESTRATOR_START_REQUESTED' os/iso/verify-config.toml os/hardware-gate/capture-harness/drive-capture.py && rg -q 'download_with_wait firstboot-unlock.sh /run/goblins-hwgate-root/firstboot 15' os/iso/verify-config.toml && rg -q 'download_with_wait orchestrator.sh /tmp/gos-orchestrator 600' os/iso/verify-config.toml && rg -q 'GOS_ORCHESTRATOR_DEST' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'publish_orchestrator()' os/hardware-gate/capture-harness/drive-capture.py && rg -Fq 'wait_helper_event(event_reader, \"orchestrator.sh\", 180)' os/hardware-gate/capture-harness/drive-capture.py && rg -q 'first boot setup failed before helper callback; collecting VT diagnostics' os/hardware-gate/capture-harness/drive-capture.py && ! rg -q 'key[(]\"alt[+]f2\"|run_alt_f2' os/hardware-gate/capture-harness/drive-capture.py"
 check "hardware gate session automation imports display env before user service" "rg -q 'Environment=WAYLAND_DISPLAY=wayland-0' os/iso/verify-config.toml && rg -q 'Environment=DISPLAY=:0' os/iso/verify-config.toml && rg -q 'dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE' os/iso/verify-config.toml && rg -q 'systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE' os/iso/verify-config.toml && rg -Fq 'export WAYLAND_DISPLAY=\"\${WAYLAND_DISPLAY:-wayland-0}\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh && rg -Fq 'export DISPLAY=\"\${DISPLAY:-:0}\"' os/hardware-gate/capture-harness/in-session-orchestrator.sh"
 check "verification ISO config pins scratch VM disk without touching release config" "rg -q 'ignoredisk --only-use=vda' os/iso/verify-config.toml && rg -q 'zerombr' os/iso/verify-config.toml && rg -q 'clearpart --all --initlabel --disklabel=gpt --drives=vda' os/iso/verify-config.toml && rg -q 'bootloader --location=mbr --boot-drive=vda' os/iso/verify-config.toml && rg -q 'part / --fstype=xfs --label=root --grow --size=1024 --ondisk=vda' os/iso/verify-config.toml && rg -q 'GOBLINS_VERIFY_INSTALL_DONE' os/iso/verify-config.toml && ! rg -q 'ostreecontainer --url' os/iso/verify-config.toml && ! rg -q 'GOBLINS_VERIFY_INSTALL_DONE' os/iso/config.toml"
 check "verification ISO markers reach x86 and aarch64 serial consoles" "rg -q '/dev/ttyS0' os/iso/verify-config.toml && rg -q '/dev/ttyAMA0' os/iso/verify-config.toml && rg -q 'tee /dev/ttyS0 /dev/ttyAMA0' os/iso/verify-config.toml"
@@ -2276,7 +2892,7 @@ check "capture driver fail-closes on QMP command errors" "rg -q 'QMP command .* 
 check "hardware gate uploads failure diagnostics" "rg -q 'copy_capture_logs' os/hardware-gate/capture-harness/run-capture.sh && rg -q '_capture-logs' os/hardware-gate/capture-harness/run-capture.sh && rg -q 'if: always()' .github/workflows/hardware-gate-capture.yml && rg -Fq 'os/screenshots/hardware-gate/\${{ matrix.arch }}/\${{ inputs.run_date }}/' .github/workflows/hardware-gate-capture.yml"
 check "hardware gate requires live firewall proof in signoff" "rg -q 'firewall_live_toggle_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Firewall live toggle checked' os/hardware-gate/close-signoff.sh && rg -q 'firewall-live-toggle-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts session proof in signoff" "rg -q 'text_shortcuts_session_enable_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts session enablement checked' os/hardware-gate/close-signoff.sh && rg -q 'text-shortcuts-session-enable-proof.json' os/hardware-gate/runbook.md"
-check "hardware gate records Text Shortcuts live keystrokes through runtime/render signoff" "! rg -q 'text_shortcuts_live_keystroke_proof_passe[s][[:space:]]*\\(|text-shortcuts-live-keystroke-proof[.]json' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts live keystrokes checked' os/hardware-gate/close-signoff.sh && rg -Fq 'covered by \$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_PROOF' os/hardware-gate/close-signoff.sh && rg -q 'supersedes the old text-shortcuts-live-keystroke-proof[.]json' os/hardware-gate/runbook.md"
+check "hardware gate records the native Text Shortcuts popup through runtime/render signoff" "! rg -q 'text_shortcuts_live_keystroke_proof_passe[s][[:space:]]*\\(|text-shortcuts-live-keystroke-proof[.]json' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts live IBus runtime/render checked' os/hardware-gate/close-signoff.sh && rg -q 'screenshot_capture_ack' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'native IBus proof may satisfy' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts candidate metadata proof in signoff" "rg -q 'text_shortcuts_candidate_metadata_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate metadata checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-metadata-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts overlay intent proof in signoff" "rg -q 'text_shortcuts_overlay_intent_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts overlay intent checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-overlay-intent-proof.json' os/hardware-gate/runbook.md"
 check "hardware gate requires Text Shortcuts candidate bubble frame proof in signoff" "rg -q 'text_shortcuts_candidate_bubble_frame_proof_passes' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Text Shortcuts candidate bubble frame checked' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'text-shortcuts-candidate-bubble-frame-proof.json' os/hardware-gate/runbook.md"
@@ -2365,7 +2981,7 @@ check "release proof binds ISO, SBOM, screenshots, and signoff to one candidate 
 check "release workflows propagate selected commit and image provenance" "rg -q 'GOBLINS_OS_CANDIDATE_COMMIT: [$][{][{] github[.]sha [}][}]' .github/workflows/build.yml && rg -q 'candidate_commit: [$][{][{] github[.]sha [}][}]' .github/workflows/release.yml && rg -q 'uses: ./[.]github/workflows/candidate-artifacts[.]yml' .github/workflows/release.yml && rg -q 'GOBLINS_OS_CANDIDATE_COMMIT: [$][{][{] inputs[.]candidate_commit [}][}]' .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q -- '--candidate-commit \"[$]GOBLINS_OS_CANDIDATE_COMMIT\"' .github/workflows/build.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q -- '--candidate-commit \"[$]CANDIDATE_COMMIT\"' .github/workflows/candidate-artifacts.yml && rg -q -- '--image-ref' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml"
 check "candidate artifact workflow is digest-bound and non-promotional" "test -f .github/workflows/candidate-artifacts.yml && rg -q 'candidate_commit:' .github/workflows/candidate-artifacts.yml && rg -q 'steps[.]build[.]outputs[.]digest' .github/workflows/candidate-artifacts.yml && rg -q 'GOBLINS_OS_BIB_SOURCE_IMAGE=\"[$]IMMUTABLE_IMAGE_REF\"' .github/workflows/candidate-artifacts.yml && rg -q 'bib_image_ref.*IMMUTABLE_IMAGE_REF' .github/workflows/candidate-artifacts.yml && rg -q 'is not the current origin/main commit' .github/workflows/candidate-artifacts.yml && rg -q 'goblins-os-candidate-ref-' .github/workflows/candidate-artifacts.yml && rg -q 'contents: read' .github/workflows/candidate-artifacts.yml && ! rg -q 'contents: write|git push|gh release|goblins-os:(x86_64|aarch64|latest|stable)' .github/workflows/candidate-artifacts.yml"
 check "candidate workflow gates the exact published digest before artifact production" "rg -q -- '--source-root /workspace' .github/workflows/candidate-artifacts.yml && rg -q -- '--installed-root /' .github/workflows/candidate-artifacts.yml && rg -q -- '--target selftest' .github/workflows/candidate-artifacts.yml && rg -q 'Verify the exact candidate source and installed-root contracts' .github/workflows/candidate-artifacts.yml && rg -q 'Run the exact candidate install and services self-test' .github/workflows/candidate-artifacts.yml"
-check "release workflows pin third-party actions to full commits" "! rg -q 'uses:[[:space:]]+(actions|docker)/[^@]+@v[0-9]+' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml && rg -q 'actions/checkout@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml && rg -q 'docker/build-push-action@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml && rg -q 'actions/upload-artifact@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml"
+check "release workflows pin third-party actions to full commits" "! rg -q 'uses:[[:space:]]+(actions|docker)/[^@]+@v[0-9]+' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml .github/workflows/aarch64-local-display-attestation.yml && rg -q 'actions/checkout@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml && rg -q 'docker/build-push-action@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml && rg -q 'actions/upload-artifact@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml && rg -q 'actions/attest@[0-9a-f]{40}' .github/workflows/aarch64-local-display-attestation.yml"
 check "release media uses one exact reviewed build and branding tool chain" "rg -q 'bootc-image-builder@sha256:[0-9a-f]{64}' os/iso/build-iso.sh && installer_branding_tool_provenance_passes && rg -q 'shippable release media cannot skip Goblins installer branding' os/iso/build-iso.sh && rg -q 'shippable release media forbids GOBLINS_OS_BIB_AUTH_FILE' os/iso/build-iso.sh && ! rg -q 'dnf -y install' os/iso/remaster-anaconda-branding.sh && rg -Fq 'cmp --silent \"\$BRAND/sidebar-bg.png\" \"\$PIX/sidebar-bg.png\"' os/iso/remaster-anaconda-branding.sh && rg -Fq 'installer stylesheet still contains the legacy Fedora accent' os/iso/remaster-anaconda-branding.sh && rg -q 'checkisomd5 --verbose' os/iso/remaster-anaconda-branding.sh"
 check "release evidence hash-seals exact Cargo and RPM inventories" "rg -Fq 'goblins-os-release-evidence-v4' crates/goblins-os-verify/src/main.rs os/hardware-gate/release-evidence.sh && rg -Fq 'cargo_packages_sha256' crates/goblins-os-verify/src/main.rs .github/workflows/candidate-artifacts.yml && rg -Fq 'rpm_packages_sha256' crates/goblins-os-verify/src/main.rs .github/workflows/candidate-artifacts.yml && rg -Fq 'goblins_os_release_evidence_hashes_match' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/hardware-gate-capture.yml .github/workflows/aarch64-verification-iso.yml os/hardware-gate/run-external-gate.sh os/hardware-gate/close-signoff.sh"
 check "native aarch64 proof binds the exact verification artifacts and workflow attempt" "rg -q 'verification_iso_sha256' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'release_evidence_manifest_sha256' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'workflow_run_attempt' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Native packaging gate run attempt:' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"

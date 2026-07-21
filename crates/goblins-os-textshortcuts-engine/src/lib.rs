@@ -5,12 +5,16 @@
 //! tracking, replacement commit decisions, and hard refusal in sensitive text
 //! fields.
 
-use std::io::{BufRead, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
 const MAX_SHORTCUTS: usize = 500;
+pub const MAX_TEXT_SHORTCUTS_TABLE_BYTES: usize = 48 * 1024;
 pub const TEXT_SHORTCUTS_CONFIG_DIR: &str = "goblins-os";
 pub const TEXT_SHORTCUTS_CONFIG_FILE: &str = "text-shortcuts.json";
 pub const IBUS_ENGINE_NAME: &str = "goblins-textshortcuts";
@@ -105,7 +109,12 @@ pub fn sanitize_shortcuts(shortcuts: Vec<TextShortcut>) -> Vec<TextShortcut> {
     for shortcut in shortcuts {
         let replace = shortcut.replace.trim().to_string();
         let with_text = shortcut.with_text.trim().to_string();
-        if replace.is_empty() || with_text.is_empty() || replace == with_text {
+        if replace.is_empty()
+            || with_text.is_empty()
+            || replace == with_text
+            || replace.contains('\0')
+            || with_text.contains('\0')
+        {
             continue;
         }
         if !seen.contains_key(&replace) {
@@ -121,6 +130,13 @@ pub fn sanitize_shortcuts(shortcuts: Vec<TextShortcut>) -> Vec<TextShortcut> {
             replace,
         })
         .collect()
+}
+
+/// Whether the canonical JSON representation, including its trailing newline,
+/// fits the one bounded table contract shared by the editor and runtime.
+pub fn text_shortcuts_table_is_within_size_limit(shortcuts: &[TextShortcut]) -> bool {
+    serde_json::to_vec(shortcuts)
+        .is_ok_and(|raw| raw.len().saturating_add(1) <= MAX_TEXT_SHORTCUTS_TABLE_BYTES)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -148,6 +164,8 @@ pub enum TableLoadStatus {
     Loaded { shortcuts: usize },
     Missing,
     InvalidJson,
+    TooLarge,
+    UnsafeFile,
     Unreadable,
 }
 
@@ -158,6 +176,12 @@ impl TableLoadStatus {
             Self::Missing => "No Text Shortcuts table is configured yet.",
             Self::InvalidJson => {
                 "Text Shortcuts table could not be parsed; expansion is disabled until it is fixed."
+            }
+            Self::TooLarge => {
+                "Text Shortcuts table exceeds the private storage limit; expansion is disabled until it is reduced."
+            }
+            Self::UnsafeFile => {
+                "Text Shortcuts table is not a private regular file; expansion is disabled until it is fixed."
             }
             Self::Unreadable => {
                 "Text Shortcuts table could not be read; expansion is disabled until it is accessible."
@@ -170,8 +194,33 @@ impl TableLoadStatus {
 pub enum TableFingerprint {
     Present { bytes: u64, content_hash: u64 },
     Missing,
+    TooLarge { bytes: u64 },
+    UnsafeFile,
     Unreadable,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TableWriteError {
+    TooLarge,
+    UnsafeParent,
+    UnsafeDestination,
+    Io,
+}
+
+impl std::fmt::Display for TableWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::TooLarge => "Text Shortcuts table exceeds the private storage limit.",
+            Self::UnsafeParent => {
+                "Text Shortcuts private configuration directory is not safe to use."
+            }
+            Self::UnsafeDestination => "Text Shortcuts table is not a private regular file.",
+            Self::Io => "Text Shortcuts table could not be saved privately.",
+        })
+    }
+}
+
+impl std::error::Error for TableWriteError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TableLoadOutcome {
@@ -238,8 +287,13 @@ impl TextShortcutTableStore {
     pub fn from_environment() -> Result<Self, TableStoreError> {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+            .filter(|path| path.is_absolute())
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .filter(|home| home.is_absolute())
+                    .map(|home| home.join(".config"))
+            })
             .ok_or(TableStoreError::NoConfigHome)?;
         Ok(Self::from_config_home(base))
     }
@@ -253,20 +307,23 @@ impl TextShortcutTableStore {
     }
 
     pub fn load_snapshot(&self) -> TableLoadSnapshot {
-        match std::fs::read_to_string(&self.path) {
-            Ok(raw) => {
+        match read_bounded_table(&self.path) {
+            BoundedTableRead::Present(raw) => {
                 let fingerprint = TableFingerprint::Present {
                     bytes: raw.len() as u64,
-                    content_hash: stable_content_hash(raw.as_bytes()),
+                    content_hash: stable_content_hash(&raw),
                 };
-                let outcome = match ShortcutTable::from_json(&raw) {
-                    Ok(table) => TableLoadOutcome {
+                let outcome = match std::str::from_utf8(&raw)
+                    .ok()
+                    .and_then(|raw| ShortcutTable::from_json(raw).ok())
+                {
+                    Some(table) => TableLoadOutcome {
                         status: TableLoadStatus::Loaded {
                             shortcuts: table.len(),
                         },
                         table,
                     },
-                    Err(_) => TableLoadOutcome {
+                    None => TableLoadOutcome {
                         table: ShortcutTable::default(),
                         status: TableLoadStatus::InvalidJson,
                     },
@@ -276,14 +333,28 @@ impl TextShortcutTableStore {
                     fingerprint,
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => TableLoadSnapshot {
+            BoundedTableRead::Missing => TableLoadSnapshot {
                 outcome: TableLoadOutcome {
                     table: ShortcutTable::default(),
                     status: TableLoadStatus::Missing,
                 },
                 fingerprint: TableFingerprint::Missing,
             },
-            Err(_) => TableLoadSnapshot {
+            BoundedTableRead::TooLarge { bytes } => TableLoadSnapshot {
+                outcome: TableLoadOutcome {
+                    table: ShortcutTable::default(),
+                    status: TableLoadStatus::TooLarge,
+                },
+                fingerprint: TableFingerprint::TooLarge { bytes },
+            },
+            BoundedTableRead::UnsafeFile => TableLoadSnapshot {
+                outcome: TableLoadOutcome {
+                    table: ShortcutTable::default(),
+                    status: TableLoadStatus::UnsafeFile,
+                },
+                fingerprint: TableFingerprint::UnsafeFile,
+            },
+            BoundedTableRead::Unreadable => TableLoadSnapshot {
                 outcome: TableLoadOutcome {
                     table: ShortcutTable::default(),
                     status: TableLoadStatus::Unreadable,
@@ -292,6 +363,176 @@ impl TextShortcutTableStore {
             },
         }
     }
+
+    /// Canonicalize and atomically replace the desktop user's one private table.
+    /// The temporary file lives beside the destination, so readers observe the
+    /// complete old table or the complete new table, never a partial write.
+    pub fn save(&self, shortcuts: Vec<TextShortcut>) -> Result<Vec<TextShortcut>, TableWriteError> {
+        let shortcuts = sanitize_shortcuts(shortcuts);
+        let mut raw = serde_json::to_vec(&shortcuts).map_err(|_| TableWriteError::Io)?;
+        raw.push(b'\n');
+        if raw.len() > MAX_TEXT_SHORTCUTS_TABLE_BYTES {
+            return Err(TableWriteError::TooLarge);
+        }
+
+        let parent = self.path.parent().ok_or(TableWriteError::UnsafeParent)?;
+        prepare_private_table_parent(parent)?;
+        validate_table_destination(&self.path)?;
+
+        let (mut temporary, temporary_path) = create_private_temporary(parent)?;
+        let write_result = (|| {
+            temporary.write_all(&raw).map_err(|_| TableWriteError::Io)?;
+            temporary.flush().map_err(|_| TableWriteError::Io)?;
+            temporary.sync_all().map_err(|_| TableWriteError::Io)?;
+            temporary
+                .set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|_| TableWriteError::Io)?;
+            std::fs::rename(&temporary_path, &self.path).map_err(|_| TableWriteError::Io)?;
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| TableWriteError::Io)
+        })();
+        if write_result.is_err() {
+            let _ = std::fs::remove_file(&temporary_path);
+        }
+        write_result.map(|()| shortcuts)
+    }
+}
+
+enum BoundedTableRead {
+    Present(Vec<u8>),
+    Missing,
+    TooLarge { bytes: u64 },
+    UnsafeFile,
+    Unreadable,
+}
+
+fn read_bounded_table(path: &Path) -> BoundedTableRead {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return BoundedTableRead::Missing;
+        }
+        Err(_) => return BoundedTableRead::Unreadable,
+    };
+    if !private_regular_file_metadata(&metadata, effective_uid()) {
+        return BoundedTableRead::UnsafeFile;
+    }
+    if metadata.len() > MAX_TEXT_SHORTCUTS_TABLE_BYTES as u64 {
+        return BoundedTableRead::TooLarge {
+            bytes: metadata.len(),
+        };
+    }
+
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(_) => return BoundedTableRead::Unreadable,
+    };
+    let opened_metadata = match file.metadata() {
+        Ok(metadata) if private_regular_file_metadata(&metadata, effective_uid()) => metadata,
+        Ok(_) => return BoundedTableRead::UnsafeFile,
+        Err(_) => return BoundedTableRead::Unreadable,
+    };
+    if opened_metadata.len() > MAX_TEXT_SHORTCUTS_TABLE_BYTES as u64 {
+        return BoundedTableRead::TooLarge {
+            bytes: opened_metadata.len(),
+        };
+    }
+
+    let mut raw = Vec::with_capacity(opened_metadata.len() as usize);
+    if file
+        .take((MAX_TEXT_SHORTCUTS_TABLE_BYTES + 1) as u64)
+        .read_to_end(&mut raw)
+        .is_err()
+    {
+        return BoundedTableRead::Unreadable;
+    }
+    if raw.len() > MAX_TEXT_SHORTCUTS_TABLE_BYTES {
+        return BoundedTableRead::TooLarge {
+            bytes: raw.len() as u64,
+        };
+    }
+    BoundedTableRead::Present(raw)
+}
+
+fn prepare_private_table_parent(parent: &Path) -> Result<(), TableWriteError> {
+    match std::fs::symlink_metadata(parent) {
+        Ok(metadata) => validate_private_table_parent_metadata(&metadata)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(parent).map_err(|_| TableWriteError::Io)?;
+            let metadata = std::fs::symlink_metadata(parent).map_err(|_| TableWriteError::Io)?;
+            validate_private_table_parent_metadata(&metadata)?;
+        }
+        Err(_) => return Err(TableWriteError::Io),
+    }
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| TableWriteError::Io)
+}
+
+fn validate_private_table_parent_metadata(
+    metadata: &std::fs::Metadata,
+) -> Result<(), TableWriteError> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() || metadata.uid() != effective_uid()
+    {
+        Err(TableWriteError::UnsafeParent)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_table_destination(path: &Path) -> Result<(), TableWriteError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata)
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || metadata.uid() != effective_uid() =>
+        {
+            Err(TableWriteError::UnsafeDestination)
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(TableWriteError::Io),
+    }
+}
+
+fn private_regular_file_metadata(metadata: &std::fs::Metadata, expected_uid: u32) -> bool {
+    !metadata.file_type().is_symlink()
+        && metadata.is_file()
+        && metadata.uid() == expected_uid
+        && metadata.mode() & 0o7777 == 0o600
+}
+
+fn effective_uid() -> u32 {
+    // SAFETY: geteuid has no preconditions and does not dereference pointers.
+    unsafe { libc::geteuid() }
+}
+
+static NEXT_TABLE_TEMPORARY: AtomicU64 = AtomicU64::new(1);
+
+fn create_private_temporary(parent: &Path) -> Result<(File, PathBuf), TableWriteError> {
+    for _ in 0..128 {
+        let sequence = NEXT_TABLE_TEMPORARY.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!(
+            ".text-shortcuts.json.tmp-{}-{sequence}",
+            std::process::id()
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(&path)
+        {
+            Ok(file) => return Ok((file, path)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(TableWriteError::Io),
+        }
+    }
+    Err(TableWriteError::Io)
 }
 
 fn stable_content_hash(bytes: &[u8]) -> u64 {
@@ -482,11 +723,7 @@ pub fn run_text_shortcuts_table_watch_self_test() -> Result<(), TableWatchSelfTe
     expect_watch_decision(
         "initial-candidate",
         candidate,
-        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-            text: "on my way".to_string(),
-            cursor_pos: 9,
-            visible: true,
-        }]),
+        IbusRuntimeDecision::show_candidate("omw", "on my way"),
     )?;
 
     expect_watch_unchanged_status(
@@ -509,11 +746,7 @@ pub fn run_text_shortcuts_table_watch_self_test() -> Result<(), TableWatchSelfTe
     expect_watch_decision(
         "updated-candidate",
         updated_candidate,
-        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-            text: "on my way now".to_string(),
-            cursor_pos: 13,
-            visible: true,
-        }]),
+        IbusRuntimeDecision::show_candidate("omw", "on my way now"),
     )?;
 
     write_table_for_watch_self_test(&path, "not-json")?;
@@ -557,6 +790,7 @@ fn expect_current_word(
 
 fn write_table_for_watch_self_test(path: &Path, raw: &str) -> Result<(), TableWatchSelfTestError> {
     std::fs::write(path, raw)
+        .and_then(|()| std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)))
         .map_err(|error| TableWatchSelfTestError::Io(format!("could not write table: {error}")))
 }
 
@@ -875,30 +1109,43 @@ pub enum EngineAction {
     ClearCandidate,
     DismissCandidate,
     CommitReplacement {
-        delete_previous_chars: usize,
+        trigger: String,
         text: String,
     },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IbusOperation {
-    UpdatePreeditText {
-        text: String,
-        cursor_pos: u32,
-        visible: bool,
-    },
     HidePreeditText,
     DeleteSurroundingText {
         offset: i32,
         n_chars: u32,
+        expected_text: String,
     },
     CommitText(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IbusCandidateMetadata {
+    trigger: String,
+    replacement: String,
+}
+
+impl IbusCandidateMetadata {
+    pub fn trigger(&self) -> &str {
+        &self.trigger
+    }
+
+    pub fn replacement(&self) -> &str {
+        &self.replacement
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct IbusRuntimeDecision {
     handled: bool,
     operations: Vec<IbusOperation>,
+    candidate: Option<Box<IbusCandidateMetadata>>,
 }
 
 impl IbusRuntimeDecision {
@@ -910,6 +1157,7 @@ impl IbusRuntimeDecision {
         Self {
             handled: true,
             operations,
+            candidate: None,
         }
     }
 
@@ -917,6 +1165,18 @@ impl IbusRuntimeDecision {
         Self {
             handled: false,
             operations,
+            candidate: None,
+        }
+    }
+
+    pub fn show_candidate(trigger: impl Into<String>, replacement: impl Into<String>) -> Self {
+        Self {
+            handled: false,
+            operations: Vec::new(),
+            candidate: Some(Box::new(IbusCandidateMetadata {
+                trigger: trigger.into(),
+                replacement: replacement.into(),
+            })),
         }
     }
 
@@ -927,37 +1187,58 @@ impl IbusRuntimeDecision {
     pub fn operations(&self) -> &[IbusOperation] {
         &self.operations
     }
+
+    pub fn candidate(&self) -> Option<&IbusCandidateMetadata> {
+        self.candidate.as_deref()
+    }
 }
 
 pub fn ibus_runtime_decision(action: EngineAction) -> IbusRuntimeDecision {
     match action {
         EngineAction::PassThrough => IbusRuntimeDecision::pass_through(),
-        EngineAction::ShowCandidate { replacement, .. } => {
-            let cursor_pos = replacement.chars().count() as u32;
-            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-                text: replacement,
-                cursor_pos,
-                visible: true,
-            }])
-        }
+        EngineAction::ShowCandidate {
+            trigger,
+            replacement,
+        } => IbusRuntimeDecision::show_candidate(trigger, replacement),
         EngineAction::ClearCandidate => {
             IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
         }
         EngineAction::DismissCandidate => {
             IbusRuntimeDecision::handled(vec![IbusOperation::HidePreeditText])
         }
-        EngineAction::CommitReplacement {
-            delete_previous_chars,
-            text,
-        } => IbusRuntimeDecision::handled(vec![
-            IbusOperation::DeleteSurroundingText {
-                offset: -(delete_previous_chars as i32),
-                n_chars: delete_previous_chars as u32,
-            },
-            IbusOperation::CommitText(text),
-            IbusOperation::HidePreeditText,
-        ]),
+        EngineAction::CommitReplacement { trigger, text } => {
+            IbusRuntimeDecision::handled(replacement_operations(trigger, text))
+        }
     }
+}
+
+fn ibus_runtime_decision_forwarding_boundary(
+    action: EngineAction,
+    boundary: char,
+) -> IbusRuntimeDecision {
+    match action {
+        EngineAction::CommitReplacement { trigger, text } => {
+            let replacement = text
+                .strip_suffix(boundary)
+                .unwrap_or(text.as_str())
+                .to_string();
+            IbusRuntimeDecision::side_effects(replacement_operations(trigger, replacement))
+        }
+        action => ibus_runtime_decision(action),
+    }
+}
+
+fn replacement_operations(expected_text: String, text: String) -> Vec<IbusOperation> {
+    let delete_previous_chars = expected_text.chars().count();
+    vec![
+        IbusOperation::DeleteSurroundingText {
+            offset: -(delete_previous_chars as i32),
+            n_chars: delete_previous_chars as u32,
+            expected_text,
+        },
+        IbusOperation::CommitText(text),
+        IbusOperation::HidePreeditText,
+    ]
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -975,6 +1256,8 @@ pub enum RuntimeProtocolRequest {
     ContentPurposeChanged {
         purpose: RuntimeProtocolPurpose,
     },
+    Health,
+    AcceptCandidate,
     FocusOut,
     Reset,
     TableChanged {
@@ -1010,6 +1293,7 @@ pub struct RuntimeProtocolResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RuntimeProtocolCandidate {
+    pub trigger: String,
     pub replacement: String,
     pub accept_on: String,
     pub dismiss_key: String,
@@ -1019,15 +1303,11 @@ pub struct RuntimeProtocolCandidate {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum RuntimeProtocolOperation {
-    UpdatePreeditText {
-        text: String,
-        cursor_pos: u32,
-        visible: bool,
-    },
     HidePreeditText,
     DeleteSurroundingText {
         offset: i32,
         n_chars: u32,
+        expected_text: String,
     },
     CommitText {
         text: String,
@@ -1043,7 +1323,7 @@ impl RuntimeProtocolResponse {
             .collect();
         Self {
             handled: decision.key_handled(),
-            candidate: runtime_candidate_from_operations(&operations),
+            candidate: decision.candidate().map(RuntimeProtocolCandidate::from),
             operations,
             error: None,
         }
@@ -1059,45 +1339,31 @@ impl RuntimeProtocolResponse {
     }
 }
 
-fn runtime_candidate_from_operations(
-    operations: &[RuntimeProtocolOperation],
-) -> Option<RuntimeProtocolCandidate> {
-    operations.iter().find_map(|operation| {
-        let RuntimeProtocolOperation::UpdatePreeditText { text, visible, .. } = operation else {
-            return None;
-        };
-        if *visible {
-            Some(RuntimeProtocolCandidate {
-                replacement: text.clone(),
-                accept_on: "word-boundary".to_string(),
-                dismiss_key: "Escape".to_string(),
-                rendered_bubble_ready_claim: false,
-            })
-        } else {
-            None
+impl From<&IbusCandidateMetadata> for RuntimeProtocolCandidate {
+    fn from(candidate: &IbusCandidateMetadata) -> Self {
+        Self {
+            trigger: candidate.trigger().to_string(),
+            replacement: candidate.replacement().to_string(),
+            accept_on: "word-boundary".to_string(),
+            dismiss_key: "Escape".to_string(),
+            rendered_bubble_ready_claim: false,
         }
-    })
+    }
 }
 
 impl From<&IbusOperation> for RuntimeProtocolOperation {
     fn from(operation: &IbusOperation) -> Self {
         match operation {
-            IbusOperation::UpdatePreeditText {
-                text,
-                cursor_pos,
-                visible,
-            } => Self::UpdatePreeditText {
-                text: text.clone(),
-                cursor_pos: *cursor_pos,
-                visible: *visible,
-            },
             IbusOperation::HidePreeditText => Self::HidePreeditText,
-            IbusOperation::DeleteSurroundingText { offset, n_chars } => {
-                Self::DeleteSurroundingText {
-                    offset: *offset,
-                    n_chars: *n_chars,
-                }
-            }
+            IbusOperation::DeleteSurroundingText {
+                offset,
+                n_chars,
+                expected_text,
+            } => Self::DeleteSurroundingText {
+                offset: *offset,
+                n_chars: *n_chars,
+                expected_text: expected_text.clone(),
+            },
             IbusOperation::CommitText(text) => Self::CommitText { text: text.clone() },
         }
     }
@@ -1108,7 +1374,10 @@ pub fn handle_runtime_protocol_request(
     request: RuntimeProtocolRequest,
 ) -> RuntimeProtocolResponse {
     match runtime_protocol_request_event(request) {
-        Ok(event) => RuntimeProtocolResponse::from_decision(runtime.handle_event(event)),
+        Ok(event) => {
+            let decision = runtime.handle_event(event);
+            RuntimeProtocolResponse::from_decision(decision)
+        }
         Err(message) => RuntimeProtocolResponse::error(message),
     }
 }
@@ -1170,6 +1439,8 @@ fn runtime_protocol_request_event(
         RuntimeProtocolRequest::ContentPurposeChanged { purpose } => Ok(
             IbusRuntimeEvent::ContentPurposeChanged(purpose.into_content_purpose()),
         ),
+        RuntimeProtocolRequest::Health => Ok(IbusRuntimeEvent::Health),
+        RuntimeProtocolRequest::AcceptCandidate => Ok(IbusRuntimeEvent::AcceptCandidate),
         RuntimeProtocolRequest::FocusOut => Ok(IbusRuntimeEvent::FocusOut),
         RuntimeProtocolRequest::Reset => Ok(IbusRuntimeEvent::Reset),
         RuntimeProtocolRequest::TableChanged { shortcuts } => Ok(IbusRuntimeEvent::TableChanged(
@@ -1261,6 +1532,10 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         r#"{"type":"key","keyval":109,"unicode":"m","pressed":true,"command_modifier_active":false}"#,
         r#"{"type":"key","keyval":119,"unicode":"w","pressed":true,"command_modifier_active":false}"#,
         r#"{"type":"key","keyval":32,"unicode":" ","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":111,"unicode":"o","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":109,"unicode":"m","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"key","keyval":119,"unicode":"w","pressed":true,"command_modifier_active":false}"#,
+        r#"{"type":"accept-candidate"}"#,
         r#"{"type":"focus-in","purpose":9}"#,
         r#"{"type":"key","keyval":111,"unicode":"o","pressed":true,"command_modifier_active":false}"#,
         r#"{"type":"key","keyval":109,"unicode":"m","pressed":true,"command_modifier_active":false}"#,
@@ -1290,9 +1565,9 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    if responses.len() != 14 {
+    if responses.len() != 18 {
         return Err(RuntimeProtocolSelfTestError::UnexpectedResponseCount {
-            expected: 14,
+            expected: 18,
             actual: responses.len(),
         });
     }
@@ -1307,16 +1582,13 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         },
     )?;
     expect_protocol_response(
-        "candidate-preedit",
+        "candidate-metadata",
         &responses[3],
         RuntimeProtocolResponse {
             handled: false,
-            operations: vec![RuntimeProtocolOperation::UpdatePreeditText {
-                text: "on my way".to_string(),
-                cursor_pos: 9,
-                visible: true,
-            }],
+            operations: Vec::new(),
             candidate: Some(RuntimeProtocolCandidate {
+                trigger: "omw".to_string(),
                 replacement: "on my way".to_string(),
                 accept_on: "word-boundary".to_string(),
                 dismiss_key: "Escape".to_string(),
@@ -1344,6 +1616,7 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
                 RuntimeProtocolOperation::DeleteSurroundingText {
                     offset: -3,
                     n_chars: 3,
+                    expected_text: "omw".to_string(),
                 },
                 RuntimeProtocolOperation::CommitText {
                     text: "on my way ".to_string(),
@@ -1355,8 +1628,28 @@ pub fn run_text_shortcuts_stdio_self_test() -> Result<(), RuntimeProtocolSelfTes
         },
     )?;
     expect_protocol_response(
+        "pointer-accept",
+        &responses[12],
+        RuntimeProtocolResponse {
+            handled: true,
+            operations: vec![
+                RuntimeProtocolOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                    expected_text: "omw".to_string(),
+                },
+                RuntimeProtocolOperation::CommitText {
+                    text: "on my way".to_string(),
+                },
+                RuntimeProtocolOperation::HidePreeditText,
+            ],
+            candidate: None,
+            error: None,
+        },
+    )?;
+    expect_protocol_response(
         "pin-pass-through",
-        &responses[13],
+        &responses[17],
         RuntimeProtocolResponse {
             handled: false,
             operations: Vec::new(),
@@ -1396,6 +1689,8 @@ pub enum IbusRuntimeEvent {
     FocusOut,
     Reset,
     ContentPurposeChanged(ContentPurpose),
+    Health,
+    AcceptCandidate,
     TableChanged(ShortcutTable),
 }
 
@@ -1458,16 +1753,38 @@ impl IbusTextShortcutsRuntime {
             IbusRuntimeEvent::Key(event) => self.handle_key(event),
             IbusRuntimeEvent::FocusIn(purpose)
             | IbusRuntimeEvent::ContentPurposeChanged(purpose) => self.set_content_purpose(purpose),
+            IbusRuntimeEvent::Health => IbusRuntimeDecision::pass_through(),
+            IbusRuntimeEvent::AcceptCandidate => self.accept_candidate(),
             IbusRuntimeEvent::FocusOut | IbusRuntimeEvent::Reset => self.clear_state(),
             IbusRuntimeEvent::TableChanged(table) => self.set_table(table),
         }
     }
 
     pub fn handle_key(&mut self, event: IbusKeyEvent) -> IbusRuntimeDecision {
+        let forwarded_boundary = match event.keyval() {
+            IBUS_KEY_RETURN => Some('\n'),
+            IBUS_KEY_TAB => Some('\t'),
+            _ => None,
+        };
         let input = input_event_from_ibus_key(event);
         let action = self
             .state
             .handle_event(self.content_purpose, input, &self.table);
+        if let Some(boundary) = forwarded_boundary {
+            ibus_runtime_decision_forwarding_boundary(action, boundary)
+        } else {
+            ibus_runtime_decision(action)
+        }
+    }
+
+    /// Accept the currently visible candidate from a non-keyboard IBus action,
+    /// such as selecting the native lookup-table row with a pointer. This does
+    /// not fabricate a Space or Return boundary, so only the replacement itself
+    /// is committed. Missing and sensitive candidates remain fail-open.
+    pub fn accept_candidate(&mut self) -> IbusRuntimeDecision {
+        let action = self
+            .state
+            .accept_candidate(self.content_purpose, &self.table);
         ibus_runtime_decision(action)
     }
 
@@ -1517,13 +1834,9 @@ pub fn run_text_shortcuts_keystroke_self_test() -> Result<(), KeystrokeSelfTestE
     let mut runtime = IbusTextShortcutsRuntime::new(table.clone());
     let candidate = type_runtime_text_for_self_test(&mut runtime, "omw");
     expect_keystroke_decision(
-        "candidate-preedit",
+        "candidate-metadata",
         candidate,
-        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-            text: "on my way".to_string(),
-            cursor_pos: 9,
-            visible: true,
-        }]),
+        IbusRuntimeDecision::show_candidate("omw", "on my way"),
     )?;
     expect_keystroke_decision(
         "escape-dismiss",
@@ -1542,13 +1855,9 @@ pub fn run_text_shortcuts_keystroke_self_test() -> Result<(), KeystrokeSelfTestE
     )?;
     let candidate = type_runtime_text_for_self_test(&mut runtime, "omw");
     expect_keystroke_decision(
-        "candidate-preedit-after-dismiss",
+        "candidate-metadata-after-dismiss",
         candidate,
-        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-            text: "on my way".to_string(),
-            cursor_pos: 9,
-            visible: true,
-        }]),
+        IbusRuntimeDecision::show_candidate("omw", "on my way"),
     )?;
     expect_keystroke_decision(
         "boundary-commit",
@@ -1557,6 +1866,7 @@ pub fn run_text_shortcuts_keystroke_self_test() -> Result<(), KeystrokeSelfTestE
             IbusOperation::DeleteSurroundingText {
                 offset: -3,
                 n_chars: 3,
+                expected_text: "omw".to_string(),
             },
             IbusOperation::CommitText("on my way ".to_string()),
             IbusOperation::HidePreeditText,
@@ -1580,11 +1890,7 @@ pub fn run_text_shortcuts_keystroke_self_test() -> Result<(), KeystrokeSelfTestE
     expect_keystroke_decision(
         "focus-candidate",
         focus_candidate,
-        IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-            text: "on my way".to_string(),
-            cursor_pos: 9,
-            visible: true,
-        }]),
+        IbusRuntimeDecision::show_candidate("omw", "on my way"),
     )?;
     expect_keystroke_decision(
         "focus-out",
@@ -1664,14 +1970,30 @@ impl EngineState {
 
     fn handle_boundary(&mut self, value: char, table: &ShortcutTable) -> EngineAction {
         if let Some(replacement) = table.replacement_for(&self.current_word) {
-            let delete_previous_chars = self.current_word.chars().count();
+            let trigger = self.current_word.clone();
             let text = format!("{replacement}{value}");
             self.current_word.clear();
             self.candidate_visible = false;
-            EngineAction::CommitReplacement {
-                delete_previous_chars,
-                text,
-            }
+            EngineAction::CommitReplacement { trigger, text }
+        } else {
+            self.clear_candidate()
+        }
+    }
+
+    fn accept_candidate(&mut self, purpose: ContentPurpose, table: &ShortcutTable) -> EngineAction {
+        if !purpose.permits_replacement() {
+            return self.clear_sensitive_state();
+        }
+        if !self.candidate_visible {
+            self.current_word.clear();
+            return EngineAction::PassThrough;
+        }
+        if let Some(replacement) = table.replacement_for(&self.current_word) {
+            let trigger = self.current_word.clone();
+            let text = replacement.to_string();
+            self.current_word.clear();
+            self.candidate_visible = false;
+            EngineAction::CommitReplacement { trigger, text }
         } else {
             self.clear_candidate()
         }
@@ -1736,18 +2058,20 @@ pub fn is_boundary_char(value: char) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     use super::{
         content_purpose_from_ibus_input_purpose, content_purpose_from_ibus_input_purpose_name,
-        default_text_shortcuts_table_path, handle_runtime_protocol_line, ibus_runtime_decision,
-        input_event_from_ibus_key, run_text_shortcuts_content_purpose_self_test,
-        run_text_shortcuts_keystroke_self_test, run_text_shortcuts_stdio_self_test,
-        run_text_shortcuts_table_watch_self_test, sanitize_shortcuts, ContentPurpose, EngineAction,
-        EngineState, IbusKeyEvent, IbusOperation, IbusRuntimeDecision, IbusRuntimeEvent,
-        IbusTextShortcutsRuntime, InputEvent, ShortcutTable, TableLoadStatus, TextShortcut,
-        TextShortcutTableStore, IBUS_INPUT_PURPOSE_FREE_FORM, IBUS_INPUT_PURPOSE_PASSWORD,
-        IBUS_INPUT_PURPOSE_PIN, IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE, IBUS_KEY_DOWN,
-        IBUS_KEY_ESCAPE, IBUS_KEY_LEFT, IBUS_KEY_RETURN, IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP,
+        default_text_shortcuts_table_path, effective_uid, handle_runtime_protocol_line,
+        ibus_runtime_decision, input_event_from_ibus_key, private_regular_file_metadata,
+        run_text_shortcuts_content_purpose_self_test, run_text_shortcuts_keystroke_self_test,
+        run_text_shortcuts_stdio_self_test, run_text_shortcuts_table_watch_self_test,
+        sanitize_shortcuts, ContentPurpose, EngineAction, EngineState, IbusKeyEvent, IbusOperation,
+        IbusRuntimeDecision, IbusRuntimeEvent, IbusTextShortcutsRuntime, InputEvent, ShortcutTable,
+        TableLoadStatus, TableWriteError, TextShortcut, TextShortcutTableStore,
+        IBUS_INPUT_PURPOSE_FREE_FORM, IBUS_INPUT_PURPOSE_PASSWORD, IBUS_INPUT_PURPOSE_PIN,
+        IBUS_KEY_BACKSPACE, IBUS_KEY_DELETE, IBUS_KEY_DOWN, IBUS_KEY_ESCAPE, IBUS_KEY_LEFT,
+        IBUS_KEY_RETURN, IBUS_KEY_RIGHT, IBUS_KEY_TAB, IBUS_KEY_UP, MAX_TEXT_SHORTCUTS_TABLE_BYTES,
     };
 
     fn table() -> ShortcutTable {
@@ -1782,6 +2106,21 @@ mod tests {
         path
     }
 
+    fn write_private_test_table(path: &std::path::Path, raw: impl AsRef<[u8]>) {
+        fs::write(path, raw).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn temp_store_path(slug: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-textshortcuts-store-{}-{slug}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let path = root.join("goblins-os").join("text-shortcuts.json");
+        (root, path)
+    }
+
     fn type_ibus_chars(runtime: &mut IbusTextShortcutsRuntime, value: &str) -> IbusRuntimeDecision {
         let mut decision = IbusRuntimeDecision::pass_through();
         for character in value.chars() {
@@ -1797,6 +2136,8 @@ mod tests {
             TextShortcut::new("same", "same"),
             TextShortcut::new("", "value"),
             TextShortcut::new("drop", ""),
+            TextShortcut::new("bad\0trigger", "value"),
+            TextShortcut::new("bad", "value\0replacement"),
             TextShortcut::new("omw", "on my way now"),
         ]);
         assert_eq!(shortcuts, vec![TextShortcut::new("omw", "on my way now")]);
@@ -1817,7 +2158,7 @@ mod tests {
     #[test]
     fn table_store_loads_and_sanitizes_shortcuts() {
         let path = temp_table_path("load");
-        fs::write(
+        write_private_test_table(
             &path,
             r#"
 [
@@ -1826,8 +2167,7 @@ mod tests {
   {"replace":"omw","with":"on my way now"}
 ]
 "#,
-        )
-        .unwrap();
+        );
 
         let outcome = TextShortcutTableStore::new(&path).load();
         assert_eq!(outcome.status(), &TableLoadStatus::Loaded { shortcuts: 1 });
@@ -1846,11 +2186,118 @@ mod tests {
         assert!(missing.table().is_empty());
 
         let invalid_path = temp_table_path("invalid");
-        fs::write(&invalid_path, "not-json").unwrap();
+        write_private_test_table(&invalid_path, "not-json");
         let invalid = TextShortcutTableStore::new(&invalid_path).load();
         assert_eq!(invalid.status(), &TableLoadStatus::InvalidJson);
         assert!(invalid.table().is_empty());
         fs::remove_file(invalid_path).unwrap();
+    }
+
+    #[test]
+    fn table_store_rejects_oversize_permissive_and_wrong_owner_metadata() {
+        let oversize_path = temp_table_path("oversize");
+        write_private_test_table(
+            &oversize_path,
+            vec![b'x'; MAX_TEXT_SHORTCUTS_TABLE_BYTES + 1],
+        );
+        let oversize = TextShortcutTableStore::new(&oversize_path).load();
+        assert_eq!(oversize.status(), &TableLoadStatus::TooLarge);
+        assert!(oversize.table().is_empty());
+        fs::remove_file(&oversize_path).unwrap();
+
+        let permissive_path = temp_table_path("permissive");
+        write_private_test_table(&permissive_path, b"[]");
+        let private_metadata = fs::symlink_metadata(&permissive_path).unwrap();
+        assert!(private_regular_file_metadata(
+            &private_metadata,
+            effective_uid()
+        ));
+        assert!(!private_regular_file_metadata(
+            &private_metadata,
+            effective_uid().wrapping_add(1)
+        ));
+        fs::set_permissions(&permissive_path, fs::Permissions::from_mode(0o644)).unwrap();
+        let metadata = fs::symlink_metadata(&permissive_path).unwrap();
+        assert!(!private_regular_file_metadata(&metadata, effective_uid()));
+        let permissive = TextShortcutTableStore::new(&permissive_path).load();
+        assert_eq!(permissive.status(), &TableLoadStatus::UnsafeFile);
+        fs::remove_file(permissive_path).unwrap();
+    }
+
+    #[test]
+    fn table_store_rejects_symlink_and_nonregular_destinations() {
+        let (symlink_root, symlink_path) = temp_store_path("symlink");
+        fs::create_dir_all(symlink_path.parent().unwrap()).unwrap();
+        fs::set_permissions(
+            symlink_path.parent().unwrap(),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        let target = symlink_root.join("target.json");
+        write_private_test_table(&target, b"[]");
+        symlink(&target, &symlink_path).unwrap();
+        let store = TextShortcutTableStore::new(&symlink_path);
+        assert_eq!(store.load().status(), &TableLoadStatus::UnsafeFile);
+        assert_eq!(
+            store.save(vec![TextShortcut::new("omw", "on my way")]),
+            Err(TableWriteError::UnsafeDestination)
+        );
+        fs::remove_dir_all(symlink_root).unwrap();
+
+        let (directory_root, directory_path) = temp_store_path("directory");
+        fs::create_dir_all(&directory_path).unwrap();
+        fs::set_permissions(
+            directory_path.parent().unwrap(),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        let store = TextShortcutTableStore::new(&directory_path);
+        assert_eq!(store.load().status(), &TableLoadStatus::UnsafeFile);
+        assert_eq!(
+            store.save(vec![TextShortcut::new("omw", "on my way")]),
+            Err(TableWriteError::UnsafeDestination)
+        );
+        fs::remove_dir_all(directory_root).unwrap();
+    }
+
+    #[test]
+    fn table_store_saves_atomically_with_private_modes_and_preserves_old_on_overflow() {
+        let (root, path) = temp_store_path("atomic-private");
+        let store = TextShortcutTableStore::new(&path);
+        let saved = store
+            .save(vec![TextShortcut::new("omw", "on my way")])
+            .unwrap();
+        assert_eq!(saved, vec![TextShortcut::new("omw", "on my way")]);
+        assert_eq!(
+            fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let before = fs::read(&path).unwrap();
+
+        assert_eq!(
+            store.save(vec![TextShortcut::new(
+                "large",
+                "x".repeat(MAX_TEXT_SHORTCUTS_TABLE_BYTES)
+            )]),
+            Err(TableWriteError::TooLarge)
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".text-shortcuts.json.tmp-")));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1909,7 +2356,7 @@ mod tests {
         assert_eq!(
             state.handle_event(ContentPurpose::Normal, InputEvent::Boundary(' '), &table),
             EngineAction::CommitReplacement {
-                delete_previous_chars: 3,
+                trigger: "omw".to_string(),
                 text: "on my way ".to_string()
             }
         );
@@ -1930,7 +2377,7 @@ mod tests {
         assert_eq!(
             state.handle_event(ContentPurpose::Normal, InputEvent::Boundary('.'), &table),
             EngineAction::CommitReplacement {
-                delete_previous_chars: 3,
+                trigger: "teh".to_string(),
                 text: "the.".to_string()
             }
         );
@@ -2136,18 +2583,15 @@ mod tests {
         });
         assert_eq!(
             decision,
-            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-                text: "on my way".to_string(),
-                cursor_pos: 9,
-                visible: true,
-            }])
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
         );
+        assert!(decision.operations().is_empty());
     }
 
     #[test]
     fn ibus_adapter_commits_replacement_atomically_on_boundary() {
         let decision = ibus_runtime_decision(EngineAction::CommitReplacement {
-            delete_previous_chars: 3,
+            trigger: "omw".to_string(),
             text: "on my way ".to_string(),
         });
         assert_eq!(
@@ -2156,6 +2600,7 @@ mod tests {
                 IbusOperation::DeleteSurroundingText {
                     offset: -3,
                     n_chars: 3,
+                    expected_text: "omw".to_string(),
                 },
                 IbusOperation::CommitText("on my way ".to_string()),
                 IbusOperation::HidePreeditText,
@@ -2187,11 +2632,7 @@ mod tests {
         let candidate = type_ibus_chars(&mut runtime, "omw");
         assert_eq!(
             candidate,
-            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-                text: "on my way".to_string(),
-                cursor_pos: 9,
-                visible: true,
-            }])
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
         );
         assert!(!candidate.key_handled());
         assert_eq!(runtime.current_word(), "omw");
@@ -2203,10 +2644,158 @@ mod tests {
                 IbusOperation::DeleteSurroundingText {
                     offset: -3,
                     n_chars: 3,
+                    expected_text: "omw".to_string(),
                 },
                 IbusOperation::CommitText("on my way ".to_string()),
                 IbusOperation::HidePreeditText,
             ])
+        );
+        assert_eq!(runtime.current_word(), "");
+    }
+
+    #[test]
+    fn ibus_runtime_return_commits_replacement_without_swallowing_activation() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
+        );
+
+        let committed = runtime.handle_key(IbusKeyEvent::new(IBUS_KEY_RETURN, None, true, false));
+        assert_eq!(
+            committed,
+            IbusRuntimeDecision::side_effects(vec![
+                IbusOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                    expected_text: "omw".to_string(),
+                },
+                IbusOperation::CommitText("on my way".to_string()),
+                IbusOperation::HidePreeditText,
+            ])
+        );
+        assert!(!committed.key_handled());
+        assert_eq!(runtime.current_word(), "");
+    }
+
+    #[test]
+    fn ibus_runtime_tab_commits_replacement_without_swallowing_focus_traversal() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
+        );
+
+        let committed = runtime.handle_key(IbusKeyEvent::new(IBUS_KEY_TAB, None, true, false));
+        assert_eq!(
+            committed,
+            IbusRuntimeDecision::side_effects(vec![
+                IbusOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                    expected_text: "omw".to_string(),
+                },
+                IbusOperation::CommitText("on my way".to_string()),
+                IbusOperation::HidePreeditText,
+            ])
+        );
+        assert!(!committed.key_handled());
+        assert_eq!(runtime.current_word(), "");
+    }
+
+    #[test]
+    fn ibus_runtime_pointer_accept_commits_pending_candidate_without_boundary() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
+        );
+
+        assert_eq!(
+            runtime.handle_event(IbusRuntimeEvent::AcceptCandidate),
+            IbusRuntimeDecision::handled(vec![
+                IbusOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                    expected_text: "omw".to_string(),
+                },
+                IbusOperation::CommitText("on my way".to_string()),
+                IbusOperation::HidePreeditText,
+            ])
+        );
+        assert_eq!(runtime.current_word(), "");
+        assert_eq!(
+            runtime.handle_event(IbusRuntimeEvent::AcceptCandidate),
+            IbusRuntimeDecision::pass_through()
+        );
+    }
+
+    #[test]
+    fn runtime_protocol_pointer_accept_is_typed_and_fail_open_without_candidate() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        for character in "omw".chars() {
+            let request = format!(
+                r#"{{"type":"key","keyval":{},"unicode":"{}","pressed":true,"command_modifier_active":false}}"#,
+                character as u32, character
+            );
+            let _ = handle_runtime_protocol_line(&mut runtime, &request);
+        }
+        let accepted = handle_runtime_protocol_line(&mut runtime, r#"{"type":"accept-candidate"}"#);
+        assert!(accepted.handled);
+        assert_eq!(
+            accepted.operations,
+            vec![
+                super::RuntimeProtocolOperation::DeleteSurroundingText {
+                    offset: -3,
+                    n_chars: 3,
+                    expected_text: "omw".to_string(),
+                },
+                super::RuntimeProtocolOperation::CommitText {
+                    text: "on my way".to_string(),
+                },
+                super::RuntimeProtocolOperation::HidePreeditText,
+            ]
+        );
+        assert!(accepted.candidate.is_none());
+        assert!(accepted.error.is_none());
+
+        let absent = handle_runtime_protocol_line(&mut runtime, r#"{"type":"accept-candidate"}"#);
+        assert!(!absent.handled);
+        assert!(absent.operations.is_empty());
+        assert!(absent.candidate.is_none());
+        assert!(absent.error.is_none());
+    }
+
+    #[test]
+    fn runtime_protocol_health_is_typed_and_does_not_mutate_edit_state() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        for character in "omw".chars() {
+            runtime.handle_event(IbusRuntimeEvent::Key(ibus_char(character)));
+        }
+        assert_eq!(runtime.current_word(), "omw");
+
+        let response = handle_runtime_protocol_line(&mut runtime, r#"{"type":"health"}"#);
+        assert!(!response.handled);
+        assert!(response.operations.is_empty());
+        assert!(response.candidate.is_none());
+        assert!(response.error.is_none());
+        assert_eq!(runtime.current_word(), "omw");
+    }
+
+    #[test]
+    fn ibus_runtime_pointer_accept_refuses_sensitive_fields_and_clears_state() {
+        let mut runtime = IbusTextShortcutsRuntime::new(table());
+        assert_eq!(
+            runtime.handle_event(IbusRuntimeEvent::FocusIn(ContentPurpose::Password)),
+            IbusRuntimeDecision::pass_through()
+        );
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::pass_through()
+        );
+        assert_eq!(
+            runtime.handle_event(IbusRuntimeEvent::AcceptCandidate),
+            IbusRuntimeDecision::pass_through()
         );
         assert_eq!(runtime.current_word(), "");
     }
@@ -2238,10 +2827,10 @@ mod tests {
             runtime.handle_key(IbusKeyEvent::new(IBUS_KEY_ESCAPE, None, true, false)),
             IbusRuntimeDecision::pass_through()
         );
-        assert!(matches!(
-            type_ibus_chars(&mut runtime, "omw").operations(),
-            [IbusOperation::UpdatePreeditText { .. }]
-        ));
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
+        );
         assert_eq!(
             runtime.handle_key(IbusKeyEvent::new(IBUS_KEY_ESCAPE, None, true, false)),
             IbusRuntimeDecision::handled(vec![IbusOperation::HidePreeditText])
@@ -2258,11 +2847,7 @@ mod tests {
         let mut runtime = IbusTextShortcutsRuntime::new(table());
         assert_eq!(
             type_ibus_chars(&mut runtime, "omw"),
-            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-                text: "on my way".to_string(),
-                cursor_pos: 9,
-                visible: true,
-            }])
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
         );
 
         assert_eq!(
@@ -2280,10 +2865,10 @@ mod tests {
     #[test]
     fn ibus_runtime_pipeline_command_modifier_resets_without_commit() {
         let mut runtime = IbusTextShortcutsRuntime::new(table());
-        assert!(matches!(
-            type_ibus_chars(&mut runtime, "omw").operations(),
-            [IbusOperation::UpdatePreeditText { .. }]
-        ));
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
+        );
 
         assert_eq!(
             runtime.handle_key(IbusKeyEvent::new('c' as u32, Some('c'), true, true)),
@@ -2308,6 +2893,7 @@ mod tests {
                 IbusOperation::DeleteSurroundingText {
                     offset: -3,
                     n_chars: 3,
+                    expected_text: "omw".to_string(),
                 },
                 IbusOperation::CommitText("on my way ".to_string()),
                 IbusOperation::HidePreeditText,
@@ -2319,10 +2905,10 @@ mod tests {
     fn ibus_runtime_event_router_focus_out_and_reset_clear_candidates() {
         for event in [IbusRuntimeEvent::FocusOut, IbusRuntimeEvent::Reset] {
             let mut runtime = IbusTextShortcutsRuntime::new(table());
-            assert!(matches!(
-                type_ibus_chars(&mut runtime, "omw").operations(),
-                [IbusOperation::UpdatePreeditText { .. }]
-            ));
+            assert_eq!(
+                type_ibus_chars(&mut runtime, "omw"),
+                IbusRuntimeDecision::show_candidate("omw", "on my way")
+            );
             assert_eq!(
                 runtime.handle_event(event.clone()),
                 IbusRuntimeDecision::side_effects(vec![IbusOperation::HidePreeditText])
@@ -2356,10 +2942,10 @@ mod tests {
     #[test]
     fn ibus_runtime_event_router_content_purpose_change_hides_candidate() {
         let mut runtime = IbusTextShortcutsRuntime::new(table());
-        assert!(matches!(
-            type_ibus_chars(&mut runtime, "omw").operations(),
-            [IbusOperation::UpdatePreeditText { .. }]
-        ));
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
+        );
         assert_eq!(
             runtime.handle_event(IbusRuntimeEvent::ContentPurposeChanged(
                 ContentPurpose::Sensitive
@@ -2373,10 +2959,10 @@ mod tests {
     #[test]
     fn ibus_runtime_event_router_table_change_hides_stale_candidate() {
         let mut runtime = IbusTextShortcutsRuntime::new(table());
-        assert!(matches!(
-            type_ibus_chars(&mut runtime, "omw").operations(),
-            [IbusOperation::UpdatePreeditText { .. }]
-        ));
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
+        );
         assert_eq!(
             runtime.handle_event(IbusRuntimeEvent::TableChanged(
                 ShortcutTable::from_shortcuts(vec![TextShortcut::new("brb", "be right back")])
@@ -2386,11 +2972,7 @@ mod tests {
         assert_eq!(runtime.current_word(), "");
         assert_eq!(
             type_ibus_chars(&mut runtime, "brb"),
-            IbusRuntimeDecision::side_effects(vec![IbusOperation::UpdatePreeditText {
-                text: "be right back".to_string(),
-                cursor_pos: 13,
-                visible: true,
-            }])
+            IbusRuntimeDecision::show_candidate("brb", "be right back")
         );
     }
 
@@ -2435,12 +3017,12 @@ mod tests {
     fn runtime_refresh_reloads_table_and_hides_stale_candidate() {
         let path = temp_table_path("refresh");
         let mut runtime = IbusTextShortcutsRuntime::new(table());
-        assert!(matches!(
-            type_ibus_chars(&mut runtime, "omw").operations(),
-            [IbusOperation::UpdatePreeditText { .. }]
-        ));
+        assert_eq!(
+            type_ibus_chars(&mut runtime, "omw"),
+            IbusRuntimeDecision::show_candidate("omw", "on my way")
+        );
 
-        fs::write(&path, r#"[{"replace":"brb","with":"be right back"}]"#).unwrap();
+        write_private_test_table(&path, r#"[{"replace":"brb","with":"be right back"}]"#);
         let refresh = runtime.refresh_table(&TextShortcutTableStore::new(&path));
         assert_eq!(refresh.status(), &TableLoadStatus::Loaded { shortcuts: 1 });
         assert_eq!(

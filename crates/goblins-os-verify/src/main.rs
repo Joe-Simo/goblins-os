@@ -25,6 +25,7 @@ const REVIEWED_GITHUB_ACTION_PINS: &[(&str, &str)] = &[
         "actions/upload-artifact",
         "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ),
+    ("actions/attest", "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"),
     (
         "actions/download-artifact",
         "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
@@ -2315,6 +2316,10 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         root.join("usr/lib/systemd/system/goblins-os-core.service"),
         "installed-core-service-does-not-export-openai-secret-environment",
         "EnvironmentFile=-/etc/goblins-os/openai-secrets.env",
+    ));
+    checks.push(core_service_writable_paths_check(
+        root.join("usr/lib/systemd/system/goblins-os-core.service"),
+        "installed-core-service-writable-paths-are-exact",
     ));
     checks.push(path_mode_check(
         root,
@@ -4875,6 +4880,44 @@ fn exact_service_value(values: &BTreeMap<String, Vec<String>>, key: &str, value:
         .is_some_and(|actual| actual.len() == 1 && actual[0] == value)
 }
 
+const CORE_SERVICE_READ_WRITE_PATHS: &str = "/run/goblins-os-core /var/lib/goblins-os/installer /var/lib/goblins-os/session /var/lib/goblins-os/policy /var/lib/goblins-os/ai /var/lib/goblins-os/models /var/lib/goblins-os/voice/work /var/lib/goblins-os/secrets/openai /var/lib/goblins-os/apps /var/lib/goblins-os/codex";
+
+/// Keep the core's writable systemd namespace narrow and reviewable. Requiring
+/// one canonical directive rejects omissions, additive reset directives, and
+/// broad parent paths such as /run, /var/lib/goblins-os, or /.
+fn core_service_writable_paths_are_exact(source: &str) -> bool {
+    let service = service_unit_values(source);
+    let expected_line = format!("ReadWritePaths={CORE_SERVICE_READ_WRITE_PATHS}");
+    let read_write_lines = source
+        .lines()
+        .filter(|line| line.starts_with("ReadWritePaths="))
+        .collect::<Vec<_>>();
+
+    exact_service_value(&service, "ProtectSystem", "strict")
+        && exact_service_value(&service, "UMask", "0077")
+        && exact_service_value(&service, "ReadWritePaths", CORE_SERVICE_READ_WRITE_PATHS)
+        && read_write_lines == [expected_line.as_str()]
+}
+
+fn core_service_writable_paths_check(path: PathBuf, id: &str) -> Check {
+    let source = read_to_string(&path);
+    if core_service_writable_paths_are_exact(&source) {
+        ready(
+            id,
+            "core service has one exact narrow writable-path allowlist under ProtectSystem=strict",
+        )
+    } else {
+        blocked(
+            id,
+            &format!(
+                "{} must contain ProtectSystem=strict, UMask=0077, and exactly one canonical ReadWritePaths={}",
+                path.display(),
+                CORE_SERVICE_READ_WRITE_PATHS
+            ),
+        )
+    }
+}
+
 /// Pin the native private-control boundary as a release contract. Desktop
 /// processes receive one setgid capability, connect to one fixed AF_UNIX
 /// listener before parsing UI state, permanently drop that group, and keep the
@@ -4908,6 +4951,31 @@ fn core_capability_boundary_checks(root: &Path) -> Vec<Check> {
             control_plane.clone(),
             "core-capability-sockets-require-0660",
             "const REQUIRED_SOCKET_MODE: u32 = 0o660;",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-server-reads-kernel-peer-credentials",
+            "libc::SO_PEERCRED",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-server-reads-kernel-peer-groups",
+            "libc::SO_PEERGROUPS",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-server-authorizes-every-accepted-stream",
+            "axum::serve(CapabilityListener::new(client, group_id, listener), router)",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-server-allows-only-primary-or-supplementary-group",
+            "self.primary_group_id == required_group_id",
+        ),
+        contains_check(
+            control_plane.clone(),
+            "core-capability-server-tests-no-uid-bypass",
+            "fn peer_group_authorization_never_bypasses_for_shared_or_root_uid()",
         ),
         contains_check(
             control_plane.clone(),
@@ -5103,6 +5171,11 @@ fn core_capability_boundary_checks(root: &Path) -> Vec<Check> {
             "root:goblins-core-resident:755",
         ),
         contains_check(
+            container.clone(),
+            "container-provides-release-proof-group-executor",
+            "command -v setpriv",
+        ),
+        contains_check(
             root.join("os/systemd/goblins-os-resident.service"),
             "resident-runs-as-dedicated-capability-user",
             "User=goblins-resident",
@@ -5137,7 +5210,35 @@ fn core_capability_boundary_checks(root: &Path) -> Vec<Check> {
             "core-does-not-source-provider-secrets-as-environment",
             "EnvironmentFile=-/etc/goblins-os/openai-secrets.env",
         ),
+        core_service_writable_paths_check(
+            root.join("os/systemd/goblins-os-core.service"),
+            "core-service-writable-paths-are-exact",
+        ),
     ];
+
+    for (id, script) in [
+        ("render-screens", "os/bootc/render-screens.sh"),
+        ("render-desktop", "os/bootc/render-desktop.sh"),
+        ("installed-selftest", "os/bootc/run-selftest.sh"),
+        (
+            "runtime-model-gate",
+            "os/runtime-gate/build-an-app-live-model.sh",
+        ),
+        (
+            "firstboot-unlock",
+            "os/hardware-gate/capture-harness/firstboot-unlock.sh",
+        ),
+        (
+            "hardware-core-proof",
+            "os/hardware-gate/capture-harness/core-proof-operation.sh",
+        ),
+    ] {
+        checks.push(contains_check(
+            root.join(script),
+            &format!("{id}-uses-exact-release-proof-peer-group"),
+            "setpriv --regid=goblins-core-release-proof --clear-groups --",
+        ));
+    }
 
     for client_spec in NATIVE_CORE_CLIENTS {
         checks.push(first_main_initialization_check(
@@ -8504,6 +8605,119 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "hardware-gate-verifies-candidate-oci-revision",
             "org.opencontainers.image.revision",
         ),
+        file_check(
+            root,
+            "os/hardware-gate/capture-harness/evidence_bundle.py",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-has-exact-v1-schema",
+            "goblins-os-hardware-evidence-bundle-v1",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-requires-32nd-firstboot-shot",
+            "05-first-boot-private-unlock.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-rejects-duplicate-json-keys",
+            "reject_duplicate_keys",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-uses-no-follow-files",
+            "O_NOFOLLOW",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-enforces-uniform-framebuffer",
+            "evidence screenshots do not share one framebuffer size",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-recomputes-canonical-evidence-bundle",
+            "evidence_bundle.py\" verify",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-recomputes-canonical-evidence-bundle",
+            "evidence_bundle.py\" verify",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-validates-proof-run-directory",
+            "--run-directory \"$SCREENSHOT_DIR\" \"$REPO_ROOT\" \"$ARCH\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-validates-exact-proof-manifest",
+            "--manifest \"$manifest\" \"$arch\" \"$SELECTED_CANDIDATE_COMMIT\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/hardware-gate-capture.yml"),
+            "x86-hardware-evidence-artifact-name-is-attempt-bound",
+            "hardware-gate-evidence-${{ inputs.candidate_commit }}-${{ matrix.arch }}-${{ inputs.run_date }}-attempt-${{ github.run_attempt }}",
+        ),
+        file_check(
+            root,
+            ".github/workflows/aarch64-local-display-attestation.yml",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-local-display-attestation.yml"),
+            "aarch64-local-display-attestation-is-github-hosted",
+            "runs-on: ubuntu-24.04",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-local-display-attestation.yml"),
+            "aarch64-local-display-attestation-has-least-signing-permissions",
+            "attestations: write",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-local-display-attestation.yml"),
+            "aarch64-local-display-attestation-has-oidc-permission",
+            "id-token: write",
+        ),
+        contains_check(
+            root.join(".github/workflows/aarch64-local-display-attestation.yml"),
+            "aarch64-local-display-attestation-uses-reviewed-attest-action",
+            "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-verifies-signed-local-display-seal",
+            "gh attestation verify",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-verifies-signed-local-display-seal",
+            "gh attestation verify",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-matches-local-display-artifact-bytes",
+            "github_actions_artifact_file_matches",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-authenticates-local-display-workflow-run",
+            "github_actions_run_is_successful",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-binds-local-display-signer-workflow",
+            "--signer-workflow Joe-Simo/goblins-os/.github/workflows/aarch64-local-display-attestation.yml",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-rejects-self-hosted-local-display-attestation",
+            "--deny-self-hosted-runners",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-matches-exact-github-evidence-files",
+            "github_actions_artifact_file_matches",
+        ),
         absent_check(
             root.join(".github/workflows/hardware-gate-capture.yml"),
             "hardware-gate-does-not-publish-channel-images",
@@ -8621,38 +8835,38 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-retired-textshortcuts-live-keystroke-proof",
-            "supersedes the old text-shortcuts-live-keystroke-proof.json",
+            "runbook-classifies-textshortcuts-preflight-as-non-live",
+            "non-live build-time behavior",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-candidate-metadata-proof",
-            "text-shortcuts-candidate-metadata-proof.json",
+            "runbook-documents-textshortcuts-candidate-metadata-preflight",
+            "candidate metadata probe",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-overlay-intent-proof",
-            "text-shortcuts-overlay-intent-proof.json",
+            "runbook-documents-textshortcuts-overlay-intent-preflight",
+            "--overlay-intent-self-test",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-candidate-bubble-frame-proof",
-            "text-shortcuts-candidate-bubble-frame-proof.json",
+            "runbook-documents-textshortcuts-candidate-bubble-frame-preflight",
+            "--candidate-bubble-frame-self-test",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-candidate-bubble-layout-proof",
-            "text-shortcuts-candidate-bubble-layout-proof.json",
+            "runbook-documents-textshortcuts-candidate-bubble-layout-preflight",
+            "--candidate-bubble-layout-self-test",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-candidate-bubble-render-intent-proof",
-            "text-shortcuts-candidate-bubble-render-intent-proof.json",
+            "runbook-documents-textshortcuts-candidate-bubble-render-intent-preflight",
+            "--candidate-bubble-render-intent-self-test",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-candidate-bubble-render-proof",
-            "text-shortcuts-candidate-bubble-render-proof.json",
+            "runbook-rejects-textshortcuts-synthetic-diagnostic-as-release-evidence",
+            "not evidence of the production popup",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -8726,28 +8940,28 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-candidate-no-live-overlay-claim",
-            "live_overlay_claim=false",
+            "runbook-documents-textshortcuts-native-renderer-honesty",
+            "synthetic_overlay=false",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-password-refusal-proof",
-            "password refusal",
+            "\"password_refusal\": \"true\"",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-passthrough-proof",
-            "pass-through",
+            "\"passthrough_actual\": \"hello.\"",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-documents-textshortcuts-final-runtime-proof",
-            "focused-field callback",
+            "\"focused_field_callback\": \"true\"",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-documents-textshortcuts-core-readiness-deferred",
-            "core_readiness_flip=live",
+            "runbook-documents-textshortcuts-core-readiness-live",
+            "\"core_readiness_flip\": \"live\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -8792,7 +9006,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-resets-timeout-on-progress",
-            "last_progress = time.time()",
+            "last_progress = time.monotonic()",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
@@ -8976,8 +9190,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-drives-textshortcuts-live-runtime-render-proof-app",
-            "--text-shortcuts-proof live-runtime-render",
+            "capture-harness-drives-textshortcuts-live-runtime-proof-app",
+            "--text-shortcuts-proof normal",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -9481,8 +9695,13 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
-            "capture-harness-session-enable-claims-live-readiness",
-            "core_engine_available=true&core_runtime_loop_available=true&runtime_ready_claim=true",
+            "capture-harness-session-enable-proves-plumbing-without-live-readiness",
+            "proof_scope=session-plumbing",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-harness-session-enable-records-observed-runtime-readiness",
+            "core_engine_available=$core_engine_available&core_runtime_loop_available=$core_runtime_loop&runtime_ready_claim=false",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -9526,18 +9745,18 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-types-qmp-keyboard-text",
-            "/input/text/",
+            "capture-driver-handles-authenticated-qmp-keyboard-text-event",
+            "event[\"input_kind\"] == \"text\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-presses-qmp-keyboard-key",
-            "/input/key/",
+            "capture-driver-handles-authenticated-qmp-keyboard-key-event",
+            "event[\"input_kind\"] == \"key\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-clicks-qmp-pointer",
-            "/input/click/",
+            "capture-driver-handles-authenticated-qmp-pointer-event",
+            "event[\"input_kind\"] == \"click\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
@@ -10009,6 +10228,51 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "capture-fixture-core-has-finite-runtime",
             "RuntimeMaxSec=1800",
         ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "capture-proof-unit-has-exact-writable-roots",
+            "ReadWritePaths=/run/goblins-hwgate-core-proof /run/goblins-hwgate-fixture-state /run/goblins-hwgate-fixture-block",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "capture-proof-unit-hides-home-by-default",
+            "ProtectHome=tmpfs",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "capture-proof-unit-binds-only-text-shortcuts-state-read-only",
+            "BindReadOnlyPaths=-/var/home/goblin/.config/goblins-os",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "capture-fixture-resident-uses-dedicated-runtime-socket",
+            "Environment=GOBLINS_OS_RESIDENT_SOCKET=/run/goblins-hwgate-fixture-state/resident/resident.sock",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "capture-fixture-core-stop-hook-runs-with-root-identity",
+            "ExecStopPost=-+/etc/goblins-os/hardware-gate/goblins-hwgate-core-proof-operation fixture-core-stopped",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-proof-helper-pins-dedicated-fixture-resident-socket",
+            "FIXTURE_RESIDENT_SOCKET=$FIXTURE_STATE/resident/resident.sock",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-proof-helper-does-not-mutate-production-resident-runtime",
+            "/run/goblins-os/resident.sock",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-proof-helper-preserves-fixture-state-mount-root",
+            "find \"$FIXTURE_STATE\" -mindepth 1 -delete",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
+            "capture-proof-helper-preserves-fixture-block-mount-root",
+            "find \"$FIXTURE_BLOCK\" -mindepth 1 -delete",
+        ),
         absent_check(
             root.join("os/hardware-gate/capture-harness/core-proof-operation.sh"),
             "capture-proof-helper-has-no-legacy-8788-listener",
@@ -10136,13 +10400,318 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
-            "capture-run-guards-textshortcuts-live-ibus-text-input-v3",
-            "\"text_input_v3_commit\": \"true\"",
+            "capture-run-guards-textshortcuts-render-intent-key-release",
+            "\"key_release_preserved_candidate\": \"true\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
-            "capture-run-guards-textshortcuts-live-ibus-rendered-accept-bubble",
-            "\"rendered_accept_bubble\": \"true\"",
+            "capture-run-guards-textshortcuts-render-intent-runtime-failure-cleanup",
+            "\"runtime_failure_cleanup\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-secure-parent",
+            "\"desktop_parent_contract\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-bounded-read",
+            "\"desktop_file_bounded_read\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-watcher-reload",
+            "\"live_watcher_reload\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-post-keystroke-roundtrip",
+            "\"post_keystroke_roundtrip\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-password-popup-absence",
+            "\"password_popup_absent\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-normal-stage-ledger-scope",
+            "\"normal_stage_ledger_scoped\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-cursor-location-callback",
+            "\"cursor_location_callback\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-pre-boundary-commit-absence",
+            "\"pre_boundary_commit_absent\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-boundary-ledger-scope",
+            "\"boundary_stage_ledger_scoped\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-single-boundary-commit",
+            "\"boundary_stage_commit_count\": \"1\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-normal-stage-commit",
+            "\"normal_stage_commit\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-commit-operation",
+            "\"ibus_commit_operation\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-focused-readback",
+            "\"focused_entry_readback\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-live-ibus-delivery",
+            "\"ibus_commit_delivered\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-boundary-popup-hide",
+            "\"boundary_popup_action\": \"hide-candidate\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-boundary-popup-commit-reason",
+            "\"boundary_popup_reason\": \"committed\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-native-ibus-publication",
+            "\"native_ibus_candidate_published\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-native-ibus-current-generation",
+            "\"native_popup_generation_current\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-native-ibus-record-ordinal",
+            "\"native_popup_record_ordinal\": \"[1-9][0-9]*\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-native-ibus-record-current-at-capture",
+            "\"native_popup_record_current_at_capture\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-native-ibus-show-action",
+            "\"native_popup_action\": \"show-candidate\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-native-ibus-cursor-rect",
+            "\"native_popup_has_cursor_rect\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-native-ibus-expected-replacement",
+            "\"native_popup_expected_replacement\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-native-ibus-hint",
+            "\"native_popup_hint_published\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-screenshot-acknowledgement",
+            "\"screenshot_capture_ack\": \"true\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-guards-textshortcuts-native-ibus-renderer",
+            "\"renderer\": \"native-ibus-lookup-table\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-rejects-textshortcuts-synthetic-overlay",
+            "\"synthetic_overlay\": \"false\"",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-rejects-obsolete-text-input-v3-claim",
+            "text_input_v3_commit",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-rejects-obsolete-rendered-accept-bubble-claim",
+            "rendered_accept_bubble",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-rejects-obsolete-text-input-v3-claim",
+            "text_input_v3_commit",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-rejects-obsolete-rendered-accept-bubble-claim",
+            "rendered_accept_bubble",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-scopes-normal-textshortcuts-ledger",
+            "normal_ledger_file=/tmp/gate-text-shortcuts-normal-stage-events.jsonl",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-scopes-pre-boundary-textshortcuts-ledger",
+            "pre_boundary_ledger_file=/tmp/gate-text-shortcuts-pre-boundary-events.jsonl",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-scopes-boundary-textshortcuts-ledger",
+            "boundary_ledger_file=/tmp/gate-text-shortcuts-boundary-stage-events.jsonl",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-selects-chronological-latest-popup",
+            "| last) as $latest_popup",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-rejects-generation-sorted-popup-selection",
+            "max_by(.generation // -1)",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-binds-popup-record-ordinal",
+            "native_popup_record_ordinal",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-rechecks-captured-popup-record",
+            "captured_ordinal",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-captures-boundary-ledger-offset",
+            "boundary_ledger_start=\"$(wc -l < \"$ledger_file\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-proves-pre-boundary-commit-absence",
+            "pre_boundary_commit_absent=true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-proves-single-boundary-commit",
+            "boundary_stage_commit_count=1",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-binds-commit-to-process-key-event",
+            ".callback == \"process-key-event\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-requires-exactly-one-commit-operation",
+            "($commit_operations | length) == 1",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-proves-committed-boundary-popup-hide",
+            "boundary_popup_action=hide-candidate&boundary_popup_reason=committed",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-fail-closes-boundary-ledger",
+            "stage=boundary-ledger",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-waits-for-host-screenshot-ack",
+            "wait_capture_ack \"$1\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-validates-screenshot-ack-sha256",
+            "CAPTURE_ACK_PNG_SHA256=\"$png_sha256\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/in-session-orchestrator.sh"),
+            "capture-orchestrator-binds-screenshot-sha256-to-live-proof",
+            "screenshot_sha256=$screenshot_sha256",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-requires-successful-png-conversion",
+            "check=True",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/png_validation.py"),
+            "capture-driver-validates-complete-png",
+            "def validate_png(path, expected_dimensions=None):",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/png_validation.py"),
+            "capture-driver-bounds-decoded-png",
+            "MAX_DECODED_PNG_BYTES",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/png_validation.py"),
+            "capture-driver-rejects-unknown-critical-png-chunks",
+            "unknown critical chunk",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/png_validation.py"),
+            "capture-driver-requires-single-complete-zlib-stream",
+            "or not decompressor.eof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/png_validation.py"),
+            "capture-driver-rejects-trailing-zlib-stream-data",
+            "or decompressor.unused_data",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-acknowledges-png-sha256",
+            "png-sha256={png_sha256}",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-atomically-acknowledges-written-frame",
+            "os.replace(temporary_ack, ack)",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-fully-decodes-png-proof",
+            "png_validation.py",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-run-binds-textshortcuts-screenshot-sha256",
+            "TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_SCREENSHOT_SHA256",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-manifest-records-textshortcuts-screenshot-sha256",
+            "text_shortcuts_live_ibus_runtime_render_screenshot_sha256",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "signoff-binds-textshortcuts-screenshot-proof-manifest-and-file",
+            "recorded_manifest_screenshot_sha",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-binds-textshortcuts-screenshot-proof-manifest-and-file",
+            "recorded_manifest_screenshot_sha",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
@@ -10711,8 +11280,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-requires-firstboot-helper-download",
-            "first boot helper download",
+            "capture-driver-requires-authenticated-firstboot-helper-download",
+            "wait_helper_event(event_reader, \"firstboot-unlock.sh\", 180)",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
@@ -10741,8 +11310,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-requires-orchestrator-download",
-            "\"GET /orchestrator.sh HTTP/1.1\" 200",
+            "capture-driver-requires-authenticated-orchestrator-download",
+            "wait_helper_event(event_reader, \"orchestrator.sh\", 180)",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
@@ -10779,6 +11348,257 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "firstboot-unlock-emits-safe-core-unit-state",
             "GOBLINS_HWGATE_CORE_UNIT_STATE property=$property value=$value",
         ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-proves-production-core-unit",
+            "prove_production_core_unit",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-production-unit-fragment",
+            "CORE_UNIT_FRAGMENT=/usr/lib/systemd/system/goblins-os-core.service",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-active-running-main-pid",
+            "--property=MainPID",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-active-unit-state",
+            "[ \"$active\" = active ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-running-unit-substate",
+            "[ \"$substate\" = running ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-live-main-pid",
+            "[ \"$main_pid\" -gt 1 ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-inspects-core-unit-dropins",
+            "--property=DropInPaths",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-exact-unit-fragment",
+            "[ \"$fragment\" = \"$CORE_UNIT_FRAGMENT\" ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-allows-only-fedora-timeout-dropin",
+            "[ \"$dropins\" = \"$CORE_TRUSTED_DROPIN\" ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-pins-fedora-timeout-dropin",
+            "CORE_TRUSTED_DROPIN=/usr/lib/systemd/system/service.d/10-timeout-abort.conf",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-pins-fedora-timeout-dropin-sha256",
+            "CORE_TRUSTED_DROPIN_SHA256=ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-trusted-dropin-owner-mode",
+            "[ \"$dropin_owner_mode\" = root:root:644 ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-trusted-dropin-sha256",
+            "[ \"$dropin_sha256\" = \"$CORE_TRUSTED_DROPIN_SHA256\" ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-hashes-trusted-dropin-bytes",
+            "sha256sum \"$CORE_TRUSTED_DROPIN\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-reads-dropin-package-provenance",
+            "rpm -qf --qf '%{NAME}' \"$CORE_TRUSTED_DROPIN\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-systemd-package-provenance",
+            "[ \"$dropin_package\" = systemd ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-effective-timeout-abort-mode",
+            "[ \"$timeout_stop_failure_mode\" = abort ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-effective-strict-protection",
+            "[ \"$protect_system\" = strict ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-effective-exact-writable-paths",
+            "[ \"$read_write_paths\" = \"$CORE_READ_WRITE_PATHS\" ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-binds-main-pid-to-installed-core-inode",
+            "stat -Lc '%d:%i' \"/proc/$main_pid/exe\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-installed-core-inode-match",
+            "[ \"$running_executable\" = \"$installed_executable\" ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-binds-capability-listeners-to-main-pid",
+            "\"socket:[$socket_inode]\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-exact-capability-directory-count",
+            "[ \"$entry_count\" = 17 ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-exact-capability-slug-count",
+            "[ \"${#CORE_CAPABILITY_SLUGS[@]}\" = 17 ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-rejects-duplicate-capability-slugs",
+            "[ -z \"${seen_slugs[$slug]+present}\" ]",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-capability-directory-owner-group-mode",
+            "goblins-os:$expected_group:2750",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-capability-socket-owner-group-mode",
+            "goblins-os:$expected_group:660",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-listening-unix-socket-row",
+            "$4 == \"00010000\" && $5 == \"0001\" && $6 == \"01\" && $8 == path",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-proves-all-capability-listeners",
+            "prove_production_capability_inventory \"$main_pid\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-checks-core-mount-namespace",
+            "nsenter --target \"$main_pid\" --mount --",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "container-provides-firstboot-dropin-hasher",
+            "command -v sha256sum",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "container-provides-firstboot-rpm-provenance-query",
+            "command -v rpm",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-runtime-capability-root-writable",
+            "mount_is_effectively_writable \"$main_pid\" /run/goblins-os-core",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-requires-voice-work-writable",
+            "mount_is_effectively_writable \"$main_pid\" /var/lib/goblins-os/voice/work",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-emits-sanitized-production-unit-proof",
+            "GOBLINS_HWGATE_CORE_PRODUCTION_UNIT status=pass identity=systemd-main-pid dropin=vendor-sha256 listeners=17 runtime_mount=rw voice_work_mount=rw",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "release-proof-voice-storage-uses-fixed-shipped-root",
+            "Path::new(DEFAULT_VOICE_DIR).join(\"work\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "release-proof-voice-storage-uses-create-new",
+            ".create_new(true)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "release-proof-voice-storage-opens-every-directory-component-no-follow",
+            "directory.open_dir_nofollow(name)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "release-proof-voice-storage-opens-probe-no-follow",
+            ".follow(FollowSymlinks::No)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "release-proof-voice-storage-validates-exact-owner-and-mode",
+            "metadata.mode() & 0o7777 != REQUIRED_VOICE_WORK_MODE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "release-proof-voice-storage-fsyncs-probe",
+            "file.sync_all()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "release-proof-voice-storage-unlinks-probe",
+            "work.remove_file(name)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "release-proof-voice-storage-fsyncs-held-directory",
+            "sync_voice_work_directory(work)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "release-proof-voice-storage-rejects-symlinked-components-in-tests",
+            "fn release_proof_rejects_final_and_intermediate_directory_symlinks()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/control_plane.rs"),
+            "release-proof-capability-allows-only-fixed-voice-storage-probe",
+            "(POST, \"/v1/release-proof/storage/voice\")",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-validates-voice-storage-response",
+            ".ok == true and .storage == \"voice-work\" and .create_new == true and .write == true and .fsync == true and .unlink == true",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-emits-sanitized-voice-storage-proof",
+            "GOBLINS_HWGATE_FIRSTBOOT_STAGE stage=voice-storage status=pass curl_rc=0 http_status=200 create_new=true write=true fsync=true unlink=true",
+        ),
+        ordered_contains_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-proves-production-unit-before-state-mutation",
+            "prove_production_core_unit\nprove_voice_storage\npost_json privacy",
+            "post_json installer-complete",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-cannot-launch-a-manual-setpriv-core",
+            "setpriv --reuid=goblins-os",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
+            "firstboot-unlock-cannot-use-fixture-core",
+            "goblins-hwgate-fixture-core",
+        ),
         absent_check(
             root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
             "firstboot-unlock-does-not-upload-journal",
@@ -10791,8 +11611,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-fails-fast-on-firstboot-failure-callback",
-            "failure_prefix = \"/failed/FIRSTBOOT_UNLOCK?\"",
+            "capture-driver-fails-fast-on-authenticated-firstboot-failure-event",
+            "event.get(\"kind\") == \"failed\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
@@ -10806,34 +11626,64 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-requires-firstboot-success-http-200",
-            "request_path == success_path and http_status_code(line) == \"200\"",
+            "capture-driver-requires-firstboot-authenticated-success-event",
+            "success_event_seen = event.get(\"values\") == {\"status\": \"pass\"}",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
-            "capture-driver-scopes-firstboot-http-to-current-attempt",
-            "http_start_pos = os.path.getsize(HTTPLOG) if os.path.exists(HTTPLOG) else 0",
+            "capture-driver-scopes-firstboot-events-to-current-attempt",
+            "event_reader = IncrementalEventReader(EVENTS)",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-scopes-firstboot-serial-to-current-attempt",
-            "serial_start_pos = os.path.getsize(SERIALLOG) if os.path.exists(SERIALLOG) else 0",
+            "firstboot_serial_start_pos = safe_file_size(SERIALLOG, SERIAL_MAX_BYTES)",
         ),
         ordered_contains_check(
             root.join("os/hardware-gate/capture-harness/drive-capture.py"),
             "capture-driver-prioritizes-firstboot-failure-before-success",
-            "if request_path and request_path.startswith(failure_prefix):",
-            "if success_http_seen and success_serial_marker in serial_data:",
+            "event.get(\"kind\") == \"failed\"",
+            "if success_event_seen and success_serial_seen:",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
-            "capture-host-serves-firstboot-success-signal",
-            "install -m 0644 /dev/null ready/FIRSTBOOT_UNLOCK",
+            "capture-host-injects-private-bearer-token-via-fw-config",
+            "-fw_cfg \"name=opt/goblins/capture-token,file=$TOKEN_FILE\"",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
-            "capture-host-serves-firstboot-failure-signal",
-            "install -m 0644 /dev/null failed/FIRSTBOOT_UNLOCK",
+            "capture-host-starts-private-event-receiver",
+            "python3 \"$HERE/drive-capture.py\" --event-receiver",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-receiver-authenticates-bearer-in-constant-time",
+            "hmac.compare_digest(authorization, expected)",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-receiver-restricts-clients-to-loopback",
+            "ipaddress.ip_address(client_address[0]).is_loopback",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-event-reader-rejects-missing-or-reordered-events",
+            "if event[\"sequence\"] != self.expected_sequence:",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-driver-bounds-existing-serial-log-before-firstboot",
+            "safe_file_size(SERIALLOG, SERIAL_MAX_BYTES)",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/drive-capture.py"),
+            "capture-channel-has-adversarial-self-test",
+            "def _capture_channel_self_test():",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "capture-host-does-not-run-a-generic-http-file-server",
+            "http.server",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/firstboot-unlock.sh"),
@@ -10859,6 +11709,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/iso/verify-config.toml"),
             "firstboot-unlock-root-starter-requests-core",
             "GOBLINS_HWGATE_CORE_START_REQUESTED",
+        ),
+        contains_check(
+            root.join("os/iso/verify-config.toml"),
+            "firstboot-unlock-root-starter-freshly-restarts-production-core",
+            "systemctl restart goblins-os-core.service",
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
@@ -11327,8 +12182,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-validates-screenshot-png-signature",
-            "89504e470d0a1a0a",
+            "shipping-status-fully-validates-screenshot-png",
+            "--check-png",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -14860,7 +15715,152 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/voice.rs"),
             "core-voice-copy-not-ready",
-            "Microphone capture is not ready.",
+            "The desktop-session microphone bridge is not ready.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-status-probes-live-session-audio",
+            "session_bridge::voice_audio_status()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-capture-uses-typed-session-bridge",
+            "session_bridge::voice_capture()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-playback-failure-propagates",
+            "play_audio(reply_wav.path())?",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-uses-private-per-call-workspaces",
+            ".prefix(\"voice-call-\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-explicitly-cleans-every-workspace-result",
+            "finish_private_voice_operation(result, cleanup)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-startup-purges-crash-leftovers-descriptor-safely",
+            "purge_stale_voice_workspaces_at",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-runs-voice-crash-cleanup-before-serving",
+            "voice::purge_stale_voice_workspaces()?;",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-transcript-read-is-bounded",
+            ".take((MAX_TRANSCRIPT_BYTES + 1) as u64)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-transcript-open-is-no-follow",
+            "libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/bounded.rs"),
+            "core-voice-has-exclusive-operation-limiter",
+            "fn voice_operation_limiter()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-converse-and-dictate-use-exclusive-limiter",
+            "run_voice_blocking",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice_control.rs"),
+            "core-voice-control-uses-exclusive-limiter",
+            "run_voice_blocking",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-voice-revalidates-untrusted-capture-wave",
+            "Some(CAPTURE_PCM_FORMAT)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-authenticates-session-bridge-peer",
+            "SO_PEERCRED",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-voice-ops-are-typed",
+            "VoiceAudioStatus {}",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-voice-capture-has-no-input-fields",
+            "VoiceCapture {}",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-voice-capture-streams-without-path",
+            "Ok(output) if output.status.success() => output.stdout",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-voice-playback-streams-without-path",
+            "bounded_input_output_of(command, wav, VOICE_PLAYBACK_TIMEOUT)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-voice-validates-canonical-pcm",
+            "fn valid_pcm_wave(",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-voice-authenticates-core-peer",
+            "voice operations require the authenticated core service peer.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-voice-contract-has-adversarial-tests",
+            "canonical_pcm_wave_rejects_duplicate_extended_and_trailing_chunks",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-io-has-absolute-deadline",
+            "fn remaining_before(deadline: Instant)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-connect-shares-absolute-deadline",
+            "socket.connect_timeout(&address, remaining_before(deadline)?)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-connect-is-atomically-close-on-exec",
+            "Type::STREAM.cloexec()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-tests-saturated-listener-deadline",
+            "core_bridge_connect_deadline_bounds_saturated_unix_listener",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "desktop-session-bridge-io-has-absolute-deadline",
+            "fn remaining_before(deadline: Instant)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-tests-trickle-deadline",
+            "core_bridge_deadline_rejects_trickle_response_by_total_wall_time",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "desktop-session-bridge-tests-trickle-deadline",
+            "bridge_read_deadline_rejects_trickle_input_by_total_wall_time",
+        ),
+        contains_check(
+            root.join("os/tmpfiles/goblins-os-core.conf"),
+            "voice-work-root-is-owner-only",
+            "d /var/lib/goblins-os/voice/work 0700 goblins-os goblins-os -",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/voice.rs"),
@@ -16496,6 +17496,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
+            "bootc-requires-textshortcuts-key-release-candidate-preservation",
+            "grep -q '\"key_release_preserved_candidate\": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-runtime-failure-popup-cleanup",
+            "grep -q '\"runtime_failure_cleanup\": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
             "bootc-requires-textshortcuts-candidate-bubble-render-intent-fail-open",
             "grep -q '\"sink_failure_fail_open\": true' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
         ),
@@ -16508,6 +17518,56 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root,
             "bootc-requires-textshortcuts-candidate-bubble-render-intent-font",
             "grep -q '\"font_family\": \"Inter\"' /tmp/goblins-textshortcuts-candidate-bubble-render-intent.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-runs-textshortcuts-native-ibus-lookup-renderer-self-test",
+            "goblins-textshortcuts-ibus --native-ibus-lookup-renderer-self-test",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-native-ibus-renderer",
+            "grep -q '\"renderer\": \"native-ibus-lookup-table\"' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-native-ibus-publication",
+            "grep -q '\"show_published\": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-native-ibus-single-candidate",
+            "grep -q '\"candidate_count\": 1' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-native-ibus-system-orientation",
+            "grep -q '\"system_orientation\": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-native-ibus-zero-visible-preedit",
+            "grep -q '\"visible_preedit_updates\": 0' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-native-only-candidate-surface",
+            "grep -q '\"native_only_candidate_surface\": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-native-ibus-redaction",
+            "grep -q '\"value_redacted\": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-native-ibus-hide",
+            "grep -q '\"hide_published\": true' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-rejects-textshortcuts-synthetic-native-overlay",
+            "grep -q '\"synthetic_overlay\": false' /tmp/goblins-textshortcuts-native-ibus-lookup-renderer.json",
         ),
         container_contains_check(
             root,
@@ -16571,8 +17631,18 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
-            "bootc-requires-textshortcuts-gi-adapter-contract-preedit",
-            "grep -q '\"preedit_update\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+            "bootc-requires-textshortcuts-gi-adapter-contract-candidate-metadata",
+            "grep -q '\"candidate_metadata\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-zero-visible-preedit",
+            "grep -q '\"visible_preedit_updates\": 0' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-gi-adapter-contract-native-only-candidate",
+            "grep -q '\"native_only_candidate_surface\": true' /tmp/goblins-textshortcuts-gi-adapter-contract.json",
         ),
         container_contains_check(
             root,
@@ -16721,8 +17791,13 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         container_contains_check(
             root,
-            "bootc-requires-textshortcuts-adapter-callback-ledger-preedit",
-            "grep -q '\"update-preedit-text\"' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+            "bootc-requires-textshortcuts-adapter-callback-ledger-zero-visible-preedit",
+            "grep -q '\"visible_preedit_updates\": 0' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
+        ),
+        container_contains_check(
+            root,
+            "bootc-requires-textshortcuts-adapter-callback-ledger-metadata-only-candidate",
+            "grep -q '\"metadata_only_candidate_response\": true' /tmp/goblins-textshortcuts-adapter-callback-ledger.json",
         ),
         container_contains_check(
             root,
@@ -16857,7 +17932,427 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-fail-open-timeout",
-            "runtime did not answer before timeout",
+            "runtime did not complete one response before timeout",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-bounds-request-frames",
+            "RUNTIME_REQUEST_MAX_BYTES = 64 * 1024",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-bounds-response-frames",
+            "RUNTIME_RESPONSE_MAX_BYTES = 64 * 1024",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-uses-nonblocking-runtime-stdin",
+            "os.set_blocking(self._process.stdin.fileno(), False)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-uses-nonblocking-runtime-stdout",
+            "os.set_blocking(self._process.stdout.fileno(), False)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-has-bounded-request-frame-writer",
+            "def _write_request_frame",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-has-bounded-response-frame-reader",
+            "def _read_response_frame",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-rejects-extra-runtime-framing",
+            "runtime returned extra response framing",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-restarts-runtime-with-bounded-backoff",
+            "RUNTIME_RESTART_MAX_SECONDS = 5.0",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-requires-surrounding-text-capability",
+            "\"SURROUNDING_TEXT\"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-binds-replacement-to-exact-trigger",
+            "trigger = delete.get(\"expected_text\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-validates-whole-replacement-transaction",
+            "def _valid_replacement_transaction",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-binds-commit-to-shown-replacement",
+            "operations[1].get(\"text\") != expected_commit",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-swapped-replacement-refusal",
+            "swapped_commit[\"operations\"][1][\"text\"] = \"different replacement \"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-strictly-decodes-runtime-operations",
+            "def _validated_runtime_response_operations",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-validates-response-against-request",
+            "def _runtime_response_valid_for_request",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-rejects-error-responses-before-application",
+            "if operations is None or response.get(\"error\") is not None:",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-rejects-unknown-runtime-response-fields",
+            "set(response) - allowed_keys",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-pins-destructive-operation-sequence",
+            "[\"delete-surrounding-text\", \"commit-text\", \"hide-preedit-text\"]",
+        ),
+        absent_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-does-not-coerce-runtime-preedit-text",
+            "text_factory(str(operation.get(\"text\", \"\")))",
+        ),
+        absent_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-does-not-coerce-runtime-cursor-position",
+            "int(operation.get(\"cursor_pos\", 0))",
+        ),
+        absent_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-does-not-coerce-runtime-visible-state",
+            "bool(operation.get(\"visible\", False))",
+        ),
+        absent_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-does-not-coerce-runtime-delete-offset",
+            "int(operation.get(\"offset\", 0))",
+        ),
+        absent_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-does-not-coerce-runtime-delete-length",
+            "int(operation.get(\"n_chars\", 0))",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-applies-validated-runtime-text-directly",
+            "text_factory(operation[\"text\"])",
+        ),
+        absent_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-never-applies-visible-preedit",
+            "target.update_preedit_text(",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-applies-validated-runtime-delete-directly",
+            "operation[\"offset\"]",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-bounds-runtime-text-by-characters",
+            "RUNTIME_TEXT_MAX_CHARACTERS = 64 * 1024",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-bounds-runtime-text-by-utf8-bytes",
+            "RUNTIME_TEXT_MAX_BYTES = 64 * 1024",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-bounds-surrounding-text-by-utf8-bytes",
+            "SURROUNDING_TEXT_MAX_BYTES = 64 * 1024",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-strictly-encodes-runtime-text",
+            "value.encode(\"utf-8\", errors=\"strict\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-rejects-surrogate-keysyms",
+            "0xD800 <= codepoint <= 0xDFFF",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-fail-opens-request-encoding-errors",
+            "UnicodeEncodeError,",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-fail-opens-json-value-errors",
+            "ValueError,",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-unencodable-request",
+            "unencodable_request_runtime = RuntimeBridge(",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-huge-json-integer",
+            "huge_integer_frame = (",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-huge-private-table-integer",
+            "table_file.write(b\"[\" + (b\"9\" * 5000) + b\"]\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-preconstructs-text-before-editing",
+            "prepared_text: dict[int, Any] = {}",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-zero-mutation-on-factory-failure",
+            "assert factory_failure_target.calls == []",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-owns-focus-bound-surrounding-snapshots",
+            "class FocusBoundSurroundingTextCache",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-stores-validated-callback-snapshot",
+            "self._surrounding_text_cache.observe(snapshot)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-reads-only-owned-focus-snapshot",
+            "snapshot = self._surrounding_text_cache.current()",
+        ),
+        absent_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-never-reads-stale-ibus-base-cache",
+            "def _read_surrounding_text",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-focus-transition-cache-refusal",
+            "snapshot_cache.end_focus()",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-propagates-render-publication-result",
+            "return self._sink.publish(record) is not False",
+        ),
+        absent_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-does-not-log-render-exception-content",
+            "render intent sink failed: {error}",
+        ),
+        absent_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-does-not-log-hide-exception-content",
+            "forced candidate hide failed: {error}",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-disarms-on-publication-failure",
+            "self._clear_candidate_ui(\"runtime-operation-application-failed\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-failed-publication-disarm",
+            "def assert_failed_candidate_publication_disarms",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-native-show-failure",
+            "\"native_show_failure_reported\": native_show_failure_reported",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-retries-native-hide",
+            "\"retryable_force_hide\": retryable_force_hide",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-propagates-table-change-application-result",
+            "table_changed, table_applied = _send_table_changed_if_needed(",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-cleans-up-failed-table-change-hide",
+            "self._clear_candidate_ui(\"table-change-application-failed\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-table-change-hide-retry",
+            "\"table_change_hide_retry\": table_change_hide_retry",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-pins-hidden-text-hint-bit",
+            "IBUS_INPUT_HINT_HIDDEN_TEXT_FALLBACK = 1 << 12",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-pins-private-input-hint-bit",
+            "IBUS_INPUT_HINT_PRIVATE_FALLBACK = 1 << 11",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-fail-closes-private-and-hidden-input",
+            "def _effective_content_purpose",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-hidden-text-hint-refusal",
+            "IBUS_INPUT_HINT_HIDDEN_TEXT_FALLBACK,",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-tests-invalid-content-type-fails-closed",
+            "_effective_content_purpose(0, \"invalid\", FakeIbus) == 8",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-rejects-content-type-outside-guint32",
+            "purpose_value > 0xFFFFFFFF",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-rejects-nul-triggers",
+            "replace.contains('\\0')",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-rejects-nul-replacements",
+            "with_text.contains('\\0')",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-handles-disable-lifecycle",
+            "def do_disable",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-disable-invalidates-runtime-status",
+            "self._runtime_status.set_enabled(False)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-disable-clears-candidate-ui",
+            "self._clear_candidate_ui(\"disabled\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-locally-clears-stale-candidate-ui",
+            "def _clear_candidate_ui",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-local-clear-hides-native-candidate",
+            "self._candidate_render.clear(self._candidate_state, reason)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-failure-clears-candidate-ui",
+            "self._clear_candidate_ui(\"runtime-health-failed\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-generation-change-clears-candidate-ui",
+            "self._clear_candidate_ui(\"runtime-generation-changed\")",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-publishes-redacted-runtime-status",
+            "class RuntimeStatusPublisher",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-pins-v1-schema",
+            "RUNTIME_STATUS_SCHEMA = \"goblins-os.text-shortcuts-runtime-status.v1\"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-pins-fixed-private-path",
+            "RUNTIME_STATUS_PATH = \"/run/goblins-os-session/text-shortcuts-runtime-status.json\"",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-bounds-record",
+            "RUNTIME_STATUS_MAX_BYTES = 4096",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-emits-enabled-state",
+            "\"enabled\": self._enabled",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-emits-surrounding-text-state",
+            "\"surrounding_text_supported\": self._surrounding_text_supported",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-emits-snapshot-state",
+            "\"snapshot_valid\": self._snapshot_valid",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-writes-owner-only-file",
+            "os.fchmod(descriptor, 0o600)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-syncs-file-before-rename",
+            "os.fsync(descriptor)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-atomically-renames-record",
+            "os.rename(",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-syncs-parent-directory",
+            "os.fsync(directory)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-runtime-bridge-updates-status-publisher",
+            "health_callback=self._runtime_status.runtime_transport",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-tracks-enabled-state",
+            "def set_enabled",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-tracks-surrounding-text-support",
+            "def set_surrounding_text_supported",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-status-publisher-tracks-snapshot-validity",
+            "def set_snapshot_valid",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-heartbeats-focused-runtime",
+            "def _runtime_health_tick",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
@@ -16913,6 +18408,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-runtime-self-test-dismisses-with-escape",
             "_special_key_protocol_event(0xFF1B)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-self-test-covers-partial-frame-timeout",
+            "partial_runtime = RuntimeBridge(",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-self-test-covers-oversize-frame",
+            "oversized_runtime = RuntimeBridge(",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-self-test-rejects-malformed-responses",
+            "malformed_runtime_responses = [",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-self-test-covers-relocated-trigger",
+            "same_trigger_elsewhere =",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-applies-guarded-effective-response",
+            "effective = self._surrounding_guard.validate_response(",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
@@ -17016,6 +18536,51 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-native-lookup-renderer",
+            "class NativeIbusLookupRenderer",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-native-lookup-table",
+            "self._ibus.LookupTable.new",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-native-lookup-publication",
+            "self._engine.update_lookup_table(lookup_table, True)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-native-pointer-acceptance",
+            "def do_candidate_clicked",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-typed-candidate-acceptance",
+            "{\"type\": \"accept-candidate\"}",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-key-release-preserves-candidate",
+            "\"key_release_preserved_candidate\": key_release_preserved_candidate",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-failure-cleans-popup",
+            "\"runtime_failure_cleanup\": runtime_failure_cleanup",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-runtime-unavailable-marker",
+            "\"runtime_available\": False",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-adapter-native-renderer-cli",
+            "--native-ibus-lookup-renderer-self-test",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
             "textshortcuts-ibus-adapter-gi-contract-cli",
             "--gi-adapter-contract-self-test",
         ),
@@ -17101,8 +18666,8 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
-            "textshortcuts-ibus-adapter-gi-contract-preedit",
-            "\"preedit_update\": preedit_update",
+            "textshortcuts-ibus-adapter-gi-contract-zero-visible-preedit",
+            "\"visible_preedit_updates\": visible_preedit_updates",
         ),
         contains_check(
             root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
@@ -17323,12 +18888,128 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/input/goblins-os-input-source-seed"),
             "input-source-seed-appends-goblins-source",
-            "gsettings set org.gnome.desktop.input-sources sources",
+            "set_and_verify_input_sources sources \"$canonical_sources\" \"$next_sources\"",
         ),
         contains_check(
             root.join("os/input/goblins-os-input-source-seed"),
             "input-source-seed-appends-goblins-preload",
-            "gsettings set org.freedesktop.ibus.general preload-engines",
+            "set_and_verify_preload \"$canonical_preload\" \"$next_preload\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-checks-writable-values-not-only-exit-status",
+            "[ \"$value\" = \"true\" ]",
+        ),
+        absent_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-does-not-mask-read-failures",
+            "|| true",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-strictly-parses-existing-values",
+            "parsed = ast.literal_eval(raw)",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-accepts-typed-empty-input-source-arrays",
+            "annotation = \"@a(ss) \"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-accepts-typed-empty-preload-arrays",
+            "annotation = \"@as \"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-rejects-malformed-existing-values",
+            "input source settings were malformed; leaving every source unchanged",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-preserves-existing-source-order-and-duplicates",
+            "sources.append((item[0], item[1]))",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-preserves-existing-preload-order-and-duplicates",
+            "engines.append(item)",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-verifies-each-write",
+            "set_and_verify_input_sources()",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-reads-sources-before-transaction",
+            "current_sources=\"$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null)\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-reads-mru-before-transaction",
+            "current_mru=\"$(gsettings get org.gnome.desktop.input-sources mru-sources 2>/dev/null)\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-reads-preload-before-transaction",
+            "current_preload=\"$(gsettings get org.freedesktop.ibus.general preload-engines 2>/dev/null)\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-rolls-back-partial-writes",
+            "rollback_originals()",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-rolls-back-only-touched-keys",
+            "if [ \"$touched\" != \"1\" ]",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-refuses-to-overwrite-concurrent-rollback-changes",
+            "[ \"$canonical\" = \"$staged\" ] || return 1",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-verifies-forward-sources-write",
+            "set_and_verify_input_sources sources \"$canonical_sources\" \"$next_sources\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-verifies-forward-mru-write",
+            "set_and_verify_input_sources mru-sources \"$canonical_mru\" \"$next_mru\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-verifies-forward-preload-write",
+            "set_and_verify_preload \"$canonical_preload\" \"$next_preload\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-conditionally-restores-sources",
+            "restore_input_sources_if_unchanged sources \"$sources_touched\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-conditionally-restores-mru",
+            "restore_input_sources_if_unchanged mru-sources \"$mru_touched\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-verifies-restored-preload",
+            "restore_preload_if_unchanged \"$preload_touched\"",
+        ),
+        contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-has-exact-marker-token",
+            "printf 'seeded %s/%s\\n'",
+        ),
+        ordered_contains_check(
+            root.join("os/input/goblins-os-input-source-seed"),
+            "input-source-seed-writes-marker-only-after-verified-transaction",
+            "if ! set_and_verify_input_sources sources",
+            "printf 'seeded %s/%s\\n'",
         ),
         file_check(root, "os/systemd-user/org.goblins.OS.InputSourcesSeed.service"),
         contains_check(
@@ -17413,8 +19094,18 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-input-source-read-uses-session-bridge",
+            "input_source_configured_from_bridge(session_bridge::gsettings(&[",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-does-not-run-gsettings-from-system-service",
+            "bounded_session_command_output(\"gsettings\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
             "core-text-shortcuts-runtime-pending-honesty",
-            "not the active IBus engine in this session",
+            "lacks an active, fresh focused runtime response in this session",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
@@ -17422,9 +19113,164 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "session_bridge::ibus_engine()",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-runtime-requires-fresh-adapter-status",
+            "session_bridge::text_shortcuts_runtime_status()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-runtime-requires-ready-adapter-child",
+            "TextShortcutsRuntimeStatusResult::Success(status) if status.ready()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-has-pathless-runtime-status-op",
+            "TextShortcutsRuntimeStatus",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-runtime-status-pins-v1-schema",
+            "const TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA: &str = \"goblins-os.text-shortcuts-runtime-status.v1\";",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-rechecks-runtime-status-freshness",
+            "TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-rechecks-runtime-status-future-skew",
+            "const TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS: u64 = 250_000_000;",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-runtime-status-ready-requires-enabled",
+            "&& self.enabled",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-runtime-status-ready-requires-surrounding-text",
+            "&& self.surrounding_text_supported",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-runtime-status-ready-requires-valid-snapshot",
+            "&& self.snapshot_valid",
+        ),
+        contains_check(
             root.join("crates/goblins-os-session-bridge/src/main.rs"),
             "session-bridge-accepts-ibus-engine-op",
             "IbusEngine",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-uses-fixed-private-path",
+            "/run/goblins-os-session/text-shortcuts-runtime-status.json",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-pins-v1-schema",
+            "const TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA: &str = \"goblins-os.text-shortcuts-runtime-status.v1\";",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-pins-four-kibibyte-envelope",
+            "const TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES: usize = 4 * 1024;",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-pins-future-skew",
+            "const TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS: u64 = 250_000_000;",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-carries-enabled-state",
+            "enabled: bool,",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-carries-surrounding-text-state",
+            "surrounding_text_supported: bool,",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-carries-snapshot-state",
+            "snapshot_valid: bool,",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-op-is-pathless",
+            "TextShortcutsRuntimeStatus {}",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-open-is-nofollow",
+            ".custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-requires-owner-only-mode",
+            "metadata.mode() & 0o7777 != TEXT_SHORTCUTS_RUNTIME_STATUS_MODE",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-is-strict-bounded-and-fresh",
+            "TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-bounds-read-before-json-decode",
+            ".take((TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES + 1) as u64)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-rechecks-device-after-read",
+            "before.dev() != after.dev()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-rechecks-inode-after-read",
+            "before.ino() != after.ino()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-rechecks-length-after-read",
+            "before.len() != after.len()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-requires-complete-read",
+            "after.len() != encoded.len() as u64",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-has-adversarial-file-tests",
+            "text_shortcuts_runtime_status_rejects_symlinks_and_oversize_files",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-tests-stale-and-future-timestamps",
+            "text_shortcuts_runtime_status_rejects_stale_and_materially_future_timestamps",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-tests-malformed-and-unknown-fields",
+            "text_shortcuts_runtime_status_rejects_malformed_and_unknown_fields",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-tests-all-readiness-signals",
+            "text_shortcuts_runtime_status_preserves_all_readiness_signals",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-tests-owner-and-mode",
+            "text_shortcuts_runtime_status_rejects_wrong_mode_and_owner",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-runtime-status-rejects-fifo-without-blocking",
+            "text_shortcuts_runtime_status_rejects_fifo_without_blocking",
         ),
         contains_check(
             root.join("crates/goblins-os-session-bridge/src/main.rs"),
@@ -17462,6 +19308,81 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "sanitize_shortcuts",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-reads-desktop-table-through-session-bridge",
+            "session_bridge::text_shortcuts_read()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-writes-desktop-table-through-session-bridge",
+            "session_bridge::text_shortcuts_write(&table)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-bounds-preview-trigger",
+            "MAX_PREVIEW_TRIGGER_BYTES: usize = 256",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-text-shortcuts-bounds-http-request-envelope",
+            "TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES: usize = 64 * 1024",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-text-shortcuts-applies-route-local-body-limit",
+            ".layer(DefaultBodyLimit::max(TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES))",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-text-shortcuts-tests-route-local-413",
+            "text_shortcuts_route_rejects_bodies_above_its_private_table_envelope",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-has-no-service-home-table-path",
+            "fn table_path()",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/text_shortcuts.rs"),
+            "core-text-shortcuts-does-not-write-service-home",
+            "fs::write(",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-has-typed-text-shortcuts-read",
+            "TextShortcutsRead",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "core-session-bridge-has-typed-text-shortcuts-write",
+            "TextShortcutsWrite",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/Cargo.toml"),
+            "session-bridge-reuses-text-shortcuts-engine-store",
+            "goblins-os-textshortcuts-engine",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-rejects-unknown-request-fields",
+            "deny_unknown_fields",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-bounds-request-before-decoding",
+            "read_to_end_before(",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/control_plane.rs"),
+            "release-proof-can-roundtrip-text-shortcuts-write",
+            "(POST, \"/v1/text-shortcuts\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/control_plane.rs"),
+            "release-proof-can-preview-text-shortcuts",
+            "(GET, \"/v1/text-shortcuts/preview\")",
+        ),
+        contains_check(
             root.join("Cargo.toml"),
             "workspace-textshortcuts-engine-crate",
             "crates/goblins-os-textshortcuts-engine",
@@ -17480,6 +19401,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-deletes-trigger-before-commit",
             "delete_previous_chars",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-serializes-exact-trigger-for-delete",
+            "expected_text: expected_text.clone()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-has-nonmutating-health-request",
+            "RuntimeProtocolRequest::Health => Ok(IbusRuntimeEvent::Health)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-health-event-passes-through-without-edit",
+            "IbusRuntimeEvent::Health => IbusRuntimeDecision::pass_through(),",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-tests-health-does-not-mutate-edit-state",
+            "runtime_protocol_health_is_typed_and_does_not_mutate_edit_state",
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
@@ -17550,6 +19491,86 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
             "textshortcuts-engine-table-store-invalid-degrades",
             "TableLoadStatus::InvalidJson",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-size-limit",
+            "MAX_TEXT_SHORTCUTS_TABLE_BYTES: usize = 48 * 1024",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-bounded-read",
+            ".take((MAX_TEXT_SHORTCUTS_TABLE_BYTES + 1) as u64)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-refuses-symlinks",
+            "libc::O_CLOEXEC | libc::O_NOFOLLOW",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-requires-private-mode",
+            "metadata.mode() & 0o7777 == 0o600",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-atomic-replace",
+            "std::fs::rename(&temporary_path, &self.path)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-syncs-file",
+            "temporary.sync_all()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
+            "textshortcuts-engine-table-store-private-parent",
+            "Permissions::from_mode(0o700)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-bounds-private-table",
+            "MAX_TEXT_SHORTCUTS_TABLE_BYTES = 48 * 1024",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-requires-absolute-config-home",
+            "not os.path.isabs(config_home)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-requires-absolute-home",
+            "not os.path.isabs(home)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-refuses-table-symlinks",
+            "getattr(os, \"O_NOFOLLOW\", 0)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-requires-private-table-owner",
+            "metadata.st_uid != os.geteuid()",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-requires-private-table-mode",
+            "stat.S_IMODE(metadata.st_mode) != 0o600",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-rejects-nonstring-trigger-fields",
+            "not isinstance(replace_value, str)",
+        ),
+        contains_check(
+            root.join("os/goblins-os-textshortcuts/goblins-textshortcuts-ibus"),
+            "textshortcuts-ibus-rejects-nonstring-replacement-fields",
+            "not isinstance(with_value, str)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "textshortcuts-core-maps-bridge-transport-outages-to-unavailable",
+            "DetailedBridgeResult::TransportUnavailable",
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
@@ -17703,8 +19724,8 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
-            "textshortcuts-engine-runtime-preedit-candidate",
-            "IbusOperation::UpdatePreeditText",
+            "textshortcuts-engine-runtime-metadata-only-candidate",
+            "IbusRuntimeDecision::show_candidate(trigger, replacement)",
         ),
         contains_check(
             root.join("crates/goblins-os-textshortcuts-engine/src/lib.rs"),
@@ -17868,8 +19889,18 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),
-            "shell-textshortcuts-proof-live-render-marker",
-            "rendered_accept_bubble={rendered}",
+            "shell-textshortcuts-proof-live-native-renderer",
+            "renderer=native-ibus-lookup-table",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-live-native-publication",
+            "candidate_popup_published={popup}",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-textshortcuts-proof-live-no-synthetic-overlay",
+            "synthetic_overlay=false",
         ),
         contains_check(
             root.join("crates/goblins-os-shell/src/main.rs"),
@@ -19137,19 +21168,20 @@ mod tests {
     use super::{
         candidate_commit_is_valid, capability_groupadd_targets, cargo_lock_packages,
         client_path_binding_inventory, contains_realish_openai_key,
-        deprecated_github_action_pins_absent_check, desktop_field, first_executable_initialization,
-        image_ref_is_digest_pinned, image_ref_is_valid, imports_shared_core_initializer,
-        install_files, is_allowed_dummy_secret, is_suspicious_secret_line,
-        native_design_system_checks, ordered_contains_check, permission_inventory,
-        reviewed_github_action_pins_check, rg_secret_scan_hit, sha256_path,
-        should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
-        tmpfiles_capability_entries, verify_installer_branding_tool_provenance,
-        write_release_evidence, CheckState, ForbiddenClientTokenVisitor, APPLICATIONS, AUTOSTART,
-        BINARIES, DCONF_FILES, DEPRECATED_GITHUB_ACTION_PINS, GLIB_SCHEMA_FILES,
-        GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS,
-        POLISH_INTERACTION_PROOF, POLISH_INTERACTION_SCREENSHOTS, REVIEWED_GITHUB_ACTION_PINS,
-        SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS,
-        SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
+        core_service_writable_paths_are_exact, deprecated_github_action_pins_absent_check,
+        desktop_field, first_executable_initialization, image_ref_is_digest_pinned,
+        image_ref_is_valid, imports_shared_core_initializer, install_files,
+        is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
+        ordered_contains_check, permission_inventory, reviewed_github_action_pins_check,
+        rg_secret_scan_hit, sha256_path, should_skip_secret_scan_path,
+        source_manifest_classifies_top_level, stable_id, tmpfiles_capability_entries,
+        verify_installer_branding_tool_provenance, write_release_evidence, CheckState,
+        ForbiddenClientTokenVisitor, APPLICATIONS, AUTOSTART, BINARIES,
+        CORE_SERVICE_READ_WRITE_PATHS, DCONF_FILES, DEPRECATED_GITHUB_ACTION_PINS,
+        GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS,
+        NAUTILUS_SCRIPTS, POLISH_INTERACTION_PROOF, POLISH_INTERACTION_SCREENSHOTS,
+        REVIEWED_GITHUB_ACTION_PINS, SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS,
+        SYSTEMD_SYSTEM_DROPINS, SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
     };
     use std::collections::HashSet;
     use std::fs;
@@ -19249,6 +21281,38 @@ mod tests {
         }
 
         fs::remove_dir_all(root).expect("remove workflow fixture directory");
+    }
+
+    #[test]
+    fn core_service_writable_paths_reject_omissions_and_broad_allowances() {
+        let canonical = format!(
+            "[Unit]\nDescription=fixture\n\n[Service]\nProtectSystem=strict\nUMask=0077\nReadWritePaths={CORE_SERVICE_READ_WRITE_PATHS}\n"
+        );
+        assert!(core_service_writable_paths_are_exact(&canonical));
+
+        let mutations = [
+            canonical.replace("UMask=0077\n", ""),
+            canonical.replace("UMask=0077", "UMask=0027"),
+            canonical.replace("/run/goblins-os-core ", ""),
+            canonical.replace(" /var/lib/goblins-os/voice/work", ""),
+            canonical.replace("/run/goblins-os-core", "/run"),
+            canonical.replace("/var/lib/goblins-os/voice/work", "/var/lib/goblins-os/voice"),
+            canonical.replace("/var/lib/goblins-os/voice/work", "/var/lib/goblins-os"),
+            canonical.replace("/var/lib/goblins-os/voice/work", "/var/lib"),
+            canonical.replace(CORE_SERVICE_READ_WRITE_PATHS, "/"),
+            canonical.replace(
+                &format!("ReadWritePaths={CORE_SERVICE_READ_WRITE_PATHS}"),
+                "ReadWritePaths=/run/goblins-os-core\nReadWritePaths=/var/lib/goblins-os/voice/work",
+            ),
+            format!("{canonical}ReadWritePaths={CORE_SERVICE_READ_WRITE_PATHS}\n"),
+            canonical.replace("ProtectSystem=strict", "ProtectSystem=full"),
+        ];
+        for mutation in mutations {
+            assert!(
+                !core_service_writable_paths_are_exact(&mutation),
+                "accepted unsafe core service fixture:\n{mutation}"
+            );
+        }
     }
 
     #[test]

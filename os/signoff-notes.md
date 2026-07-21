@@ -18,6 +18,9 @@ instructions.
   - image: pass/fail
   - installer-iso: pass/fail
  - Host/VM screenshot capture path: `os/screenshots/hardware-gate/<arch>/YYYY-MM-DD/`
+- Canonical evidence bundle path/SHA256:
+- Exact evidence workflow artifact/run attempt:
+- Local aarch64/HVF signed attestation run (aarch64 only):
 - Verify command output:
 - Verify result (`blocked=0`): pass/fail
 - Self-test command output:
@@ -34,7 +37,7 @@ instructions.
 
 2) First-boot onboarding/reaches desktop session
 - Result: pass/fail
-- Screenshot(s): `06-onboarding.png`, `07-home.png`
+- Screenshot(s): `05-first-boot-private-unlock.png`, `06-onboarding.png`, `07-home.png`
 
 3) Shell launch
 - Result: pass/fail
@@ -76,6 +79,12 @@ instructions.
 - Cargo package TSV generated from `Cargo.lock`: yes/no
 - RPM package TSV generated from the built image RPM database: yes/no
 - Evidence path: `os/signoff-proofs/sbom/<arch>/`
+
+10) Canonical display-evidence integrity
+- `evidence-bundle.json` recomputed against all 32 uniform-dimension PNGs and every required JSON: yes/no
+- Exact x86_64 capture artifact file matched the successful workflow run: yes/no/not-applicable
+- Exact aarch64 seal and record matched the successful GitHub-hosted attestation run: yes/no/not-applicable
+- GitHub artifact attestation verified against the exact aarch64 signer workflow and candidate commit: yes/no/not-applicable
 
 ### Runtime engine setup
 - Engine path configured: local model | BYO OpenAI relay | BYO Codex
@@ -1982,6 +1991,21 @@ instructions.
 - Gaming readiness checked: yes (screenshots 19-vulkan-vkcube.png 20-gamemode-active.png 21-gamescope-session.png 22-mangohud-overlay.png 23-controller-detection.png 24-audio-output.png present)
 - Install storage/bootloader/dual-boot checked: yes (screenshots 25-install-destination.png 26-install-storage-summary.png 27-dual-boot-preserve-existing-os.png 28-bootloader-efi-summary.png present)
 - Current project completion status: complete
+
+## Release evidence correction: 2026-07-19
+
+- The historical Text Shortcuts rows in this file that say `text-input-v3 commit` or
+  `rendered accept bubble` are invalid for those two subclaims and must not be
+  used to satisfy the current stable gate. A source/runtime audit found that
+  the adapter recorded its internal `commit-text` operation without a trusted
+  text-input-v3 protocol trace, and its production candidate-render sink was a
+  no-op while the live proof mode drew a separate proof-only GTK candidate.
+- The remaining historical fields stay as an audit trail; this correction does
+  not retroactively promote or erase them.
+- Superseding proof must be bound to the exact current candidate and
+  architecture, capture the production native IBus lookup-table popup with the
+  proof fixture's synthetic overlay disabled, and prove delivery by combining
+  the adapter's IBus commit operation with focused-entry readback.
 
 ## Manual Gate Run: 2026-07-05T025402Z (script assisted)
 - Runner: GitHub Actions 1000009321 (Linux/ARM64, aarch64-verification-iso, https://github.com/Joe-Simo/goblins-os/actions/runs/28727099426)

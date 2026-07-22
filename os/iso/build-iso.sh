@@ -650,7 +650,7 @@ ensure_docker_registry_network() {
 
 ensure_docker_registry() {
   local container_image endpoint_network_id expected_network_id network_count
-  local port_binding purpose running
+  local expected_port_bindings port_binding purpose running
 
   ensure_docker_egress_network
   ensure_docker_registry_network
@@ -659,13 +659,21 @@ ensure_docker_registry() {
     container_image="$(docker inspect --format '{{.Config.Image}}' "$DOCKER_REGISTRY_NAME")"
     network_count="$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$DOCKER_REGISTRY_NAME")"
     endpoint_network_id="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$DOCKER_REGISTRY_NETWORK\"}}{{.NetworkID}}{{end}}" "$DOCKER_REGISTRY_NAME")"
-    port_binding="$(docker inspect --format '{{range (index .HostConfig.PortBindings "5000/tcp")}}{{println .HostIp .HostPort}}{{end}}' "$DOCKER_REGISTRY_NAME")"
+    port_binding="$(
+      docker inspect --format '{{range (index .HostConfig.PortBindings "5000/tcp")}}{{println .HostIp .HostPort}}{{end}}' "$DOCKER_REGISTRY_NAME" \
+        | sed '/^$/d' \
+        | LC_ALL=C sort
+    )"
+    expected_port_bindings="$(
+      printf '127.0.0.1 %s\n::1 %s\n' "$DOCKER_REGISTRY_PORT" "$DOCKER_REGISTRY_PORT" \
+        | LC_ALL=C sort
+    )"
     purpose="$(docker inspect --format '{{index .Config.Labels "org.goblins-os.purpose"}}' "$DOCKER_REGISTRY_NAME")"
     if [ "$container_image" != "$LOCAL_REGISTRY_IMAGE" ] \
       || [ "$network_count" != "1" ] \
       || [ -z "$endpoint_network_id" ] \
       || [ "$endpoint_network_id" != "$expected_network_id" ] \
-      || [ "$port_binding" != "127.0.0.1 $DOCKER_REGISTRY_PORT" ] \
+      || [ "$port_binding" != "$expected_port_bindings" ] \
       || [ "$purpose" != "installer-local-registry" ]; then
       echo "error: existing Docker container $DOCKER_REGISTRY_NAME does not satisfy the isolated, loopback-only installer registry contract; remove that exact container explicitly before retrying." >&2
       exit 1
@@ -679,6 +687,7 @@ ensure_docker_registry() {
       --network "$DOCKER_REGISTRY_NETWORK" \
       --label org.goblins-os.purpose=installer-local-registry \
       -p "127.0.0.1:$DOCKER_REGISTRY_PORT:5000" \
+      -p "[::1]:$DOCKER_REGISTRY_PORT:5000" \
       "$LOCAL_REGISTRY_IMAGE" >/dev/null
   fi
   network_count="$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$DOCKER_REGISTRY_NAME")"
@@ -1061,6 +1070,8 @@ run_docker_builder() {
     esac
   else
     ensure_docker_registry
+    # Docker's local-registry exception uses localhost. Publish on both IPv4
+    # and IPv6 loopback so resolver order cannot miss the fail-closed binding.
     registry_image="localhost:$DOCKER_REGISTRY_PORT/goblins-os:$ARCH"
     echo "==> Publishing $IMAGE to local Docker registry as $registry_image"
     docker tag "$IMAGE" "$registry_image"

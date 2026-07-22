@@ -8607,6 +8607,21 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
+            "iso-builder-local-registry-host-port-covers-ipv6-loopback",
+            "-p \"[::1]:$DOCKER_REGISTRY_PORT:5000\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-host-publish-matches-dual-loopback-binding",
+            "registry_image=\"localhost:$DOCKER_REGISTRY_PORT/goblins-os:$ARCH\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-validates-exact-dual-loopback-bindings",
+            "printf '127.0.0.1 %s\\n::1 %s\\n'",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
             "iso-builder-local-registry-uses-container-dns",
             "builder_image=\"$DOCKER_REGISTRY_NAME:5000/goblins-os:$ARCH\"",
         ),

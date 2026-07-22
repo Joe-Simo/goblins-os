@@ -221,6 +221,10 @@ require_docker_dual_network_versions() {
 
 require_bounded_positive_integer GOBLINS_OS_DOCKER_REGISTRY_PORT "$DOCKER_REGISTRY_PORT" 65535
 require_docker_dns_label GOBLINS_OS_DOCKER_REGISTRY_NAME "$DOCKER_REGISTRY_NAME"
+if [ "$DOCKER_REGISTRY_NAME" = "localhost" ]; then
+  echo "error: GOBLINS_OS_DOCKER_REGISTRY_NAME cannot be localhost; that name is reserved for container loopback and cannot route to the managed registry." >&2
+  exit 1
+fi
 require_docker_object_name GOBLINS_OS_DOCKER_REGISTRY_NETWORK "$DOCKER_REGISTRY_NETWORK"
 require_docker_object_name GOBLINS_OS_DOCKER_EGRESS_NETWORK "$DOCKER_EGRESS_NETWORK"
 require_user_defined_network_name GOBLINS_OS_DOCKER_REGISTRY_NETWORK "$DOCKER_REGISTRY_NETWORK"
@@ -831,6 +835,14 @@ require_docker_dual_network_capability() (
     exit 1
   fi
   preflight_container_created=1
+  # Docker records the requested endpoint priorities at create time, but it
+  # does not materialize endpoint NetworkIDs until the container starts. Run
+  # the fixed no-op entrypoint so the preflight validates the same live network
+  # attachment lifecycle that the registry probe and privileged BIB use.
+  if ! docker start -a "$preflight_container_id" >/dev/null; then
+    echo "error: Docker could not start the two-user-defined-network preflight container." >&2
+    exit 1
+  fi
 
   network_count="$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$preflight_name")"
   egress_priority="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$preflight_egress_network\"}}{{.GwPriority}}{{end}}" "$preflight_name")"

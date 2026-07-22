@@ -8612,6 +8612,11 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
+            "iso-builder-reserves-container-loopback-name",
+            "GOBLINS_OS_DOCKER_REGISTRY_NAME cannot be localhost",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
             "iso-builder-probes-local-registry-on-builder-network",
             "probe_docker_registry_from_builder_network",
         ),
@@ -8639,6 +8644,17 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/iso/build-iso.sh"),
             "iso-builder-capability-tests-dual-network-create",
             "if ! preflight_container_id=\"$(docker create",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-materializes-live-network-endpoints",
+            "if ! docker start -a \"$preflight_container_id\"",
+        ),
+        ordered_contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-capability-starts-before-endpoint-inspection",
+            "  if ! docker start -a \"$preflight_container_id\" >/dev/null; then\n",
+            "  network_count=\"$(docker inspect --format '{{len .NetworkSettings.Networks}}' \"$preflight_name\")\"\n",
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),

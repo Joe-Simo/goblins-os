@@ -40,7 +40,7 @@ export const screenshots = [
     src: "/screenshots/installer-disk.png",
     alt: "Goblins OS installer disk selection screen",
     title: "Installer",
-    description: "Architecture-specific media with guarded storage choices.",
+    description: "Arm64 installer media with guarded storage choices.",
     width: 1400,
     height: 590,
     bytes: 56843,

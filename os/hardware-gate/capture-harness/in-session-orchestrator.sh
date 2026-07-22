@@ -12,6 +12,16 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 MODEL_LOOPBACK_PID=""
 FIXTURE_ACTIVE=false
+ACCESSIBILITY_PROOF_ACTIVE=false
+ACCESSIBILITY_SETTINGS_PID=""
+ACCESSIBILITY_LOCALE_PID=""
+ACCESSIBILITY_ORCA_PID=""
+ACCESSIBILITY_ORCA_STARTED=false
+ORIGINAL_TEXT_SCALE=""
+ORIGINAL_HIGH_CONTRAST=""
+ORIGINAL_REDUCE_TRANSPARENCY=""
+ORIGINAL_ENABLE_ANIMATIONS=""
+ORIGINAL_SCREEN_READER=""
 CORE_HEALTH_URL=http://127.0.0.1:8787/health
 CORE_PROOF_RESULT_DIR=/run/goblins-hwgate-core-proof
 
@@ -48,6 +58,10 @@ restore_fixture_core(){
 }
 
 cleanup(){
+  if [ "$ACCESSIBILITY_PROOF_ACTIVE" = "true" ] \
+    && declare -F restore_accessibility_proof_state >/dev/null 2>&1; then
+    restore_accessibility_proof_state || true
+  fi
   restore_fixture_core
   if [ -n "${MODEL_LOOPBACK_PID:-}" ]; then
     kill "$MODEL_LOOPBACK_PID" 2>/dev/null || true
@@ -143,6 +157,7 @@ proof_app_privacy_revoke(){ capture_curl -s "http://$H/proof/app-privacy-revoke?
 proof_preview_open_render(){ capture_curl -s "http://$H/proof/preview-open-render?$1" >/dev/null 2>&1 || true; }
 proof_audio_output(){ capture_curl -s "http://$H/proof/audio-output?$1" >/dev/null 2>&1 || true; }
 proof_runtime_build(){ capture_curl -s "http://$H/proof/runtime-build?$1" >/dev/null 2>&1 || true; }
+proof_accessibility_adaptivity(){ capture_curl -s "http://$H/proof/accessibility-adaptivity?$1" >/dev/null 2>&1 || true; }
 proof_query_value(){
   python3 - "$1" <<'PY'
 import sys
@@ -2461,6 +2476,19 @@ darkoff(){ gsettings set org.gnome.desktop.interface color-scheme default 2>/dev
 
 sleep 3
 capture_curl -s "http://$H/ready/ORCH_START" >/dev/null 2>&1
+ACCESSIBILITY_PROOF_HELPER="$(mktemp /tmp/goblins-accessibility-proof.XXXXXX)"
+if capture_curl -sf -o "$ACCESSIBILITY_PROOF_HELPER" \
+  "http://$H/accessibility-adaptivity-proof.sh"; then
+  chmod 0700 "$ACCESSIBILITY_PROOF_HELPER"
+  # shellcheck source=/dev/null
+  . "$ACCESSIBILITY_PROOF_HELPER"
+  rm -f "$ACCESSIBILITY_PROOF_HELPER"
+  ACCESSIBILITY_PROOF_HELPER=""
+else
+  rm -f "$ACCESSIBILITY_PROOF_HELPER"
+  ACCESSIBILITY_PROOF_HELPER=""
+  proof_accessibility_adaptivity "status=fail&stage=helper-download&architecture=aarch64"
+fi
 pkill -f goblins-os-login 2>/dev/null; pkill -f goblins-os-installer 2>/dev/null; sleep 2
 dismiss_shell_overview text-shortcuts-proof-start
 switch_control_off
@@ -2479,6 +2507,9 @@ multi_display_apply_proof || true
 focus_arm_roundtrip_proof || true
 app_privacy_revoke_proof || true
 preview_open_render_proof || true
+if declare -F accessibility_adaptivity_proof >/dev/null 2>&1; then
+  accessibility_adaptivity_proof || true
+fi
 
 # The verification-only root service owns the fixture block/state directories
 # and later swaps the fixture daemon onto the same production sockets. The
@@ -2521,12 +2552,23 @@ shot 23-controller-detection "$B/goblins-os-settings" --panel=games
 
 # ---- light/dark motion (shell mid-interaction is the closest honest motion frame) ----
 shot 18-light-motion  "$B/goblins-os-shell"
+if ! GOBLINS_OS_CAPTURE_EXPECT_TITLE="Goblins OS Hosted AI Review" \
+  shot 41-hosted-context-review "$B/goblins-os-consent-broker" --render-proof=light; then
+  echo "GOBLINS_HWGATE_HOSTED_CONTEXT_REVIEW_LIGHT_MISSING"
+  exit 1
+fi
 
 # ---- dark variants ----
 darkon
 GOBLINS_OS_THEME=dark shot 09-shell-dark    "$B/goblins-os-shell"
 GOBLINS_OS_THEME=dark shot 12-settings-dark "$B/goblins-os-settings"
 GOBLINS_OS_THEME=dark shot 17-dark-motion   "$B/goblins-os-shell"
+if ! GOBLINS_OS_THEME=dark \
+  GOBLINS_OS_CAPTURE_EXPECT_TITLE="Goblins OS Hosted AI Review" \
+  shot 42-hosted-context-review-dark "$B/goblins-os-consent-broker" --render-proof=dark; then
+  echo "GOBLINS_HWGATE_HOSTED_CONTEXT_REVIEW_DARK_MISSING"
+  exit 1
+fi
 darkoff
 
 # Swap the root-owned fixture daemon onto the same production capability

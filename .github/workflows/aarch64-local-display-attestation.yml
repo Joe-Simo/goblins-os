@@ -1,13 +1,13 @@
-# Re-attests a locally captured Apple-Silicon/HVF evidence seal on a GitHub-hosted
-# runner. The workflow never receives screenshots or credentials: its only input
-# is the canonical manifest of hashes produced by the exact candidate checkout.
+# Verification-only replication for a display bundle already signed by the
+# isolated Authority 2 account. GitHub never creates display authority:
+# it has no private key and cannot turn dispatcher-supplied bytes into proof.
 name: aarch64-local-display-attestation
 
 on:
   workflow_dispatch:
     inputs:
       candidate_commit:
-        description: "Exact lowercase 40-hex candidate commit (dispatch this workflow from the candidate branch or tag)"
+        description: "Exact lowercase 40-hex candidate commit"
         required: true
         type: string
       candidate_image_ref:
@@ -19,26 +19,32 @@ on:
         required: true
         type: string
       evidence_bundle_sha256:
-        description: "SHA256 of the canonical local evidence-bundle.json"
+        description: "SHA256 of the host-signed canonical evidence-bundle.json"
         required: true
         type: string
       evidence_bundle_base64:
-        description: "Canonical evidence-bundle.json encoded as unwrapped base64"
+        description: "Canonical host-signed evidence-bundle.json, unwrapped base64"
+        required: true
+        type: string
+      authority_record_base64:
+        description: "Host-created display-authority record, unwrapped base64"
+        required: true
+        type: string
+      authority_signature_base64:
+        description: "Host-created detached CMS signature, unwrapped base64"
         required: true
         type: string
 
 concurrency:
-  group: aarch64-local-display-attestation-${{ inputs.candidate_commit }}-${{ inputs.run_date }}
+  group: aarch64-local-display-verification-${{ inputs.candidate_commit }}-${{ inputs.run_date }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  attestations: write
-  id-token: write
 
 jobs:
-  attest:
-    runs-on: ubuntu-24.04
+  verify-host-signature:
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -46,15 +52,19 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Validate exact candidate and reconstruct the canonical seal
+      - name: Verify the pinned Authority 2 signature without minting authority
         env:
           CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
           CANDIDATE_IMAGE_REF: ${{ inputs.candidate_image_ref }}
           RUN_DATE: ${{ inputs.run_date }}
           EVIDENCE_BUNDLE_SHA256: ${{ inputs.evidence_bundle_sha256 }}
           EVIDENCE_BUNDLE_BASE64: ${{ inputs.evidence_bundle_base64 }}
+          AUTHORITY_RECORD_BASE64: ${{ inputs.authority_record_base64 }}
+          AUTHORITY_SIGNATURE_BASE64: ${{ inputs.authority_signature_base64 }}
         run: |
           set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = aarch64
           [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$CANDIDATE_IMAGE_REF" =~ ^ghcr\.io/joe-simo/goblins-os@sha256:[0-9a-f]{64}$ ]]
           [[ "$EVIDENCE_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -62,42 +72,26 @@ jobs:
           test "$GITHUB_SHA" = "$CANDIDATE_COMMIT"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
           test -z "$(git status --porcelain --untracked-files=normal)"
-          install -d -m 0700 attestation
+          install -d -m 0700 verified-display-proof
           python3 os/hardware-gate/capture-harness/evidence_bundle.py \
             decode-attestation-input \
-            --base64 "$EVIDENCE_BUNDLE_BASE64" \
+            --seal-base64 "$EVIDENCE_BUNDLE_BASE64" \
+            --record-base64 "$AUTHORITY_RECORD_BASE64" \
+            --signature-base64 "$AUTHORITY_SIGNATURE_BASE64" \
             --evidence-bundle-sha256 "$EVIDENCE_BUNDLE_SHA256" \
+            --certificate os/release/display-proof-authority2.pem \
+            --certificate-sha256 os/release/display-proof-authority2.sha256 \
+            --ca-certificate os/release/display-proof-authority2-ca.pem \
+            --ca-certificate-sha256 os/release/display-proof-authority2-ca.sha256 \
             --candidate-commit "$CANDIDATE_COMMIT" \
             --image-ref "$CANDIDATE_IMAGE_REF" \
             --run-date "$RUN_DATE" \
-            --output attestation/evidence-bundle.json
+            --output-directory verified-display-proof
 
-      - name: Create exact workflow/run attestation record
-        env:
-          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
-          CANDIDATE_IMAGE_REF: ${{ inputs.candidate_image_ref }}
-          RUN_DATE: ${{ inputs.run_date }}
-        run: |
-          set -euo pipefail
-          python3 os/hardware-gate/capture-harness/evidence_bundle.py \
-            create-attestation \
-            --seal attestation/evidence-bundle.json \
-            --candidate-commit "$CANDIDATE_COMMIT" \
-            --image-ref "$CANDIDATE_IMAGE_REF" \
-            --run-date "$RUN_DATE" \
-            --workflow-run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --output attestation/aarch64-local-display-attestation.json
-
-      - name: Sign and publish the exact evidence seal provenance
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
-        with:
-          subject-path: attestation/evidence-bundle.json
-
-      - name: Upload the exact seal and run-bound attestation record
+      - name: Upload only the already host-signed verified bytes
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: aarch64-local-display-attestation-${{ inputs.candidate_commit }}-${{ inputs.run_date }}-attempt-${{ github.run_attempt }}
-          path: attestation/
+          name: aarch64-local-display-verified-${{ inputs.candidate_commit }}-${{ inputs.run_date }}-attempt-${{ github.run_attempt }}
+          path: verified-display-proof/
           if-no-files-found: error
           retention-days: 90

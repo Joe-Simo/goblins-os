@@ -16,6 +16,5 @@ artifacts
 libpod
 .claude
 .ci-target
-.ci-target-amd64
 %sn *
 -background

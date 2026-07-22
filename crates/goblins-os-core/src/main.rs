@@ -10,6 +10,8 @@ mod bluetooth;
 mod boot_lock;
 mod bounded;
 mod codex;
+mod codex_containment;
+mod context_consent;
 mod control_plane;
 mod credentials;
 mod displays;
@@ -86,6 +88,7 @@ use crate::{
     bluetooth::{bluetooth_status, set_bluetooth_power},
     boot_lock::boot_lock_status,
     codex::{codex_login_start, codex_login_url, codex_logout, codex_status},
+    context_consent::{broker_fetch_review, broker_submit_decision},
     displays::{apply_displays, displays_status},
     encryption::encryption_status,
     fingerprint::fingerprint_status,
@@ -115,7 +118,10 @@ use crate::{
     settings::{recovery_status, settings_system},
     shortcuts::{set_modifier_remap, set_shortcut_binding, shortcuts_status},
     snapshots::{restore_snapshot, snapshots_status},
-    studio::{studio_file, studio_session, studio_sessions, studio_turn},
+    studio::{
+        recover_all_studio_transactions, studio_file, studio_session, studio_sessions, studio_turn,
+        undo_studio_turn,
+    },
     system::{health, system_services},
     system_image::system_image_status,
     voice::{voice_converse, voice_dictate, voice_status, voice_storage_release_proof},
@@ -137,6 +143,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Voice workspaces are intentionally persistent only as a parent
     // capability. Remove crash/power-loss leftovers before any route can run.
     voice::purge_stale_voice_workspaces()?;
+    // A Studio turn atomically stages workspace and session state behind a
+    // durable rollback journal. Recover any power-loss interruption before a
+    // client can observe the canonical session or workspace trees.
+    recover_all_studio_transactions()?;
 
     // Refresh the OS-owned OpenAI account session before expiry without ever
     // handing refresh tokens to a desktop client. The task is generation-gated
@@ -176,6 +186,8 @@ fn private_router() -> Router {
         .route("/health", get(health))
         .route("/v1/readiness", get(readiness))
         .route("/v1/boot-lock", get(boot_lock_status))
+        .route("/v1/consent/review", post(broker_fetch_review))
+        .route("/v1/consent/decision", post(broker_submit_decision))
         .route("/v1/ai/actions", get(ai_action_catalog))
         .route("/v1/ai/action-history", get(ai_action_history))
         .route("/v1/ai/safe-setting-change", post(change_safe_setting))
@@ -374,6 +386,7 @@ fn private_router() -> Router {
             post(migration_preference_plan),
         )
         .route("/v1/studio/turn", post(studio_turn))
+        .route("/v1/studio/turn/undo", post(undo_studio_turn))
         .route("/v1/studio/sessions", get(studio_sessions))
         .route("/v1/studio/session", get(studio_session))
         .route("/v1/studio/file", get(studio_file))

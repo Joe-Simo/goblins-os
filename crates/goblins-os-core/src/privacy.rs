@@ -126,6 +126,7 @@ pub async fn set_privacy(Json(request): Json<SetPrivacyRequest>) -> Response {
         )
             .into_response();
     }
+    crate::resident::bump_hosted_authority_generation();
     Json(build_status()).into_response()
 }
 

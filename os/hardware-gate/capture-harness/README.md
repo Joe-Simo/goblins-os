@@ -1,9 +1,9 @@
 # Hardware-gate display-backed-VM capture harness
 
 `os/hardware-gate/run-external-gate.sh` boots a display-backed VM but leaves the
-28-shot screenshot capture as a **manual operator checklist** (see its "Next
+40-shot screenshot capture as a **manual operator checklist** (see its "Next
 manual closure steps"). This harness automates that capture so the gate's
-`os/screenshots/hardware-gate/<arch>/<date>/{01..28}.png` run can be produced
+`os/screenshots/hardware-gate/aarch64/<date>/{01..42}.png` run can be produced
 without a human clicking through every surface.
 
 It is **honest, not fabricated**: every shot is a real QMP framebuffer capture
@@ -83,11 +83,37 @@ hardware run").
    `31-text-shortcuts-candidate-bubble-render.png` is a synthetic diagnostic
    surface; only screenshot 32 and its native IBus proof count as production UI
    evidence.
-7. The host writes `proof-manifest.json` (architecture, iso path, iso_sha256,
+7. Screenshots 33–40 and `accessibility-adaptivity-proof.json` bind text
+   scaling, high contrast, reduced transparency, reduced motion, the real
+   Goblins Settings Language & Region expansion, Orca/AT-SPI, QMP-keyboard focus,
+   and a real AT-SPI window-resize action to host-acknowledged framebuffer
+   SHA-256 values. Screenshot 37 compares the baseline session with the real
+   German (Germany) system locale. It requires locale-derived date and number
+   formats, ordinary English production labels, a longer changed accessible
+   name, and zero clipped visible nodes. It explicitly does not claim a German
+   Goblins translation catalog. The helper restores every preference before it
+   may report `status=pass`; no GNOME Control Center proxy, synthetic tree,
+   fabricated translation, focus state, or resize state is accepted.
+8. Screenshots 41–42 show the shipped hosted-context review surface in light
+   and dark appearances on the real GNOME Wayland framebuffer. They use the
+   broker's visibly labeled, decision-incapable render-proof mode: no pending
+   review is claimed, no personal context is loaded, and no approval can be
+   submitted. The capture still exercises the installed setgid entrypoint,
+   protected core capability bootstrap, shared GTK theme, and real display.
+9. The keyless capture account writes an aarch64-only `proof-manifest.json` (architecture, ISO
+   path, ISO SHA-256,
    captured_at, screenshot_run_dir, firewall proof filename, Text Shortcuts
    session proof filename, Text Shortcuts live runtime/render proof filename,
-   and the exact screenshot 32 SHA-256) and runs `close-signoff.sh`. The live
-   proof, manifest, and decoded PNG must all carry the same digest.
+   and the exact screenshot 32 SHA-256), creates the canonical v5 evidence
+   bundle, and creates a domain-separated Authority 2 record. It then stops
+   without unlocking or accessing any signing key. A separate dedicated
+   non-admin account signs the transferred record with a signer-owned reviewed
+   tool copy and locked dedicated Keychain; no candidate process runs in that
+   account. The record binds the exact candidate, image, ISO digest, seal digest,
+   and complete 42-screenshot manifest digest. The keyless finalizer accepts the
+   run only after the detached CMS verifies against the pinned Authority 2 leaf
+   and offline-CA public certificate set. The live proof, manifest, and decoded
+   PNG must all carry the same digest.
 
 ## Status
 
@@ -96,6 +122,11 @@ captures of the branded Anaconda install, the installed desktop, settings, the
 goblins-os installer review screens, and **real Vulkan via lavapipe (`vkcube`)**.
 The current embedded verification-config install path is source-gated only until
 a fresh hardware-gate run reaches the installed session and produces the required
-proof artifacts. The x86_64 track runs the identical harness on a native x86_64
-Linux/KVM host (e.g. the GitHub `ubuntu-24.04` runner) since TCG emulation of
-x86_64 on Apple Silicon is too slow for a full session capture.
+proof artifacts. The only accepted release architecture is canonical `aarch64`;
+the shell entry point accepts `arm64` as an input alias, while manifests,
+directories, bundles, and signoff rows always record `aarch64`. Native aarch64
+Linux supplies packaging proof; Apple Silicon with Darwin/arm64 and HVF supplies
+display-backed capture and the only authoritative local-display signature.
+GitHub can re-verify and replicate already signed bytes but cannot create that
+authority.
+Linux/KVM may be used only for diagnostics and never satisfies display signoff.

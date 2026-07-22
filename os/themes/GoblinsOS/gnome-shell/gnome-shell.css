@@ -297,10 +297,10 @@ stage {
 }
 
 /* ── Screenshot / screencast capture overlay (Cmd+Shift+4 / Cmd+Shift+5) ────
-   GNOME's native interactive capture UI (area/window/screen + record) is the
-   Cmd+Shift+5 equivalent; brand it to the same dark glass as the chrome so the
-   macOS muscle-memory lands on a surface that looks like the rest of the OS.
-   Refine against os/bootc/render-desktop.sh (triggers the overlay via Eval). */
+   GNOME's native interactive capture UI handles area/window/screen capture and
+   recording. Give that familiar shortcut a Goblins-native material so it reads
+   as one system. Refine against os/bootc/render-desktop.sh (which triggers the
+   overlay through Eval). */
 .screenshot-ui-panel {
   background-color: rgba(24, 24, 30, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.10);
@@ -336,8 +336,8 @@ stage {
   color: #161616;
 }
 
-/* The big round capture button — a calm white shutter; turns macOS-red in the
-   screencast (record) state. */
+/* The big round capture button is a calm white shutter and uses Goblins' shared
+   semantic red in the screencast state. */
 .screenshot-ui-capture-button .screenshot-ui-capture-button-circle {
   background-color: #f5f5f4;
   border-radius: 999px;
@@ -347,8 +347,8 @@ stage {
   background-color: #ffffff;
 }
 .screenshot-ui-capture-button.screencast .screenshot-ui-capture-button-circle {
-  background-color: #ff453a;
-  border-color: rgba(255, 69, 58, 0.5);
+  background-color: #ff383c;
+  border-color: rgba(255, 56, 60, 0.5);
 }
 
 /* Pointer-visibility + close affordances — hairline pills like the chrome. */

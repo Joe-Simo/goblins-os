@@ -16,6 +16,7 @@ const A11Y_INTERFACE_SCHEMA: &str = "org.gnome.desktop.a11y.interface";
 const A11Y_KEYBOARD_SCHEMA: &str = "org.gnome.desktop.a11y.keyboard";
 const A11Y_MAGNIFIER_SCHEMA: &str = "org.gnome.desktop.a11y.magnifier";
 const A11Y_MOUSE_SCHEMA: &str = "org.gnome.desktop.a11y.mouse";
+const GOBLINS_VISUAL_A11Y_SCHEMA: &str = "org.goblins.os.a11y.visual";
 const COLOR_SCHEMA: &str = "org.gnome.settings-daemon.plugins.color";
 
 #[derive(Serialize)]
@@ -57,16 +58,20 @@ pub struct MagnifierAccessibilityStatus {
     detail: String,
 }
 
-/// Visual accommodations from `org.gnome.desktop.a11y.interface`.
+/// Visual accommodations from the desktop high-contrast preference and the
+/// Goblins-owned material-accessibility preference.
 #[derive(Serialize)]
 pub struct VisualAccessibilityStatus {
     schema_available: bool,
+    reduce_transparency_schema_available: bool,
     high_contrast: Option<bool>,
+    reduce_transparency: Option<bool>,
     detail: String,
+    reduce_transparency_detail: String,
 }
 
 /// Typing accommodations (Sticky/Slow/Bounce/Mouse keys) from
-/// `org.gnome.desktop.a11y.keyboard` — the macOS "Keyboard accommodations" set.
+/// `org.gnome.desktop.a11y.keyboard`.
 #[derive(Serialize)]
 pub struct TypingAccessibilityStatus {
     schema_available: bool,
@@ -77,8 +82,7 @@ pub struct TypingAccessibilityStatus {
     detail: String,
 }
 
-/// Pointing accommodations from `org.gnome.desktop.a11y.mouse` — dwell click is
-/// the cross-vendor stand-in for macOS's pointer-alternative dwell.
+/// Pointing accommodations from `org.gnome.desktop.a11y.mouse`.
 #[derive(Serialize)]
 pub struct PointingAccessibilityStatus {
     schema_available: bool,
@@ -112,6 +116,7 @@ enum AccessibilityPreferenceTarget {
     MagnifierZoom,
     MagnifierLensMode,
     HighContrast,
+    ReduceTransparency,
     StickyKeys,
     SlowKeys,
     BounceKeys,
@@ -189,7 +194,25 @@ fn build_accessibility_status() -> AccessibilityStatus {
     let a11y_keyboard_schema = schema_snapshot(gsettings_available, A11Y_KEYBOARD_SCHEMA);
     let a11y_magnifier_schema = schema_snapshot(gsettings_available, A11Y_MAGNIFIER_SCHEMA);
     let a11y_mouse_schema = schema_snapshot(gsettings_available, A11Y_MOUSE_SCHEMA);
+    let goblins_visual_a11y_schema =
+        schema_snapshot(gsettings_available, GOBLINS_VISUAL_A11Y_SCHEMA);
     let color_schema = schema_snapshot(gsettings_available, COLOR_SCHEMA);
+    let reduce_transparency_value = setting_bool(
+        &goblins_visual_a11y_schema,
+        GOBLINS_VISUAL_A11Y_SCHEMA,
+        "reduce-transparency",
+    );
+    let reduce_transparency_status_detail = reduce_transparency_value
+        .map(reduce_transparency_detail)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            schema_detail(
+                gsettings_available,
+                goblins_visual_a11y_schema.available,
+                "Reduced transparency",
+                GOBLINS_VISUAL_A11Y_SCHEMA,
+            )
+        });
 
     AccessibilityStatus {
         source: "goblins-os-core",
@@ -237,17 +260,20 @@ fn build_accessibility_status() -> AccessibilityStatus {
         },
         visual: VisualAccessibilityStatus {
             schema_available: a11y_interface_schema.available,
+            reduce_transparency_schema_available: goblins_visual_a11y_schema.available,
             high_contrast: setting_bool(
                 &a11y_interface_schema,
                 A11Y_INTERFACE_SCHEMA,
                 "high-contrast",
             ),
+            reduce_transparency: reduce_transparency_value,
             detail: schema_detail(
                 gsettings_available,
                 a11y_interface_schema.available,
                 "Visual accommodations",
                 A11Y_INTERFACE_SCHEMA,
             ),
+            reduce_transparency_detail: reduce_transparency_status_detail,
         },
         typing: TypingAccessibilityStatus {
             schema_available: a11y_keyboard_schema.available,
@@ -596,6 +622,13 @@ fn accessibility_target_spec(target: AccessibilityPreferenceTarget) -> Accessibi
             label: "High contrast",
             kind: AccessibilityValueKind::Bool,
         },
+        AccessibilityPreferenceTarget::ReduceTransparency => AccessibilityTargetSpec {
+            target: "reduce-transparency",
+            schema: GOBLINS_VISUAL_A11Y_SCHEMA,
+            key: "reduce-transparency",
+            label: "Reduce transparency",
+            kind: AccessibilityValueKind::Bool,
+        },
         AccessibilityPreferenceTarget::StickyKeys => AccessibilityTargetSpec {
             target: "sticky-keys",
             schema: A11Y_KEYBOARD_SCHEMA,
@@ -683,6 +716,9 @@ fn accessibility_preference_success_detail(
         }
         ("high-contrast", AccessibilityPreferenceValue::Bool(enabled)) => {
             high_contrast_detail(*enabled).to_string()
+        }
+        ("reduce-transparency", AccessibilityPreferenceValue::Bool(enabled)) => {
+            reduce_transparency_detail(*enabled).to_string()
         }
         ("sticky-keys", AccessibilityPreferenceValue::Bool(enabled)) => {
             sticky_keys_detail(*enabled).to_string()
@@ -817,6 +853,14 @@ fn high_contrast_detail(enabled: bool) -> &'static str {
         "High contrast is on. Interface colors use stronger contrast for legibility."
     } else {
         "High contrast is off. The desktop uses its standard color contrast."
+    }
+}
+
+fn reduce_transparency_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Reduce transparency is on. Goblins OS panels use solid, non-blurred surfaces."
+    } else {
+        "Reduce transparency is off. Goblins OS panels may use subtle translucent materials."
     }
 }
 
@@ -967,6 +1011,7 @@ mod tests {
     fn keyboard_visual_pointing_accommodations_are_boolean_targets() {
         for target in [
             AccessibilityPreferenceTarget::HighContrast,
+            AccessibilityPreferenceTarget::ReduceTransparency,
             AccessibilityPreferenceTarget::StickyKeys,
             AccessibilityPreferenceTarget::SlowKeys,
             AccessibilityPreferenceTarget::BounceKeys,
@@ -981,6 +1026,35 @@ mod tests {
             // A non-boolean is rejected, not silently coerced.
             assert!(parse_preference_value(spec, &json!("yes")).is_err());
         }
+
+        let reduce_transparency =
+            accessibility_target_spec(AccessibilityPreferenceTarget::ReduceTransparency);
+        assert_eq!(
+            reduce_transparency.schema,
+            super::GOBLINS_VISUAL_A11Y_SCHEMA
+        );
+        assert_eq!(reduce_transparency.key, "reduce-transparency");
+    }
+
+    #[test]
+    fn reduced_transparency_copy_names_the_observable_material_change() {
+        assert_eq!(
+            super::reduce_transparency_detail(true),
+            "Reduce transparency is on. Goblins OS panels use solid, non-blurred surfaces."
+        );
+        assert_eq!(
+            super::reduce_transparency_detail(false),
+            "Reduce transparency is off. Goblins OS panels may use subtle translucent materials."
+        );
+
+        let spec = accessibility_target_spec(AccessibilityPreferenceTarget::ReduceTransparency);
+        assert_eq!(
+            super::accessibility_preference_success_detail(
+                spec,
+                &AccessibilityPreferenceValue::Bool(true),
+            ),
+            super::reduce_transparency_detail(true)
+        );
     }
 
     #[test]

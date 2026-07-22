@@ -1,0 +1,3188 @@
+# Stable promotion is intentionally split into three trust stages. The reviewed
+# default-branch workflow YAML, protected stable environment, and protected
+# runners form the publication trust boundary. A dedicated, non-admin
+# Apple-Silicon proof-reader account with no display-authority private key
+# overlays the complete canonical signed run and executes candidate-controlled
+# verification code with read-only GitHub access. A native Linux/aarch64 job then
+# replays the deterministic sealed payload, also read-only. The final native
+# Linux/aarch64 job has write permissions but performs no checkout and executes
+# no repository file. The release stays draft until every remote asset has been
+# downloaded and re-hashed. Repository/package policy must make this protected
+# stable environment the only principal allowed to mutate the :aarch64 and
+# :stable package tags; the compare-before-write checks are defense in depth,
+# not a replacement for that single-writer boundary.
+name: aarch64-stable-promotion
+run-name: aarch64 stable promotion · ${{ inputs.stable_tag }} · ${{ inputs.candidate_commit }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_commit:
+        description: Exact lowercase 40-hex current origin/main candidate
+        required: true
+        type: string
+      candidate_workflow_run_id:
+        description: Exact successful candidate-artifacts workflow run ID
+        required: true
+        type: string
+      candidate_workflow_run_attempt:
+        description: Exact successful candidate-artifacts workflow run attempt
+        required: true
+        type: string
+      display_verification_run_id:
+        description: Exact successful host-signature verification workflow run ID
+        required: true
+        type: string
+      display_verification_run_attempt:
+        description: Exact host-signature verification workflow run attempt
+        required: true
+        type: string
+      local_display_run_directory:
+        description: Absolute aarch64/YYYY-MM-DD directory on the approved capture host containing every canonical PNG and proof file
+        required: true
+        type: string
+      stable_tag:
+        description: Final SemVer tag such as v1.0.0 (no prerelease suffix)
+        required: true
+        type: string
+      confirmation:
+        description: Exact text promote-aarch64-stable TAG COMMIT
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  # Every stable promotion mutates the shared :aarch64 and :stable aliases.
+  # Serialize all tags so two otherwise-valid releases cannot race those refs.
+  group: aarch64-stable-promotion-shared-aliases
+  cancel-in-progress: false
+
+jobs:
+  verify-and-seal:
+    name: verify complete local proof and seal release payload
+    runs-on: [self-hosted, macOS, ARM64, goblins-display-proof-reader, no-display-signing-key]
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      payload_name: ${{ steps.identity.outputs.payload_name }}
+      payload_run_attempt: ${{ steps.identity.outputs.payload_run_attempt }}
+      payload_image_ref: ${{ steps.trusted_identity.outputs.image_ref }}
+      payload_run_date: ${{ steps.trusted_identity.outputs.run_date }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prove this unprivileged runner cannot access the display signing identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          if id -Gn | tr ' ' '\n' | grep -qx admin; then
+            echo "Stable proof replay must use a non-admin macOS account." >&2
+            exit 1
+          fi
+          authority_sha1="$(openssl x509 \
+            -in os/release/display-proof-authority2.pem \
+            -outform DER | shasum -a 1 | awk '{print toupper($1)}')"
+          [[ "$authority_sha1" =~ ^[0-9A-F]{40}$ ]]
+          visible_identities="$(security find-identity -v 2>/dev/null | tr '[:lower:]' '[:upper:]' || true)"
+          if grep -Fq "$authority_sha1" <<<"$visible_identities"; then
+            echo "The pinned display-authority private identity is visible to the promotion runner." >&2
+            exit 1
+          fi
+
+      - name: Validate immutable promotion identity and capture host
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_workflow_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_workflow_run_attempt }}
+          DISPLAY_RUN_ID: ${{ inputs.display_verification_run_id }}
+          DISPLAY_RUN_ATTEMPT: ${{ inputs.display_verification_run_attempt }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$GITHUB_SHA" = "$CANDIDATE_COMMIT"
+          python3 os/release/stable-promotion.py validate-inputs \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --candidate-run-id "$CANDIDATE_RUN_ID" \
+            --candidate-run-attempt "$CANDIDATE_RUN_ATTEMPT" \
+            --display-run-id "$DISPLAY_RUN_ID" \
+            --display-run-attempt "$DISPLAY_RUN_ATTEMPT" \
+            --stable-tag "$STABLE_TAG" \
+            --confirmation "$CONFIRMATION"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_COMMIT"
+
+      - name: Fetch only the exact read-only workflow artifacts
+        id: fetch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/goblins-stable-gh-readonly
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_workflow_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_workflow_run_attempt }}
+          DISPLAY_RUN_ID: ${{ inputs.display_verification_run_id }}
+          DISPLAY_RUN_ATTEMPT: ${{ inputs.display_verification_run_attempt }}
+          INPUT_DIR: ${{ runner.temp }}/goblins-stable-input-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test ! -e "$INPUT_DIR"
+          install -d -m 0700 "$INPUT_DIR" "$GH_CONFIG_DIR"
+
+          gh api "repos/Joe-Simo/goblins-os/actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT" \
+            > "$INPUT_DIR/candidate-run.json"
+          gh api "repos/Joe-Simo/goblins-os/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" \
+            > "$INPUT_DIR/candidate-artifacts.json"
+          candidate_name="goblins-os-candidate-$CANDIDATE_COMMIT-aarch64"
+          candidate_id="$(jq -er --arg name "$candidate_name" \
+            '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else error("candidate artifact identity mismatch") end' \
+            "$INPUT_DIR/candidate-artifacts.json")"
+          candidate_digest="$(jq -er --arg name "$candidate_name" \
+            '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].digest else error("candidate artifact digest mismatch") end | select(test("^sha256:[0-9a-f]{64}$"))' \
+            "$INPUT_DIR/candidate-artifacts.json")"
+          gh api "repos/Joe-Simo/goblins-os/actions/artifacts/$candidate_id/zip" \
+            > "$INPUT_DIR/candidate-artifact.zip"
+
+          gh api "repos/Joe-Simo/goblins-os/actions/runs/$DISPLAY_RUN_ID/attempts/$DISPLAY_RUN_ATTEMPT" \
+            > "$INPUT_DIR/display-run.json"
+          gh api "repos/Joe-Simo/goblins-os/actions/runs/$DISPLAY_RUN_ID/artifacts?per_page=100" \
+            > "$INPUT_DIR/display-artifacts.json"
+          display_pattern="^aarch64-local-display-verified-$CANDIDATE_COMMIT-[0-9]{4}-[0-9]{2}-[0-9]{2}-attempt-$DISPLAY_RUN_ATTEMPT$"
+          display_name="$(jq -er --arg pattern "$display_pattern" \
+            '[.artifacts[] | select((.name | test($pattern)) and .expired == false)] | if length == 1 then .[0].name else error("display artifact identity mismatch") end' \
+            "$INPUT_DIR/display-artifacts.json")"
+          display_id="$(jq -er --arg pattern "$display_pattern" \
+            '[.artifacts[] | select((.name | test($pattern)) and .expired == false)] | if length == 1 then .[0].id else error("display artifact identity mismatch") end' \
+            "$INPUT_DIR/display-artifacts.json")"
+          display_digest="$(jq -er --arg pattern "$display_pattern" \
+            '[.artifacts[] | select((.name | test($pattern)) and .expired == false)] | if length == 1 then .[0].digest else error("display artifact digest mismatch") end | select(test("^sha256:[0-9a-f]{64}$"))' \
+            "$INPUT_DIR/display-artifacts.json")"
+          gh api "repos/Joe-Simo/goblins-os/actions/artifacts/$display_id/zip" \
+            > "$INPUT_DIR/display-artifact.zip"
+          test -s "$INPUT_DIR/candidate-artifact.zip"
+          test -s "$INPUT_DIR/display-artifact.zip"
+          printf 'input_dir=%s\n' "$INPUT_DIR" >> "$GITHUB_OUTPUT"
+          printf 'candidate_artifact_digest=%s\n' "$candidate_digest" >> "$GITHUB_OUTPUT"
+          printf 'display_artifact_digest=%s\n' "$display_digest" >> "$GITHUB_OUTPUT"
+          printf 'display_artifact_name=%s\n' "$display_name" >> "$GITHUB_OUTPUT"
+          rm -f -- "$GH_CONFIG_DIR/hosts.yml"
+
+      - name: Derive the release identity independently from exact workflow artifacts
+        id: trusted_identity
+        shell: bash
+        env:
+          INPUT_DIR: ${{ steps.fetch.outputs.input_dir }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ steps.fetch.outputs.candidate_artifact_digest }}
+          DISPLAY_ARTIFACT_DIGEST: ${{ steps.fetch.outputs.display_artifact_digest }}
+          DISPLAY_ARTIFACT_NAME: ${{ steps.fetch.outputs.display_artifact_name }}
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_workflow_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_workflow_run_attempt }}
+          DISPLAY_RUN_ATTEMPT: ${{ inputs.display_verification_run_attempt }}
+        run: |
+          set -euo pipefail
+          trusted_identity="$(env -i \
+            PATH="$PATH" \
+            LC_ALL=C \
+            python3 - \
+              "$INPUT_DIR/candidate-artifact.zip" \
+              "$CANDIDATE_ARTIFACT_DIGEST" \
+              "$INPUT_DIR/display-artifact.zip" \
+              "$DISPLAY_ARTIFACT_DIGEST" \
+              "$DISPLAY_ARTIFACT_NAME" \
+              "$CANDIDATE_COMMIT" \
+              "$CANDIDATE_RUN_ID" \
+              "$CANDIDATE_RUN_ATTEMPT" \
+              "$DISPLAY_RUN_ATTEMPT" <<'PY'
+          import datetime
+          import hashlib
+          import json
+          import os
+          import re
+          import stat
+          import sys
+          import zipfile
+
+          (
+              candidate_archive,
+              candidate_archive_digest,
+              display_archive,
+              display_archive_digest,
+              display_artifact_name,
+              candidate_commit,
+              candidate_run_id,
+              candidate_run_attempt,
+              display_run_attempt,
+          ) = sys.argv[1:]
+
+          def reject_duplicates(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError(f"duplicate JSON key: {key}")
+                  result[key] = value
+              return result
+
+          def read_exact_member(path, expected_digest, member_name, maximum):
+              if re.fullmatch(r"sha256:[0-9a-f]{64}", expected_digest) is None:
+                  raise SystemExit("workflow artifact digest is malformed")
+              flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+              descriptor = os.open(path, flags)
+              with os.fdopen(descriptor, "rb", closefd=True) as archive_file:
+                  metadata = os.fstat(archive_file.fileno())
+                  if not stat.S_ISREG(metadata.st_mode) or not (0 < metadata.st_size <= 20 * 1024**3):
+                      raise SystemExit("workflow artifact archive is not one bounded regular file")
+                  digest = hashlib.sha256()
+                  while chunk := archive_file.read(1024 * 1024):
+                      digest.update(chunk)
+                  if f"sha256:{digest.hexdigest()}" != expected_digest:
+                      raise SystemExit("downloaded workflow artifact digest differs from authenticated metadata")
+                  archive_file.seek(0)
+                  with zipfile.ZipFile(archive_file) as archive:
+                      matches = [info for info in archive.infolist() if info.filename == member_name]
+                      if len(matches) != 1:
+                          raise SystemExit(f"workflow artifact does not contain exactly one {member_name}")
+                      info = matches[0]
+                      if (
+                          info.is_dir()
+                          or info.flag_bits & 0x1
+                          or info.file_size <= 0
+                          or info.file_size > maximum
+                          or info.compress_size < 0
+                          or info.compress_size > maximum
+                      ):
+                          raise SystemExit(f"workflow artifact member is not bounded: {member_name}")
+                      with archive.open(info, "r") as member:
+                          data = member.read(maximum + 1)
+                          if len(data) != info.file_size or member.read(1):
+                              raise SystemExit(f"workflow artifact member size differs: {member_name}")
+                      return data
+
+          candidate = json.loads(
+              read_exact_member(
+                  candidate_archive,
+                  candidate_archive_digest,
+                  "candidate-output/aarch64/image-ref.json",
+                  64 * 1024,
+              ),
+              object_pairs_hook=reject_duplicates,
+          )
+          expected_candidate_keys = {
+              "architecture", "candidate_commit", "candidate_tag",
+              "candidate_tag_authoritative", "cargo_packages_sha256",
+              "exact_candidate_gates", "image_digest", "immutable_image_ref",
+              "installer_config", "iso_manifest_sha256", "iso_sha256",
+              "non_promotional", "oci_revision", "platform",
+              "release_evidence_manifest_sha256", "rpm_command_sha256",
+              "rpm_packages_sha256", "schema", "source_repository",
+              "workflow_name", "workflow_run", "workflow_run_attempt",
+              "bib_manifest_sha256",
+          }
+          image_ref = candidate.get("immutable_image_ref") if isinstance(candidate, dict) else None
+          expected_gates = {
+              "source_verifier": "pass",
+              "installed_root_verifier": "pass",
+              "services_selftest": "pass",
+          }
+          if (
+              set(candidate) != expected_candidate_keys
+              or candidate.get("schema") != "goblins-os-candidate-image-ref-v3"
+              or candidate.get("architecture") != "aarch64"
+              or candidate.get("platform") != "linux/arm64"
+              or candidate.get("candidate_commit") != candidate_commit
+              or candidate.get("oci_revision") != candidate_commit
+              or candidate.get("candidate_tag_authoritative") is not False
+              or candidate.get("non_promotional") is not True
+              or candidate.get("installer_config") != "os/iso/config.toml"
+              or candidate.get("source_repository") != "https://github.com/Joe-Simo/goblins-os"
+              or candidate.get("workflow_name") != "candidate-artifacts"
+              or candidate.get("workflow_run") != f"https://github.com/Joe-Simo/goblins-os/actions/runs/{candidate_run_id}"
+              or str(candidate.get("workflow_run_attempt")) != candidate_run_attempt
+              or candidate.get("exact_candidate_gates") != expected_gates
+              or re.fullmatch(r"ghcr\.io/joe-simo/goblins-os@sha256:[0-9a-f]{64}", str(image_ref)) is None
+              or candidate.get("image_digest") != image_ref.rsplit("@", 1)[1]
+          ):
+              raise SystemExit("candidate artifact does not independently establish the exact release identity")
+
+          match = re.fullmatch(
+              rf"aarch64-local-display-verified-{candidate_commit}-(\d{{4}}-\d{{2}}-\d{{2}})-attempt-{display_run_attempt}",
+              display_artifact_name,
+          )
+          if match is None:
+              raise SystemExit("display artifact name does not establish one run date")
+          run_date = match.group(1)
+          try:
+              if datetime.date.fromisoformat(run_date).isoformat() != run_date:
+                  raise ValueError
+          except ValueError as error:
+              raise SystemExit("display artifact run date is not a real canonical date") from error
+
+          authority = json.loads(
+              read_exact_member(
+                  display_archive,
+                  display_archive_digest,
+                  "aarch64-local-display-attestation.json",
+                  1024 * 1024,
+              ),
+              object_pairs_hook=reject_duplicates,
+          )
+          expected_authority_keys = {
+              "architecture", "authority_ca_certificate_sha256",
+              "authority_certificate_sha256", "authority_generation",
+              "candidate_commit", "capture_environment", "evidence_bundle_sha256",
+              "evidence_bundle_size", "image_ref", "run_date", "schema",
+              "screenshot_count", "screenshot_manifest_sha256", "signature_file",
+              "signature_purpose", "verification_iso_sha256",
+          }
+          if (
+              not isinstance(authority, dict)
+              or set(authority) != expected_authority_keys
+              or authority.get("schema") != "goblins-os-aarch64-local-display-authority-v2"
+              or authority.get("signature_purpose") != "goblins-os-display-proof-authority-v2"
+              or authority.get("authority_generation") != 2
+              or authority.get("architecture") != "aarch64"
+              or authority.get("candidate_commit") != candidate_commit
+              or authority.get("image_ref") != image_ref
+              or authority.get("run_date") != run_date
+              or authority.get("screenshot_count") != 42
+              or authority.get("signature_file") != "aarch64-local-display-attestation.json.cms"
+          ):
+              raise SystemExit("display artifact does not independently match the candidate release identity")
+          print(json.dumps({"image_ref": image_ref, "run_date": run_date}, separators=(",", ":")))
+          PY
+          )"
+          image_ref="$(jq -er '.image_ref' <<<"$trusted_identity")"
+          run_date="$(jq -er '.run_date' <<<"$trusted_identity")"
+          [[ "$image_ref" =~ ^ghcr\.io/joe-simo/goblins-os@sha256:[0-9a-f]{64}$ ]]
+          [[ "$run_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
+          printf 'image_ref=%s\n' "$image_ref" >> "$GITHUB_OUTPUT"
+          printf 'run_date=%s\n' "$run_date" >> "$GITHUB_OUTPUT"
+
+      - name: Drop credentials, overlay every signed byte, and pass the final gate
+        id: identity
+        shell: bash
+        env:
+          INPUT_DIR: ${{ steps.fetch.outputs.input_dir }}
+          LOCAL_DISPLAY_RUN_DIRECTORY: ${{ inputs.local_display_run_directory }}
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_workflow_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_workflow_run_attempt }}
+          DISPLAY_RUN_ID: ${{ inputs.display_verification_run_id }}
+          DISPLAY_RUN_ATTEMPT: ${{ inputs.display_verification_run_attempt }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          PAYLOAD_DIR: ${{ runner.temp }}/goblins-stable-payload-${{ github.run_id }}-${{ github.run_attempt }}
+          ISOLATION_DIR: ${{ runner.temp }}/goblins-stable-isolation-${{ github.run_id }}-${{ github.run_attempt }}
+          PROMOTION_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PROMOTION_RUN_ATTEMPT: ${{ github.run_attempt }}
+          TRUSTED_IMAGE_REF: ${{ steps.trusted_identity.outputs.image_ref }}
+          TRUSTED_RUN_DATE: ${{ steps.trusted_identity.outputs.run_date }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test ! -e "$PAYLOAD_DIR"
+          test ! -e "$ISOLATION_DIR"
+          install -d -m 0700 \
+            "$ISOLATION_DIR/home" \
+            "$ISOLATION_DIR/cargo" \
+            "$ISOLATION_DIR/tmp"
+          promotion_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          original_rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+          env -i \
+            PATH="$PATH" \
+            HOME="$ISOLATION_DIR/home" \
+            CARGO_HOME="$ISOLATION_DIR/cargo" \
+            RUSTUP_HOME="$original_rustup_home" \
+            TMPDIR="$ISOLATION_DIR/tmp" \
+            LC_ALL=C \
+            CI=true \
+            GOBLINS_OS_PROMOTION_CREDENTIAL_FREE=1 \
+            GOBLINS_OS_PROMOTION_INPUT_DIR="$INPUT_DIR" \
+            GOBLINS_OS_LOCAL_DISPLAY_RUN_DIR="$LOCAL_DISPLAY_RUN_DIRECTORY" \
+            GOBLINS_OS_PROMOTION_OUTPUT_DIR="$PAYLOAD_DIR" \
+            GOBLINS_OS_PROMOTION_TIMESTAMP="$promotion_timestamp" \
+            GOBLINS_OS_PROMOTION_WORKFLOW_RUN="$PROMOTION_RUN_URL" \
+            GOBLINS_OS_PROMOTION_WORKFLOW_RUN_ATTEMPT="$PROMOTION_RUN_ATTEMPT" \
+            GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT" \
+            GOBLINS_OS_CANDIDATE_WORKFLOW_RUN_ID="$CANDIDATE_RUN_ID" \
+            GOBLINS_OS_CANDIDATE_WORKFLOW_RUN_ATTEMPT="$CANDIDATE_RUN_ATTEMPT" \
+            GOBLINS_OS_DISPLAY_VERIFICATION_RUN_ID="$DISPLAY_RUN_ID" \
+            GOBLINS_OS_DISPLAY_VERIFICATION_RUN_ATTEMPT="$DISPLAY_RUN_ATTEMPT" \
+            GOBLINS_OS_STABLE_TAG="$STABLE_TAG" \
+            GOBLINS_OS_STABLE_CONFIRMATION="$CONFIRMATION" \
+            os/release/promote-stable.sh prepare
+          payload_name="goblins-os-stable-promotion-$CANDIDATE_COMMIT-$STABLE_TAG-attempt-$GITHUB_RUN_ATTEMPT"
+          test "$(jq -er '.container.immutable_image_ref' "$PAYLOAD_DIR/promotion-manifest.json")" = "$TRUSTED_IMAGE_REF"
+          test "$(jq -er '.display_verification_workflow.run_date' "$PAYLOAD_DIR/promotion-manifest.json")" = "$TRUSTED_RUN_DATE"
+          echo "payload_name=$payload_name" >> "$GITHUB_OUTPUT"
+          echo "payload_run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "payload_dir=$PAYLOAD_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the sealed promotion payload without recompression
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.identity.outputs.payload_name }}
+          path: ${{ steps.identity.outputs.payload_dir }}/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  verify-payload:
+    name: replay sealed payload on native Linux aarch64
+    needs: verify-and-seal
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare native aarch64 verification tools
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = aarch64
+          test "$GITHUB_SHA" = "$CANDIDATE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_COMMIT"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jq zstd
+
+      - name: Run promotion archive and TOCTOU adversarial self-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 os/release/stable-promotion.py self-test --zstd "$(command -v zstd)"
+
+      - name: Fetch the exact sealed payload from this workflow run
+        id: fetch_payload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/goblins-stable-gh-payload
+          PAYLOAD_NAME: ${{ needs.verify-and-seal.outputs.payload_name }}
+          INPUT_DIR: ${{ runner.temp }}/goblins-stable-publish-input
+        run: |
+          set -euo pipefail
+          umask 077
+          test ! -e "$INPUT_DIR"
+          install -d -m 0700 "$INPUT_DIR" "$GH_CONFIG_DIR"
+          gh api "repos/Joe-Simo/goblins-os/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            > "$INPUT_DIR/artifacts.json"
+          artifact_id="$(jq -er --arg name "$PAYLOAD_NAME" \
+            '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else error("promotion payload identity mismatch") end' \
+            "$INPUT_DIR/artifacts.json")"
+          gh api "repos/Joe-Simo/goblins-os/actions/artifacts/$artifact_id/zip" \
+            > "$INPUT_DIR/payload.zip"
+          test -s "$INPUT_DIR/payload.zip"
+          echo "input_dir=$INPUT_DIR" >> "$GITHUB_OUTPUT"
+          rm -f -- "$GH_CONFIG_DIR/hosts.yml"
+
+      - name: Revalidate the sealed payload without credentials
+        id: payload
+        shell: bash
+        env:
+          INPUT_DIR: ${{ steps.fetch_payload.outputs.input_dir }}
+          PAYLOAD_NAME: ${{ needs.verify-and-seal.outputs.payload_name }}
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_workflow_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_workflow_run_attempt }}
+          DISPLAY_RUN_ID: ${{ inputs.display_verification_run_id }}
+          DISPLAY_RUN_ATTEMPT: ${{ inputs.display_verification_run_attempt }}
+          PROMOTION_RUN_ID: ${{ github.run_id }}
+          PROMOTION_RUN_ATTEMPT: ${{ needs.verify-and-seal.outputs.payload_run_attempt }}
+          RUN_DATE: ${{ needs.verify-and-seal.outputs.payload_run_date }}
+          IMAGE_REF: ${{ needs.verify-and-seal.outputs.payload_image_ref }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+          PAYLOAD_DIR: ${{ runner.temp }}/goblins-stable-publish-payload
+          ISOLATION_DIR: ${{ runner.temp }}/goblins-stable-publish-isolation
+        run: |
+          set -euo pipefail
+          umask 077
+          test ! -e "$PAYLOAD_DIR"
+          install -d -m 0700 "$ISOLATION_DIR/home" "$ISOLATION_DIR/tmp"
+          env -i \
+            PATH="$PATH" \
+            HOME="$ISOLATION_DIR/home" \
+            TMPDIR="$ISOLATION_DIR/tmp" \
+            LC_ALL=C \
+            python3 os/release/stable-promotion.py extract-payload \
+              --artifacts-json "$INPUT_DIR/artifacts.json" \
+              --artifact-name "$PAYLOAD_NAME" \
+              --run-id "$GITHUB_RUN_ID" \
+              --candidate-commit "$CANDIDATE_COMMIT" \
+              --archive "$INPUT_DIR/payload.zip" \
+              --destination "$PAYLOAD_DIR"
+          env -i \
+            PATH="$PATH" \
+            HOME="$ISOLATION_DIR/home" \
+            TMPDIR="$ISOLATION_DIR/tmp" \
+            LC_ALL=C \
+            GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT" \
+            GOBLINS_OS_CANDIDATE_WORKFLOW_RUN_ID="$CANDIDATE_RUN_ID" \
+            GOBLINS_OS_CANDIDATE_WORKFLOW_RUN_ATTEMPT="$CANDIDATE_RUN_ATTEMPT" \
+            GOBLINS_OS_DISPLAY_VERIFICATION_RUN_ID="$DISPLAY_RUN_ID" \
+            GOBLINS_OS_DISPLAY_VERIFICATION_RUN_ATTEMPT="$DISPLAY_RUN_ATTEMPT" \
+            GOBLINS_OS_PROMOTION_WORKFLOW_RUN_ID="$PROMOTION_RUN_ID" \
+            GOBLINS_OS_PROMOTION_WORKFLOW_RUN_ATTEMPT="$PROMOTION_RUN_ATTEMPT" \
+            GOBLINS_OS_DISPLAY_RUN_DATE="$RUN_DATE" \
+            GOBLINS_OS_CANDIDATE_IMAGE_REF="$IMAGE_REF" \
+            GOBLINS_OS_STABLE_TAG="$STABLE_TAG" \
+            GOBLINS_OS_PROMOTION_PAYLOAD_DIR="$PAYLOAD_DIR" \
+            os/release/promote-stable.sh verify-payload
+          echo "payload_dir=$PAYLOAD_DIR" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: publish exact allowlisted bytes without candidate scripts
+    needs: [verify-and-seal, verify-payload]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    environment: stable
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+    steps:
+      - name: Install the exact reviewed Buildx client without a floating BuildKit daemon
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+        with:
+          version: v0.34.1
+          driver: docker
+
+      - name: Assert native publication host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = aarch64
+          command -v docker
+          command -v gh
+          command -v jq
+          command -v python3
+          command -v sha256sum
+          [[ "$(docker buildx version)" =~ ^github\.com/docker/buildx[[:space:]]v0\.34\.1([[:space:]]|$) ]]
+
+      - name: Build the exact reviewed zstd 1.5.7 compressor
+        id: pinned_zstd
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          command -v curl
+          command -v make
+          command -v cc
+          source_url="https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz"
+          source_sha256="eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3"
+          work="$RUNNER_TEMP/goblins-stable-zstd-source"
+          install_dir="$RUNNER_TEMP/goblins-stable-tools"
+          test ! -e "$work"
+          test ! -e "$install_dir"
+          install -d -m 0700 "$work" "$install_dir"
+          curl --fail --silent --show-error --location \
+            "$source_url" \
+            --output "$work/zstd-1.5.7.tar.gz"
+          test "$(sha256sum "$work/zstd-1.5.7.tar.gz" | awk '{print $1}')" = "$source_sha256"
+          python3 - "$work/zstd-1.5.7.tar.gz" "$work" <<'PY'
+          import pathlib
+          import sys
+          import tarfile
+
+          archive_path = pathlib.Path(sys.argv[1])
+          destination = pathlib.Path(sys.argv[2])
+          with tarfile.open(archive_path, mode="r:gz") as archive:
+              members = archive.getmembers()
+              if not members:
+                  raise SystemExit("reviewed zstd source archive is empty")
+              for member in members:
+                  parts = pathlib.PurePosixPath(member.name).parts
+                  if (
+                      not parts
+                      or parts[0] != "zstd-1.5.7"
+                      or any(part in ("", ".", "..") for part in parts)
+                  ):
+                      raise SystemExit("reviewed zstd source archive has an unsafe member")
+              archive.extractall(destination, filter="data")
+          PY
+          make -C "$work/zstd-1.5.7/programs" -j2 zstd
+          install -m 0755 "$work/zstd-1.5.7/programs/zstd" "$install_dir/zstd"
+          test "$("$install_dir/zstd" --version)" = \
+            "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***"
+          echo "path=$install_dir/zstd" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch only this run's exact sealed payload
+        id: fetch_publish_payload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/goblins-stable-gh-publish-fetch
+          PAYLOAD_NAME: ${{ needs.verify-and-seal.outputs.payload_name }}
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          INPUT_DIR: ${{ runner.temp }}/goblins-stable-publish-control-input
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test ! -e "$INPUT_DIR"
+          install -d -m 0700 "$INPUT_DIR" "$GH_CONFIG_DIR"
+          gh api "repos/Joe-Simo/goblins-os/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            > "$INPUT_DIR/artifacts.json"
+          artifact_id="$(jq -er \
+            --arg name "$PAYLOAD_NAME" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg commit "$CANDIDATE_COMMIT" \
+            '[.artifacts[] | select(
+              .name == $name
+              and .expired == false
+              and .workflow_run.id == $run_id
+              and .workflow_run.head_sha == $commit
+            )] | if length == 1 then .[0].id else error("promotion payload identity mismatch") end' \
+            "$INPUT_DIR/artifacts.json")"
+          gh api "repos/Joe-Simo/goblins-os/actions/artifacts/$artifact_id/zip" \
+            > "$INPUT_DIR/payload.zip"
+          test -s "$INPUT_DIR/payload.zip"
+          echo "input_dir=$INPUT_DIR" >> "$GITHUB_OUTPUT"
+          rm -f -- "$GH_CONFIG_DIR/hosts.yml"
+
+      - name: Safely extract and independently rehash the fixed ARM64 allowlist
+        id: publish_payload
+        shell: bash
+        env:
+          INPUT_DIR: ${{ steps.fetch_publish_payload.outputs.input_dir }}
+          PAYLOAD_NAME: ${{ needs.verify-and-seal.outputs.payload_name }}
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_workflow_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_workflow_run_attempt }}
+          DISPLAY_RUN_ID: ${{ inputs.display_verification_run_id }}
+          DISPLAY_RUN_ATTEMPT: ${{ inputs.display_verification_run_attempt }}
+          PROMOTION_PAYLOAD_RUN_ATTEMPT: ${{ needs.verify-and-seal.outputs.payload_run_attempt }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          PINNED_AUTHORITY2_SHA256: ${{ vars.GOBLINS_OS_DISPLAY_AUTHORITY2_SHA256 }}
+          PINNED_AUTHORITY2_CA_SHA256: ${{ vars.GOBLINS_OS_DISPLAY_AUTHORITY2_CA_SHA256 }}
+          PINNED_ZSTD: ${{ steps.pinned_zstd.outputs.path }}
+          PAYLOAD_DIR: ${{ runner.temp }}/goblins-stable-publish-control-payload
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$STABLE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$CONFIRMATION" = "promote-aarch64-stable $STABLE_TAG $CANDIDATE_COMMIT"
+          test ! -e "$PAYLOAD_DIR"
+          python3 - \
+            "$INPUT_DIR/artifacts.json" \
+            "$INPUT_DIR/payload.zip" \
+            "$PAYLOAD_DIR" \
+            "$PAYLOAD_NAME" \
+            "$GITHUB_RUN_ID" \
+            "$CANDIDATE_COMMIT" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import stat
+          import sys
+          import zipfile
+
+          artifacts_path, archive_path, destination_path, name, run_id, commit = sys.argv[1:]
+          with open(artifacts_path, encoding="utf-8") as handle:
+              artifacts = json.load(handle)
+          matches = [
+              item for item in artifacts.get("artifacts", [])
+              if item.get("name") == name
+              and item.get("expired") is False
+              and (item.get("workflow_run") or {}).get("id") == int(run_id)
+              and (item.get("workflow_run") or {}).get("head_sha") == commit
+          ]
+          if len(matches) != 1:
+              raise SystemExit("sealed payload artifact identity is not unique")
+          archive = Path(archive_path)
+          path_status = archive.lstat()
+          if (
+              not stat.S_ISREG(path_status.st_mode)
+              or stat.S_ISLNK(path_status.st_mode)
+              or path_status.st_nlink != 1
+              or path_status.st_size <= 0
+          ):
+              raise SystemExit("sealed payload ZIP is not one direct regular file")
+          flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+          descriptor = os.open(archive, flags)
+          with os.fdopen(descriptor, "rb", closefd=True) as archive_stream:
+              opened = os.fstat(archive_stream.fileno())
+              if (opened.st_dev, opened.st_ino) != (
+                  path_status.st_dev,
+                  path_status.st_ino,
+              ):
+                  raise SystemExit("sealed payload ZIP changed before it was opened")
+              snapshot = (
+                  opened.st_dev,
+                  opened.st_ino,
+                  opened.st_size,
+                  opened.st_mtime_ns,
+                  opened.st_ctime_ns,
+              )
+              digest_builder = hashlib.sha256()
+              for chunk in iter(lambda: archive_stream.read(1024 * 1024), b""):
+                  digest_builder.update(chunk)
+              digest = digest_builder.hexdigest()
+              if matches[0].get("digest") != f"sha256:{digest}":
+                  raise SystemExit("sealed payload artifact digest changed")
+              archive_stream.seek(0)
+              destination = Path(destination_path)
+              destination.mkdir(mode=0o700, parents=True)
+              with zipfile.ZipFile(archive_stream) as zipped:
+                  seen = set()
+                  total = 0
+                  for member in zipped.infolist():
+                      if member.is_dir():
+                          continue
+                      pure = PurePosixPath(member.filename)
+                      if (
+                          len(pure.parts) != 1
+                          or pure.name in ("", ".", "..")
+                          or "\\" in member.filename
+                          or pure.name in seen
+                      ):
+                          raise SystemExit(f"unsafe or duplicate payload member: {member.filename!r}")
+                      kind = stat.S_IFMT(member.external_attr >> 16)
+                      if kind not in (0, stat.S_IFREG):
+                          raise SystemExit(f"non-regular payload member: {member.filename!r}")
+                      if member.file_size <= 0 or member.file_size > 2_000_000_000:
+                          raise SystemExit(f"payload member has an invalid size: {member.filename!r}")
+                      total += member.file_size
+                      if total > 12_000_000_000:
+                          raise SystemExit("payload exceeds the fixed expansion limit")
+                      seen.add(pure.name)
+                      target = destination / pure.name
+                      output_fd = os.open(
+                          target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+                      )
+                      try:
+                          written = 0
+                          with zipped.open(member) as source:
+                              while True:
+                                  chunk = source.read(1024 * 1024)
+                                  if not chunk:
+                                      break
+                                  written += len(chunk)
+                                  if written > member.file_size:
+                                      raise SystemExit("payload member exceeded its declared size")
+                                  view = memoryview(chunk)
+                                  while view:
+                                      count = os.write(output_fd, view)
+                                      view = view[count:]
+                          if written != member.file_size:
+                              raise SystemExit("payload member size changed during extraction")
+                          os.fsync(output_fd)
+                      finally:
+                          os.close(output_fd)
+              final_status = os.fstat(archive_stream.fileno())
+              if snapshot != (
+                  final_status.st_dev,
+                  final_status.st_ino,
+                  final_status.st_size,
+                  final_status.st_mtime_ns,
+                  final_status.st_ctime_ns,
+              ):
+                  raise SystemExit("sealed payload ZIP changed during extraction")
+          PY
+
+          test -z "$(find "$PAYLOAD_DIR" -mindepth 2 -print -quit)"
+          test -z "$(find "$PAYLOAD_DIR" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+          manifest="$PAYLOAD_DIR/promotion-manifest.json"
+          manifest_checksum="$PAYLOAD_DIR/promotion-manifest.sha256"
+          test -s "$manifest"
+          test -s "$manifest_checksum"
+          manifest_sha="$(sha256sum "$manifest" | awk '{print $1}')"
+          test "$(cat "$manifest_checksum")" = "$manifest_sha  promotion-manifest.json"
+          jq -e \
+            --arg commit "$CANDIDATE_COMMIT" \
+            --arg tag "$STABLE_TAG" \
+            --arg base "https://github.com/Joe-Simo/goblins-os/releases/download/$STABLE_TAG" \
+            --arg release "https://github.com/Joe-Simo/goblins-os/releases/tag/$STABLE_TAG" \
+            --arg candidate_run "https://github.com/Joe-Simo/goblins-os/actions/runs/$CANDIDATE_RUN_ID" \
+            --argjson candidate_attempt "$CANDIDATE_RUN_ATTEMPT" \
+            --arg display_run "https://github.com/Joe-Simo/goblins-os/actions/runs/$DISPLAY_RUN_ID" \
+            --argjson display_attempt "$DISPLAY_RUN_ATTEMPT" \
+            --arg promotion_run "https://github.com/Joe-Simo/goblins-os/actions/runs/$GITHUB_RUN_ID" \
+            --argjson promotion_attempt "$PROMOTION_PAYLOAD_RUN_ATTEMPT" \
+            '.schema == "goblins-os-stable-promotion-v1"
+             and .product == "Goblins OS"
+             and .architecture == "aarch64"
+             and .platform == "linux/arm64"
+             and .candidate_commit == $commit
+             and .stable_tag == $tag
+             and .candidate_workflow.run == $candidate_run
+             and .candidate_workflow.run_attempt == $candidate_attempt
+             and .display_verification_workflow.run == $display_run
+             and .display_verification_workflow.run_attempt == $display_attempt
+             and .promotion_workflow_run == $promotion_run
+             and .promotion_workflow_run_attempt == $promotion_attempt
+             and .website.releaseTag == $tag
+             and .website.releaseBaseUrl == $base
+             and .website.releaseUrl == $release
+             and .website.targetCommit == $commit
+             and .website.releaseArtifact.arch == "aarch64"
+             and .website.containerImage.platform == "linux/arm64"
+             and .display_proof.archive.name == "goblins-os-aarch64-display-proof.tar.zst"
+             and .display_proof.evidence_schema == "goblins-os-hardware-evidence-bundle-v5"
+             and .display_proof.authority_schema == "goblins-os-aarch64-local-display-authority-v2"
+             and .display_proof.authority_generation == 2
+             and .display_proof.screenshot_count == 42
+             and .display_proof.member_count == (.display_proof.members | length)
+             and ([.display_proof.members[].name] | length == (unique | length))
+             and .container.stable_tags == [
+               "ghcr.io/joe-simo/goblins-os:aarch64",
+               "ghcr.io/joe-simo/goblins-os:stable"
+             ]
+             and (.container.immutable_image_ref | test("^ghcr\\.io/joe-simo/goblins-os@sha256:[0-9a-f]{64}$"))
+             and ([.release_assets[].name] | length == (unique | length))' \
+            "$manifest" >/dev/null
+
+          actual_count="$(find "$PAYLOAD_DIR" -mindepth 1 -maxdepth 1 -type f -print | wc -l)"
+          expected_count="$(( $(jq -er '.release_assets | length' "$manifest") + 2 ))"
+          test "$actual_count" -eq "$expected_count"
+          part_count=0
+          while IFS= read -r path; do
+            name="$(basename "$path")"
+            case "$name" in
+              goblins-os-aarch64.iso.sha256|goblins-os-aarch64.iso.zst.sha256|goblins-os-aarch64.iso.zst.parts.sha256|\
+              manifest-goblins-os-aarch64.json|manifest-anaconda-iso-aarch64.json|\
+              release-evidence-manifest-aarch64.json|cargo-lock-packages-aarch64.tsv|\
+              rpm-packages-aarch64.command|rpm-packages-aarch64.tsv|candidate-image-ref-aarch64.json|\
+              evidence-bundle.json|aarch64-local-display-attestation.json|\
+              aarch64-local-display-attestation.json.cms|display-proof-authority2.pem|\
+              display-proof-authority2.sha256|display-proof-authority2-ca.pem|\
+              display-proof-authority2-ca.sha256|goblins-os-aarch64-display-proof.tar.zst|\
+              goblins-os-aarch64-display-proof.tar.zst.sha256|final-shipping-gate-aarch64.log|\
+              signoff-notes-aarch64.md|promotion-manifest.json|promotion-manifest.sha256)
+                ;;
+              goblins-os-aarch64.iso.zst.part-[0-9][0-9])
+                part_count=$((part_count + 1))
+                ;;
+              *)
+                echo "Unexpected or non-ARM release asset: $name" >&2
+                exit 1
+                ;;
+            esac
+            case "$name" in
+              *x86*|*X86*|*amd64*|*AMD64*) exit 1 ;;
+            esac
+            if [ "$name" != promotion-manifest.json ] && [ "$name" != promotion-manifest.sha256 ]; then
+              expected_sha="$(jq -er --arg name "$name" '[.release_assets[] | select(.name == $name)] | if length == 1 then .[0].sha256 else error("asset allowlist mismatch") end' "$manifest")"
+              expected_size="$(jq -er --arg name "$name" '.release_assets[] | select(.name == $name) | .size_bytes' "$manifest")"
+              test "$(sha256sum "$path" | awk '{print $1}')" = "$expected_sha"
+              test "$(wc -c < "$path" | tr -d ' ')" = "$expected_size"
+            fi
+          done < <(find "$PAYLOAD_DIR" -mindepth 1 -maxdepth 1 -type f -print | sort)
+          test "$part_count" -ge 1
+          [[ "$PINNED_AUTHORITY2_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PINNED_AUTHORITY2_CA_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          for required in \
+            goblins-os-aarch64.iso.sha256 \
+            goblins-os-aarch64.iso.zst.sha256 \
+            goblins-os-aarch64.iso.zst.parts.sha256 \
+            manifest-goblins-os-aarch64.json \
+            release-evidence-manifest-aarch64.json \
+            candidate-image-ref-aarch64.json \
+            evidence-bundle.json \
+            aarch64-local-display-attestation.json \
+            aarch64-local-display-attestation.json.cms \
+            display-proof-authority2.pem \
+            display-proof-authority2.sha256 \
+            display-proof-authority2-ca.pem \
+            display-proof-authority2-ca.sha256 \
+            goblins-os-aarch64-display-proof.tar.zst \
+            goblins-os-aarch64-display-proof.tar.zst.sha256 \
+            final-shipping-gate-aarch64.log \
+            signoff-notes-aarch64.md; do
+            test -s "$PAYLOAD_DIR/$required"
+          done
+          display_archive_sha="$(sha256sum "$PAYLOAD_DIR/goblins-os-aarch64-display-proof.tar.zst" | awk '{print $1}')"
+          test "$(cat "$PAYLOAD_DIR/goblins-os-aarch64-display-proof.tar.zst.sha256")" = "$display_archive_sha  goblins-os-aarch64-display-proof.tar.zst"
+          test "$(wc -c < "$PAYLOAD_DIR/promotion-manifest.json" | tr -d ' ')" -le 16777216
+          test "$(wc -c < "$PAYLOAD_DIR/evidence-bundle.json" | tr -d ' ')" -le 16777216
+          test "$(wc -c < "$PAYLOAD_DIR/aarch64-local-display-attestation.json" | tr -d ' ')" -le 16777216
+          test "$(wc -c < "$PAYLOAD_DIR/aarch64-local-display-attestation.json.cms" | tr -d ' ')" -le 16777216
+          test "$(wc -c < "$PAYLOAD_DIR/display-proof-authority2.pem" | tr -d ' ')" -le 65536
+          test "$(wc -c < "$PAYLOAD_DIR/display-proof-authority2.sha256" | tr -d ' ')" -le 256
+          test "$(wc -c < "$PAYLOAD_DIR/display-proof-authority2-ca.pem" | tr -d ' ')" -le 65536
+          test "$(wc -c < "$PAYLOAD_DIR/display-proof-authority2-ca.sha256" | tr -d ' ')" -le 256
+          test "$(tr -d '\n' < "$PAYLOAD_DIR/display-proof-authority2.sha256")" = "$PINNED_AUTHORITY2_SHA256"
+          test "$(tr -d '\n' < "$PAYLOAD_DIR/display-proof-authority2-ca.sha256")" = "$PINNED_AUTHORITY2_CA_SHA256"
+          test "$(openssl x509 -in "$PAYLOAD_DIR/display-proof-authority2.pem" -outform DER | sha256sum | awk '{print $1}')" = "$PINNED_AUTHORITY2_SHA256"
+          test "$(openssl x509 -in "$PAYLOAD_DIR/display-proof-authority2-ca.pem" -outform DER | sha256sum | awk '{print $1}')" = "$PINNED_AUTHORITY2_CA_SHA256"
+          python3 - "$PAYLOAD_DIR" "$CANDIDATE_COMMIT" "$PINNED_ZSTD" "$RUNNER_TEMP" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import ssl
+          import subprocess
+          import sys
+          import tarfile
+          import tempfile
+
+          root = Path(sys.argv[1])
+          selected_commit = sys.argv[2]
+          pinned_zstd = Path(sys.argv[3])
+          temporary_parent = Path(sys.argv[4])
+
+          def unique_object(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise SystemExit(f"duplicate JSON key: {key}")
+                  result[key] = value
+              return result
+
+          def load(name):
+              with (root / name).open(encoding="utf-8") as handle:
+                  return json.load(handle, object_pairs_hook=unique_object)
+
+          def record(name):
+              path = root / name
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return {"name": name, "sha256": digest.hexdigest(), "size_bytes": path.stat().st_size}
+
+          manifest = load("promotion-manifest.json")
+          seal = load("evidence-bundle.json")
+          authority = load("aarch64-local-display-attestation.json")
+          proof = manifest.get("display_proof") or {}
+          container = manifest.get("container") or {}
+          display_workflow = manifest.get("display_verification_workflow") or {}
+          release_artifact = ((manifest.get("website") or {}).get("releaseArtifact") or {})
+          selected_image = container.get("immutable_image_ref")
+          selected_run_date = display_workflow.get("run_date")
+          selected_iso_sha256 = release_artifact.get("sha256")
+          if (
+              manifest.get("candidate_commit") != selected_commit
+              or re.fullmatch(r"ghcr\.io/joe-simo/goblins-os@sha256:[0-9a-f]{64}", str(selected_image)) is None
+              or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", str(selected_run_date)) is None
+              or re.fullmatch(r"[0-9a-f]{64}", str(selected_iso_sha256)) is None
+          ):
+              raise SystemExit("promotion manifest has an invalid selected proof identity")
+          if proof.get("archive") != record("goblins-os-aarch64-display-proof.tar.zst"):
+              raise SystemExit("promotion manifest does not bind the exact display archive")
+          members = proof.get("members")
+          if not isinstance(members, list) or proof.get("member_count") != len(members):
+              raise SystemExit("promotion manifest display member count is invalid")
+          by_name = {}
+          for item in members:
+              if not isinstance(item, dict) or set(item) != {"name", "sha256", "size_bytes"}:
+                  raise SystemExit("promotion manifest has a malformed display member")
+              name = item.get("name")
+              if (
+                  not isinstance(name, str)
+                  or PurePosixPath(name).name != name
+                  or name in by_name
+                  or re.search(r"(?:x86|amd64)", name, flags=re.IGNORECASE)
+                  or re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256"))) is None
+                  or type(item.get("size_bytes")) is not int
+                  or item["size_bytes"] <= 0
+              ):
+                  raise SystemExit("promotion manifest has an unsafe display member")
+              by_name[name] = item
+          required = {
+              "evidence-bundle.json",
+              "aarch64-local-display-attestation.json",
+              "aarch64-local-display-attestation.json.cms",
+              "display-proof-authority2.pem",
+              "display-proof-authority2.sha256",
+              "display-proof-authority2-ca.pem",
+              "display-proof-authority2-ca.sha256",
+              "signoff-row.md",
+          }
+          if not required.issubset(by_name):
+              raise SystemExit("promotion manifest omits a required display member")
+          authority_names = (
+              "display-proof-authority2.pem",
+              "display-proof-authority2.sha256",
+              "display-proof-authority2-ca.pem",
+              "display-proof-authority2-ca.sha256",
+          )
+          authority_files = proof.get("authority_files")
+          expected_authority_files = [record(name) for name in authority_names]
+          if authority_files != expected_authority_files:
+              raise SystemExit("promotion manifest does not bind Authority 2 public files")
+          for name, field in (
+              ("evidence-bundle.json", "evidence_bundle_sha256"),
+              ("aarch64-local-display-attestation.json", "authority_record_sha256"),
+              ("aarch64-local-display-attestation.json.cms", "authority_signature_sha256"),
+          ):
+              standalone = record(name)
+              if proof.get(field) != standalone["sha256"] or by_name[name] != standalone:
+                  raise SystemExit(f"display member binding differs from standalone {name}")
+          for name in authority_names:
+              if by_name[name] != record(name):
+                  raise SystemExit(f"Authority 2 archive binding differs from {name}")
+          def certificate_fingerprint(certificate_name, fingerprint_name):
+              certificate_text = (root / certificate_name).read_text(encoding="ascii")
+              der = ssl.PEM_cert_to_DER_cert(certificate_text)
+              observed = hashlib.sha256(der).hexdigest()
+              if (root / fingerprint_name).read_text(encoding="ascii") != observed + "\n":
+                  raise SystemExit(f"{certificate_name} does not match its fingerprint")
+              return observed
+          leaf_fingerprint = certificate_fingerprint(
+              "display-proof-authority2.pem", "display-proof-authority2.sha256"
+          )
+          ca_fingerprint = certificate_fingerprint(
+              "display-proof-authority2-ca.pem", "display-proof-authority2-ca.sha256"
+          )
+          framebuffer = seal.get("framebuffer") or {}
+          if (
+              seal.get("schema") != "goblins-os-hardware-evidence-bundle-v5"
+              or authority.get("schema") != "goblins-os-aarch64-local-display-authority-v2"
+              or authority.get("authority_generation") != 2
+              or authority.get("signature_purpose") != "goblins-os-display-proof-authority-v2"
+              or seal.get("architecture") != "aarch64"
+              or authority.get("architecture") != "aarch64"
+              or seal.get("candidate_commit") != selected_commit
+              or authority.get("candidate_commit") != selected_commit
+              or seal.get("image_ref") != selected_image
+              or authority.get("image_ref") != selected_image
+              or seal.get("run_date") != selected_run_date
+              or authority.get("run_date") != selected_run_date
+              or proof.get("run_date") != selected_run_date
+              or seal.get("verification_iso_sha256") != selected_iso_sha256
+              or authority.get("verification_iso_sha256") != selected_iso_sha256
+              or proof.get("authority_generation") != 2
+              or proof.get("screenshot_count") != 42
+              or proof.get("screenshot_count") != framebuffer.get("required_png_count")
+              or proof.get("screenshot_count") != authority.get("screenshot_count")
+              or proof.get("authority_certificate_sha256") != leaf_fingerprint
+              or proof.get("authority_ca_certificate_sha256") != ca_fingerprint
+              or authority.get("authority_certificate_sha256") != leaf_fingerprint
+              or authority.get("authority_ca_certificate_sha256") != ca_fingerprint
+              or authority.get("evidence_bundle_sha256") != record("evidence-bundle.json")["sha256"]
+              or authority.get("evidence_bundle_size") != (root / "evidence-bundle.json").stat().st_size
+              or proof.get("screenshot_manifest_sha256") != seal.get("screenshot_manifest_sha256")
+              or proof.get("screenshot_manifest_sha256") != authority.get("screenshot_manifest_sha256")
+          ):
+              raise SystemExit("promotion manifest changes the signed display identity")
+          entries = seal.get("entries")
+          if not isinstance(entries, list) or seal.get("entry_count") != len(entries):
+              raise SystemExit("signed display seal has an invalid entry set")
+          expected_png_names = {
+              "01-installer.png",
+              "02-install-network.png",
+              "03-login.png",
+              "04-desktop.png",
+              "05-first-boot-private-unlock.png",
+              "06-onboarding.png",
+              "07-home.png",
+              "08-shell-home.png",
+              "09-shell-dark.png",
+              "10-settings.png",
+              "11-settings-models.png",
+              "12-settings-dark.png",
+              "13-studio-before.png",
+              "14-studio-running.png",
+              "15-studio-app-detail.png",
+              "16-built-app-open.png",
+              "17-dark-motion.png",
+              "18-light-motion.png",
+              "19-vulkan-vkcube.png",
+              "20-gamemode-active.png",
+              "21-gamescope-session.png",
+              "22-mangohud-overlay.png",
+              "23-controller-detection.png",
+              "24-audio-output.png",
+              "25-install-destination.png",
+              "26-install-storage-summary.png",
+              "27-dual-boot-preserve-existing-os.png",
+              "28-bootloader-efi-summary.png",
+              "29-preview-pdf-open.png",
+              "30-preview-image-open.png",
+              "31-text-shortcuts-candidate-bubble-render.png",
+              "32-text-shortcuts-live-ibus-runtime-render.png",
+              "33-accessibility-text-scaling.png",
+              "34-accessibility-high-contrast.png",
+              "35-accessibility-reduced-transparency.png",
+              "36-accessibility-reduced-motion.png",
+              "37-accessibility-localization-expansion.png",
+              "38-accessibility-orca-atspi.png",
+              "39-accessibility-keyboard-focus.png",
+              "40-accessibility-window-resize.png",
+              "41-hosted-context-review.png",
+              "42-hosted-context-review-dark.png",
+          }
+          sealed_names = set()
+          png_names = set()
+          for entry in entries:
+              member = by_name.get(entry.get("path")) if isinstance(entry, dict) else None
+              if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+                  raise SystemExit("signed display seal has a malformed entry")
+              if entry["path"] in sealed_names:
+                  raise SystemExit("signed display seal has a duplicate entry")
+              sealed_names.add(entry["path"])
+              if entry.get("kind") == "png":
+                  png_names.add(entry["path"])
+              if (
+                  member is None
+                  or member.get("sha256") != entry.get("sha256")
+                  or member.get("size_bytes") != entry.get("size")
+              ):
+                  raise SystemExit("promotion manifest display members differ from the signed seal")
+          if png_names != expected_png_names:
+              raise SystemExit("signed display seal does not contain the exact 42 screenshots")
+          if set(by_name) != sealed_names | required:
+              raise SystemExit("promotion manifest display members are not the exact signed run")
+
+          def sha256_path(path):
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          def files_equal(left, right):
+              if left.stat().st_size != right.stat().st_size:
+                  return False
+              with left.open("rb") as left_stream, right.open("rb") as right_stream:
+                  while True:
+                      left_chunk = left_stream.read(1024 * 1024)
+                      right_chunk = right_stream.read(1024 * 1024)
+                      if left_chunk != right_chunk:
+                          return False
+                      if not left_chunk:
+                          return True
+
+          proof_manifest_data = None
+          class BoundedReader:
+              def __init__(self, source, limit):
+                  self.source = source
+                  self.limit = limit
+                  self.consumed = 0
+                  self.digest = hashlib.sha256()
+                  self.tail = bytearray()
+
+              def read(self, size=-1):
+                  if size < 0 or size > 1024 * 1024:
+                      size = 1024 * 1024
+                  data = self.source.read(size)
+                  self.consumed += len(data)
+                  if self.consumed > self.limit:
+                      raise SystemExit("display archive decompression exceeded its fixed stream limit")
+                  self.digest.update(data)
+                  self.tail.extend(data)
+                  if len(self.tail) > 20 * 1024:
+                      del self.tail[: len(self.tail) - 20 * 1024]
+                  return data
+
+          class CanonicalMemberReader:
+              def __init__(self, source, expected_size, capture):
+                  self.source = source
+                  self.expected_size = expected_size
+                  self.observed_size = 0
+                  self.digest = hashlib.sha256()
+                  self.capture = bytearray() if capture else None
+
+              def read(self, size=-1):
+                  remaining = self.expected_size - self.observed_size
+                  if remaining <= 0:
+                      return b""
+                  if size < 0 or size > min(1024 * 1024, remaining):
+                      size = min(1024 * 1024, remaining)
+                  data = self.source.read(size)
+                  self.observed_size += len(data)
+                  if self.observed_size > self.expected_size:
+                      raise SystemExit("display archive member exceeded its declared size")
+                  self.digest.update(data)
+                  if self.capture is not None:
+                      if self.observed_size > 16 * 1024 * 1024:
+                          raise SystemExit("proof manifest is unexpectedly large")
+                      self.capture.extend(data)
+                  return data
+
+          source_date_epoch = manifest.get("source_date_epoch")
+          if type(source_date_epoch) is not int or source_date_epoch <= 0:
+              raise SystemExit("promotion manifest has no exact source date epoch")
+          expected_archive_order = sorted(by_name, key=lambda name: name.encode("utf-8"))
+          with tempfile.TemporaryDirectory(
+              prefix="goblins-stable-display-canonical-", dir=temporary_parent
+          ) as temporary_name:
+              temporary = Path(temporary_name)
+              canonical_tar = temporary / "goblins-os-aarch64-display-proof.tar"
+              stderr_file = tempfile.TemporaryFile()
+              process = subprocess.Popen(
+                  [
+                      "timeout",
+                      "1800",
+                      str(pinned_zstd),
+                      "--decompress",
+                      "--stdout",
+                      "--long=31",
+                      "--no-progress",
+                      str(root / "goblins-os-aarch64-display-proof.tar.zst"),
+                  ],
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=stderr_file,
+              )
+              if process.stdout is None:
+                  raise SystemExit("could not open the display archive replay stream")
+              bounded_stream = BoundedReader(process.stdout, 25 * 1024 * 1024 * 1024)
+              try:
+                  archive_names = set()
+                  archive_order = []
+                  root_seen = False
+                  expanded_size = 0
+                  with canonical_tar.open("xb") as canonical_raw:
+                      with tarfile.open(
+                          fileobj=canonical_raw, mode="w", format=tarfile.USTAR_FORMAT
+                      ) as canonical_archive:
+                          with tarfile.open(fileobj=bounded_stream, mode="r|") as archive:
+                              for member in archive:
+                                  pure = PurePosixPath(member.name)
+                                  if member.name == "goblins-os-aarch64-display-proof":
+                                      if (
+                                          root_seen
+                                          or archive_names
+                                          or not member.isdir()
+                                          or member.mode != 0o755
+                                          or member.uid != 0
+                                          or member.gid != 0
+                                          or member.uname != ""
+                                          or member.gname != ""
+                                          or member.mtime != source_date_epoch
+                                          or member.pax_headers
+                                      ):
+                                          raise SystemExit("display archive has an invalid root directory")
+                                      root_info = tarfile.TarInfo(
+                                          "goblins-os-aarch64-display-proof"
+                                      )
+                                      root_info.type = tarfile.DIRTYPE
+                                      root_info.mode = 0o755
+                                      root_info.uid = 0
+                                      root_info.gid = 0
+                                      root_info.uname = ""
+                                      root_info.gname = ""
+                                      root_info.mtime = source_date_epoch
+                                      canonical_archive.addfile(root_info)
+                                      root_seen = True
+                                      continue
+                                  if (
+                                      not root_seen
+                                      or len(pure.parts) != 2
+                                      or pure.parts[0] != "goblins-os-aarch64-display-proof"
+                                      or pure.name in ("", ".", "..")
+                                      or "\\" in member.name
+                                      or pure.name in archive_names
+                                      or not member.isreg()
+                                      or member.issym()
+                                      or member.islnk()
+                                      or member.mode != 0o644
+                                      or member.uid != 0
+                                      or member.gid != 0
+                                      or member.uname != ""
+                                      or member.gname != ""
+                                      or member.mtime != source_date_epoch
+                                      or member.pax_headers
+                                      or member.size <= 0
+                                      or member.size > 16 * 1024 * 1024 * 1024
+                                  ):
+                                      raise SystemExit("display archive has an unsafe member")
+                                  expected = by_name.get(pure.name)
+                                  if expected is None or expected.get("size_bytes") != member.size:
+                                      raise SystemExit(
+                                          "display archive member is not in the signed inventory"
+                                      )
+                                  expanded_size += member.size
+                                  if expanded_size > 24 * 1024 * 1024 * 1024:
+                                      raise SystemExit(
+                                          "display archive exceeds its fixed expansion limit"
+                                      )
+                                  source = archive.extractfile(member)
+                                  if source is None:
+                                      raise SystemExit("display archive member could not be read")
+                                  canonical_info = tarfile.TarInfo(
+                                      f"goblins-os-aarch64-display-proof/{pure.name}"
+                                  )
+                                  canonical_info.size = member.size
+                                  canonical_info.mode = 0o644
+                                  canonical_info.uid = 0
+                                  canonical_info.gid = 0
+                                  canonical_info.uname = ""
+                                  canonical_info.gname = ""
+                                  canonical_info.mtime = source_date_epoch
+                                  reader = CanonicalMemberReader(
+                                      source,
+                                      member.size,
+                                      pure.name == "proof-manifest.json",
+                                  )
+                                  canonical_archive.addfile(canonical_info, reader)
+                                  if (
+                                      reader.observed_size != member.size
+                                      or reader.digest.hexdigest() != expected.get("sha256")
+                                  ):
+                                      raise SystemExit(
+                                          "display archive member bytes differ from the signed inventory"
+                                      )
+                                  if reader.capture is not None:
+                                      proof_manifest_data = bytes(reader.capture)
+                                  archive_names.add(pure.name)
+                                  archive_order.append(pure.name)
+                      canonical_raw.flush()
+                      os.fsync(canonical_raw.fileno())
+                  if (
+                      not root_seen
+                      or archive_names != set(by_name)
+                      or archive_order != expected_archive_order
+                  ):
+                      raise SystemExit(
+                          "display archive does not contain the exact canonical signed member order"
+                      )
+                  while bounded_stream.read(1024 * 1024):
+                      pass
+                  tar_payload_bytes = 512 + sum(
+                      512 + ((int(item["size_bytes"]) + 511) // 512) * 512
+                      for item in by_name.values()
+                  )
+                  canonical_tar_size = (
+                      (tar_payload_bytes + 1024 + 10240 - 1) // 10240
+                  ) * 10240
+                  canonical_zero_tail = canonical_tar_size - tar_payload_bytes
+                  if (
+                      bounded_stream.consumed != canonical_tar_size
+                      or canonical_zero_tail > len(bounded_stream.tail)
+                      or any(bounded_stream.tail[-canonical_zero_tail:])
+                      or canonical_tar.stat().st_size != bounded_stream.consumed
+                      or sha256_path(canonical_tar) != bounded_stream.digest.hexdigest()
+                  ):
+                      raise SystemExit(
+                          "display archive raw USTAR bytes are not the exact canonical encoding"
+                      )
+                  returncode = process.wait(timeout=10)
+                  if returncode != 0:
+                      stderr_file.seek(0)
+                      raise SystemExit(
+                          "could not replay the signed display archive: "
+                          + stderr_file.read(1000).decode("utf-8", "replace")
+                      )
+              except BaseException:
+                  process.kill()
+                  process.wait()
+                  raise
+              finally:
+                  process.stdout.close()
+                  stderr_file.close()
+              canonical_zstd = temporary / "goblins-os-aarch64-display-proof.tar.zst"
+              completed = subprocess.run(
+                  [
+                      str(pinned_zstd),
+                      "--ultra",
+                      "-19",
+                      "--long=31",
+                      "-T1",
+                      "--no-progress",
+                      "--force",
+                      "-o",
+                      str(canonical_zstd),
+                      str(canonical_tar),
+                  ],
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  check=False,
+                  timeout=1800,
+              )
+              if completed.returncode != 0:
+                  raise SystemExit(
+                      "pinned zstd could not rebuild the canonical display archive: "
+                      + completed.stderr[:1000].decode("utf-8", "replace")
+                  )
+              if not files_equal(
+                  canonical_zstd,
+                  root / "goblins-os-aarch64-display-proof.tar.zst",
+              ):
+                  raise SystemExit(
+                      "display archive compressed bytes are not the exact canonical zstd encoding"
+                  )
+          if proof_manifest_data is None:
+              raise SystemExit("display archive has no proof-manifest.json")
+          try:
+              proof_manifest = json.loads(
+                  proof_manifest_data.decode("utf-8"), object_pairs_hook=unique_object
+              )
+          except (UnicodeDecodeError, json.JSONDecodeError) as error:
+              raise SystemExit("display proof manifest is not canonical JSON") from error
+          expected_screenshot_dir = (
+              f"os/screenshots/hardware-gate/aarch64/{selected_run_date}"
+          )
+          if (
+              proof_manifest.get("architecture") != "aarch64"
+              or proof_manifest.get("candidate_commit") != selected_commit
+              or proof_manifest.get("image_ref") != selected_image
+              or proof_manifest.get("iso")
+              != "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso"
+              or proof_manifest.get("iso_sha256") != selected_iso_sha256
+              or proof_manifest.get("captured_at") != f"{selected_run_date}T00:00:00Z"
+              or proof_manifest.get("screenshot_run_dir") != expected_screenshot_dir
+          ):
+              raise SystemExit("signed display proof does not bind the selected release identity")
+          PY
+          leaf="$PAYLOAD_DIR/display-proof-authority2.pem"
+          leaf_fingerprint="$PAYLOAD_DIR/display-proof-authority2.sha256"
+          ca="$PAYLOAD_DIR/display-proof-authority2-ca.pem"
+          ca_fingerprint="$PAYLOAD_DIR/display-proof-authority2-ca.sha256"
+          test "$(openssl x509 -in "$leaf" -outform DER | sha256sum | awk '{print $1}')" = "$(tr -d '\n' < "$leaf_fingerprint")"
+          test "$(openssl x509 -in "$ca" -outform DER | sha256sum | awk '{print $1}')" = "$(tr -d '\n' < "$ca_fingerprint")"
+          test "$(openssl x509 -in "$leaf" -noout -subject -nameopt RFC2253)" = "subject=CN=Goblins OS Display Proof Authority 2"
+          leaf_issuer="$(openssl x509 -in "$leaf" -noout -issuer -nameopt RFC2253)"
+          ca_subject="$(openssl x509 -in "$ca" -noout -subject -nameopt RFC2253)"
+          test "${leaf_issuer#issuer=}" = "${ca_subject#subject=}"
+          test "${leaf_issuer#issuer=}" != "CN=Goblins OS Display Proof Authority 2"
+          test "$(openssl x509 -in "$leaf" -noout -ext basicConstraints | tail -n +2 | xargs)" = "CA:FALSE"
+          test "$(openssl x509 -in "$leaf" -noout -ext keyUsage | tail -n +2 | xargs)" = "Digital Signature"
+          test "$(openssl x509 -in "$leaf" -noout -ext extendedKeyUsage | tail -n +2 | xargs)" = "E-mail Protection"
+          test "$(openssl x509 -in "$ca" -noout -ext basicConstraints | tail -n +2 | xargs)" = "CA:TRUE"
+          ca_key_usage="$(openssl x509 -in "$ca" -noout -ext keyUsage | tail -n +2 | xargs)"
+          test "$ca_key_usage" = "Certificate Sign" || test "$ca_key_usage" = "Certificate Sign, CRL Sign"
+          openssl verify -no-CApath -purpose smimesign -CAfile "$ca" "$leaf" >/dev/null
+          openssl cms -verify \
+            -binary \
+            -inform DER \
+            -in "$PAYLOAD_DIR/aarch64-local-display-attestation.json.cms" \
+            -content "$PAYLOAD_DIR/aarch64-local-display-attestation.json" \
+            -certfile "$leaf" \
+            -nointern \
+            -CAfile "$ca" \
+            -no-CApath \
+            -purpose smimesign \
+            -out /dev/null
+          echo "payload_dir=$PAYLOAD_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Create an exact draft, verify every remote byte, promote GHCR, then publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/goblins-stable-gh-publish
+          DOCKER_CONFIG: ${{ runner.temp }}/goblins-stable-docker
+          PAYLOAD_DIR: ${{ steps.publish_payload.outputs.payload_dir }}
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_workflow_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_workflow_run_attempt }}
+          DISPLAY_RUN_ID: ${{ inputs.display_verification_run_id }}
+          DISPLAY_RUN_ATTEMPT: ${{ inputs.display_verification_run_attempt }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          PINNED_AUTHORITY2_SHA256: ${{ vars.GOBLINS_OS_DISPLAY_AUTHORITY2_SHA256 }}
+          PINNED_AUTHORITY2_CA_SHA256: ${{ vars.GOBLINS_OS_DISPLAY_AUTHORITY2_CA_SHA256 }}
+          PINNED_ZSTD: ${{ steps.pinned_zstd.outputs.path }}
+        run: |
+          set -euo pipefail
+          umask 077
+          repository="Joe-Simo/goblins-os"
+          publication_gh_token="$GH_TOKEN"
+          unset GH_TOKEN
+          export -n publication_gh_token
+          gh_write() {
+            GH_TOKEN="$publication_gh_token" command gh "$@"
+          }
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CANDIDATE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$DISPLAY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$DISPLAY_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$STABLE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$CONFIRMATION" = "promote-aarch64-stable $STABLE_TAG $CANDIDATE_COMMIT"
+          test -x "$PINNED_ZSTD"
+          test "$("$PINNED_ZSTD" --version)" = \
+            "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***"
+          install -d -m 0700 "$GH_CONFIG_DIR"
+          assert_main_head() {
+            test "$(gh_write api "repos/$repository/git/ref/heads/main" --jq '.object.sha')" = "$CANDIDATE_COMMIT"
+          }
+          test -z "$(find "$PAYLOAD_DIR" -mindepth 2 -print -quit)"
+          test -z "$(find "$PAYLOAD_DIR" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+          manifest="$PAYLOAD_DIR/promotion-manifest.json"
+          image_ref="$(jq -er '.container.immutable_image_ref' "$manifest")"
+          image_digest="${image_ref##*@}"
+          [[ "$image_ref" =~ ^ghcr\.io/joe-simo/goblins-os@sha256:[0-9a-f]{64}$ ]]
+          release_marker="<!-- goblins-os-stable-promotion-v1 tag=$STABLE_TAG commit=$CANDIDATE_COMMIT image=$image_ref -->"
+          release_notes_body() {
+            printf '%s\n' "$release_marker"
+            printf 'Goblins OS %s is the signed aarch64 stable release.\n\n' "$STABLE_TAG"
+            printf -- '- Source commit: `%s`\n' "$CANDIDATE_COMMIT"
+            printf -- '- Immutable image: `%s`\n' "$image_ref"
+            printf -- '- Platform: `linux/arm64`\n'
+            printf -- '- Proof: `promotion-manifest.json` and the complete signed display archive.\n'
+          }
+          published_resume_is_current() {
+            local published_resume_json expected_body release_id status
+            status=1
+            published_resume_json="$(mktemp "$RUNNER_TEMP/goblins-stable-published-resume.XXXXXX")"
+            expected_body="$(release_notes_body)"
+            if gh_write api "repos/$repository/releases/tags/$STABLE_TAG" > "$published_resume_json" 2>/dev/null \
+              && [ "$(jq -er '.draft' "$published_resume_json")" = false ] \
+              && [ "$(jq -er '.prerelease' "$published_resume_json")" = false ] \
+              && [ "$(jq -er '.tag_name' "$published_resume_json")" = "$STABLE_TAG" ] \
+              && [ "$(jq -er '.name' "$published_resume_json")" = "Goblins OS $STABLE_TAG" ] \
+              && [ "$(jq -er '.body' "$published_resume_json")" = "$expected_body" ] \
+              && [ "$(gh_write api "repos/$repository/git/ref/tags/$STABLE_TAG" --jq '.object.type' 2>/dev/null)" = commit ] \
+              && [ "$(gh_write api "repos/$repository/git/ref/tags/$STABLE_TAG" --jq '.object.sha' 2>/dev/null)" = "$CANDIDATE_COMMIT" ]; then
+              release_id="$(jq -er '.id' "$published_resume_json")"
+              if [ "$(gh_write api "repos/$repository/releases/latest" --jq '.id' 2>/dev/null)" = "$release_id" ]; then
+                status=0
+              fi
+            fi
+            rm -f -- "$published_resume_json"
+            return "$status"
+          }
+          resume_published_release=0
+          assert_main_head_or_published_resume() {
+            if [ "$resume_published_release" -eq 1 ]; then
+              published_resume_is_current
+            else
+              assert_main_head
+            fi
+          }
+          assert_main_head_or_published_resume
+          manifest_sha="$(sha256sum "$manifest" | awk '{print $1}')"
+          test "$(cat "$PAYLOAD_DIR/promotion-manifest.sha256")" = "$manifest_sha  promotion-manifest.json"
+          candidate_run_json="$(mktemp "$RUNNER_TEMP/goblins-candidate-run.XXXXXX")"
+          display_run_json="$(mktemp "$RUNNER_TEMP/goblins-display-run.XXXXXX")"
+          candidate_artifacts_json="$(mktemp "$RUNNER_TEMP/goblins-candidate-artifacts.XXXXXX")"
+          display_artifacts_json="$(mktemp "$RUNNER_TEMP/goblins-display-artifacts.XXXXXX")"
+          gh_write api "repos/$repository/actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT" > "$candidate_run_json"
+          gh_write api "repos/$repository/actions/runs/$DISPLAY_RUN_ID/attempts/$DISPLAY_RUN_ATTEMPT" > "$display_run_json"
+          gh_write api "repos/$repository/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" > "$candidate_artifacts_json"
+          gh_write api "repos/$repository/actions/runs/$DISPLAY_RUN_ID/artifacts?per_page=100" > "$display_artifacts_json"
+          jq -e \
+            --argjson id "$CANDIDATE_RUN_ID" \
+            --argjson attempt "$CANDIDATE_RUN_ATTEMPT" \
+            --arg commit "$CANDIDATE_COMMIT" \
+            '.id == $id
+             and .run_attempt == $attempt
+             and .name == "candidate-artifacts"
+             and .path == ".github/workflows/candidate-artifacts.yml"
+             and .event == "workflow_dispatch"
+             and .head_branch == "main"
+             and .head_sha == $commit
+             and .status == "completed"
+             and .conclusion == "success"
+             and .repository.full_name == "Joe-Simo/goblins-os"
+             and .head_repository.full_name == "Joe-Simo/goblins-os"' \
+            "$candidate_run_json" >/dev/null
+          jq -e \
+            --argjson id "$DISPLAY_RUN_ID" \
+            --argjson attempt "$DISPLAY_RUN_ATTEMPT" \
+            --arg commit "$CANDIDATE_COMMIT" \
+            '.id == $id
+             and .run_attempt == $attempt
+             and .name == "aarch64-local-display-attestation"
+             and .path == ".github/workflows/aarch64-local-display-attestation.yml"
+             and .event == "workflow_dispatch"
+             and .head_branch == "main"
+             and .head_sha == $commit
+             and .status == "completed"
+             and .conclusion == "success"
+             and .repository.full_name == "Joe-Simo/goblins-os"
+             and .head_repository.full_name == "Joe-Simo/goblins-os"' \
+            "$display_run_json" >/dev/null
+          candidate_artifact_name="goblins-os-candidate-$CANDIDATE_COMMIT-aarch64"
+          display_run_date="$(jq -er '.display_verification_workflow.run_date' "$manifest")"
+          display_artifact_name="aarch64-local-display-verified-$CANDIDATE_COMMIT-$display_run_date-attempt-$DISPLAY_RUN_ATTEMPT"
+          candidate_artifact_digest="$(jq -er '.candidate_workflow.artifact_digest' "$manifest")"
+          display_artifact_digest="$(jq -er '.display_verification_workflow.artifact_digest' "$manifest")"
+          candidate_artifact_id="$(jq -er \
+            --arg name "$candidate_artifact_name" \
+            --arg digest "$candidate_artifact_digest" \
+            --argjson run_id "$CANDIDATE_RUN_ID" \
+            '[.artifacts[] | select(
+                .name == $name
+                and .digest == $digest
+                and .expired == false
+                and .workflow_run.id == $run_id
+              )] | if length == 1 then .[0].id else error("candidate artifact identity mismatch") end' \
+            "$candidate_artifacts_json")"
+          display_artifact_id="$(jq -er \
+            --arg name "$display_artifact_name" \
+            --arg digest "$display_artifact_digest" \
+            --argjson run_id "$DISPLAY_RUN_ID" \
+            '[.artifacts[] | select(
+                .name == $name
+                and .digest == $digest
+                and .expired == false
+                and .workflow_run.id == $run_id
+              )] | if length == 1 then .[0].id else error("display artifact identity mismatch") end' \
+            "$display_artifacts_json")"
+          [[ "$candidate_artifact_id" =~ ^[1-9][0-9]*$ ]]
+          [[ "$display_artifact_id" =~ ^[1-9][0-9]*$ ]]
+          test "$(jq -er '.candidate_workflow.artifact_name' "$manifest")" = "$candidate_artifact_name"
+          test "$(jq -er '.display_verification_workflow.artifact_name' "$manifest")" = "$display_artifact_name"
+          expected_count="$(( $(jq -er '.release_assets | length' "$manifest") + 2 ))"
+          actual_count="$(find "$PAYLOAD_DIR" -mindepth 1 -maxdepth 1 -type f -print | wc -l)"
+          test "$actual_count" -eq "$expected_count"
+          while IFS= read -r local_path; do
+            local_name="$(basename "$local_path")"
+            case "$local_name" in
+              goblins-os-aarch64.iso.sha256|goblins-os-aarch64.iso.zst.sha256|goblins-os-aarch64.iso.zst.parts.sha256|\
+              manifest-goblins-os-aarch64.json|manifest-anaconda-iso-aarch64.json|\
+              release-evidence-manifest-aarch64.json|cargo-lock-packages-aarch64.tsv|\
+              rpm-packages-aarch64.command|rpm-packages-aarch64.tsv|candidate-image-ref-aarch64.json|\
+              evidence-bundle.json|aarch64-local-display-attestation.json|\
+              aarch64-local-display-attestation.json.cms|display-proof-authority2.pem|\
+              display-proof-authority2.sha256|display-proof-authority2-ca.pem|\
+              display-proof-authority2-ca.sha256|goblins-os-aarch64-display-proof.tar.zst|\
+              goblins-os-aarch64-display-proof.tar.zst.sha256|final-shipping-gate-aarch64.log|\
+              signoff-notes-aarch64.md|promotion-manifest.json|promotion-manifest.sha256|\
+              goblins-os-aarch64.iso.zst.part-[0-9][0-9])
+                ;;
+              *)
+                echo "Unexpected or non-ARM release asset: $local_name" >&2
+                exit 1
+                ;;
+            esac
+            case "$local_name" in
+              promotion-manifest.json|promotion-manifest.sha256) ;;
+              *)
+                local_sha="$(jq -er --arg name "$local_name" '[.release_assets[] | select(.name == $name)] | if length == 1 then .[0].sha256 else error("asset allowlist mismatch") end' "$manifest")"
+                local_size="$(jq -er --arg name "$local_name" '.release_assets[] | select(.name == $name) | .size_bytes' "$manifest")"
+                test "$(sha256sum "$local_path" | awk '{print $1}')" = "$local_sha"
+                test "$(wc -c < "$local_path" | tr -d ' ')" = "$local_size"
+                ;;
+            esac
+          done < <(find "$PAYLOAD_DIR" -mindepth 1 -maxdepth 1 -type f -print | sort)
+
+          candidate_artifact_zip="$(mktemp "$RUNNER_TEMP/goblins-candidate-artifact.XXXXXX")"
+          display_artifact_zip="$(mktemp "$RUNNER_TEMP/goblins-display-artifact.XXXXXX")"
+          gh_write api "repos/$repository/actions/artifacts/$candidate_artifact_id/zip" > "$candidate_artifact_zip"
+          gh_write api "repos/$repository/actions/artifacts/$display_artifact_id/zip" > "$display_artifact_zip"
+          python3 - \
+            "$PAYLOAD_DIR" \
+            "$candidate_artifact_zip" \
+            "$candidate_artifact_digest" \
+            "$display_artifact_zip" \
+            "$display_artifact_digest" \
+            "$STABLE_TAG" \
+            "$CANDIDATE_COMMIT" \
+            "$GITHUB_RUN_ID" \
+            "$image_ref" \
+            "$CANDIDATE_RUN_ID" \
+            "$CANDIDATE_RUN_ATTEMPT" \
+            "$DISPLAY_RUN_ID" \
+            "$DISPLAY_RUN_ATTEMPT" \
+            "$PROMOTION_PAYLOAD_RUN_ATTEMPT" <<'PY'
+          import datetime
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import sys
+          import zipfile
+
+          payload = Path(sys.argv[1])
+          candidate_zip = Path(sys.argv[2])
+          candidate_digest = sys.argv[3]
+          display_zip = Path(sys.argv[4])
+          display_digest = sys.argv[5]
+          stable_tag = sys.argv[6]
+          candidate_commit = sys.argv[7]
+          promotion_run_id = sys.argv[8]
+          image_ref = sys.argv[9]
+          candidate_run_id = sys.argv[10]
+          candidate_run_attempt = int(sys.argv[11])
+          display_run_id = sys.argv[12]
+          display_run_attempt = int(sys.argv[13])
+          promotion_run_attempt = int(sys.argv[14])
+
+          candidate_mapping = {
+              "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso": None,
+              "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso.sha256": "goblins-os-aarch64.iso.sha256",
+              "os/iso/output/aarch64/manifest-goblins-os-aarch64.json": "manifest-goblins-os-aarch64.json",
+              "os/iso/output/aarch64/manifest-anaconda-iso.json": "manifest-anaconda-iso-aarch64.json",
+              "os/signoff-proofs/sbom/aarch64/release-evidence-manifest.json": "release-evidence-manifest-aarch64.json",
+              "os/signoff-proofs/sbom/aarch64/cargo-lock-packages.tsv": "cargo-lock-packages-aarch64.tsv",
+              "os/signoff-proofs/sbom/aarch64/rpm-packages.command": "rpm-packages-aarch64.command",
+              "os/signoff-proofs/sbom/aarch64/rpm-packages.tsv": "rpm-packages-aarch64.tsv",
+              "candidate-output/aarch64/image-ref.json": "candidate-image-ref-aarch64.json",
+          }
+          display_names = {
+              "evidence-bundle.json",
+              "aarch64-local-display-attestation.json",
+              "aarch64-local-display-attestation.json.cms",
+              "display-proof-authority2.pem",
+              "display-proof-authority2.sha256",
+              "display-proof-authority2-ca.pem",
+              "display-proof-authority2-ca.sha256",
+          }
+
+          def sha256_file(path):
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          def stable_zip_records(path, expected_names, expected_digest, *, total_limit, ordinary_limit):
+              if re.fullmatch(r"sha256:[0-9a-f]{64}", expected_digest) is None:
+                  raise SystemExit("workflow artifact has an invalid digest")
+              before = path.lstat()
+              if (
+                  not stat.S_ISREG(before.st_mode)
+                  or stat.S_ISLNK(before.st_mode)
+                  or before.st_nlink != 1
+                  or before.st_size <= 0
+              ):
+                  raise SystemExit("workflow artifact ZIP is not one direct regular file")
+              descriptor = os.open(
+                  path,
+                  os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+              )
+              with os.fdopen(descriptor, "rb", closefd=True) as stream:
+                  opened = os.fstat(stream.fileno())
+                  stable_fields = (
+                      "st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"
+                  )
+                  if any(getattr(before, field) != getattr(opened, field) for field in stable_fields):
+                      raise SystemExit("workflow artifact ZIP changed before it was opened")
+                  archive_digest = hashlib.sha256()
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      archive_digest.update(chunk)
+                  if f"sha256:{archive_digest.hexdigest()}" != expected_digest:
+                      raise SystemExit("downloaded workflow artifact digest differs from the selected artifact")
+                  stream.seek(0)
+                  records = {}
+                  expected_directories = {
+                      "/".join(PurePosixPath(name).parts[:index]) + "/"
+                      for name in expected_names
+                      for index in range(1, len(PurePosixPath(name).parts))
+                  }
+                  total = 0
+                  with zipfile.ZipFile(stream) as zipped:
+                      seen_directories = set()
+                      for member in zipped.infolist():
+                          pure = PurePosixPath(member.filename)
+                          if (
+                              not member.filename
+                              or pure.is_absolute()
+                              or "\\" in member.filename
+                              or any(part in ("", ".", "..") for part in pure.parts)
+                              or member.flag_bits & 0x1
+                          ):
+                              raise SystemExit(f"unsafe workflow artifact member: {member.filename!r}")
+                          kind = stat.S_IFMT(member.external_attr >> 16)
+                          if member.is_dir():
+                              if (
+                                  member.filename not in expected_directories
+                                  or member.filename in seen_directories
+                                  or member.file_size != 0
+                                  or kind not in (0, stat.S_IFDIR)
+                              ):
+                                  raise SystemExit(f"unexpected workflow artifact directory: {member.filename!r}")
+                              seen_directories.add(member.filename)
+                              continue
+                          if (
+                              member.filename not in expected_names
+                              or member.filename in records
+                              or kind not in (0, stat.S_IFREG)
+                              or member.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+                              or member.file_size <= 0
+                          ):
+                              raise SystemExit(f"unexpected workflow artifact file: {member.filename!r}")
+                          per_file_limit = (
+                              16 * 1024 * 1024 * 1024
+                              if member.filename.endswith("goblins-os-aarch64.iso")
+                              else ordinary_limit
+                          )
+                          if member.file_size > per_file_limit:
+                              raise SystemExit(f"workflow artifact member exceeds its purpose limit: {member.filename}")
+                          total += member.file_size
+                          if total > total_limit:
+                              raise SystemExit("workflow artifact exceeds its total expansion limit")
+                          digest = hashlib.sha256()
+                          consumed = 0
+                          with zipped.open(member) as source:
+                              while chunk := source.read(1024 * 1024):
+                                  consumed += len(chunk)
+                                  if consumed > member.file_size or consumed > per_file_limit:
+                                      raise SystemExit("workflow artifact member exceeded its declared bound")
+                                  digest.update(chunk)
+                          if consumed != member.file_size:
+                              raise SystemExit("workflow artifact member was truncated")
+                          records[member.filename] = (digest.hexdigest(), consumed)
+                  if set(records) != set(expected_names):
+                      raise SystemExit("workflow artifact member allowlist is not exact")
+                  after_open = os.fstat(stream.fileno())
+              after_path = path.lstat()
+              if any(getattr(before, field) != getattr(after_open, field) for field in stable_fields):
+                  raise SystemExit("workflow artifact ZIP changed while it was consumed")
+              if any(getattr(before, field) != getattr(after_path, field) for field in stable_fields):
+                  raise SystemExit("workflow artifact ZIP path changed while it was consumed")
+              return records
+
+          candidate_records = stable_zip_records(
+              candidate_zip,
+              set(candidate_mapping),
+              candidate_digest,
+              total_limit=24 * 1024 * 1024 * 1024,
+              ordinary_limit=1024 * 1024 * 1024,
+          )
+          checksum = (payload / "goblins-os-aarch64.iso.sha256").read_bytes()
+          match = re.fullmatch(rb"([0-9a-f]{64})  goblins-os-aarch64\.iso\n", checksum)
+          if match is None:
+              raise SystemExit("release ISO checksum is not canonical")
+          raw_iso_member = "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso"
+          if candidate_records[raw_iso_member][0] != match.group(1).decode("ascii"):
+              raise SystemExit("published ISO checksum differs from the exact candidate artifact ISO")
+          for member_name, payload_name in candidate_mapping.items():
+              if payload_name is None:
+                  continue
+              target = payload / payload_name
+              if candidate_records[member_name] != (sha256_file(target), target.stat().st_size):
+                  raise SystemExit(f"published {payload_name} differs from the exact candidate artifact")
+
+          display_records = stable_zip_records(
+              display_zip,
+              display_names,
+              display_digest,
+              total_limit=128 * 1024 * 1024,
+              ordinary_limit=32 * 1024 * 1024,
+          )
+          for name in display_names:
+              target = payload / name
+              if display_records[name] != (sha256_file(target), target.stat().st_size):
+                  raise SystemExit(f"published {name} differs from the exact display-verification artifact")
+
+          def unique_object(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise SystemExit(f"duplicate JSON key in published metadata: {key}")
+                  result[key] = value
+              return result
+
+          def bounded_bytes(name, maximum):
+              path = payload / name
+              status = path.lstat()
+              if (
+                  not stat.S_ISREG(status.st_mode)
+                  or stat.S_ISLNK(status.st_mode)
+                  or status.st_nlink != 1
+                  or status.st_size <= 0
+                  or status.st_size > maximum
+              ):
+                  raise SystemExit(f"published file exceeds its purpose limit: {name}")
+              data = path.read_bytes()
+              if len(data) != status.st_size:
+                  raise SystemExit(f"published file changed while it was read: {name}")
+              return data
+
+          def load_json(name):
+              data = bounded_bytes(name, 16 * 1024 * 1024)
+              try:
+                  return json.loads(data.decode("utf-8"), object_pairs_hook=unique_object)
+              except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                  raise SystemExit(f"published JSON is invalid: {name}") from error
+
+          manifest = load_json("promotion-manifest.json")
+          expected_manifest_keys = {
+              "schema", "product", "architecture", "platform", "candidate_commit",
+              "stable_tag", "promotion_timestamp", "source_date_epoch",
+              "source_repository", "promotion_workflow_run",
+              "promotion_workflow_run_attempt", "candidate_workflow",
+              "display_verification_workflow", "display_proof", "container",
+              "compression", "release_assets", "website",
+          }
+          if set(manifest) != expected_manifest_keys:
+              raise SystemExit("promotion manifest top-level keyset is not exact")
+          candidate_workflow = manifest.get("candidate_workflow")
+          display_workflow = manifest.get("display_verification_workflow")
+          display_proof = manifest.get("display_proof")
+          compression = manifest.get("compression")
+          if not isinstance(candidate_workflow, dict) or set(candidate_workflow) != {
+              "run", "run_attempt", "artifact_name", "artifact_digest"
+          }:
+              raise SystemExit("promotion manifest candidate workflow keyset is not exact")
+          if not isinstance(display_workflow, dict) or set(display_workflow) != {
+              "run", "run_attempt", "artifact_name", "artifact_digest", "run_date"
+          }:
+              raise SystemExit("promotion manifest display workflow keyset is not exact")
+          expected_display_keys = {
+              "archive", "authority_generation", "authority_certificate_sha256",
+              "authority_ca_certificate_sha256", "authority_files",
+              "authority_record_sha256", "authority_schema",
+              "authority_signature_sha256", "evidence_bundle_sha256",
+              "evidence_schema", "member_count", "members", "run_date",
+              "screenshot_count", "screenshot_manifest_sha256",
+              "verification_iso_sha256",
+          }
+          if not isinstance(display_proof, dict) or set(display_proof) != expected_display_keys:
+              raise SystemExit("promotion manifest display proof keyset is not exact")
+          if not isinstance(compression, dict) or set(compression) != {
+              "format", "command", "tool_version", "determinism_replay", "part_size_bytes"
+          }:
+              raise SystemExit("promotion manifest compression keyset is not exact")
+          tool_version = compression.get("tool_version")
+          if (
+              compression.get("format") != "zstd"
+              or compression.get("command") != "zstd --ultra -19 --long=31 -T1 --no-progress"
+              or compression.get("determinism_replay") != "pass"
+              or compression.get("part_size_bytes") != 1_887_436_800
+              or tool_version
+              != "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***"
+          ):
+              raise SystemExit("promotion manifest compression contract is not exact")
+          run_date = display_workflow.get("run_date")
+          try:
+              canonical_run_date = datetime.date.fromisoformat(str(run_date)).isoformat()
+          except ValueError as error:
+              raise SystemExit("promotion display run date is not a real date") from error
+          if (
+              manifest.get("schema") != "goblins-os-stable-promotion-v1"
+              or manifest.get("product") != "Goblins OS"
+              or manifest.get("architecture") != "aarch64"
+              or manifest.get("platform") != "linux/arm64"
+              or manifest.get("candidate_commit") != candidate_commit
+              or manifest.get("stable_tag") != stable_tag
+              or manifest.get("source_repository") != "https://github.com/Joe-Simo/goblins-os"
+              or candidate_workflow.get("run")
+              != f"https://github.com/Joe-Simo/goblins-os/actions/runs/{candidate_run_id}"
+              or candidate_workflow.get("run_attempt") != candidate_run_attempt
+              or candidate_workflow.get("artifact_name")
+              != f"goblins-os-candidate-{candidate_commit}-aarch64"
+              or candidate_workflow.get("artifact_digest") != candidate_digest
+              or display_workflow.get("run")
+              != f"https://github.com/Joe-Simo/goblins-os/actions/runs/{display_run_id}"
+              or display_workflow.get("run_attempt") != display_run_attempt
+              or display_workflow.get("artifact_name")
+              != f"aarch64-local-display-verified-{candidate_commit}-{run_date}-attempt-{display_run_attempt}"
+              or display_workflow.get("artifact_digest") != display_digest
+              or canonical_run_date != run_date
+              or manifest.get("promotion_workflow_run")
+              != f"https://github.com/Joe-Simo/goblins-os/actions/runs/{promotion_run_id}"
+              or manifest.get("promotion_workflow_run_attempt") != promotion_run_attempt
+              or type(manifest.get("source_date_epoch")) is not int
+              or manifest["source_date_epoch"] <= 0
+          ):
+              raise SystemExit("promotion manifest workflow identity is not exact")
+          iso_manifest = load_json("manifest-goblins-os-aarch64.json")
+          candidate_metadata = load_json("candidate-image-ref-aarch64.json")
+          evidence_manifest = load_json("release-evidence-manifest-aarch64.json")
+          bib_bytes = bounded_bytes("manifest-anaconda-iso-aarch64.json", 16 * 1024 * 1024)
+          try:
+              json.loads(bib_bytes.decode("utf-8"), object_pairs_hook=unique_object)
+          except (UnicodeDecodeError, json.JSONDecodeError) as error:
+              raise SystemExit("public anaconda manifest is invalid JSON") from error
+
+          def canonical_rfc3339(value):
+              if not isinstance(value, str) or re.fullmatch(
+                  r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value
+              ) is None:
+                  return False
+              try:
+                  parsed = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+              except ValueError:
+                  return False
+              return parsed.strftime("%Y-%m-%dT%H:%M:%SZ") == value
+
+          iso_digest = image_ref.rsplit("@", 1)[1]
+          candidate_expected_keys = {
+              "schema", "product", "architecture", "platform", "candidate_commit",
+              "candidate_tag", "candidate_tag_authoritative", "image_digest",
+              "immutable_image_ref", "oci_revision", "iso_sha256",
+              "iso_manifest_sha256", "bib_manifest_sha256",
+              "release_evidence_manifest_sha256", "cargo_packages_sha256",
+              "rpm_command_sha256", "rpm_packages_sha256", "installer_config",
+              "source_repository", "workflow_run", "workflow_run_attempt",
+              "workflow_name", "exact_candidate_gates", "non_promotional",
+          }
+          if set(candidate_metadata) != candidate_expected_keys:
+              raise SystemExit("candidate image metadata keyset is not exact")
+          candidate_expected = {
+              "schema": "goblins-os-candidate-image-ref-v3",
+              "product": "Goblins OS",
+              "architecture": "aarch64",
+              "platform": "linux/arm64",
+              "candidate_commit": candidate_commit,
+              "candidate_tag": f"ghcr.io/joe-simo/goblins-os:candidate-{candidate_commit}-aarch64",
+              "candidate_tag_authoritative": False,
+              "image_digest": iso_digest,
+              "immutable_image_ref": image_ref,
+              "oci_revision": candidate_commit,
+              "iso_sha256": candidate_records[raw_iso_member][0],
+              "iso_manifest_sha256": sha256_file(payload / "manifest-goblins-os-aarch64.json"),
+              "bib_manifest_sha256": sha256_file(payload / "manifest-anaconda-iso-aarch64.json"),
+              "release_evidence_manifest_sha256": sha256_file(payload / "release-evidence-manifest-aarch64.json"),
+              "cargo_packages_sha256": sha256_file(payload / "cargo-lock-packages-aarch64.tsv"),
+              "rpm_command_sha256": sha256_file(payload / "rpm-packages-aarch64.command"),
+              "rpm_packages_sha256": sha256_file(payload / "rpm-packages-aarch64.tsv"),
+              "installer_config": "os/iso/config.toml",
+              "source_repository": "https://github.com/Joe-Simo/goblins-os",
+              "workflow_run": f"https://github.com/Joe-Simo/goblins-os/actions/runs/{candidate_run_id}",
+              "workflow_run_attempt": candidate_run_attempt,
+              "workflow_name": "candidate-artifacts",
+              "exact_candidate_gates": {
+                  "source_verifier": "pass",
+                  "installed_root_verifier": "pass",
+                  "services_selftest": "pass",
+              },
+              "non_promotional": True,
+          }
+          if candidate_metadata != candidate_expected:
+              raise SystemExit("candidate image metadata is not the exact selected ARM64 artifact")
+
+          iso_expected = {
+              "architecture": "aarch64",
+              "candidate_commit": candidate_commit,
+              "image": image_ref,
+              "builder_source_image": image_ref,
+              "native_host_os": "Linux",
+              "native_host_arch": "aarch64",
+              "container_engine_arch": "aarch64",
+              "installer_config": "os/iso/config.toml",
+              "installer_branding_applied": True,
+              "installer_payload_source_kind": "release-registry",
+              "installer_payload_source_local_only": False,
+              "shippable_release": True,
+          }
+          if any(iso_manifest.get(key) != value for key, value in iso_expected.items()):
+              raise SystemExit("public ISO manifest is not the exact native ARM64 candidate")
+          for field in ("installer_branding_image", "builder_image"):
+              if re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", str(iso_manifest.get(field))) is None:
+                  raise SystemExit(f"public ISO manifest has no immutable {field}")
+          if (
+              iso_manifest.get("installer_branding_ownership_helper_image")
+              != iso_manifest.get("installer_branding_image")
+              or iso_manifest.get("builder_output_ownership_helper_image")
+              != iso_manifest.get("builder_image")
+              or not canonical_rfc3339(iso_manifest.get("built_on"))
+          ):
+              raise SystemExit("public ISO manifest has invalid helper or build provenance")
+
+          bib_text = bib_bytes.decode("utf-8")
+          bootc_refs = set(
+              re.findall(
+                  r"bootc switch --mutate-in-place --transport registry ([^\"\\\s]+)",
+                  bib_text,
+              )
+          )
+          if bootc_refs != {image_ref}:
+              raise SystemExit("anaconda manifest does not contain one exact ARM64 payload image")
+
+          cargo_text = bounded_bytes(
+              "cargo-lock-packages-aarch64.tsv", 64 * 1024 * 1024
+          ).decode("utf-8")
+          cargo_lines = [line for line in cargo_text.splitlines() if line]
+          if not cargo_lines or cargo_lines[0] != "name\tversion\tsource\tchecksum":
+              raise SystemExit("Cargo evidence has an invalid header")
+          if any(len(line.split("\t")) != 4 for line in cargo_lines[1:]):
+              raise SystemExit("Cargo evidence has a malformed package row")
+          rpm_text = bounded_bytes(
+              "rpm-packages-aarch64.tsv", 256 * 1024 * 1024
+          ).decode("utf-8")
+          rpm_lines = [line for line in rpm_text.splitlines() if line]
+          if not rpm_lines or len(rpm_lines[0].split("\t")) < 3:
+              raise SystemExit("RPM evidence has an invalid header")
+          rpm_header = rpm_lines[0].split("\t")
+          if rpm_header[0] != "name" or rpm_header[2] != "arch":
+              raise SystemExit("RPM evidence does not identify package architecture")
+          for line in rpm_lines[1:]:
+              fields = line.split("\t")
+              if len(fields) < 3:
+                  raise SystemExit("RPM evidence has a malformed package row")
+              if not (fields[0] == "gpg-pubkey" and fields[2] == "(none)") and fields[2] not in (
+                  "aarch64", "noarch"
+              ):
+                  raise SystemExit(f"RPM evidence contains a non-ARM package architecture: {fields[2]}")
+          if len(rpm_lines) < 2:
+              raise SystemExit("RPM evidence contains no package rows")
+
+          evidence_expected_keys = {
+              "schema", "architecture", "candidate_commit", "image_ref",
+              "image_digest_pinned", "cargo_lock", "cargo_package_count",
+              "cargo_packages_tsv", "cargo_packages_sha256", "rpm_packages_tsv",
+              "rpm_packages_sha256", "rpm_command_file", "rpm_command_sha256",
+              "rpm_status", "asset_provenance", "third_party_notices",
+              "trademark_posture", "source_tree_manifest",
+          }
+          if set(evidence_manifest) != evidence_expected_keys:
+              raise SystemExit("release-evidence manifest keyset is not exact")
+          evidence_expected = {
+              "schema": "goblins-os-release-evidence-v5",
+              "architecture": "aarch64",
+              "candidate_commit": candidate_commit,
+              "image_ref": image_ref,
+              "image_digest_pinned": True,
+              "cargo_lock": "Cargo.lock",
+              "cargo_package_count": len(cargo_lines) - 1,
+              "cargo_packages_tsv": "cargo-lock-packages.tsv",
+              "cargo_packages_sha256": sha256_file(payload / "cargo-lock-packages-aarch64.tsv"),
+              "rpm_packages_tsv": "rpm-packages.tsv",
+              "rpm_packages_sha256": sha256_file(payload / "rpm-packages-aarch64.tsv"),
+              "rpm_command_file": "rpm-packages.command",
+              "rpm_command_sha256": sha256_file(payload / "rpm-packages-aarch64.command"),
+              "rpm_status": "generated from rpm database",
+              "asset_provenance": "os/release/asset-provenance.toml",
+              "third_party_notices": "os/release/third-party-notices.toml",
+              "trademark_posture": "os/release/trademark-posture.toml",
+              "source_tree_manifest": "os/release/source-tree-manifest.toml",
+          }
+          if evidence_manifest != evidence_expected:
+              raise SystemExit("release evidence does not bind the exact ARM64 SBOM bytes")
+
+          assets = manifest.get("release_assets")
+          if not isinstance(assets, list):
+              raise SystemExit("promotion manifest has no release asset inventory")
+          assets_by_name = {}
+          for item in assets:
+              if not isinstance(item, dict) or set(item) != {"name", "sha256", "size_bytes"}:
+                  raise SystemExit("promotion manifest has a malformed release asset")
+              name = item.get("name")
+              if not isinstance(name, str) or name in assets_by_name:
+                  raise SystemExit("promotion manifest has a duplicate release asset")
+              target = payload / name
+              if (
+                  not target.is_file()
+                  or target.is_symlink()
+                  or item.get("sha256") != sha256_file(target)
+                  or item.get("size_bytes") != target.stat().st_size
+              ):
+                  raise SystemExit(f"promotion manifest does not bind the exact {name} bytes")
+              assets_by_name[name] = item
+          part_names = sorted(name for name in assets_by_name if re.fullmatch(
+              r"goblins-os-aarch64\.iso\.zst\.part-[0-9]{2}", name
+          ))
+          if part_names != [
+              f"goblins-os-aarch64.iso.zst.part-{index:02d}" for index in range(len(part_names))
+          ] or not part_names:
+              raise SystemExit("public compressed ISO parts are not contiguous")
+          for index, name in enumerate(part_names):
+              size = assets_by_name[name]["size_bytes"]
+              if (
+                  type(size) is not int
+                  or size <= 0
+                  or size > 1_887_436_800
+                  or (index < len(part_names) - 1 and size != 1_887_436_800)
+              ):
+                  raise SystemExit("public compressed ISO parts violate the fixed splitter contract")
+          compressed_checksum = (payload / "goblins-os-aarch64.iso.zst.sha256").read_bytes()
+          compressed_match = re.fullmatch(
+              rb"([0-9a-f]{64})  goblins-os-aarch64\.iso\.zst\n", compressed_checksum
+          )
+          if compressed_match is None:
+              raise SystemExit("compressed ISO checksum is not canonical")
+          base_url = f"https://github.com/Joe-Simo/goblins-os/releases/download/{stable_tag}"
+          download_parts = [
+              {
+                  "filename": name,
+                  "url": f"{base_url}/{name}",
+                  "sizeBytes": assets_by_name[name]["size_bytes"],
+                  "sha256": assets_by_name[name]["sha256"],
+              }
+              for name in part_names
+          ]
+          promotion_timestamp = manifest.get("promotion_timestamp")
+          if not canonical_rfc3339(promotion_timestamp):
+              raise SystemExit("promotion timestamp is not canonical UTC")
+          expected_container = {
+              "immutable_image_ref": image_ref,
+              "image_digest": iso_digest,
+              "stable_tags": [
+                  "ghcr.io/joe-simo/goblins-os:aarch64",
+                  "ghcr.io/joe-simo/goblins-os:stable",
+              ],
+          }
+          expected_website = {
+              "releaseTag": stable_tag,
+              "releaseBaseUrl": base_url,
+              "releaseUrl": f"https://github.com/Joe-Simo/goblins-os/releases/tag/{stable_tag}",
+              "releaseRunUrl": f"https://github.com/Joe-Simo/goblins-os/actions/runs/{promotion_run_id}",
+              "targetCommit": candidate_commit,
+              "preparedAt": promotion_timestamp,
+              "releaseArtifact": {
+                  "arch": "aarch64",
+                  "label": "Arm / aarch64",
+                  "cpu": "UEFI aarch64 virtual machines. Bare-metal devices require model-specific proof.",
+                  "isoName": "goblins-os-aarch64.iso",
+                  "compressedName": "goblins-os-aarch64.iso.zst",
+                  "rawSizeBytes": candidate_records[raw_iso_member][1],
+                  "compressedSizeBytes": sum(assets_by_name[name]["size_bytes"] for name in part_names),
+                  "sha256": candidate_records[raw_iso_member][0],
+                  "compressedSha256": compressed_match.group(1).decode("ascii"),
+                  "isoSha256Url": f"{base_url}/goblins-os-aarch64.iso.sha256",
+                  "compressedSha256Url": f"{base_url}/goblins-os-aarch64.iso.zst.sha256",
+                  "partsSha256Url": f"{base_url}/goblins-os-aarch64.iso.zst.parts.sha256",
+                  "manifestUrl": f"{base_url}/manifest-goblins-os-aarch64.json",
+                  "evidenceUrl": f"{base_url}/release-evidence-manifest-aarch64.json",
+                  "downloadParts": download_parts,
+                  "builtOn": iso_manifest.get("built_on"),
+                  "status": "available",
+              },
+              "containerImage": {
+                  "arch": "aarch64",
+                  "image": "ghcr.io/joe-simo/goblins-os:aarch64",
+                  "platform": "linux/arm64",
+                  "immutableImage": image_ref,
+                  "sourceManifestUrl": f"{base_url}/manifest-goblins-os-aarch64.json",
+              },
+          }
+          if manifest.get("container") != expected_container or manifest.get("website") != expected_website:
+              raise SystemExit("public install and container metadata is not exactly reproducible")
+
+          final_gate = bounded_bytes(
+              "final-shipping-gate-aarch64.log", 16 * 1024 * 1024
+          ).decode("utf-8")
+          if (
+              final_gate.splitlines().count("Shipping status gate: PASS") != 1
+              or "Shipping status gate: BLOCKED" in final_gate
+              or re.search(r"(?m)^\[FAIL\]", final_gate)
+          ):
+              raise SystemExit("final shipping gate log has no unique clean PASS result")
+          signoff = bounded_bytes(
+              "signoff-notes-aarch64.md", 16 * 1024 * 1024
+          ).decode("utf-8")
+          blocks = re.split(r"(?m)(?=^## Manual Gate Run: )", signoff)
+          manual_blocks = [block for block in blocks if block.startswith("## Manual Gate Run: ")]
+          if not manual_blocks:
+              raise SystemExit("signoff notes have no manual gate block")
+          current = manual_blocks[-1]
+          next_heading = re.search(r"(?m)^## (?!Manual Gate Run: ).+$", current)
+          if next_heading is not None:
+              current = current[: next_heading.start()]
+          labels = [match.group(1) for match in re.finditer(r"(?m)^- ([^:]+):", current)]
+          if len(labels) != len(set(labels)):
+              raise SystemExit("current signoff block has duplicate authoritative fields")
+          required_signoff = {
+              "- Architecture: aarch64",
+              f"- Candidate/source commit: {candidate_commit}",
+              f"- Image digest reference: {image_ref}",
+              "- Verify result (blocked=0): pass",
+              "- Self-test result: pass",
+              "- Current project completion status: complete",
+          }
+          lines = current.splitlines()
+          if any(lines.count(line) != 1 for line in required_signoff):
+              raise SystemExit("current signoff block is not the exact completed ARM64 candidate")
+          PY
+          rm -f -- "$candidate_artifact_zip" "$display_artifact_zip"
+
+          [[ "$PINNED_AUTHORITY2_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PINNED_AUTHORITY2_CA_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          display_archive_sha="$(sha256sum "$PAYLOAD_DIR/goblins-os-aarch64-display-proof.tar.zst" | awk '{print $1}')"
+          test "$(cat "$PAYLOAD_DIR/goblins-os-aarch64-display-proof.tar.zst.sha256")" = "$display_archive_sha  goblins-os-aarch64-display-proof.tar.zst"
+          test "$(tr -d '\n' < "$PAYLOAD_DIR/display-proof-authority2.sha256")" = "$PINNED_AUTHORITY2_SHA256"
+          test "$(tr -d '\n' < "$PAYLOAD_DIR/display-proof-authority2-ca.sha256")" = "$PINNED_AUTHORITY2_CA_SHA256"
+          test "$(openssl x509 -in "$PAYLOAD_DIR/display-proof-authority2.pem" -outform DER | sha256sum | awk '{print $1}')" = "$PINNED_AUTHORITY2_SHA256"
+          test "$(openssl x509 -in "$PAYLOAD_DIR/display-proof-authority2-ca.pem" -outform DER | sha256sum | awk '{print $1}')" = "$PINNED_AUTHORITY2_CA_SHA256"
+          openssl verify \
+            -no-CApath \
+            -purpose smimesign \
+            -CAfile "$PAYLOAD_DIR/display-proof-authority2-ca.pem" \
+            "$PAYLOAD_DIR/display-proof-authority2.pem" >/dev/null
+          openssl cms -verify \
+            -binary \
+            -inform DER \
+            -in "$PAYLOAD_DIR/aarch64-local-display-attestation.json.cms" \
+            -content "$PAYLOAD_DIR/aarch64-local-display-attestation.json" \
+            -certfile "$PAYLOAD_DIR/display-proof-authority2.pem" \
+            -nointern \
+            -CAfile "$PAYLOAD_DIR/display-proof-authority2-ca.pem" \
+            -no-CApath \
+            -purpose smimesign \
+            -out /dev/null
+
+          python3 - "$PAYLOAD_DIR" "$RUNNER_TEMP" "$PINNED_ZSTD" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import shutil
+          import struct
+          import subprocess
+          import sys
+          import tempfile
+
+          payload = Path(sys.argv[1])
+          temporary_parent = Path(sys.argv[2])
+          pinned_zstd = Path(sys.argv[3])
+          with (payload / "promotion-manifest.json").open(encoding="utf-8") as handle:
+              promotion_manifest = json.load(handle)
+          with (payload / "evidence-bundle.json").open(encoding="utf-8") as handle:
+              signed_seal = json.load(handle)
+          with (payload / "aarch64-local-display-attestation.json").open(encoding="utf-8") as handle:
+              authority_record = json.load(handle)
+          release_artifact = (
+              ((promotion_manifest.get("website") or {}).get("releaseArtifact") or {})
+          )
+          selected_iso_sha256 = release_artifact.get("sha256")
+          selected_compressed_sha256 = release_artifact.get("compressedSha256")
+          selected_iso_size = release_artifact.get("rawSizeBytes")
+          if (
+              re.fullmatch(r"[0-9a-f]{64}", str(selected_iso_sha256)) is None
+              or re.fullmatch(r"[0-9a-f]{64}", str(selected_compressed_sha256)) is None
+              or type(selected_iso_size) is not int
+              or selected_iso_size <= 0
+              or selected_iso_size > 16 * 1024 * 1024 * 1024
+              or signed_seal.get("verification_iso_sha256") != selected_iso_sha256
+              or authority_record.get("verification_iso_sha256") != selected_iso_sha256
+          ):
+              raise SystemExit("selected ISO hashes do not match the signed display identity")
+          part_pattern = re.compile(r"goblins-os-aarch64\.iso\.zst\.part-([0-9]{2})\Z")
+          parts = sorted(
+              path for path in payload.iterdir() if part_pattern.fullmatch(path.name)
+          )
+          if not parts or len(parts) > 100:
+              raise SystemExit("stable payload has no bounded compressed ISO part set")
+          expected_names = [
+              f"goblins-os-aarch64.iso.zst.part-{index:02d}"
+              for index in range(len(parts))
+          ]
+          if [path.name for path in parts] != expected_names:
+              raise SystemExit("stable payload ISO parts are not contiguous")
+
+          def sha256_path(path: Path) -> str:
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  while chunk := handle.read(1024 * 1024):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          def files_equal(left: Path, right: Path) -> bool:
+              if left.stat().st_size != right.stat().st_size:
+                  return False
+              with left.open("rb") as left_stream, right.open("rb") as right_stream:
+                  while True:
+                      left_chunk = left_stream.read(1024 * 1024)
+                      right_chunk = right_stream.read(1024 * 1024)
+                      if left_chunk != right_chunk:
+                          return False
+                      if not left_chunk:
+                          return True
+
+          def checksum(path: Path, expected_name: str) -> str:
+              data = path.read_bytes()
+              match = re.fullmatch(
+                  rb"([0-9a-f]{64})  " + re.escape(expected_name.encode("ascii")) + rb"\n",
+                  data,
+              )
+              if match is None:
+                  raise SystemExit(f"{path.name} is not one canonical checksum line")
+              return match.group(1).decode("ascii")
+
+          expected_part_lines = b"".join(
+              f"{sha256_path(part)}  {part.name}\n".encode("ascii") for part in parts
+          )
+          if (payload / "goblins-os-aarch64.iso.zst.parts.sha256").read_bytes() != expected_part_lines:
+              raise SystemExit("stable payload ISO part checksums do not match the exact parts")
+
+          def archive_paths(archive: Path) -> list[str]:
+              completed = subprocess.run(
+                  ["7z", "l", "-slt", "--", str(archive)],
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  check=False,
+                  timeout=120,
+              )
+              if completed.returncode != 0:
+                  raise SystemExit(
+                      f"7z could not inspect {archive.name}: "
+                      + completed.stderr[:1000].decode("utf-8", "replace")
+                  )
+              if len(completed.stdout) > 16 * 1024 * 1024:
+                  raise SystemExit(f"7z listing for {archive.name} is unexpectedly large")
+              text = completed.stdout.decode("utf-8", "strict")
+              result: list[str] = []
+              for line in text.splitlines():
+                  if not line.startswith("Path = "):
+                      continue
+                  value = line.removeprefix("Path = ")
+                  if value == str(archive):
+                      continue
+                  pure = PurePosixPath(value)
+                  if (
+                      not value
+                      or pure.is_absolute()
+                      or "\\" in value
+                      or any(part in ("", ".", "..") for part in pure.parts)
+                      or any(ord(character) < 32 or ord(character) == 127 for character in value)
+                  ):
+                      raise SystemExit(f"unsafe archive member in {archive.name}")
+                  result.append(value)
+              if len(result) != len(set(result)):
+                  raise SystemExit(f"duplicate archive member in {archive.name}")
+              return result
+
+          def extract_one(archive: Path, member: str, destination: Path) -> Path:
+              destination.mkdir(mode=0o700)
+              completed = subprocess.run(
+                  ["7z", "e", "-bd", "-y", f"-o{destination}", "--", str(archive), member],
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  check=False,
+                  timeout=120,
+              )
+              if completed.returncode != 0:
+                  raise SystemExit(
+                      f"7z could not extract {member}: "
+                      + completed.stderr[:1000].decode("utf-8", "replace")
+                  )
+              files = list(destination.iterdir())
+              if len(files) != 1 or files[0].is_symlink() or not files[0].is_file():
+                  raise SystemExit(f"7z did not produce one regular file for {member}")
+              return files[0]
+
+          def verify_arm64_efi(path: Path, member: str) -> None:
+              data = path.read_bytes()
+              if len(data) < 0x100 or data[:2] != b"MZ":
+                  raise SystemExit(f"{member} is not a PE executable")
+              pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+              if pe_offset < 0x40 or pe_offset + 94 > len(data):
+                  raise SystemExit(f"{member} has an invalid PE header offset")
+              if data[pe_offset : pe_offset + 4] != b"PE\0\0":
+                  raise SystemExit(f"{member} has no PE signature")
+              machine = struct.unpack_from("<H", data, pe_offset + 4)[0]
+              optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+              optional_offset = pe_offset + 24
+              if optional_size < 70 or optional_offset + optional_size > len(data):
+                  raise SystemExit(f"{member} has an invalid PE optional header")
+              magic = struct.unpack_from("<H", data, optional_offset)[0]
+              subsystem = struct.unpack_from("<H", data, optional_offset + 68)[0]
+              if machine != 0xAA64 or magic != 0x20B or subsystem != 10:
+                  raise SystemExit(f"{member} is not an ARM64 EFI application")
+
+          with tempfile.TemporaryDirectory(
+              prefix="goblins-stable-arm64-iso-", dir=temporary_parent
+          ) as temporary_name:
+              temporary = Path(temporary_name)
+              compressed_iso = temporary / "goblins-os-aarch64.iso.zst"
+              with compressed_iso.open("xb") as output:
+                  for part in parts:
+                      with part.open("rb") as source:
+                          shutil.copyfileobj(source, output, length=1024 * 1024)
+              compressed_digest = sha256_path(compressed_iso)
+              if compressed_digest != checksum(
+                  payload / "goblins-os-aarch64.iso.zst.sha256",
+                  "goblins-os-aarch64.iso.zst",
+              ) or compressed_digest != selected_compressed_sha256:
+                  raise SystemExit("reconstructed compressed ISO checksum does not match")
+              iso = temporary / "goblins-os-aarch64.iso"
+              stderr_file = tempfile.TemporaryFile()
+              process = subprocess.Popen(
+                  [
+                      "timeout",
+                      "1800",
+                      str(pinned_zstd),
+                      "--decompress",
+                      "--stdout",
+                      "--long=31",
+                      "--no-progress",
+                      str(compressed_iso),
+                  ],
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=stderr_file,
+              )
+              if process.stdout is None:
+                  raise SystemExit("zstd did not expose the ISO reconstruction stream")
+              written = 0
+              with iso.open("xb") as output:
+                  try:
+                      while chunk := process.stdout.read(1024 * 1024):
+                          written += len(chunk)
+                          if written > selected_iso_size:
+                              raise SystemExit("stable ISO reconstruction exceeded its signed size")
+                          output.write(chunk)
+                      returncode = process.wait(timeout=10)
+                  except BaseException:
+                      process.kill()
+                      process.wait()
+                      raise
+                  finally:
+                      process.stdout.close()
+              if returncode != 0:
+                  stderr_file.seek(0)
+                  raise SystemExit(
+                      "zstd could not reconstruct the stable ISO: "
+                      + stderr_file.read(1000).decode("utf-8", "replace")
+                  )
+              stderr_file.close()
+              if written != selected_iso_size:
+                  raise SystemExit("stable ISO reconstruction size differs from the candidate artifact")
+              iso_digest = sha256_path(iso)
+              if iso_digest != checksum(
+                  payload / "goblins-os-aarch64.iso.sha256",
+                  "goblins-os-aarch64.iso",
+              ) or iso_digest != selected_iso_sha256:
+                  raise SystemExit("reconstructed ISO checksum does not match")
+
+              canonical_compressed_iso = temporary / "canonical-goblins-os-aarch64.iso.zst"
+              completed = subprocess.run(
+                  [
+                      str(pinned_zstd),
+                      "--ultra",
+                      "-19",
+                      "--long=31",
+                      "-T1",
+                      "--no-progress",
+                      "--force",
+                      "-o",
+                      str(canonical_compressed_iso),
+                      str(iso),
+                  ],
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  check=False,
+                  timeout=1800,
+              )
+              if completed.returncode != 0:
+                  raise SystemExit(
+                      "pinned zstd could not rebuild the canonical stable ISO: "
+                      + completed.stderr[:1000].decode("utf-8", "replace")
+                  )
+              if not files_equal(canonical_compressed_iso, compressed_iso):
+                  raise SystemExit(
+                      "stable ISO compressed bytes are not the exact canonical zstd encoding"
+                  )
+
+              iso_members = archive_paths(iso)
+              if any(PurePosixPath(member).name.casefold() == "bootx64.efi" for member in iso_members):
+                  raise SystemExit("stable ISO contains an x86-64 EFI bootloader")
+              efiboot_members = [
+                  member for member in iso_members if member.casefold() == "images/efiboot.img"
+              ]
+              if len(efiboot_members) != 1:
+                  raise SystemExit("stable ISO does not contain one /images/efiboot.img")
+              efiboot = extract_one(
+                  iso, efiboot_members[0], temporary / "efiboot-extract"
+              )
+              fat_members = archive_paths(efiboot)
+              efi_members = [
+                  member for member in fat_members if PurePosixPath(member).suffix.casefold() == ".efi"
+              ]
+              if not efi_members:
+                  raise SystemExit("stable EFI boot image contains no EFI applications")
+              if any(PurePosixPath(member).name.casefold() == "bootx64.efi" for member in efi_members):
+                  raise SystemExit("stable EFI boot image contains BOOTX64.EFI")
+              if sum(
+                  PurePosixPath(member).name.casefold() == "bootaa64.efi"
+                  for member in efi_members
+              ) != 1:
+                  raise SystemExit("stable EFI boot image must contain one BOOTAA64.EFI")
+              for index, member in enumerate(efi_members):
+                  extracted = extract_one(
+                      efiboot, member, temporary / f"efi-{index:03d}"
+                  )
+                  verify_arm64_efi(extracted, member)
+          PY
+
+          install -d -m 0700 "$GH_CONFIG_DIR" "$DOCKER_CONFIG"
+          printf '%s' "$publication_gh_token" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cleanup_credentials() {
+            docker logout ghcr.io >/dev/null 2>&1 || true
+            rm -f -- "$DOCKER_CONFIG/config.json" "$GH_CONFIG_DIR/hosts.yml"
+            unset publication_gh_token || true
+          }
+          created_release=0
+          transaction_draft_release=0
+          release_published=0
+          aliases_mutated=0
+          release_id=""
+          release_marker=""
+          previous_aarch64_ref=""
+          previous_stable_ref=""
+          publication_exit() {
+            status=$?
+            trap - EXIT HUP INT TERM
+            if [ "$status" -ne 0 ]; then
+              set +e
+              if [ "$aliases_mutated" -eq 1 ]; then
+                current_aarch64_ref="$(snapshot_alias ghcr.io/joe-simo/goblins-os:aarch64 2>/dev/null || true)"
+                if [ "$current_aarch64_ref" = "ghcr.io/joe-simo/goblins-os@$image_digest" ]; then
+                  docker buildx imagetools create \
+                    --tag ghcr.io/joe-simo/goblins-os:aarch64 \
+                    "$previous_aarch64_ref" >/dev/null \
+                    || echo "failed to restore the prior :aarch64 alias" >&2
+                else
+                  echo "refusing to overwrite a concurrently changed :aarch64 alias" >&2
+                fi
+                if [ -n "$previous_stable_ref" ]; then
+                  current_stable_ref="$(snapshot_alias ghcr.io/joe-simo/goblins-os:stable 2>/dev/null || true)"
+                  if [ "$current_stable_ref" = "ghcr.io/joe-simo/goblins-os@$image_digest" ]; then
+                    docker buildx imagetools create \
+                      --tag ghcr.io/joe-simo/goblins-os:stable \
+                      "$previous_stable_ref" >/dev/null \
+                      || echo "failed to restore the prior :stable alias" >&2
+                  else
+                    echo "refusing to overwrite a concurrently changed :stable alias" >&2
+                  fi
+                fi
+              fi
+              if [ "$transaction_draft_release" -eq 1 ] && [ -n "$release_id" ] && [ -n "$release_marker" ]; then
+                current_release="$(mktemp "$RUNNER_TEMP/goblins-stable-rollback-release.XXXXXX")"
+                if gh_write api "repos/$repository/releases/$release_id" > "$current_release" \
+                  && [ "$(jq -er '.tag_name' "$current_release")" = "$STABLE_TAG" ] \
+                  && [ "$(jq -er '.name' "$current_release")" = "Goblins OS $STABLE_TAG" ] \
+                  && [ "$(jq -er '.body' "$current_release")" = "$(release_notes_body)" ]; then
+                  if [ "$release_published" -eq 1 ]; then
+                    gh_write api --method PATCH "repos/$repository/releases/$release_id" \
+                      -F draft=true -F prerelease=false >/dev/null \
+                      || echo "failed to return the release to draft during rollback" >&2
+                  fi
+                  if [ "$created_release" -eq 1 ] \
+                    && [ "$(gh_write api "repos/$repository/releases/$release_id" --jq '.draft')" = true ]; then
+                    gh_write api --method DELETE "repos/$repository/releases/$release_id" >/dev/null \
+                      || echo "failed to delete the transaction draft" >&2
+                    if [ "$(gh_write api "repos/$repository/git/ref/tags/$STABLE_TAG" --jq '.object.sha' 2>/dev/null)" = "$CANDIDATE_COMMIT" ]; then
+                      gh_write api --method DELETE "repos/$repository/git/refs/tags/$STABLE_TAG" >/dev/null \
+                        || echo "failed to delete the transaction tag" >&2
+                    fi
+                  fi
+                else
+                  echo "refusing rollback because the release identity changed" >&2
+                fi
+                rm -f -- "$current_release"
+              fi
+              set -e
+            fi
+            cleanup_credentials
+            exit "$status"
+          }
+          trap publication_exit EXIT
+          trap 'exit 130' HUP INT TERM
+
+          assert_registry_arm_only() {
+            local ref="$1"
+            local expected_digest="$2"
+            local raw formatted arm_child_digest child_ref child_raw child_config
+            raw="$(mktemp "$RUNNER_TEMP/goblins-arm-manifest.XXXXXX")"
+            formatted="$(mktemp "$RUNNER_TEMP/goblins-arm-inspect.XXXXXX")"
+            docker buildx imagetools inspect --raw "$ref" > "$raw"
+            docker buildx imagetools inspect "$ref" --format '{{json .}}' > "$formatted"
+            test "sha256:$(sha256sum "$raw" | awk '{print $1}')" = "$expected_digest"
+            arm_child_digest="$(python3 - "$raw" "$formatted" "$expected_digest" <<'PY'
+          import json
+          import re
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              manifest = json.load(handle)
+          with open(sys.argv[2], encoding="utf-8") as handle:
+              inspection = json.load(handle)
+          expected_digest = sys.argv[3]
+          if (inspection.get("manifest") or {}).get("digest") != expected_digest:
+              raise SystemExit("registry inspection resolved a different immutable digest")
+          annotations = manifest.get("annotations") if isinstance(manifest, dict) else None
+          if manifest.get("artifactType") is not None or manifest.get("subject") is not None:
+              raise SystemExit("registry object is an artifact, not a runnable image")
+          if isinstance(annotations, dict) and any(
+              key in {"vnd.docker.reference.type", "vnd.docker.reference.digest"}
+              or value == "attestation-manifest"
+              for key, value in annotations.items()
+          ):
+              raise SystemExit("registry object carries attestation-reference annotations")
+          descriptors = manifest.get("manifests")
+          if descriptors is None:
+              if manifest.get("mediaType") not in (
+                  "application/vnd.oci.image.manifest.v1+json",
+                  "application/vnd.docker.distribution.manifest.v2+json",
+              ):
+                  raise SystemExit("registry returned an unsupported single-image manifest")
+              image = inspection.get("image") or {}
+              if image.get("architecture") != "arm64" or image.get("os") != "linux":
+                  raise SystemExit("registry single-image manifest is not linux/arm64")
+              print(expected_digest)
+              raise SystemExit(0)
+          if not isinstance(descriptors, list) or not descriptors:
+              raise SystemExit("registry index has no manifests")
+          if manifest.get("mediaType") not in (
+              "application/vnd.oci.image.index.v1+json",
+              "application/vnd.docker.distribution.manifest.list.v2+json",
+          ):
+              raise SystemExit("registry returned an unsupported image index")
+          arm_digests = set()
+          image_manifest_types = {
+              "application/vnd.oci.image.manifest.v1+json",
+              "application/vnd.docker.distribution.manifest.v2+json",
+          }
+          for descriptor in descriptors:
+              if not isinstance(descriptor, dict):
+                  raise SystemExit("registry index contains a malformed descriptor")
+              digest = descriptor.get("digest")
+              if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+                  raise SystemExit("registry index contains an invalid descriptor digest")
+              if descriptor.get("mediaType") not in image_manifest_types:
+                  raise SystemExit("registry index contains a non-image descriptor")
+              descriptor_annotations = descriptor.get("annotations")
+              if descriptor.get("artifactType") is not None or (
+                  isinstance(descriptor_annotations, dict)
+                  and any(
+                      key in {"vnd.docker.reference.type", "vnd.docker.reference.digest"}
+                      or value == "attestation-manifest"
+                      for key, value in descriptor_annotations.items()
+                  )
+              ):
+                  raise SystemExit("registry index contains an artifact descriptor")
+              platform = descriptor.get("platform") or {}
+              architecture = platform.get("architecture")
+              if architecture == "arm64":
+                  if platform.get("os") != "linux":
+                      raise SystemExit("registry arm64 descriptor is not linux/arm64")
+                  arm_digests.add(digest)
+                  continue
+              raise SystemExit(f"registry index contains non-ARM architecture: {architecture!r}")
+          if len(arm_digests) != 1:
+              raise SystemExit("registry index must contain exactly one linux/arm64 image")
+          print(next(iter(arm_digests)))
+          PY
+            )"
+            [[ "$arm_child_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            child_ref="${ref%@*}@$arm_child_digest"
+            child_raw="$(mktemp "$RUNNER_TEMP/goblins-arm-child-manifest.XXXXXX")"
+            child_config="$(mktemp "$RUNNER_TEMP/goblins-arm-child-config.XXXXXX")"
+            docker buildx imagetools inspect --raw "$child_ref" > "$child_raw"
+            test "sha256:$(sha256sum "$child_raw" | awk '{print $1}')" = "$arm_child_digest"
+            docker buildx imagetools inspect "$child_ref" --format '{{json .Image}}' > "$child_config"
+            python3 - "$child_raw" "$child_config" "$CANDIDATE_COMMIT" <<'PY'
+          import json
+          import re
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              manifest = json.load(handle)
+          with open(sys.argv[2], encoding="utf-8") as handle:
+              image = json.load(handle)
+          candidate_commit = sys.argv[3]
+          image_manifest_types = {
+              "application/vnd.oci.image.manifest.v1+json",
+              "application/vnd.docker.distribution.manifest.v2+json",
+          }
+          image_config_types = {
+              "application/vnd.oci.image.config.v1+json",
+              "application/vnd.docker.container.image.v1+json",
+          }
+          runnable_layer_types = {
+              "application/vnd.oci.image.layer.v1.tar",
+              "application/vnd.oci.image.layer.v1.tar+gzip",
+              "application/vnd.oci.image.layer.v1.tar+zstd",
+              "application/vnd.oci.image.layer.nondistributable.v1.tar",
+              "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip",
+              "application/vnd.oci.image.layer.nondistributable.v1.tar+zstd",
+              "application/vnd.docker.image.rootfs.diff.tar",
+              "application/vnd.docker.image.rootfs.diff.tar.gzip",
+              "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip",
+          }
+          config = manifest.get("config") if isinstance(manifest, dict) else None
+          layers = manifest.get("layers") if isinstance(manifest, dict) else None
+          annotations = manifest.get("annotations") if isinstance(manifest, dict) else None
+          if (
+              manifest.get("schemaVersion") != 2
+              or manifest.get("mediaType") not in image_manifest_types
+              or "manifests" in manifest
+              or manifest.get("artifactType") is not None
+              or manifest.get("subject") is not None
+              or set(manifest) - {"schemaVersion", "mediaType", "config", "layers", "annotations"}
+              or (
+                  isinstance(annotations, dict)
+                  and any(
+                      key in {"vnd.docker.reference.type", "vnd.docker.reference.digest"}
+                      or value == "attestation-manifest"
+                      for key, value in annotations.items()
+                  )
+              )
+              or not isinstance(config, dict)
+              or config.get("mediaType") not in image_config_types
+              or re.fullmatch(r"sha256:[0-9a-f]{64}", str(config.get("digest"))) is None
+              or type(config.get("size")) is not int
+              or config["size"] <= 0
+              or not isinstance(layers, list)
+              or not layers
+          ):
+              raise SystemExit("selected OCI child is not one runnable image manifest")
+          for layer in layers:
+              if (
+                  not isinstance(layer, dict)
+                  or layer.get("mediaType") not in runnable_layer_types
+                  or re.fullmatch(r"sha256:[0-9a-f]{64}", str(layer.get("digest"))) is None
+                  or type(layer.get("size")) is not int
+                  or layer["size"] <= 0
+              ):
+                  raise SystemExit("selected OCI child has a malformed image layer")
+          rootfs = image.get("rootfs") if isinstance(image, dict) else None
+          diff_ids = rootfs.get("diff_ids") if isinstance(rootfs, dict) else None
+          image_config = image.get("config") if isinstance(image, dict) else None
+          labels = image_config.get("Labels") if isinstance(image_config, dict) else None
+          if image.get("architecture") != "arm64" or image.get("os") != "linux":
+              raise SystemExit("selected OCI child config is not linux/arm64")
+          if (
+              not isinstance(diff_ids, list)
+              or len(diff_ids) != len(layers)
+              or any(
+                  re.fullmatch(r"sha256:[0-9a-f]{64}", str(diff_id)) is None
+                  for diff_id in diff_ids
+              )
+          ):
+              raise SystemExit("selected OCI child config has no exact runnable rootfs")
+          if not isinstance(labels, dict):
+              raise SystemExit("selected OCI child config has no image labels")
+          if labels.get("org.opencontainers.image.revision") != candidate_commit:
+              raise SystemExit("selected OCI child revision label does not match candidate")
+          if labels.get("org.goblins-os.supported-architectures") != "aarch64":
+              raise SystemExit("selected OCI child does not declare the ARM-only contract")
+          PY
+            rm -f -- "$raw" "$formatted" "$child_raw" "$child_config"
+          }
+
+          verify_draft_asset_subset() {
+            local release_json="$1"
+            local name path size digest id remote_size remote_digest remote_sha
+            jq -e '
+              (.assets | type == "array")
+              and ([.assets[].name] | length == (unique | length))
+            ' "$release_json" >/dev/null
+            while IFS= read -r name; do
+              [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]]
+              path="$PAYLOAD_DIR/$name"
+              test -f "$path"
+              test ! -L "$path"
+              size="$(wc -c < "$path" | tr -d ' ')"
+              digest="$(sha256sum "$path" | awk '{print $1}')"
+              id="$(jq -er --arg name "$name" '.assets[] | select(.name == $name) | .id' "$release_json")"
+              remote_size="$(jq -er --arg name "$name" '.assets[] | select(.name == $name) | .size' "$release_json")"
+              remote_digest="$(jq -er --arg name "$name" '.assets[] | select(.name == $name) | .digest' "$release_json")"
+              test "$remote_size" = "$size"
+              test "$remote_digest" = "sha256:$digest"
+              remote_sha="$(gh_write api -H 'Accept: application/octet-stream' \
+                "repos/$repository/releases/assets/$id" | sha256sum | awk '{print $1}')"
+              test "$remote_sha" = "$digest"
+            done < <(jq -er '.assets[].name' "$release_json")
+          }
+
+          verify_release_assets() {
+            local release_json="$1"
+            local expected_count actual_count path name size digest id remote_size remote_digest remote_sha
+            test "$(gh_write api "repos/$repository/git/ref/tags/$STABLE_TAG" --jq '.object.type')" = commit
+            test "$(gh_write api "repos/$repository/git/ref/tags/$STABLE_TAG" --jq '.object.sha')" = "$CANDIDATE_COMMIT"
+            expected_count="$(find "$PAYLOAD_DIR" -mindepth 1 -maxdepth 1 -type f -print | wc -l)"
+            actual_count="$(jq -er '.assets | length' "$release_json")"
+            test "$actual_count" -eq "$expected_count"
+            while IFS= read -r path; do
+              name="$(basename "$path")"
+              size="$(wc -c < "$path" | tr -d ' ')"
+              digest="$(sha256sum "$path" | awk '{print $1}')"
+              id="$(jq -er --arg name "$name" '[.assets[] | select(.name == $name)] | if length == 1 then .[0].id else error("remote asset identity mismatch") end' "$release_json")"
+              remote_size="$(jq -er --arg name "$name" '.assets[] | select(.name == $name) | .size' "$release_json")"
+              remote_digest="$(jq -er --arg name "$name" '.assets[] | select(.name == $name) | .digest' "$release_json")"
+              test "$remote_size" = "$size"
+              test "$remote_digest" = "sha256:$digest"
+              remote_sha="$(gh_write api -H 'Accept: application/octet-stream' \
+                "repos/$repository/releases/assets/$id" | sha256sum | awk '{print $1}')"
+              test "$remote_sha" = "$digest"
+            done < <(find "$PAYLOAD_DIR" -mindepth 1 -maxdepth 1 -type f -print | sort)
+            test "$(jq -er '.tag_name' "$release_json")" = "$STABLE_TAG"
+          }
+
+          assert_registry_arm_only "$image_ref" "$image_digest"
+          snapshot_alias() {
+            local alias="$1"
+            local repository_ref tag token_json token headers body status digests digest actual
+            repository_ref="${alias%:*}"
+            tag="${alias##*:}"
+            test "$repository_ref" = "ghcr.io/joe-simo/goblins-os"
+            [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]
+            token_json="$(mktemp "$RUNNER_TEMP/goblins-stable-registry-token.XXXXXX")"
+            headers="$(mktemp "$RUNNER_TEMP/goblins-stable-registry-headers.XXXXXX")"
+            body="$(mktemp "$RUNNER_TEMP/goblins-stable-registry-body.XXXXXX")"
+            if ! curl --fail --silent --show-error --get \
+              --data-urlencode 'service=ghcr.io' \
+              --data-urlencode 'scope=repository:joe-simo/goblins-os:pull' \
+              https://ghcr.io/token > "$token_json"; then
+              rm -f -- "$token_json" "$headers" "$body"
+              return 1
+            fi
+            token="$(jq -er '.token | select(type == "string" and length > 0)' "$token_json")"
+            status="$(curl --silent --show-error \
+              --request GET \
+              --header "Authorization: Bearer $token" \
+              --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              --dump-header "$headers" \
+              --output "$body" \
+              --write-out '%{http_code}' \
+              "https://ghcr.io/v2/joe-simo/goblins-os/manifests/$tag")" || {
+                rm -f -- "$token_json" "$headers" "$body"
+                return 1
+              }
+            case "$status" in
+              200)
+                digests="$(awk 'tolower($1) == "docker-content-digest:" { gsub("\\r", "", $2); print $2 }' "$headers" | sort -u)"
+                test "$(printf '%s\n' "$digests" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 || {
+                  rm -f -- "$token_json" "$headers" "$body"
+                  return 1
+                }
+                digest="$digests"
+                [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+                  rm -f -- "$token_json" "$headers" "$body"
+                  return 1
+                }
+                actual="sha256:$(sha256sum "$body" | awk '{print $1}')"
+                test "$actual" = "$digest" || {
+                  rm -f -- "$token_json" "$headers" "$body"
+                  return 1
+                }
+                rm -f -- "$token_json" "$headers" "$body"
+                printf '%s@%s\n' "$repository_ref" "$digest"
+                ;;
+              404)
+                if ! jq -e '
+                  (.errors | type == "array" and length >= 1)
+                  and all(.errors[]; .code == "MANIFEST_UNKNOWN")
+                ' "$body" >/dev/null; then
+                  rm -f -- "$token_json" "$headers" "$body"
+                  return 1
+                fi
+                rm -f -- "$token_json" "$headers" "$body"
+                return 4
+                ;;
+              *)
+                rm -f -- "$token_json" "$headers" "$body"
+                return 1
+                ;;
+            esac
+          }
+          previous_aarch64_ref="$(snapshot_alias ghcr.io/joe-simo/goblins-os:aarch64)"
+          stable_alias_existed=0
+          if previous_stable_ref="$(snapshot_alias ghcr.io/joe-simo/goblins-os:stable 2>/dev/null)"; then
+            stable_alias_existed=1
+          else
+            stable_probe_status=$?
+            test "$stable_probe_status" -eq 4
+            previous_stable_ref=""
+          fi
+
+          notes="$(mktemp "$RUNNER_TEMP/goblins-stable-notes.XXXXXX")"
+          release_notes_body > "$notes"
+          existing_tag=0
+          existing_release=0
+          existing_draft_release=0
+          resume_published_release=0
+          if gh_write api "repos/$repository/git/ref/tags/$STABLE_TAG" >/dev/null 2>&1; then
+            existing_tag=1
+          fi
+          if gh_write api "repos/$repository/releases/tags/$STABLE_TAG" >/dev/null 2>&1; then
+            existing_release=1
+          fi
+          if [ "$existing_tag" -ne "$existing_release" ]; then
+            echo "Stable tag/release state is incomplete and cannot be resumed safely." >&2
+            exit 1
+          fi
+          if [ "$existing_release" -eq 1 ]; then
+            recovery_release="$(mktemp "$RUNNER_TEMP/goblins-stable-recovery.XXXXXX")"
+            gh_write api "repos/$repository/releases/tags/$STABLE_TAG" > "$recovery_release"
+            test "$(gh_write api "repos/$repository/git/ref/tags/$STABLE_TAG" --jq '.object.type')" = commit
+            test "$(gh_write api "repos/$repository/git/ref/tags/$STABLE_TAG" --jq '.object.sha')" = "$CANDIDATE_COMMIT"
+            test "$(jq -er '.prerelease' "$recovery_release")" = false
+            test "$(jq -er '.tag_name' "$recovery_release")" = "$STABLE_TAG"
+            test "$(jq -er '.name' "$recovery_release")" = "Goblins OS $STABLE_TAG"
+            test "$(jq -er '.body' "$recovery_release")" = "$(cat "$notes")"
+            recovery_release_id="$(jq -er '.id' "$recovery_release")"
+            if [ "$(jq -er '.draft' "$recovery_release")" = true ]; then
+              verify_draft_asset_subset "$recovery_release"
+              existing_draft_release=1
+              transaction_draft_release=1
+              release_id="$recovery_release_id"
+            else
+              published_resume_is_current
+              resume_published_release=1
+              release_id="$recovery_release_id"
+              release_published=1
+            fi
+            rm -f -- "$recovery_release"
+          fi
+          assert_main_head_or_published_resume
+
+          if [ "$resume_published_release" -eq 0 ]; then
+            if [ "$existing_draft_release" -eq 0 ]; then
+              create_release_json="$(mktemp "$RUNNER_TEMP/goblins-stable-create.XXXXXX")"
+              gh_write api --method POST "repos/$repository/releases" \
+                -f "tag_name=$STABLE_TAG" \
+                -f "target_commitish=$CANDIDATE_COMMIT" \
+                -f "name=Goblins OS $STABLE_TAG" \
+                -f "body=$(cat "$notes")" \
+                -F draft=true \
+                -F prerelease=false > "$create_release_json"
+              release_id="$(jq -er '.id' "$create_release_json")"
+              test "$(jq -er '.draft' "$create_release_json")" = true
+              test "$(jq -er '.tag_name' "$create_release_json")" = "$STABLE_TAG"
+              created_release=1
+              transaction_draft_release=1
+              rm -f -- "$create_release_json"
+            fi
+
+            ref_json="$(mktemp "$RUNNER_TEMP/goblins-stable-ref.XXXXXX")"
+            gh_write api "repos/$repository/git/ref/tags/$STABLE_TAG" > "$ref_json"
+            test "$(jq -er '.object.type' "$ref_json")" = commit
+            test "$(jq -er '.object.sha' "$ref_json")" = "$CANDIDATE_COMMIT"
+            rm -f -- "$ref_json"
+
+            draft_state="$(mktemp "$RUNNER_TEMP/goblins-stable-draft-state.XXXXXX")"
+            gh_write api "repos/$repository/releases/$release_id" > "$draft_state"
+            test "$(jq -er '.draft' "$draft_state")" = true
+            test "$(jq -er '.prerelease' "$draft_state")" = false
+            test "$(jq -er '.tag_name' "$draft_state")" = "$STABLE_TAG"
+            test "$(jq -er '.name' "$draft_state")" = "Goblins OS $STABLE_TAG"
+            test "$(jq -er '.body' "$draft_state")" = "$(cat "$notes")"
+            verify_draft_asset_subset "$draft_state"
+            while IFS= read -r path; do
+              name="$(basename "$path")"
+              if [ "$(jq -er --arg name "$name" '[.assets[] | select(.name == $name)] | length' "$draft_state")" -eq 0 ]; then
+                gh_write release upload "$STABLE_TAG" "$path" --repo "$repository"
+              fi
+            done < <(find "$PAYLOAD_DIR" -mindepth 1 -maxdepth 1 -type f -print | sort)
+            rm -f -- "$draft_state"
+          fi
+          release_json="$(mktemp "$RUNNER_TEMP/goblins-stable-release.XXXXXX")"
+          gh_write api "repos/$repository/releases/tags/$STABLE_TAG" > "$release_json"
+          test "$(jq -er '.prerelease' "$release_json")" = false
+          test "$(jq -er '.name' "$release_json")" = "Goblins OS $STABLE_TAG"
+          test "$(jq -er '.body' "$release_json")" = "$(cat "$notes")"
+          if [ "$resume_published_release" -eq 0 ]; then
+            test "$(jq -er '.draft' "$release_json")" = true
+          else
+            test "$(jq -er '.draft' "$release_json")" = false
+          fi
+          verify_release_assets "$release_json"
+
+          assert_main_head_or_published_resume
+          current_aarch64_ref="$(snapshot_alias ghcr.io/joe-simo/goblins-os:aarch64)"
+          test "$current_aarch64_ref" = "$previous_aarch64_ref" || {
+            echo "The :aarch64 alias changed after the publication snapshot; refusing to overwrite it." >&2
+            exit 1
+          }
+          if [ "$stable_alias_existed" -eq 1 ]; then
+            current_stable_ref="$(snapshot_alias ghcr.io/joe-simo/goblins-os:stable)"
+            test "$current_stable_ref" = "$previous_stable_ref" || {
+              echo "The :stable alias changed after the publication snapshot; refusing to overwrite it." >&2
+              exit 1
+            }
+          else
+            if snapshot_alias ghcr.io/joe-simo/goblins-os:stable >/dev/null 2>&1; then
+              echo "The :stable alias appeared after the publication snapshot; refusing to continue." >&2
+              exit 1
+            else
+              stable_probe_status=$?
+              test "$stable_probe_status" -eq 4
+            fi
+          fi
+          aliases_mutated=1
+          docker buildx imagetools create \
+            --tag ghcr.io/joe-simo/goblins-os:aarch64 \
+            "$image_ref"
+          if [ "$stable_alias_existed" -eq 1 ]; then
+            docker buildx imagetools create \
+              --tag ghcr.io/joe-simo/goblins-os:stable \
+              "$image_ref"
+          fi
+          assert_registry_arm_only ghcr.io/joe-simo/goblins-os:aarch64 "$image_digest"
+          if [ "$stable_alias_existed" -eq 1 ]; then
+            assert_registry_arm_only ghcr.io/joe-simo/goblins-os:stable "$image_digest"
+          fi
+
+          test "$(jq -er '.id' "$release_json")" = "$release_id"
+          assert_main_head_or_published_resume
+          if [ "$resume_published_release" -eq 0 ]; then
+            gh_write api --method PATCH "repos/$repository/releases/$release_id" \
+              -F draft=false \
+              -F prerelease=false \
+              -f make_latest=true >/dev/null
+            release_published=1
+          else
+            # The live recovery guard already proved this exact release is
+            # non-draft and latest. Do not rewrite latest state on a resume.
+            published_resume_is_current
+          fi
+          gh_write api "repos/$repository/releases/tags/$STABLE_TAG" > "$release_json"
+          test "$(jq -er '.draft' "$release_json")" = false
+          test "$(jq -er '.prerelease' "$release_json")" = false
+          test "$(jq -er '.tag_name' "$release_json")" = "$STABLE_TAG"
+          test "$(jq -er '.name' "$release_json")" = "Goblins OS $STABLE_TAG"
+          test "$(jq -er '.body' "$release_json")" = "$(cat "$notes")"
+          verify_release_assets "$release_json"
+          test "$(gh_write api "repos/$repository/releases/latest" --jq '.id')" = "$release_id"
+          assert_registry_arm_only ghcr.io/joe-simo/goblins-os:aarch64 "$image_digest"
+          assert_main_head_or_published_resume
+          if [ "$stable_alias_existed" -eq 0 ]; then
+            # A registry tag that did not exist has no portable delete operation.
+            # Make its creation the final, forward-resumable publication action.
+            created_release=0
+            transaction_draft_release=0
+            aliases_mutated=0
+            stable_created=0
+            if current_stable_ref="$(snapshot_alias ghcr.io/joe-simo/goblins-os:stable 2>/dev/null)"; then
+              test "$current_stable_ref" = "ghcr.io/joe-simo/goblins-os@$image_digest"
+              assert_registry_arm_only ghcr.io/joe-simo/goblins-os:stable "$image_digest"
+              stable_created=1
+            else
+              stable_probe_status=$?
+              test "$stable_probe_status" -eq 4
+              for attempt in 1 2 3; do
+                if docker buildx imagetools create \
+                  --tag ghcr.io/joe-simo/goblins-os:stable \
+                  "$image_ref" \
+                  && assert_registry_arm_only \
+                    ghcr.io/joe-simo/goblins-os:stable "$image_digest"; then
+                  stable_created=1
+                  break
+                fi
+              done
+            fi
+            test "$stable_created" -eq 1
+          else
+            assert_registry_arm_only ghcr.io/joe-simo/goblins-os:stable "$image_digest"
+          fi
+          gh_write api "repos/$repository/releases/tags/$STABLE_TAG" > "$release_json"
+          test "$(jq -er '.id' "$release_json")" = "$release_id"
+          test "$(jq -er '.draft' "$release_json")" = false
+          test "$(jq -er '.prerelease' "$release_json")" = false
+          test "$(jq -er '.tag_name' "$release_json")" = "$STABLE_TAG"
+          test "$(jq -er '.name' "$release_json")" = "Goblins OS $STABLE_TAG"
+          test "$(jq -er '.body' "$release_json")" = "$(cat "$notes")"
+          test "$(gh_write api "repos/$repository/releases/latest" --jq '.id')" = "$release_id"
+          printf 'Published and verified %s\n' "$(jq -er '.html_url' "$release_json")"
+          rm -f -- "$release_json" "$notes"
+          cleanup_credentials
+          trap - EXIT HUP INT TERM
+
+      - name: Clean publication credentials
+        if: always()
+        shell: bash
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/goblins-stable-docker
+          GH_CONFIG_DIR: ${{ runner.temp }}/goblins-stable-gh-publish
+        run: |
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          rm -f -- "$DOCKER_CONFIG/config.json" "$GH_CONFIG_DIR/hosts.yml"

@@ -11,26 +11,22 @@
 # Usage:
 #   os/iso/build-iso.sh
 # Env overrides:
-#   GOBLINS_OS_ARCH   target architecture: aarch64 or x86_64 (default host arch)
-#   GOBLINS_OS_IMAGE   container image to install (default localhost/goblins-os:<arch>)
+#   GOBLINS_OS_ARCH   target architecture: aarch64 (default host arch)
+#   GOBLINS_OS_IMAGE   container image to install (default localhost/goblins-os:aarch64)
 #   GOBLINS_OS_ROOTFS  installed root filesystem  (default xfs, matching the
 #                      bootc install config in os/bootc-install/00-goblins-os.toml)
 #   GOBLINS_OS_ISO_CONFIG
 #                      bootc-image-builder config path (default os/iso/config.toml).
 #                      Hardware proof jobs use os/iso/verify-config.toml; release
 #                      media must keep the default interactive config.
-#   OUTDIR             output directory           (default os/iso/output/<arch>)
+#   OUTDIR             output directory           (default os/iso/output/aarch64)
 #   BIB_IMAGE          digest-pinned bootc-image-builder image (default the
-#                      reviewed multi-architecture digest below)
+#                      reviewed image digest below)
 #   GOBLINS_OS_CONTAINER_RUNTIME
 #                      docker (default docker)
-#   GOBLINS_OS_ALLOW_EMULATED_DOCKER
-#                      set 1 to allow a Docker engine whose architecture differs
-#                      from GOBLINS_OS_ARCH; native matching remains the default
-#                      for release media.
 #   GOBLINS_OS_DOCKER_PLATFORM
-#                      Docker platform for non-release Docker artifact testing
-#                      (default linux/arm64 for aarch64, linux/amd64 for x86_64)
+#                      Docker platform selector; must resolve to linux/arm64
+#                      (default linux/arm64)
 #   GOBLINS_OS_DOCKER_REGISTRY_PORT
 #                      local registry port for Docker BIB handoff (default 5002)
 #   GOBLINS_OS_DOCKER_REGISTRY_NAME
@@ -59,7 +55,8 @@
 #                      avoids exporting the full bootc image into the local Docker
 #                      daemon on constrained CI runners.
 #   GOBLINS_OS_SHIPPABLE_RELEASE
-#                      set 1 to fail if the BIB source image is local/test-only
+#                      set 1 to require release-grade source images and the
+#                      canonical schema-2 ARM64 branding-tool provenance record
 #   GOBLINS_OS_CANDIDATE_COMMIT
 #                      exact 40-hex source commit used for this image and ISO;
 #                      required for every artifact, including non-release tests
@@ -78,10 +75,9 @@ case "$CONFIG_LABEL" in
   "$REPO_ROOT"/*) CONFIG_LABEL="${CONFIG_LABEL#"$REPO_ROOT/"}" ;;
 esac
 BIB="${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b}"
-INSTALLER_BRANDING_IMAGE="${GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:a5b2be1ce90514f1e4d1447bcd6eb6af51ea98644bc310c58ce649a7550e39c0}"
+INSTALLER_BRANDING_IMAGE="${GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:4483609aa40e0b8f16e56becda876468309345fadf1b43572ddabfc556382205}"
 ROOTFS="${GOBLINS_OS_ROOTFS:-xfs}"
 CONTAINER_RUNTIME="${GOBLINS_OS_CONTAINER_RUNTIME:-docker}"
-ALLOW_EMULATED_DOCKER="${GOBLINS_OS_ALLOW_EMULATED_DOCKER:-0}"
 DOCKER_REGISTRY_PORT="${GOBLINS_OS_DOCKER_REGISTRY_PORT:-5002}"
 DOCKER_REGISTRY_NAME="${GOBLINS_OS_DOCKER_REGISTRY_NAME:-goblins-os-registry}"
 DOCKER_REGISTRY_NETWORK="${GOBLINS_OS_DOCKER_REGISTRY_NETWORK:-goblins-os-bib-$DOCKER_REGISTRY_PORT}"
@@ -98,12 +94,10 @@ BIB_SOURCE_KIND=""
 BIB_SOURCE_LOCAL_ONLY="false"
 INSTALLER_BRANDING_APPLIED="false"
 DOCKER_PLATFORM=""
-DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS="${GOBLINS_OS_DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS:-20}"
 
 normalize_arch() {
   case "$1" in
     aarch64|arm64) echo "aarch64" ;;
-    x86_64|amd64) echo "x86_64" ;;
     *) echo "unsupported" ;;
   esac
 }
@@ -111,7 +105,6 @@ normalize_arch() {
 docker_platform_for_arch() {
   case "$1" in
     aarch64) echo "linux/arm64" ;;
-    x86_64) echo "linux/amd64" ;;
     *)
       echo "error: unsupported architecture for Docker platform: $1" >&2
       exit 1
@@ -122,7 +115,6 @@ docker_platform_for_arch() {
 arch_for_docker_platform() {
   case "$1" in
     linux/arm64|linux/aarch64) echo "aarch64" ;;
-    linux/amd64|linux/x86_64) echo "x86_64" ;;
     *)
       echo "unsupported"
       ;;
@@ -136,6 +128,82 @@ require_command() {
     exit 1
   fi
 }
+
+require_shippable_branding_provenance() {
+  local provenance="$REPO_ROOT/os/release/installer-branding-tool.toml"
+
+  if [ "$SHIPPABLE_RELEASE" != "1" ]; then
+    return 0
+  fi
+  require_command python3
+  [ -f "$provenance" ] || {
+    echo "error: missing canonical installer branding-tool provenance: $provenance" >&2
+    exit 1
+  }
+
+  python3 - "$provenance" "$INSTALLER_BRANDING_IMAGE" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    raise SystemExit(
+        "error: Python 3.11 or newer is required to verify shippable installer "
+        "branding-tool provenance."
+    )
+
+record_path = Path(sys.argv[1])
+expected_ref = sys.argv[2]
+try:
+    with record_path.open("rb") as source:
+        record = tomllib.load(source)
+except (OSError, tomllib.TOMLDecodeError) as error:
+    raise SystemExit(
+        f"error: cannot parse canonical installer branding-tool provenance "
+        f"{record_path}: {error}"
+    )
+
+if record.get("schema") != 2:
+    raise SystemExit(
+        "error: shippable release media requires schema 2 installer "
+        "branding-tool provenance; publish and pin a current native ARM64 artifact."
+    )
+
+if record.get("anonymous_pull_verified") is not True:
+    raise SystemExit(
+        "error: shippable release media requires schema 2 provenance from an "
+        "anonymous digest-access check."
+    )
+
+architectures = record.get("architectures")
+if not isinstance(architectures, dict) or set(architectures) != {"aarch64"}:
+    raise SystemExit(
+        "error: shippable release media requires exactly one installer "
+        "branding-tool architecture table: architectures.aarch64."
+    )
+
+aarch64 = architectures["aarch64"]
+if not isinstance(aarch64, dict):
+    raise SystemExit(
+        "error: architectures.aarch64 must be a TOML table in the canonical "
+        "installer branding-tool provenance."
+    )
+
+image_ref = record.get("image_ref")
+native_image_ref = aarch64.get("native_image_ref")
+if image_ref != expected_ref or native_image_ref != expected_ref:
+    raise SystemExit(
+        "error: GOBLINS_OS_INSTALLER_BRANDING_IMAGE must exactly match both "
+        "schema-2 ARM64 branding-tool provenance pins."
+    )
+PY
+}
+
+# Release mode must prove the branding helper before host, runtime, output, or
+# media setup. The truthful legacy schema-1 record intentionally fails closed
+# until a current native ARM64 schema-2 artifact is published and pinned.
+require_shippable_branding_provenance
 
 require_docker_dns_label() {
   local label="$1"
@@ -322,6 +390,41 @@ require_shippable_source_ref() {
   fi
 }
 
+verify_shippable_candidate_image() {
+  local ref="$1"
+  local actual_arch actual_os actual_revision
+
+  if [ "$SHIPPABLE_RELEASE" != "1" ]; then
+    return 0
+  fi
+  case "$ref" in
+    ghcr.io/joe-simo/goblins-os@sha256:*) ;;
+    *)
+      echo "error: shippable release media requires the approved ghcr.io/joe-simo/goblins-os image repository." >&2
+      exit 1
+      ;;
+  esac
+  if [ "$IMAGE" != "$ref" ]; then
+    echo "error: GOBLINS_OS_IMAGE and GOBLINS_OS_BIB_SOURCE_IMAGE must name the same immutable candidate image." >&2
+    exit 1
+  fi
+
+  echo "==> Pulling and verifying the exact shippable ARM64 candidate image"
+  docker pull --platform "$DOCKER_PLATFORM" "$ref"
+  actual_os="$(docker image inspect --format '{{.Os}}' "$ref")"
+  actual_arch="$(normalize_arch "$(docker image inspect --format '{{.Architecture}}' "$ref")")"
+  actual_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ref")"
+  actual_revision="$(printf '%s' "$actual_revision" | tr '[:upper:]' '[:lower:]')"
+  if [ "$actual_os" != "linux" ] || [ "$actual_arch" != "$ARCH" ]; then
+    echo "error: shippable candidate image must be linux/$ARCH; got $actual_os/$actual_arch." >&2
+    exit 1
+  fi
+  if [ "$actual_revision" != "$CANDIDATE_COMMIT" ]; then
+    echo "error: shippable candidate image revision $actual_revision does not match selected commit $CANDIDATE_COMMIT." >&2
+    exit 1
+  fi
+}
+
 require_shippable_tool_ref() {
   local label="$1"
   local ref="$2"
@@ -347,45 +450,6 @@ require_shippable_branding_tool_ref() {
   esac
 }
 
-verify_docker_emulation_runtime() {
-  local name output pid i status
-
-  if [ "$ARCH" = "$RUNTIME_ARCH" ]; then
-    return 0
-  fi
-
-  name="goblins-os-rustc-$ARCH-preflight-$$"
-  output="${TMPDIR:-/tmp}/$name.log"
-  rm -f "$output"
-  docker rm -f "$name" >/dev/null 2>&1 || true
-
-  echo "==> Checking Docker $DOCKER_PLATFORM emulation can run the Rust toolchain"
-  (docker run --rm --name "$name" --platform "$DOCKER_PLATFORM" rust:1.88 rustc -Vv >"$output" 2>&1) &
-  pid=$!
-  for i in $(seq 1 "$DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS"); do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      status=0
-      wait "$pid" || status=$?
-      if [ "$status" -ne 0 ]; then
-        cat "$output" >&2 || true
-        echo "error: Docker $DOCKER_PLATFORM emulation cannot run rustc; use a native $ARCH runner for release artifacts or fix the host emulation backend before local artifact testing." >&2
-        exit 1
-      fi
-      rm -f "$output"
-      return 0
-    fi
-    sleep 1
-  done
-
-  docker rm -f "$name" >/dev/null 2>&1 || true
-  kill "$pid" >/dev/null 2>&1 || true
-  wait "$pid" >/dev/null 2>&1 || true
-  cat "$output" >&2 || true
-  rm -f "$output"
-  echo "error: Docker $DOCKER_PLATFORM emulation preflight timed out after ${DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS}s; use a native $ARCH runner for release artifacts or fix the host emulation backend before local artifact testing." >&2
-  exit 1
-}
-
 docker_engine_arch() {
   local arch
 
@@ -398,32 +462,40 @@ docker_engine_arch() {
   normalize_arch "$arch"
 }
 
+HOST_OS="$(uname -s)"
 HOST_ARCH="$(normalize_arch "$(uname -m)")"
+ARCH="$(normalize_arch "${GOBLINS_OS_ARCH:-$HOST_ARCH}")"
+if [ "$ARCH" = "unsupported" ]; then
+  echo "error: unsupported GOBLINS_OS_ARCH='${GOBLINS_OS_ARCH:-$(uname -m)}'; expected aarch64." >&2
+  exit 1
+fi
+if [ "$HOST_ARCH" = "unsupported" ]; then
+  echo "error: Goblins OS ARM64 media requires a native aarch64 host; got $(uname -m)." >&2
+  exit 1
+fi
+if [ "${GOBLINS_OS_ALLOW_EMULATED_DOCKER:-0}" != "0" ]; then
+  echo "error: GOBLINS_OS_ALLOW_EMULATED_DOCKER is not supported; use a native aarch64 host and container engine." >&2
+  exit 1
+fi
+unset GOBLINS_OS_ALLOW_EMULATED_DOCKER
 if [ "$CONTAINER_RUNTIME" != "docker" ]; then
   echo "error: unsupported GOBLINS_OS_CONTAINER_RUNTIME='$CONTAINER_RUNTIME'; expected docker." >&2
   exit 1
 fi
 RUNTIME_ARCH="$(docker_engine_arch)"
 
-ARCH="$(normalize_arch "${GOBLINS_OS_ARCH:-$RUNTIME_ARCH}")"
-if [ "$ARCH" = "unsupported" ]; then
-  echo "error: unsupported GOBLINS_OS_ARCH='${GOBLINS_OS_ARCH:-$(uname -m)}'; expected aarch64 or x86_64." >&2
-  exit 1
-fi
 if [ "$RUNTIME_ARCH" = "unsupported" ]; then
-  echo "error: unsupported $CONTAINER_RUNTIME engine architecture; expected native aarch64 or x86_64." >&2
+  echo "error: unsupported $CONTAINER_RUNTIME engine architecture; expected native aarch64." >&2
   exit 1
 fi
-if [ "$ARCH" != "$RUNTIME_ARCH" ] && [ "$ALLOW_EMULATED_DOCKER" != "1" ]; then
+if [ "$ARCH" != "$RUNTIME_ARCH" ]; then
   echo "error: requested $ARCH ISO on $RUNTIME_ARCH Docker engine." >&2
-  echo "       Goblins OS release media must be built on a native $ARCH container engine." >&2
-  echo "       For non-release Docker experiments only, set GOBLINS_OS_ALLOW_EMULATED_DOCKER=1." >&2
+  echo "       Goblins OS ARM64 media requires a native $ARCH container engine." >&2
   exit 1
 fi
-if [ "$SHIPPABLE_RELEASE" = "1" ] \
-  && { [ "$ARCH" != "$HOST_ARCH" ] || [ "$ARCH" != "$RUNTIME_ARCH" ]; }; then
-  echo "error: shippable $ARCH media requires a native $ARCH host and container engine (host=$HOST_ARCH engine=$RUNTIME_ARCH)" >&2
-  echo "       Emulated Docker builds are restricted to GOBLINS_OS_SHIPPABLE_RELEASE=0 experiments." >&2
+if [ "$SHIPPABLE_RELEASE" = "1" ] && [ "$HOST_OS" != "Linux" ]; then
+  echo "error: shippable $ARCH media requires a native aarch64 Linux host; got $HOST_OS/$HOST_ARCH." >&2
+  echo "       macOS ARM64 builds are diagnostic artifacts, not release packaging authority." >&2
   exit 1
 fi
 DOCKER_PLATFORM="${GOBLINS_OS_DOCKER_PLATFORM:-$(docker_platform_for_arch "$ARCH")}"
@@ -533,6 +605,7 @@ finalize_outputs() {
   "iso": "bootiso/$ISO_NAME",
   "sha256_file": "bootiso/$ISO_NAME.sha256",
   "built_on": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "native_host_os": "$HOST_OS",
   "native_host_arch": "$HOST_ARCH",
   "container_engine_arch": "$RUNTIME_ARCH",
   "docker_platform": "$DOCKER_PLATFORM",
@@ -1009,6 +1082,7 @@ run_docker_builder() {
     exit 1
   fi
   require_shippable_source_ref "$builder_image"
+  verify_shippable_candidate_image "$builder_image"
   case "$source_route" in
     managed-registry)
       # Validate Docker's exact dual-network contract before an expensive bootc
@@ -1028,7 +1102,6 @@ run_docker_builder() {
       # they create and attach neither managed local network.
       ;;
   esac
-  verify_docker_emulation_runtime
   if [ "$SKIP_LOCAL_IMAGE_BUILD" = "1" ]; then
     echo "==> Skipping local Docker image build; bootc-image-builder will pull $BIB_SOURCE_IMAGE_OVERRIDE"
   else

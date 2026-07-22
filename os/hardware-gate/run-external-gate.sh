@@ -15,7 +15,6 @@ DATE="${DATE:-$(date -u +%Y-%m-%d)}"
 normalize_arch() {
   case "$1" in
     aarch64|arm64) echo "aarch64" ;;
-    x86_64|amd64) echo "x86_64" ;;
     *) echo "unsupported" ;;
   esac
 }
@@ -30,41 +29,36 @@ Usage:
   REPO_ROOT=/path os/hardware-gate/run-external-gate.sh
 
 Optional env:
-  GOBLINS_OS_ARCH=aarch64|x86_64
+  GOBLINS_OS_ARCH=aarch64       arm64 is accepted as an input alias
   GOBLINS_OS_CANDIDATE_COMMIT=40-hex-commit
-                              Exact source commit selected for both architectures.
+                              Exact source commit selected for the ARM64 release.
                               Defaults to GITHUB_SHA or the checked-out Git HEAD.
   DATE=YYYY-MM-DD            Screenshot directory date segment (default UTC date)
   SCREENSHOT_DIR=path         Full screenshot directory path
   SCREENSHOT_RUN_DIR=path     Alias for SCREENSHOT_DIR
   IMAGE_NAME=tag              Image tag for helper (default localhost/goblins-os:<arch>)
   RELEASE_EVIDENCE_DIR=path   SBOM/provenance output dir (default os/signoff-proofs/sbom/<arch>)
-  GENERATE_RELEASE_EVIDENCE=1 Generate Cargo/RPM release evidence before VM launch (default 1)
-  RUN_QEMU=1|0                Launch display-backed VM (default 1; set 0 for artifact/SBOM build only)
-  RUN_CLOSEOFF=1|0            Run close-signoff (default 0; requires screenshots)
+  GENERATE_RELEASE_EVIDENCE=1 Generate hash-bound Cargo/RPM/command release evidence before VM launch (default 1)
+  RUN_QEMU=1|0                Launch an optional Linux/KVM diagnostic VM (default 0;
+                              this cannot satisfy Apple-Silicon/HVF signoff)
+  RUN_CLOSEOFF=0              Final signoff is owned by the Darwin/arm64/HVF capture harness
   PREFLIGHT_ONLY=1|0          Validate native runner prerequisites and exit without building (default 0)
   GOBLINS_OS_CONTAINER_RUNTIME=docker
                               Host container runtime for image, ISO, and SBOM
                               steps (default docker)
-  GOBLINS_OS_ALLOW_EMULATED_DOCKER=1
-                              Allow RUN_QEMU=0 Docker artifact testing when
-                              the host architecture differs from
-                              GOBLINS_OS_ARCH. This can never satisfy release
-                              proof; display-backed signoff still requires a
-                              native Linux/KVM runner for the target arch.
   GOBLINS_OS_BIB_SOURCE_IMAGE=registry.example/org/goblins-os@sha256:<64-hex-digest>
                               Immutable pullable bootc image ref used by
                               bootc-image-builder for shippable media. Required
-                              for RUN_QEMU=1 so the installed system tracks a
-                              release registry ref instead of a Docker-local
-                              test registry.
+                              for GOBLINS_OS_SHIPPABLE_RELEASE=1 so the installed
+                              system tracks a release registry ref instead of a
+                              Docker-local test registry.
   GOBLINS_OS_SHIPPABLE_RELEASE=1|0
                               Require a nonlocal installer payload source
-                              (default 1 for RUN_QEMU=1, 0 for RUN_QEMU=0)
+                              (default 0; set 1 explicitly for release packaging)
   QCOW2_PATH=/tmp/goblins-os-<arch>.qcow2
   VM_MEMORY=8192
   VM_CPU=4
-  QEMU_ACCEL=kvm              Required native VM acceleration for display-backed proof
+  QEMU_ACCEL=kvm              Required native acceleration for optional Linux VM diagnostics
   MIN_HOST_FREE_GB=120        Minimum free space required on repo and VM scratch filesystems
   CONTAINER_RUNTIME_HEALTH_TIMEOUT_SECS=20
                               Seconds allowed for docker info before failing fast
@@ -74,14 +68,15 @@ Optional env:
                               template copied to AARCH64_UEFI_VARS when needed
 
 Preflight:
-  PREFLIGHT_ONLY=1 GOBLINS_OS_ARCH=<arch> \
+  PREFLIGHT_ONLY=1 RUN_QEMU=0 GOBLINS_OS_SHIPPABLE_RELEASE=1 GOBLINS_OS_ARCH=aarch64 \
   GOBLINS_OS_BIB_SOURCE_IMAGE=registry.example/org/goblins-os@sha256:<64-hex-digest> \
   REPO_ROOT=/path os/hardware-gate/run-external-gate.sh
 
-Preflight validates the native architecture, container runtime health, free
-space, and, when RUN_QEMU=1, the native Linux host, QEMU/KVM requirements, and
-aarch64 UEFI paths when applicable. It does not build the image, generate ISOs,
-create SBOM proof, launch QEMU, or satisfy shipping evidence by itself.
+Preflight validates the native architecture, Linux packaging authority,
+container runtime health, free space, and optional QEMU/KVM diagnostics. It does
+not build the image, generate ISOs, create SBOM proof, launch QEMU, or satisfy
+shipping evidence by itself. Final display proof uses the Darwin/arm64/HVF
+capture harness.
 EOF
 }
 
@@ -117,36 +112,33 @@ resolve_candidate_commit() {
   export GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT"
 }
 
-resolve_candidate_commit
-
 ARCH="$(normalize_arch "${GOBLINS_OS_ARCH:-$(uname -m)}")"
 if [[ "$ARCH" == "unsupported" ]]; then
-  warn "Unsupported architecture '${GOBLINS_OS_ARCH:-$(uname -m)}'; expected aarch64 or x86_64."
+  warn "Unsupported architecture '${GOBLINS_OS_ARCH:-$(uname -m)}'; expected aarch64 (arm64 alias accepted)."
   exit 1
 fi
 HOST_OS="$(uname -s)"
 HOST_ARCH="$(normalize_arch "$(uname -m)")"
 if [[ "$HOST_ARCH" == "unsupported" ]]; then
-  warn "Unsupported host architecture '$(uname -m)'; expected native aarch64 or x86_64."
+  warn "Unsupported host architecture '$(uname -m)'; expected native aarch64."
   exit 1
 fi
-RUN_QEMU="${RUN_QEMU:-1}"
+if [[ "${GOBLINS_OS_ALLOW_EMULATED_DOCKER:-0}" != "0" ]]; then
+  warn "GOBLINS_OS_ALLOW_EMULATED_DOCKER is not supported by the ARM64 release gate."
+  exit 1
+fi
+unset GOBLINS_OS_ALLOW_EMULATED_DOCKER
+resolve_candidate_commit
+RUN_QEMU="${RUN_QEMU:-0}"
 CONTAINER_RUNTIME="${GOBLINS_OS_CONTAINER_RUNTIME:-docker}"
 if [[ "$CONTAINER_RUNTIME" != "docker" ]]; then
   warn "GOBLINS_OS_CONTAINER_RUNTIME must be docker; got '$CONTAINER_RUNTIME'."
   exit 1
 fi
-ALLOW_EMULATED_DOCKER="${GOBLINS_OS_ALLOW_EMULATED_DOCKER:-0}"
 if [[ "$HOST_ARCH" != "$ARCH" ]]; then
-  if [[ "$RUN_QEMU" == "0" && "$CONTAINER_RUNTIME" == "docker" && "$ALLOW_EMULATED_DOCKER" == "1" ]]; then
-    warn "Requested $ARCH artifact-only Docker test on $HOST_ARCH host."
-    warn "This is not release proof; Goblins OS release media and display proof must still be produced on a native $ARCH Linux runner."
-  else
-    warn "Requested $ARCH gate on $HOST_ARCH host."
-    warn "Goblins OS release media and display proof must be produced on a native $ARCH Linux runner."
-    warn "For non-release Docker artifact testing only, set RUN_QEMU=0 and GOBLINS_OS_ALLOW_EMULATED_DOCKER=1."
-    exit 1
-  fi
+  warn "Requested $ARCH gate on $HOST_ARCH host."
+  warn "Goblins OS release packaging must be produced on a native aarch64 Linux runner; display proof runs separately on Darwin/arm64 with HVF."
+  exit 1
 fi
 SCREENSHOT_DIR="${SCREENSHOT_DIR:-${SCREENSHOT_RUN_DIR:-os/screenshots/hardware-gate/$ARCH/$DATE}}"
 ISO_DIR="os/iso/output/$ARCH/bootiso"
@@ -301,11 +293,11 @@ prepare_container_runtime() {
 
 prepare_native_qemu_acceleration() {
   if [[ "$QEMU_ACCEL" != "kvm" ]]; then
-    warn "QEMU_ACCEL must be kvm for native display-backed release proof; got '$QEMU_ACCEL'."
+    warn "QEMU_ACCEL must be kvm for the optional native Linux diagnostic; got '$QEMU_ACCEL'."
     exit 1
   fi
   if [[ ! -e /dev/kvm || ! -r /dev/kvm || ! -w /dev/kvm ]]; then
-    warn "Native display-backed proof requires readable/writable /dev/kvm on the $ARCH Linux runner."
+    warn "The optional native Linux diagnostic requires readable/writable /dev/kvm on the $ARCH Linux runner."
     exit 1
   fi
 }
@@ -352,15 +344,8 @@ prepare_aarch64_uefi() {
 build_qemu_args() {
   local iso="$1"
 
-  case "$ARCH" in
-    x86_64)
-      QEMU_ARGS=(-accel "$QEMU_ACCEL" -m "$VM_MEMORY" -smp "$VM_CPU" -cdrom "$iso" -drive "file=$QCOW2_PATH,if=virtio,format=qcow2" -boot d -vga std -display gtk -serial mon:stdio)
-      ;;
-    aarch64)
-      prepare_aarch64_uefi
-      QEMU_ARGS=(-machine "virt,accel=$QEMU_ACCEL,gic-version=max" -cpu host -m "$VM_MEMORY" -smp "$VM_CPU" -drive "if=pflash,format=raw,readonly=on,file=$AARCH64_UEFI_CODE" -drive "if=pflash,format=raw,file=$AARCH64_UEFI_VARS" -cdrom "$iso" -drive "file=$QCOW2_PATH,if=virtio,format=qcow2" -boot d -device virtio-gpu-pci -display gtk -serial mon:stdio)
-      ;;
-  esac
+  prepare_aarch64_uefi
+  QEMU_ARGS=(-machine "virt,accel=$QEMU_ACCEL,gic-version=max" -cpu host -m "$VM_MEMORY" -smp "$VM_CPU" -drive "if=pflash,format=raw,readonly=on,file=$AARCH64_UEFI_CODE" -drive "if=pflash,format=raw,file=$AARCH64_UEFI_VARS" -cdrom "$iso" -drive "file=$QCOW2_PATH,if=virtio,format=qcow2" -boot d -device virtio-gpu-pci -display gtk -serial mon:stdio)
 }
 
 verify_iso_artifacts() {
@@ -376,7 +361,8 @@ verify_iso_artifacts() {
   require_file_contains "$ARCH ISO manifest architecture" "$manifest_path" "\"architecture\": \"$ARCH\""
   require_file_contains "$ARCH ISO manifest candidate commit" "$manifest_path" "\"candidate_commit\": \"$CANDIDATE_COMMIT\""
   require_file_contains "$ARCH ISO manifest image" "$manifest_path" "\"image\": \"$IMAGE_NAME\""
-  if [[ "$RUN_QEMU" == "1" ]]; then
+  if [[ "$SHIPPABLE_RELEASE" == "1" ]]; then
+    require_file_contains "$ARCH ISO manifest native Linux packaging host" "$manifest_path" '"native_host_os": "Linux"'
     require_file_contains "$ARCH ISO manifest nonlocal installer payload source" "$manifest_path" "\"installer_payload_source_local_only\": false"
     require_file_contains "$ARCH ISO manifest shippable release mode" "$manifest_path" "\"shippable_release\": true"
     manifest_image_ref="$(awk -F'"' '/"builder_source_image"/ { print $4; exit }' "$manifest_path")"
@@ -435,7 +421,7 @@ verify_release_evidence() {
   require_file_contains "$ARCH release evidence architecture" "$manifest" "\"architecture\": \"$ARCH\""
   require_file_contains "$ARCH release evidence candidate commit" "$manifest" "\"candidate_commit\": \"$CANDIDATE_COMMIT\""
   require_file_contains "$ARCH release evidence image ref" "$manifest" "\"image_ref\": \"$EVIDENCE_IMAGE_REF\""
-  if [[ "$RUN_QEMU" == "1" ]]; then
+  if [[ "$SHIPPABLE_RELEASE" == "1" ]]; then
     require_file_contains "$ARCH release evidence digest pin" "$manifest" "\"image_digest_pinned\": true"
   fi
   require_file_contains "$ARCH release evidence asset provenance" "$manifest" "\"asset_provenance\": \"os/release/asset-provenance.toml\""
@@ -445,7 +431,7 @@ verify_release_evidence() {
   require_file "$ARCH Cargo SBOM package TSV" "$RELEASE_EVIDENCE_DIR/cargo-lock-packages.tsv"
   require_file "$ARCH RPM SBOM package TSV" "$RELEASE_EVIDENCE_DIR/rpm-packages.tsv"
   if ! goblins_os_release_evidence_hashes_match "$RELEASE_EVIDENCE_DIR"; then
-    warn "$ARCH release evidence Cargo/RPM inventories do not match their sealed SHA256 values."
+    warn "$ARCH release evidence Cargo/RPM inventories or replay-command bytes do not match their sealed SHA256 values."
     exit 1
   fi
   if ! rpm_sbom_arch_matches "$RELEASE_EVIDENCE_DIR/rpm-packages.tsv" "$ARCH"; then
@@ -455,41 +441,37 @@ verify_release_evidence() {
   log "$ARCH release evidence verified in $RELEASE_EVIDENCE_DIR"
 }
 
-case "$ARCH" in
-  x86_64)
-    QEMU_BIN=qemu-system-x86_64
-    ;;
-  aarch64)
-    QEMU_BIN=qemu-system-aarch64
-    ;;
-esac
+QEMU_BIN=qemu-system-aarch64
 
 require_bool "GENERATE_RELEASE_EVIDENCE" "$GENERATE_RELEASE_EVIDENCE"
 require_bool "RUN_QEMU" "$RUN_QEMU"
 require_bool "RUN_CLOSEOFF" "$RUN_CLOSEOFF"
 require_bool "PREFLIGHT_ONLY" "$PREFLIGHT_ONLY"
-require_bool "GOBLINS_OS_ALLOW_EMULATED_DOCKER" "$ALLOW_EMULATED_DOCKER"
 if [[ -z "$SHIPPABLE_RELEASE" ]]; then
-  if [[ "$RUN_QEMU" == "1" ]]; then
-    SHIPPABLE_RELEASE=1
-  else
-    SHIPPABLE_RELEASE=0
-  fi
+  SHIPPABLE_RELEASE=0
 fi
 require_bool "GOBLINS_OS_SHIPPABLE_RELEASE" "$SHIPPABLE_RELEASE"
 
+if [[ "$RUN_CLOSEOFF" == "1" ]]; then
+  warn "RUN_CLOSEOFF=1 is not supported by the native Linux packaging helper."
+  warn "Use capture-harness/run-capture.sh on Darwin/arm64 with HVF, then close signoff from that sealed run."
+  exit 1
+fi
+
 if [[ "$RUN_QEMU" == "1" && "$HOST_OS" != "Linux" ]]; then
-  warn "External display-backed gate requires a native Linux host with Docker and QEMU; got $HOST_OS."
-  warn "Use RUN_QEMU=0 for Docker artifact/SBOM testing without claiming shipping proof."
+  warn "The optional Linux/KVM diagnostic requires a native Linux host with Docker and QEMU; got $HOST_OS."
   exit 1
 fi
-if [[ "$RUN_QEMU" == "1" && -z "$BIB_SOURCE_IMAGE" ]]; then
-  warn "Display-backed shipping proof requires GOBLINS_OS_BIB_SOURCE_IMAGE to an immutable pullable bootc image digest ref."
-  warn "The Docker-local registry path is allowed only for RUN_QEMU=0 artifact testing and cannot satisfy release signoff."
+if [[ "$SHIPPABLE_RELEASE" == "1" && "$HOST_OS" != "Linux" ]]; then
+  warn "Shippable ARM64 packaging requires a native aarch64 Linux host; got $HOST_OS/$HOST_ARCH."
   exit 1
 fi
-if [[ "$RUN_QEMU" == "1" ]] && ! image_ref_is_digest_pinned "$BIB_SOURCE_IMAGE"; then
-  warn "GOBLINS_OS_BIB_SOURCE_IMAGE must end in @sha256:<64-hex-digest> for display-backed shipping proof."
+if [[ "$SHIPPABLE_RELEASE" == "1" && -z "$BIB_SOURCE_IMAGE" ]]; then
+  warn "Shippable ARM64 packaging requires GOBLINS_OS_BIB_SOURCE_IMAGE to an immutable pullable bootc image digest ref."
+  exit 1
+fi
+if [[ "$SHIPPABLE_RELEASE" == "1" ]] && ! image_ref_is_digest_pinned "$BIB_SOURCE_IMAGE"; then
+  warn "GOBLINS_OS_BIB_SOURCE_IMAGE must end in @sha256:<64-hex-digest> for shippable ARM64 packaging."
   exit 1
 fi
 
@@ -514,7 +496,7 @@ prepare_container_runtime
 
 log "Running external sign-off helper in: $REPO_ROOT"
 log "Architecture: $ARCH"
-if [[ "$RUN_QEMU" == "1" || "$RUN_CLOSEOFF" == "1" ]]; then
+if [[ "$RUN_QEMU" == "1" ]]; then
   log "Screenshot target: $SCREENSHOT_DIR"
 else
   log "Screenshot target: not created for artifact-only Docker run"
@@ -530,18 +512,17 @@ log "Shippable release ISO source enforcement: $SHIPPABLE_RELEASE"
 if [[ "$PREFLIGHT_ONLY" == "1" ]]; then
   if [[ "$RUN_QEMU" == "1" ]]; then
     prepare_native_qemu_acceleration
-    if [[ "$ARCH" == "aarch64" ]]; then
-      prepare_aarch64_uefi
-    fi
+    prepare_aarch64_uefi
   fi
   if [[ "$RUN_QEMU" == "0" ]]; then
-    log "Docker artifact-only preflight passed for $ARCH on $HOST_ARCH; not release proof."
-    log "Native $ARCH Linux/KVM display proof is still required before signoff."
-  elif [[ "$HOST_ARCH" != "$ARCH" ]]; then
-    log "Preflight passed for Docker-emulated $ARCH artifact testing on $HOST_ARCH."
-    log "This is not release proof and does not replace a native $ARCH Linux/KVM runner."
+    if [[ "$SHIPPABLE_RELEASE" == "1" ]]; then
+      log "Native $ARCH Linux packaging preflight passed; no artifact was built."
+    else
+      log "Docker artifact-only preflight passed for $ARCH on $HOST_ARCH; not release proof."
+    fi
+    log "Darwin/arm64/HVF display proof is still required before signoff."
   else
-    log "Preflight passed for native $ARCH release runner."
+    log "Native Linux/KVM diagnostic preflight passed; this does not satisfy final display proof."
   fi
   log "No image, ISO, SBOM, screenshot, or signoff artifact was generated."
   cat <<EOF2
@@ -549,6 +530,7 @@ if [[ "$PREFLIGHT_ONLY" == "1" ]]; then
 Next artifact command:
   GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT" \
   GOBLINS_OS_ARCH=$ARCH \
+  RUN_QEMU=0 \
   GOBLINS_OS_BIB_SOURCE_IMAGE="$BIB_SOURCE_IMAGE" \
   GOBLINS_OS_SHIPPABLE_RELEASE=1 \
   REPO_ROOT="$REPO_ROOT" os/hardware-gate/run-external-gate.sh
@@ -556,25 +538,19 @@ Next artifact command:
 Artifact-only command without display proof:
   GOBLINS_OS_ARCH=$ARCH RUN_QEMU=0 REPO_ROOT="$REPO_ROOT" os/hardware-gate/run-external-gate.sh
 
-Docker-emulated artifact-only command for non-native local testing:
-  GOBLINS_OS_ARCH=$ARCH RUN_QEMU=0 GOBLINS_OS_ALLOW_EMULATED_DOCKER=1 REPO_ROOT="$REPO_ROOT" os/hardware-gate/run-external-gate.sh
-
-Shipping proof still requires GOBLINS_OS_BIB_SOURCE_IMAGE=<real release bootc image ref>,
-the full artifact command, display-backed screenshots, and close-signoff.
+Shipping proof still requires the exact digest-bound artifact command, then the
+Darwin/arm64/HVF capture harness, signed attestation, and close-signoff.
 EOF2
   exit 0
 fi
 
-if [[ "$RUN_QEMU" == "1" || "$RUN_CLOSEOFF" == "1" ]]; then
+if [[ "$RUN_QEMU" == "1" ]]; then
   mkdir -p "$SCREENSHOT_DIR"
 fi
 SKIP_LOCAL_IMAGE_BUILD=0
 EVIDENCE_IMAGE_REF="$IMAGE_NAME"
-if [[ "$RUN_QEMU" == "1" ]]; then
-  case "$ARCH" in
-    aarch64) EXPECTED_IMAGE_ARCH=arm64 ;;
-    x86_64) EXPECTED_IMAGE_ARCH=amd64 ;;
-  esac
+if [[ "$SHIPPABLE_RELEASE" == "1" ]]; then
+  EXPECTED_IMAGE_ARCH=arm64
   log "Pulling and verifying exact candidate image $BIB_SOURCE_IMAGE"
   "${CONTAINER_CMD[@]}" pull "$BIB_SOURCE_IMAGE"
   [ "$("${CONTAINER_CMD[@]}" image inspect --format '{{.Os}}' "$BIB_SOURCE_IMAGE")" = linux ] || {
@@ -594,19 +570,14 @@ if [[ "$RUN_QEMU" == "1" ]]; then
   SKIP_LOCAL_IMAGE_BUILD=1
 else
   "${CONTAINER_CMD[@]}" rmi -f "$IMAGE_NAME" localhost/goblins-os:ci || true
-  if [[ "$HOST_ARCH" != "$ARCH" && "$CONTAINER_RUNTIME" == "docker" && "$ALLOW_EMULATED_DOCKER" == "1" ]]; then
-    warn "Skipping native pre-build for Docker-emulated artifact testing; os/iso/build-iso.sh will build $IMAGE_NAME with Docker --platform."
-  else
-    log "Building native $ARCH bootc image"
-    "${CONTAINER_CMD[@]}" build -f os/bootc/Containerfile -t "$IMAGE_NAME" .
-  fi
+  log "Building native $ARCH bootc image"
+  "${CONTAINER_CMD[@]}" build -f os/bootc/Containerfile -t "$IMAGE_NAME" .
 fi
 
 log "Building $ARCH installer ISO"
 GOBLINS_OS_ARCH="$ARCH" \
   GOBLINS_OS_IMAGE="$IMAGE_NAME" \
   GOBLINS_OS_CONTAINER_RUNTIME="$CONTAINER_RUNTIME" \
-  GOBLINS_OS_ALLOW_EMULATED_DOCKER="$ALLOW_EMULATED_DOCKER" \
   GOBLINS_OS_BIB_SOURCE_IMAGE="$BIB_SOURCE_IMAGE" \
   GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD="$SKIP_LOCAL_IMAGE_BUILD" \
   GOBLINS_OS_SHIPPABLE_RELEASE="$SHIPPABLE_RELEASE" \
@@ -637,23 +608,22 @@ if [[ "$RUN_QEMU" == "1" ]]; then
     qemu-img create -f qcow2 "$QCOW2_PATH" 80G
   fi
 
-  log "Launching display-backed VM for real gate capture"
+  log "Launching native Linux/KVM diagnostic VM"
   build_qemu_args "$LATEST_ISO"
   "$QEMU_BIN" "${QEMU_ARGS[@]}"
-  log "VM session ended. Continue with screenshot capture checklist."
+  log "VM diagnostic ended. It does not satisfy the Darwin/arm64/HVF display-proof gate."
 else
-  warn "RUN_QEMU=0: built and verified artifacts only. Shipping still requires a later display-backed VM run and screenshot proof."
-fi
-
-if [[ "$RUN_CLOSEOFF" == "1" ]]; then
-  log "Running close-signoff with screenshot directory set."
-  GOBLINS_OS_ARCH="$ARCH" SCREENSHOT_DIR="$SCREENSHOT_DIR" GOBLINS_OS_IMAGE="$IMAGE_NAME" ./os/hardware-gate/close-signoff.sh
+  warn "RUN_QEMU=0: built and verified artifacts only. Shipping still requires the Darwin/arm64/HVF capture harness and screenshot proof."
 fi
 
 log "Done."
 cat <<EOF2
 
-Next manual closure steps (once screenshots are collected):
+Next closure steps after native packaging succeeds:
+- Run os/hardware-gate/capture-harness/run-capture.sh on Darwin/arm64 with HVF
+  using the exact verification ISO, manifests, native packaging proof, and release evidence.
+- Dispatch aarch64-local-display-attestation.yml for that sealed bundle.
+- Run close-signoff against the exact hydrated capture directory.
 - Edit os/signoff-notes.md and update the latest 'Manual Gate Run' section:
   - Runner/device
   - Architecture: $ARCH
@@ -667,7 +637,7 @@ Next manual closure steps (once screenshots are collected):
   - shell and settings
   - Build Studio prompt -> built app open
   - light/dark motion/interactions
-  - Open advanced storage or Install Goblins OS Beside Another OS, then Installation Destination, Custom/manual storage or Reclaim Space, preserved Windows/macOS/APFS/Linux/other OS/recovery/EFI partitions, and bootloader/EFI summary
+  - Open advanced storage or Install Goblins OS Beside Another OS, then Installation Destination, Custom/manual storage or Reclaim Space, preserved existing-OS/APFS/data/recovery/vendor/EFI partitions, and bootloader/EFI summary; APFS is preserve-only and does not claim Apple bare-metal support
   - Runtime engine mode/source/config and built artifact path or URL, passed to close-signoff through RUNTIME_ENGINE_MODE, RUNTIME_ENGINE_SOURCE, RUNTIME_ENGINE_CONFIG, and BUILT_ARTIFACT_PATH_URL or edited into the signoff row after proof
   - If runtime-build-proof.json is missing, run os/runtime-gate/build-an-app-live-model.sh from inside the Goblins OS image/container with PROOF_PATH set to the screenshot run dir; do not hand-write the proof
   - Current project completion status: complete only after ISO, verifier, self-test, SBOM, gaming screenshots, install-storage screenshots, runtime engine, and built artifact proof are all present

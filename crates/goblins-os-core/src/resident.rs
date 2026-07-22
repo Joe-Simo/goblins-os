@@ -1,11 +1,14 @@
 use axum::{
+    extract::Extension,
     http::{StatusCode, Uri},
     Json,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime},
 };
 
@@ -60,6 +63,11 @@ pub struct ResidentEngine {
     ready: bool,
     provider: String,
     locality: String,
+    /// Readiness of the on-device route independent of the active selection.
+    /// Engine pickers use this instead of inferring local readiness from the
+    /// presence of any engine-status response.
+    local_ready: bool,
+    local_detail: String,
     cloud_relay_configured: bool,
     local_relay_configured: bool,
     relay_contract: String,
@@ -168,6 +176,37 @@ impl EngineLocality {
     }
 }
 
+/// A protected-context generation can fail closed before any hosted egress.
+/// Consent is resolved synchronously by the core-owned broker flow, so callers
+/// never receive an approval token, handle, or retry capability.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ContextGenerationError {
+    Cancelled,
+    TimedOut,
+    Unavailable(&'static str),
+}
+
+/// Studio can route either through a resident chat relay or through Codex's
+/// workspace-aware executor. Both paths use the same one-shot route resolution
+/// and hosted-consent check; execution errors are owned strings because Codex
+/// returns a user-facing failure rather than a static relay status.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum StudioContextExecutionError {
+    Cancelled,
+    TimedOut,
+    Unavailable(String),
+}
+
+pub(crate) struct StudioContextRequest<'a> {
+    pub(crate) client: Option<crate::control_plane::RequestClient>,
+    pub(crate) action_id: &'a str,
+    pub(crate) request_binding: &'a [u8],
+    pub(crate) resident_prompt: &'a str,
+    pub(crate) codex_review_content: &'a str,
+    pub(crate) resident_context_disclosure: &'a str,
+    pub(crate) codex_context_disclosure: &'a str,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResidentRouteKind {
     LocalContract,
@@ -245,6 +284,17 @@ enum RouteUnavailable {
 struct ResolvedResidentRoute {
     kind: ResidentRouteKind,
     relay: ResidentRelay,
+    authority_fingerprint: [u8; 32],
+}
+
+static HOSTED_AUTHORITY_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Invalidate approvals that may be waiting while an engine, authentication,
+/// privacy, or policy authority changes. The route fingerprint also includes
+/// the concrete credential and destination, so process-static credential
+/// changes fail closed even without an explicit generation bump.
+pub(crate) fn bump_hosted_authority_generation() {
+    HOSTED_AUTHORITY_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
 pub async fn ai_runtime_status() -> Json<ResidentStatus> {
@@ -255,9 +305,11 @@ pub async fn ai_runtime_status() -> Json<ResidentStatus> {
 /// default) or a `codex exec` run under its 600s bound, so the body runs on
 /// the blocking pool instead of pinning an async runtime worker.
 pub async fn ai_runtime(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
     Json(payload): Json<ResidentRequest>,
 ) -> (StatusCode, Json<ResidentResponse>) {
-    crate::bounded::run_blocking(move || ai_runtime_blocking(payload))
+    let client = client.map(|Extension(client)| client);
+    crate::bounded::run_blocking(move || ai_runtime_blocking(payload, client))
         .await
         .unwrap_or_else(|_| {
             (
@@ -269,7 +321,10 @@ pub async fn ai_runtime(
         })
 }
 
-fn ai_runtime_blocking(payload: ResidentRequest) -> (StatusCode, Json<ResidentResponse>) {
+fn ai_runtime_blocking(
+    payload: ResidentRequest,
+    client: Option<crate::control_plane::RequestClient>,
+) -> (StatusCode, Json<ResidentResponse>) {
     let message = payload.message.trim();
 
     if message.is_empty() || message.chars().count() > 1000 {
@@ -281,33 +336,40 @@ fn ai_runtime_blocking(payload: ResidentRequest) -> (StatusCode, Json<ResidentRe
         );
     }
 
-    let status = build_resident_status();
-    let route = match resolve_resident_route() {
-        Ok(route) => route,
-        Err(reason) => {
-            audit_ai_action("ask-goblins", Some("launcher"), AiActionOutcome::Blocked);
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ResidentResponse {
-                    text: format!(
-                        "Goblins AI is {}. {} Open Models to review the selected engine.",
-                        resident_process_label(&status.process.state),
-                        route_unavailable_detail(reason)
-                    ),
-                }),
-            );
-        }
-    };
-
-    match forward_resident_message(&route.relay, message) {
-        Ok(text) => {
+    match resident_generate_protected_context(
+        client,
+        "ai.runtime",
+        "Ask Goblins AI",
+        message,
+        message.as_bytes(),
+        "the exact message entered in Goblins AI",
+    ) {
+        Ok((text, _)) => {
             audit_ai_action("ask-goblins", Some("launcher"), AiActionOutcome::Succeeded);
             (StatusCode::OK, Json(ResidentResponse { text }))
         }
-        Err(detail) => {
+        Err(ContextGenerationError::Cancelled) => {
+            audit_ai_action("ask-goblins", Some("launcher"), AiActionOutcome::Denied);
+            (
+                StatusCode::FORBIDDEN,
+                Json(ResidentResponse {
+                    text: "Nothing was shared. The hosted request was cancelled.".to_string(),
+                }),
+            )
+        }
+        Err(ContextGenerationError::TimedOut) => {
+            audit_ai_action("ask-goblins", Some("launcher"), AiActionOutcome::Blocked);
+            (
+                StatusCode::REQUEST_TIMEOUT,
+                Json(ResidentResponse {
+                    text: "Nothing was shared because the hosted review expired.".to_string(),
+                }),
+            )
+        }
+        Err(ContextGenerationError::Unavailable(detail)) => {
             audit_ai_action("ask-goblins", Some("launcher"), AiActionOutcome::Failed);
             (
-                StatusCode::BAD_GATEWAY,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ResidentResponse {
                     text: format!("Goblins AI could not complete the request: {detail}"),
                 }),
@@ -345,6 +407,7 @@ pub(crate) fn build_resident_status() -> ResidentStatus {
         .as_ref()
         .map(|route| route.kind.contract_detail())
         .unwrap_or("The selected engine is not ready.");
+    let (local_ready, local_detail) = local_engine_readiness();
 
     let (pid, mode, mut engine, mut capabilities) = match stored {
         Some(stored) => (
@@ -358,6 +421,8 @@ pub(crate) fn build_resident_status() -> ResidentStatus {
                     .map(EngineLocality::as_id)
                     .unwrap_or("unavailable")
                     .to_string(),
+                local_ready,
+                local_detail: local_detail.to_string(),
                 cloud_relay_configured: cloud_configured,
                 local_relay_configured: local_configured,
                 relay_contract: relay_contract.to_string(),
@@ -375,6 +440,8 @@ pub(crate) fn build_resident_status() -> ResidentStatus {
                     .map(EngineLocality::as_id)
                     .unwrap_or("unavailable")
                     .to_string(),
+                local_ready,
+                local_detail: local_detail.to_string(),
                 cloud_relay_configured: cloud_configured,
                 local_relay_configured: local_configured,
                 relay_contract: relay_contract.to_string(),
@@ -392,6 +459,8 @@ pub(crate) fn build_resident_status() -> ResidentStatus {
         .map(EngineLocality::as_id)
         .unwrap_or("unavailable")
         .to_string();
+    engine.local_ready = local_ready;
+    engine.local_detail = local_detail.to_string();
     engine.cloud_relay_configured = cloud_configured;
     engine.local_relay_configured = local_configured;
     engine.relay_contract = relay_contract.to_string();
@@ -637,20 +706,205 @@ pub(crate) fn active_engine_locality() -> Option<EngineLocality> {
         .map(|route| route.kind.locality())
 }
 
+/// Authoritative GPT-OSS readiness for selectors that may currently have a
+/// different engine active. This consumes the same local route sources as the
+/// execution resolver, so a desktop process never guesses from model catalog or
+/// service-presence data.
+pub(crate) fn local_engine_readiness() -> (bool, &'static str) {
+    if local_contract_url().is_some() {
+        (
+            true,
+            "On-device GPT-OSS is ready through the OS-owned local adapter.",
+        )
+    } else if local_runtime_config().is_some() {
+        (
+            true,
+            "On-device GPT-OSS is ready through the local model runtime.",
+        )
+    } else {
+        (
+            false,
+            "On-device GPT-OSS is not ready. Add a compatible local model, then retry after its runtime starts.",
+        )
+    }
+}
+
 pub(crate) fn resident_engine_ready() -> bool {
     resolve_resident_route().is_ok()
 }
 
-pub(crate) fn resident_generate(prompt: &str) -> Result<String, &'static str> {
-    resident_generate_with_engine(prompt).map(|(text, _)| text)
+/// Resolve one execution route and execute local context immediately. Hosted
+/// context remains retained inside the core while the dedicated trusted broker
+/// displays the canonical review. After approval, the core resolves the route
+/// again and sends the retained prompt exactly once only if the destination and
+/// authority fingerprint are unchanged.
+pub(crate) fn resident_generate_protected_context(
+    client: Option<crate::control_plane::RequestClient>,
+    action_id: &str,
+    action: &str,
+    prompt: &str,
+    request_binding: &[u8],
+    context_disclosure: &str,
+) -> Result<(String, &'static str), ContextGenerationError> {
+    let route = resolve_resident_route()
+        .map_err(route_unavailable_detail)
+        .map_err(ContextGenerationError::Unavailable)?;
+    let engine = route.kind.engine_label();
+    if route.kind.locality() == EngineLocality::OnDevice {
+        return forward_resident_message(&route.relay, prompt)
+            .map(|text| (text, engine))
+            .map_err(ContextGenerationError::Unavailable);
+    }
+
+    let destination = hosted_engine_display(engine);
+    let client = client.ok_or(ContextGenerationError::Unavailable(
+        "Hosted-context review has no authenticated desktop user",
+    ))?;
+    let review = crate::context_consent::HostedContextReview {
+        destination: destination.to_string(),
+        action: action.to_string(),
+        context: context_disclosure.to_string(),
+        content_label: "Exact content leaving this device".to_string(),
+        exact_content: prompt.to_string(),
+        consequence: format!(
+            "Share this exact content once with {destination}. It will leave this device only for this request."
+        ),
+    };
+    match crate::context_consent::request_hosted_context_consent(
+        client,
+        action_id,
+        request_binding,
+        prompt.as_bytes(),
+        review,
+    ) {
+        crate::context_consent::HostedConsentResult::Approved => {}
+        crate::context_consent::HostedConsentResult::Cancelled => {
+            return Err(ContextGenerationError::Cancelled)
+        }
+        crate::context_consent::HostedConsentResult::TimedOut => {
+            return Err(ContextGenerationError::TimedOut)
+        }
+        crate::context_consent::HostedConsentResult::Unavailable => {
+            return Err(ContextGenerationError::Unavailable(
+                "Hosted-context review is unavailable",
+            ))
+        }
+    }
+
+    let approved_route = resolve_resident_route()
+        .map_err(route_unavailable_detail)
+        .map_err(ContextGenerationError::Unavailable)?;
+    if approved_route.kind != route.kind
+        || approved_route.authority_fingerprint != route.authority_fingerprint
+        || approved_route.kind.locality() != EngineLocality::Cloud
+    {
+        return Err(ContextGenerationError::Unavailable(
+            "The hosted engine or its authorization changed during review",
+        ));
+    }
+
+    forward_resident_message(&approved_route.relay, prompt)
+        .map(|text| (text, engine))
+        .map_err(ContextGenerationError::Unavailable)
 }
 
-pub(crate) fn resident_generate_with_engine(
-    prompt: &str,
-) -> Result<(String, &'static str), &'static str> {
-    let route = resolve_resident_route().map_err(route_unavailable_detail)?;
+/// Execute one Studio turn through the exact route resolved for this call.
+/// Codex receives the workspace only inside `codex_turn`, and that closure is
+/// never invoked until the trusted broker approves the hosted Codex review. Chat routes forward
+/// through the captured relay instead, so a concurrent engine preference change
+/// cannot redirect a reviewed request or workspace to another provider.
+pub(crate) fn resident_execute_studio_context(
+    request: StudioContextRequest<'_>,
+    codex_turn: impl FnOnce() -> Result<String, String>,
+) -> Result<(String, &'static str), StudioContextExecutionError> {
+    let route = resolve_resident_route()
+        .map_err(route_unavailable_detail)
+        .map_err(|detail| StudioContextExecutionError::Unavailable(detail.to_string()))?;
     let engine = route.kind.engine_label();
-    forward_resident_message(&route.relay, prompt).map(|text| (text, engine))
+    if route.kind.locality() == EngineLocality::Cloud {
+        let (exact_content, context_disclosure) = if route.kind == ResidentRouteKind::Codex {
+            (
+                request.codex_review_content,
+                request.codex_context_disclosure,
+            )
+        } else {
+            (request.resident_prompt, request.resident_context_disclosure)
+        };
+        let destination = hosted_engine_display(engine);
+        let client = request.client.ok_or_else(|| {
+            StudioContextExecutionError::Unavailable(
+                "Hosted-context review has no authenticated desktop user".to_string(),
+            )
+        })?;
+        let review = crate::context_consent::HostedContextReview {
+            destination: destination.to_string(),
+            action: "Build or update this app in Build Studio".to_string(),
+            context: context_disclosure.to_string(),
+            content_label: if route.kind == ResidentRouteKind::Codex {
+                "Exact instruction and reviewed files Codex can access".to_string()
+            } else {
+                "Exact content leaving this device".to_string()
+            },
+            exact_content: exact_content.to_string(),
+            consequence: format!(
+                "Share this reviewed Studio context once with {destination}. Goblins OS keeps a local checkpoint for recovery."
+            ),
+        };
+        match crate::context_consent::request_hosted_context_consent(
+            client,
+            request.action_id,
+            request.request_binding,
+            exact_content.as_bytes(),
+            review,
+        ) {
+            crate::context_consent::HostedConsentResult::Approved => {}
+            crate::context_consent::HostedConsentResult::Cancelled => {
+                return Err(StudioContextExecutionError::Cancelled)
+            }
+            crate::context_consent::HostedConsentResult::TimedOut => {
+                return Err(StudioContextExecutionError::TimedOut)
+            }
+            crate::context_consent::HostedConsentResult::Unavailable => {
+                return Err(StudioContextExecutionError::Unavailable(
+                    "Hosted-context review is unavailable".to_string(),
+                ))
+            }
+        }
+
+        let approved_route = resolve_resident_route()
+            .map_err(route_unavailable_detail)
+            .map_err(|detail| StudioContextExecutionError::Unavailable(detail.to_string()))?;
+        if approved_route.kind != route.kind
+            || approved_route.authority_fingerprint != route.authority_fingerprint
+            || approved_route.kind.locality() != EngineLocality::Cloud
+        {
+            return Err(StudioContextExecutionError::Unavailable(
+                "The hosted engine or its authorization changed during review".to_string(),
+            ));
+        }
+        return if approved_route.kind == ResidentRouteKind::Codex {
+            codex_turn()
+                .map(|text| (text, engine))
+                .map_err(StudioContextExecutionError::Unavailable)
+        } else {
+            forward_resident_message(&approved_route.relay, request.resident_prompt)
+                .map(|text| (text, engine))
+                .map_err(|detail| StudioContextExecutionError::Unavailable(detail.to_string()))
+        };
+    }
+
+    let text = forward_resident_message(&route.relay, request.resident_prompt)
+        .map_err(|detail| StudioContextExecutionError::Unavailable(detail.to_string()))?;
+    Ok((text, engine))
+}
+
+fn hosted_engine_display(engine: &str) -> &'static str {
+    match engine {
+        "codex" => "your OpenAI account through Codex",
+        "openai-api" => "OpenAI hosted models using the protected API key",
+        "cloud-openai" => "the managed OpenAI cloud service",
+        _ => "the active hosted model",
+    }
 }
 
 /// True only when a hosted request is permitted at the moment it executes.
@@ -737,7 +991,59 @@ fn resolve_resident_route() -> Result<ResolvedResidentRoute, RouteUnavailable> {
             ResidentRelay::ManagedCloud { url, authorization }
         }
     };
-    Ok(ResolvedResidentRoute { kind, relay })
+    let authority_fingerprint =
+        route_authority_fingerprint(kind, &relay).ok_or(RouteUnavailable::CodexNotReady)?;
+    Ok(ResolvedResidentRoute {
+        kind,
+        relay,
+        authority_fingerprint,
+    })
+}
+
+fn route_authority_fingerprint(kind: ResidentRouteKind, relay: &ResidentRelay) -> Option<[u8; 32]> {
+    let codex_authority = if matches!(relay, ResidentRelay::Codex) {
+        crate::codex::codex_authority_fingerprint()
+    } else {
+        None
+    };
+    route_authority_fingerprint_with_codex(kind, relay, codex_authority)
+}
+
+fn route_authority_fingerprint_with_codex(
+    kind: ResidentRouteKind,
+    relay: &ResidentRelay,
+    codex_authority: Option<[u8; 32]>,
+) -> Option<[u8; 32]> {
+    let mut digest = Sha256::new();
+    digest.update(b"goblins-hosted-route-authority-v1\0");
+    digest.update(
+        HOSTED_AUTHORITY_GENERATION
+            .load(Ordering::SeqCst)
+            .to_le_bytes(),
+    );
+    digest.update(kind.engine_label().as_bytes());
+    match relay {
+        ResidentRelay::LocalContract { url } => digest.update(url.as_bytes()),
+        ResidentRelay::LocalRuntime { url, model } => {
+            digest.update(url.as_bytes());
+            digest.update([0]);
+            digest.update(model.as_bytes());
+        }
+        ResidentRelay::Codex => digest.update(codex_authority?),
+        ResidentRelay::OpenAiApi { key, model, base } => {
+            digest.update(base.as_bytes());
+            digest.update([0]);
+            digest.update(model.as_bytes());
+            digest.update([0]);
+            digest.update(key.as_bytes());
+        }
+        ResidentRelay::ManagedCloud { url, authorization } => {
+            digest.update(url.as_bytes());
+            digest.update([0]);
+            digest.update(authorization.as_bytes());
+        }
+    }
+    Some(digest.finalize().into())
 }
 
 fn route_unavailable_detail(reason: RouteUnavailable) -> &'static str {
@@ -836,14 +1142,6 @@ fn resident_process_detail(age: Option<u64>) -> String {
     }
 }
 
-fn resident_process_label(state: &ResidentProcessState) -> &'static str {
-    match state {
-        ResidentProcessState::Online => "online",
-        ResidentProcessState::Stale => "stale",
-        ResidentProcessState::Waiting => "waiting",
-    }
-}
-
 fn default_capabilities(ready: bool) -> Vec<ResidentCapability> {
     vec![
         ResidentCapability {
@@ -916,7 +1214,8 @@ mod tests {
     use super::{
         build_resident_status, clamp_resident_timeout, extract_openai_response_text,
         forward_resident_message, local_http_url, ollama_generate_payload,
-        openai_responses_payload, resident_process_detail, resolve_route_kind, server_https_url,
+        openai_responses_payload, resident_process_detail, resolve_route_kind,
+        route_authority_fingerprint, route_authority_fingerprint_with_codex, server_https_url,
         validated_openai_api_base_from, CapabilityState, EngineLocality, OpenAiResponseContent,
         OpenAiResponseOutput, OpenAiResponsesReply, ResidentProcessState, ResidentRelay,
         ResidentRouteKind, RouteInputs, RouteUnavailable,
@@ -1261,6 +1560,59 @@ mod tests {
             }
             .locality(),
             EngineLocality::Cloud
+        );
+    }
+
+    #[test]
+    fn hosted_route_fingerprint_changes_with_generation_and_credentials() {
+        let relay = ResidentRelay::OpenAiApi {
+            key: "first-secret".to_string(),
+            model: "gpt-5".to_string(),
+            base: "https://api.openai.com".to_string(),
+        };
+        let first = route_authority_fingerprint(ResidentRouteKind::OpenAiApi, &relay);
+        let changed_credential = route_authority_fingerprint(
+            ResidentRouteKind::OpenAiApi,
+            &ResidentRelay::OpenAiApi {
+                key: "second-secret".to_string(),
+                model: "gpt-5".to_string(),
+                base: "https://api.openai.com".to_string(),
+            },
+        );
+        assert_ne!(first, changed_credential);
+        super::bump_hosted_authority_generation();
+        assert_ne!(
+            first,
+            route_authority_fingerprint(ResidentRouteKind::OpenAiApi, &relay)
+        );
+
+        let codex_before = route_authority_fingerprint_with_codex(
+            ResidentRouteKind::Codex,
+            &ResidentRelay::Codex,
+            Some([0x11; 32]),
+        );
+        super::bump_hosted_authority_generation();
+        let codex_after = route_authority_fingerprint_with_codex(
+            ResidentRouteKind::Codex,
+            &ResidentRelay::Codex,
+            Some([0x11; 32]),
+        );
+        assert_ne!(codex_before, codex_after);
+        assert_ne!(
+            codex_after,
+            route_authority_fingerprint_with_codex(
+                ResidentRouteKind::Codex,
+                &ResidentRelay::Codex,
+                Some([0x22; 32]),
+            )
+        );
+        assert_eq!(
+            route_authority_fingerprint_with_codex(
+                ResidentRouteKind::Codex,
+                &ResidentRelay::Codex,
+                None,
+            ),
+            None
         );
     }
 

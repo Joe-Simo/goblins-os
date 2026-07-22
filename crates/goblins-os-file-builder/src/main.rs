@@ -1,7 +1,7 @@
 use std::{
     env,
     error::Error,
-    fmt,
+    fmt, fs,
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -51,6 +51,25 @@ struct FileQuestionOutcome {
     text: String,
 }
 
+#[derive(Clone, Deserialize)]
+struct RuntimeStatus {
+    engine: EngineRoute,
+}
+
+#[derive(Clone, Deserialize)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct EngineRoute {
+    ready: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SelectedFileMetadata {
+    name: String,
+    kind: &'static str,
+    file_type: String,
+    size_bytes: Option<u64>,
+}
+
 fn main() {
     let core = match initialize(ClientKind::FileBuilder) {
         Ok(core) => core,
@@ -71,14 +90,26 @@ fn main() {
 
 fn run(core: &CoreClient) -> BuilderResult<String> {
     let (action, path) = selected_file_from_env_or_args()?;
+    let metadata = selected_file_metadata(&path);
+    let route = fetch_engine_route(core)?;
+    if !route.ready {
+        return Err(BuilderError::BuildRejected(
+            "The selected Goblins AI engine is not ready. Open Settings > Goblin & Models to set it up or retry it."
+                .to_string(),
+        ));
+    }
     match action {
-        FileAction::BuildApp => build_file_app(core, &path),
+        FileAction::BuildApp => build_file_app(core, &path, &metadata),
         FileAction::AskGoblins => ask_about_file(core, &path),
     }
 }
 
-fn build_file_app(core: &CoreClient, path: &Path) -> BuilderResult<String> {
-    let intent = file_build_intent(path);
+fn build_file_app(
+    core: &CoreClient,
+    path: &Path,
+    metadata: &SelectedFileMetadata,
+) -> BuilderResult<String> {
+    let intent = file_build_intent(metadata);
     let app = submit_build(core, &intent)?;
 
     Command::new(SHELL_BIN)
@@ -142,17 +173,48 @@ fn sanitize_prompt_value(value: &str) -> String {
         .join(" ")
 }
 
-fn file_build_intent(path: &Path) -> String {
-    let file = sanitize_prompt_value(&display_file(path));
+fn selected_file_metadata(path: &Path) -> SelectedFileMetadata {
+    let fs_metadata = fs::metadata(path).ok();
+    let kind = match fs_metadata.as_ref() {
+        Some(metadata) if metadata.is_file() => "file",
+        Some(metadata) if metadata.is_dir() => "folder",
+        _ => "item",
+    };
     let extension = path
         .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.trim().to_ascii_lowercase())
-        .filter(|ext| !ext.is_empty())
-        .unwrap_or_else(|| "unknown".to_string());
+        .and_then(|extension| extension.to_str())
+        .map(str::trim)
+        .filter(|extension| !extension.is_empty())
+        .map(str::to_ascii_lowercase);
+    let file_type = match (kind, extension) {
+        ("file", Some(extension)) => format!("{extension} file"),
+        ("file", None) => "file with no extension".to_string(),
+        ("folder", _) => "folder".to_string(),
+        _ => "item of unknown type".to_string(),
+    };
+
+    SelectedFileMetadata {
+        name: sanitize_prompt_value(&display_file(path)),
+        kind,
+        file_type,
+        size_bytes: fs_metadata
+            .as_ref()
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len()),
+    }
+}
+
+fn file_build_intent(metadata: &SelectedFileMetadata) -> String {
+    let size = metadata
+        .size_bytes
+        .map(|bytes| format!("{bytes} bytes"))
+        .unwrap_or_else(|| "not applicable".to_string());
 
     format!(
-        "Build a focused Goblins OS app to open and work with the local file \"{file}\". The file extension is {extension}. Use the selected file as local context and keep all file access on this device."
+        "Build a focused Goblins OS app for one selected {kind} using metadata only. Name: '{name}'. Type: {file_type}. Size: {size}. Do not claim to have read the item's contents. Do not read or send file contents unless a separate, explicit file-content consent is added in a future action.",
+        kind = metadata.kind,
+        name = metadata.name,
+        file_type = metadata.file_type,
     )
 }
 
@@ -164,25 +226,39 @@ fn display_file(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+fn fetch_engine_route(core: &CoreClient) -> BuilderResult<EngineRoute> {
+    let response = core
+        .get("/v1/ai/runtime", Duration::from_secs(2))
+        .map_err(|_| BuilderError::CoreUnavailable)?;
+    if !response.is_success() {
+        return Err(BuilderError::CoreUnavailable);
+    }
+    serde_json::from_slice::<RuntimeStatus>(&response.body)
+        .map(|status| status.engine)
+        .map_err(|_| BuilderError::Decode)
+}
+
 fn submit_build(core: &CoreClient, intent: &str) -> BuilderResult<BuiltApp> {
-    let body = serde_json::json!({ "intent": intent }).to_string();
+    let body = serde_json::json!({
+        "intent": intent,
+        "context_kind": "file-metadata",
+    })
+    .to_string();
     let response = core
         .post_json("/v1/apps/builds", body.as_bytes(), CORE_READ_TIMEOUT)
         .map_err(|_| BuilderError::CoreUnavailable)?;
     let outcome: BuildOutcome =
         serde_json::from_slice(&response.body).map_err(|_| BuilderError::Decode)?;
-
     if response.is_success() && outcome.ok {
-        outcome
-            .app
-            .ok_or_else(|| BuilderError::BuildRejected("The build returned no app record.".into()))
-    } else if outcome.text.is_empty() {
-        Err(BuilderError::BuildRejected(
-            "Goblins OS could not start an app for the selected item.".into(),
-        ))
-    } else {
-        Err(BuilderError::BuildRejected(outcome.text))
+        return outcome.app.ok_or_else(|| {
+            BuilderError::BuildRejected("The build returned no app record.".into())
+        });
     }
+    Err(BuilderError::BuildRejected(if outcome.text.is_empty() {
+        "Goblins OS could not start an app for the selected item.".to_string()
+    } else {
+        outcome.text
+    }))
 }
 
 fn submit_file_question(core: &CoreClient, path: &Path) -> BuilderResult<String> {
@@ -192,22 +268,19 @@ fn submit_file_question(core: &CoreClient, path: &Path) -> BuilderResult<String>
         .map_err(|_| BuilderError::CoreUnavailable)?;
     let outcome: FileQuestionOutcome =
         serde_json::from_slice(&response.body).map_err(|_| BuilderError::Decode)?;
-
     if response.is_success() && outcome.ok {
         if outcome.text.trim().is_empty() {
-            Err(BuilderError::BuildRejected(
+            return Err(BuilderError::BuildRejected(
                 "Goblins AI returned an empty answer for the selected item.".into(),
-            ))
-        } else {
-            Ok(outcome.text)
+            ));
         }
-    } else if outcome.text.is_empty() {
-        Err(BuilderError::BuildRejected(
-            "Goblins AI could not answer about the selected item.".into(),
-        ))
-    } else {
-        Err(BuilderError::BuildRejected(outcome.text))
+        return Ok(outcome.text);
     }
+    Err(BuilderError::BuildRejected(if outcome.text.is_empty() {
+        "Goblins AI could not answer about the selected item.".to_string()
+    } else {
+        outcome.text
+    }))
 }
 
 impl BuilderError {
@@ -241,16 +314,26 @@ impl Error for BuilderError {}
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use super::{file_build_intent, sanitize_prompt_value, BuilderError, SelectedFileMetadata};
 
-    use super::{file_build_intent, sanitize_prompt_value, BuilderError};
+    fn csv_metadata() -> SelectedFileMetadata {
+        SelectedFileMetadata {
+            name: "Budget.csv".to_string(),
+            kind: "file",
+            file_type: "csv file".to_string(),
+            size_bytes: None,
+        }
+    }
 
     #[test]
     fn file_intent_mentions_name_extension_and_locality() {
-        let intent = file_build_intent(Path::new("/home/goblin/Notes/Budget.csv"));
+        let metadata = csv_metadata();
+        let intent = file_build_intent(&metadata);
         assert!(intent.contains("Budget.csv"));
-        assert!(intent.contains("csv"));
-        assert!(intent.contains("local"));
+        assert!(intent.contains("csv file"));
+        assert!(intent.contains("metadata only"));
+        assert!(intent.contains("Do not claim to have read"));
+        assert!(intent.contains("explicit file-content consent"));
     }
 
     #[test]

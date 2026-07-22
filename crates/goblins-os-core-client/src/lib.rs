@@ -83,6 +83,7 @@ static GLOBAL: OnceLock<Arc<SharedConnection>> = OnceLock::new();
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientKind {
     ControlCenter,
+    ConsentBroker,
     Dictate,
     FileBuilder,
     FocusTick,
@@ -105,6 +106,7 @@ impl ClientKind {
     pub const fn slug(self) -> &'static str {
         match self {
             Self::ControlCenter => "control-center",
+            Self::ConsentBroker => "consent-broker",
             Self::Dictate => "dictate",
             Self::FileBuilder => "file-builder",
             Self::FocusTick => "focus-tick",
@@ -133,6 +135,7 @@ impl ClientKind {
     const fn user_agent(self) -> &'static str {
         match self {
             Self::ControlCenter => "goblins-os-control-center",
+            Self::ConsentBroker => "goblins-os-consent-broker",
             Self::Dictate => "goblins-os-dictate",
             Self::FileBuilder => "goblins-os-file-builder",
             Self::FocusTick => "goblins-os-focus-tick",
@@ -155,6 +158,7 @@ impl ClientKind {
     const fn executable_name(self) -> &'static str {
         match self {
             Self::ControlCenter => "goblins-os-control-center",
+            Self::ConsentBroker => "goblins-os-consent-broker",
             Self::Dictate => "goblins-os-dictate",
             Self::FileBuilder => "goblins-os-file-builder",
             Self::FocusTick => "goblins-os-focus-tick",
@@ -1466,6 +1470,7 @@ mod tests {
     fn client_kind_paths_are_fixed_and_complete() {
         let cases = [
             (ClientKind::ControlCenter, "control-center"),
+            (ClientKind::ConsentBroker, "consent-broker"),
             (ClientKind::Dictate, "dictate"),
             (ClientKind::FileBuilder, "file-builder"),
             (ClientKind::FocusTick, "focus-tick"),
@@ -1492,6 +1497,7 @@ mod tests {
         assert!(ClientKind::Resident.requires_no_new_privs());
         for desktop in [
             ClientKind::ControlCenter,
+            ClientKind::ConsentBroker,
             ClientKind::Dictate,
             ClientKind::FileBuilder,
             ClientKind::FocusTick,

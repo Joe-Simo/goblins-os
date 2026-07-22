@@ -862,8 +862,11 @@ struct MagnifierAccessibilityStatus {
 #[derive(Clone, Deserialize)]
 struct VisualAccessibilityStatus {
     schema_available: bool,
+    reduce_transparency_schema_available: bool,
     high_contrast: Option<bool>,
+    reduce_transparency: Option<bool>,
     detail: String,
+    reduce_transparency_detail: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -2630,6 +2633,8 @@ struct ResidentEngine {
     ready: bool,
     provider: ResidentEngineProvider,
     locality: ResidentEngineLocality,
+    local_ready: bool,
+    local_detail: String,
     cloud_relay_configured: bool,
     local_relay_configured: bool,
     relay_contract: String,
@@ -2825,6 +2830,11 @@ struct SettingsContextAiResponse {
     ok: bool,
     text: String,
     context: Option<SettingsContextAiSummary>,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+enum SettingsAiHelpResult {
+    Completed(String),
 }
 
 #[derive(Clone, Deserialize)]
@@ -3048,6 +3058,8 @@ impl SettingsPanel {
                 "zoom",
                 "text size",
                 "reduce motion",
+                "reduce transparency",
+                "solid panels",
             ],
             Self::DesktopWallpaper => &[
                 "desktop",
@@ -3221,10 +3233,9 @@ impl SettingsPanel {
         }
     }
 
-    /// The colored rounded icon-tile class for the sidebar — the macOS-kit
-    /// "system settings" signature, translated to project-owned tints. Each
-    /// category carries a calm, saturated tile with a white glyph; the CSS
-    /// resolves the class to `@gos_tint_*` so light and dark both stay vivid.
+    /// The colored rounded icon-tile class for the Goblins sidebar. Each category
+    /// carries a calm, saturated tile with a white glyph; the CSS resolves the
+    /// class to `@gos_tint_*` so light and dark both stay vivid.
     #[cfg(all(target_os = "linux", feature = "native-desktop"))]
     fn sidebar_icon_tint(self) -> &'static str {
         match self {
@@ -3382,7 +3393,7 @@ impl SettingsPanel {
             Self::MouseTrackpad => "Pointer and touchpad readiness from Linux input devices.",
             Self::DrawingTablet => "Pen, stylus, and drawing tablet settings.",
             Self::Accessibility => {
-                "Assistive technologies, motion, text scale, and accessibility readiness."
+                "Assistive technologies, motion, text scale, visual clarity, and accessibility readiness."
             }
             Self::DesktopWallpaper => "Desktop background, session theme, and wallpaper ownership.",
             Self::Notifications => {
@@ -4376,8 +4387,8 @@ fn build_settings(
     main_scroll.set_hexpand(true);
     main_scroll.set_vexpand(true);
     main_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    // Non-overlay scrollbar so the styled slim slider reads as a persistent macOS
-    // scrollbar (matching the sidebar's nav_scroll), not the stock overlay fade.
+    // Keep the styled slim slider visible in both content panes instead of using
+    // the stock overlay fade.
     main_scroll.set_overlay_scrolling(false);
     main_scroll.set_propagate_natural_height(false);
 
@@ -5287,7 +5298,7 @@ fn populate_panel(
         SettingsPanel::Games => build_games(main),
         SettingsPanel::PrintersScanners => build_device_settings_panel(main, panel, state),
         SettingsPanel::DateTime => build_device_settings_panel(main, panel, state),
-        SettingsPanel::LanguageRegion => build_device_settings_panel(main, panel, state),
+        SettingsPanel::LanguageRegion => build_language_region(main, state),
         SettingsPanel::UsersAccounts => build_users_accounts(main, state),
         SettingsPanel::OnlineAccounts => build_device_settings_panel(main, panel, state),
         SettingsPanel::PrivacyPermissions => build_privacy_permissions(main, state),
@@ -5729,6 +5740,397 @@ fn build_device_settings_panel(
     let title = settings_panel.display_name();
     let detail = device_settings_integrated_detail(settings_panel);
     append_device_settings_handoff(panel, settings_panel, title, &detail, state.system.as_ref());
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocaleIdentity {
+    language: String,
+    region: Option<String>,
+    encoding: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocaleEnvironmentSnapshot {
+    interface_language: Option<String>,
+    requested_locale: String,
+    requested_locale_source: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NativeLocaleFacts {
+    active_messages_locale: String,
+    active_time_locale: String,
+    active_numeric_locale: String,
+    date_pattern: String,
+    date_now: String,
+    time_now: String,
+    decimal_separator: String,
+    grouping_separator: String,
+    encoding: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LanguageRegionFact {
+    title: &'static str,
+    value: String,
+    detail: String,
+    accessible_label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LanguageRegionPresentation {
+    facts: Vec<LanguageRegionFact>,
+}
+
+fn clean_locale_value(value: Option<&str>) -> Option<String> {
+    let value = value?
+        .chars()
+        .take_while(|character| !character.is_control())
+        .take(96)
+        .collect::<String>();
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn locale_environment_snapshot(
+    lc_all: Option<&str>,
+    lang: Option<&str>,
+    language: Option<&str>,
+) -> LocaleEnvironmentSnapshot {
+    let lc_all = clean_locale_value(lc_all);
+    let lang = clean_locale_value(lang);
+    let (requested_locale, requested_locale_source) = if let Some(locale) = lc_all {
+        (locale, "LC_ALL")
+    } else if let Some(locale) = lang {
+        (locale, "LANG")
+    } else {
+        ("C".to_string(), "system fallback")
+    };
+
+    LocaleEnvironmentSnapshot {
+        interface_language: clean_locale_value(language),
+        requested_locale,
+        requested_locale_source,
+    }
+}
+
+fn parse_locale_identity(locale: &str) -> LocaleIdentity {
+    let base = locale.split('@').next().unwrap_or(locale);
+    let mut base_and_encoding = base.splitn(2, '.');
+    let language_region = base_and_encoding.next().unwrap_or("C");
+    let encoding = base_and_encoding
+        .next()
+        .and_then(|value| clean_locale_value(Some(value)));
+    let mut pieces = language_region.splitn(2, ['_', '-']);
+    let language = clean_locale_value(pieces.next()).unwrap_or_else(|| "C".to_string());
+    let region = pieces
+        .next()
+        .and_then(|value| clean_locale_value(Some(value)));
+
+    LocaleIdentity {
+        language,
+        region,
+        encoding,
+    }
+}
+
+fn locale_display_name(identity: &LocaleIdentity) -> String {
+    use countries_iso3166::BCP47LanguageInfo;
+
+    if matches!(identity.language.as_str(), "C" | "POSIX") {
+        return "System default".to_string();
+    }
+    let language = identity.language.to_ascii_lowercase();
+    let tag = identity
+        .region
+        .as_ref()
+        .map(|region| format!("{language}-{}", region.to_ascii_uppercase()))
+        .unwrap_or_else(|| language.clone());
+    let named = BCP47LanguageInfo::from(tag.as_str());
+    if !matches!(named, BCP47LanguageInfo::UnsupportedLanguage) {
+        return named.english().to_string();
+    }
+    let language_only = BCP47LanguageInfo::from(language.as_str());
+    if matches!(language_only, BCP47LanguageInfo::UnsupportedLanguage) {
+        "System language and region".to_string()
+    } else {
+        language_only.english().to_string()
+    }
+}
+
+fn interface_language_name(language: Option<&str>, identity: &LocaleIdentity) -> String {
+    let requested = language
+        .and_then(|value| value.split(':').next())
+        .and_then(|value| clean_locale_value(Some(value)));
+    let requested_identity = requested
+        .as_deref()
+        .map(parse_locale_identity)
+        .unwrap_or_else(|| identity.clone());
+    locale_display_name(&LocaleIdentity {
+        region: None,
+        ..requested_identity
+    })
+}
+
+fn locale_separator_name(separator: &str, empty_label: &str) -> String {
+    match separator {
+        "" => empty_label.to_string(),
+        "." => "period".to_string(),
+        "," => "comma".to_string(),
+        " " => "space".to_string(),
+        "\u{a0}" => "no-break space".to_string(),
+        "\u{202f}" => "narrow no-break space".to_string(),
+        _ => "locale-specific symbol".to_string(),
+    }
+}
+
+fn encoding_display_name(encoding: &str) -> String {
+    let normalized = encoding
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if normalized == "UTF8" {
+        "Unicode (UTF-8)".to_string()
+    } else if encoding.is_empty() {
+        "System default".to_string()
+    } else {
+        "Current system encoding".to_string()
+    }
+}
+
+fn build_language_region_presentation(
+    environment: &LocaleEnvironmentSnapshot,
+    native: &NativeLocaleFacts,
+) -> LanguageRegionPresentation {
+    let messages_identity = parse_locale_identity(&native.active_messages_locale);
+    let language_value = interface_language_name(
+        environment.interface_language.as_deref(),
+        &messages_identity,
+    );
+    let time_region = locale_display_name(&parse_locale_identity(&native.active_time_locale));
+    let numeric_region = locale_display_name(&parse_locale_identity(&native.active_numeric_locale));
+    let (regional_value, locale_detail) = if time_region == numeric_region {
+        (
+            time_region,
+            "Dates, times, and numbers below use this session’s regional settings.".to_string(),
+        )
+    } else {
+        (
+            "Mixed regional formats".to_string(),
+            format!("Dates and times use {time_region}. Numbers use {numeric_region}."),
+        )
+    };
+    let language_detail = match environment.interface_language.as_deref() {
+        Some(_) => "Goblins OS interface text is currently available in English.".to_string(),
+        None => "Goblins OS interface text is available in English.".to_string(),
+    };
+    let date_detail = "Shown using the current regional date and time format.".to_string();
+    let decimal_name = locale_separator_name(&native.decimal_separator, "not available");
+    let grouping_name = locale_separator_name(&native.grouping_separator, "no thousands separator");
+    let number_value = format!("Decimal {decimal_name} · thousands separator {grouping_name}");
+    let number_detail = "Shown using the current regional number format.".to_string();
+    let language_accessible_label = if environment.interface_language.is_some() {
+        format!(
+            "Requested interface language: {language_value}. Goblins OS interface text is currently available in English."
+        )
+    } else {
+        "Goblins OS interface language: English".to_string()
+    };
+    let encoding_value = encoding_display_name(&native.encoding);
+
+    LanguageRegionPresentation {
+        facts: vec![
+            LanguageRegionFact {
+                title: "Interface language",
+                value: language_value,
+                detail: language_detail,
+                accessible_label: language_accessible_label,
+            },
+            LanguageRegionFact {
+                title: "Regional format",
+                value: regional_value.clone(),
+                detail: locale_detail,
+                accessible_label: format!("Regional format: {regional_value}"),
+            },
+            LanguageRegionFact {
+                title: "Date and time",
+                value: format!("{} · {}", native.date_now, native.time_now),
+                detail: date_detail,
+                accessible_label: format!(
+                    "Date and time: {}, {}",
+                    native.date_now, native.time_now
+                ),
+            },
+            LanguageRegionFact {
+                title: "Number format",
+                value: number_value.clone(),
+                detail: number_detail,
+                accessible_label: format!("Number format: {number_value}"),
+            },
+            LanguageRegionFact {
+                title: "Text encoding",
+                value: encoding_value.clone(),
+                detail: "Unicode supports text from languages around the world.".to_string(),
+                accessible_label: format!("Text encoding: {encoding_value}"),
+            },
+        ],
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn native_locale_string(category: libc::c_int) -> String {
+    use std::{ffi::CStr, ptr};
+
+    // Querying `setlocale` with a null pointer does not change process state.
+    // GTK has already initialized the process locale before this panel is built.
+    let value = unsafe { libc::setlocale(category, ptr::null()) };
+    if value.is_null() {
+        return "unavailable".to_string();
+    }
+    unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn native_locale_info(item: libc::nl_item) -> String {
+    use std::ffi::CStr;
+
+    let value = unsafe { libc::nl_langinfo(item) };
+    if value.is_null() {
+        return String::new();
+    }
+    unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn native_numeric_separators() -> (String, String) {
+    use std::ffi::CStr;
+
+    let locale = unsafe { libc::localeconv() };
+    if locale.is_null() {
+        return (String::new(), String::new());
+    }
+    let decimal = unsafe { (*locale).decimal_point };
+    let grouping = unsafe { (*locale).thousands_sep };
+    let decimal = if decimal.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(decimal) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let grouping = if grouping.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(grouping) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    (decimal, grouping)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn current_native_locale_facts() -> NativeLocaleFacts {
+    let now = gtk4::glib::DateTime::now_local().ok();
+    let formatted_now = |format: &str, fallback: &str| {
+        now.as_ref()
+            .and_then(|date_time| date_time.format(format).ok())
+            .map(|value| value.to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| fallback.to_string())
+    };
+    let (decimal_separator, grouping_separator) = native_numeric_separators();
+
+    NativeLocaleFacts {
+        active_messages_locale: native_locale_string(libc::LC_MESSAGES),
+        active_time_locale: native_locale_string(libc::LC_TIME),
+        active_numeric_locale: native_locale_string(libc::LC_NUMERIC),
+        date_pattern: native_locale_info(libc::D_FMT),
+        date_now: formatted_now("%x", "unavailable"),
+        time_now: formatted_now("%X", "unavailable"),
+        decimal_separator,
+        grouping_separator,
+        encoding: native_locale_info(libc::CODESET),
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn current_language_region_presentation() -> LanguageRegionPresentation {
+    let environment = locale_environment_snapshot(
+        env::var("LC_ALL").ok().as_deref(),
+        env::var("LANG").ok().as_deref(),
+        env::var("LANGUAGE").ok().as_deref(),
+    );
+    let native = current_native_locale_facts();
+    if env::var_os("GOBLINS_OS_CAPTURE_PRESENT_LEDGER").is_some() {
+        eprintln!(
+            "settings_language_region_readback={}",
+            serde_json::json!({
+                "interface_language": environment.interface_language,
+                "requested_locale": environment.requested_locale,
+                "requested_locale_source": environment.requested_locale_source,
+                "active_messages_locale": native.active_messages_locale,
+                "active_time_locale": native.active_time_locale,
+                "active_numeric_locale": native.active_numeric_locale,
+                "date_pattern": native.date_pattern,
+                "date_now": native.date_now,
+                "time_now": native.time_now,
+                "decimal_separator": native.decimal_separator,
+                "grouping_separator": native.grouping_separator,
+                "encoding": native.encoding,
+            })
+        );
+    }
+    build_language_region_presentation(&environment, &native)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn language_region_fact_row(fact: &LanguageRegionFact) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-system-row");
+    row.set_hexpand(true);
+    set_accessible_label_description(&row, &fact.accessible_label, &fact.detail);
+    row.append(&label(fact.title, &["gos-row-title"]));
+    row.append(&label(&fact.value, &["gos-row-copy"]));
+    row.append(&label(&fact.detail, &["gos-row-copy"]));
+    row
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn build_language_region(panel: &gtk4::Box, state: &SettingsState) {
+    append_panel_header(
+        panel,
+        "Language & Region",
+        "Review the language request and the live regional formats used by this session.",
+    );
+    let presentation = current_language_region_presentation();
+    append_preference_group(
+        panel,
+        "Current session",
+        presentation
+            .facts
+            .iter()
+            .map(language_region_fact_row)
+            .collect(),
+    );
+
+    append_device_native_handoffs(panel, SettingsPanel::LanguageRegion);
+    panel.append(&label("Controls", &["gos-subsection-title"]));
+    let detail = device_settings_integrated_detail(SettingsPanel::LanguageRegion);
+    append_device_settings_handoff(
+        panel,
+        SettingsPanel::LanguageRegion,
+        "Language & Region",
+        &detail,
+        state.system.as_ref(),
+    );
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -6518,7 +6920,7 @@ fn build_appearance(panel: &gtk4::Box, state: &SettingsState) {
     ));
     panel.append(&system_row(
         "Window style",
-        "Rounded client chrome, traffic-light window controls, semantic light/dark tokens, and focused blue selection are owned by Goblins OS.",
+        "Rounded client chrome, neutral icon controls, semantic light and dark tokens, and visible keyboard focus are owned by Goblins OS.",
     ));
     append_motion_preference(panel, state);
     append_text_scale_preference(panel, state);
@@ -7742,7 +8144,7 @@ fn build_accessibility(panel: &gtk4::Box, state: &SettingsState) {
     append_panel_header(
         panel,
         "Accessibility",
-        "Motion and type preferences write system interface keys so system utilities and Goblins OS surfaces follow the same setting.",
+        "Adjust motion, text, visual clarity, and assistive access across Goblins OS.",
     );
     append_accessibility_summary(panel, state);
     append_facility_status(
@@ -7752,6 +8154,7 @@ fn build_accessibility(panel: &gtk4::Box, state: &SettingsState) {
         "Accessibility services",
         "Waiting for AT-SPI accessibility status.",
     );
+    append_visual_accessibility_settings(panel, state);
     append_assistive_technology_settings(panel, state);
     append_switch_control_settings(panel, state);
     append_live_captions_settings(panel, state);
@@ -8080,7 +8483,8 @@ fn append_notifications_ai_context(panel: &gtk4::Box, state: &SettingsState) {
     {
         Some(action) => {
             let detail = format!(
-                "From an invoked notification, Goblins OS sends only that notification's title, body, app, and chosen action label through the OS-owned notification context route. {}",
+                "{} From an invoked notification, Goblins OS uses only that notification's exact title, body, app, chosen action label, and question. A hosted route requires a fresh review bound to the active engine before any of it leaves this device. {}",
+                context_route_disclosure(&context_submission_route(state.resident.as_ref())),
                 ai_action_detail(action)
             );
             health_row(
@@ -8727,9 +9131,8 @@ fn build_privacy_permissions(panel: &gtk4::Box, state: &SettingsState) {
     );
 }
 
-/// Per-app permission entries from the xdg PermissionStore (macOS per-app Privacy
-/// altitude). Revokes are scoped to app-keyed grants that the core bridge can
-/// delete by exact table/id/app.
+/// Per-app permission entries from the xdg PermissionStore. Revokes are scoped
+/// to app-keyed grants that the core bridge can delete by exact table/id/app.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_app_permissions(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
@@ -10301,6 +10704,16 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         .as_ref()
         .is_some_and(|codex| codex.installed && codex.authenticated);
     let engine_status_available = status.is_some();
+    let local_ready = state
+        .resident
+        .as_ref()
+        .is_some_and(|resident| resident.engine.local_ready);
+    let local_detail = state
+        .resident
+        .as_ref()
+        .map(|resident| resident.engine.local_detail.as_str())
+        .unwrap_or("Waiting for authoritative GPT-OSS readiness from Goblins OS.");
+    let local_available = Rc::new(Cell::new(engine_status_available && local_ready));
     let codex_available = Rc::new(Cell::new(engine_status_available && codex_ready));
     let hosted_available = Rc::new(Cell::new(engine_status_available && configured));
     let engine_pending = Rc::new(Cell::new(false));
@@ -10342,7 +10755,8 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         Some("local-gpt-oss") => gpt_btn.add_css_class("gos-engine-active"),
         _ => {}
     }
-    gpt_btn.set_sensitive(engine_status_available);
+    gpt_btn.set_sensitive(local_available.get());
+    gpt_btn.set_tooltip_text(Some(local_detail));
     codex_btn.set_sensitive(codex_available.get());
     hosted_btn.set_sensitive(hosted_available.get());
     choice.append(&gpt_btn);
@@ -10357,6 +10771,58 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
     panel.append(&engine_feedback);
 
+    let local_readiness = label(local_detail, &["gos-row-copy"]);
+    local_readiness.set_wrap(true);
+    local_readiness.set_xalign(0.0);
+    panel.append(&local_readiness);
+    if !local_ready {
+        let retry_local = button("Retry GPT-OSS readiness", &["gos-permission-action"]);
+        set_accessible_label_description(
+            &retry_local,
+            "Retry on-device GPT-OSS readiness",
+            "Checks the authoritative local model route again. Choose a compatible model under Local models below if setup is still needed.",
+        );
+        let core = core.clone();
+        let gpt = gpt_btn.clone();
+        let feedback = local_readiness.clone();
+        let local_available = local_available.clone();
+        retry_local.connect_clicked(move |retry| {
+            retry.set_sensitive(false);
+            retry.set_label("Checking…");
+            feedback.set_text("Checking the on-device GPT-OSS route…");
+            let core = core.clone();
+            let gpt = gpt.clone();
+            let feedback = feedback.clone();
+            let local_available = local_available.clone();
+            let retry = retry.clone();
+            run_settings_action(
+                move || get_core_json::<ResidentStatus>(&core, "/v1/ai/runtime"),
+                move |outcome| {
+                    retry.set_label("Retry GPT-OSS readiness");
+                    retry.set_sensitive(true);
+                    match outcome {
+                        Ok(resident) => {
+                            local_available.set(resident.engine.local_ready);
+                            gpt.set_sensitive(resident.engine.local_ready);
+                            feedback.set_text(&if resident.engine.local_ready {
+                                resident.engine.local_detail
+                            } else {
+                                format!(
+                                    "{} Choose a compatible model under Local models below, then retry.",
+                                    resident.engine.local_detail
+                                )
+                            });
+                        }
+                        Err(error) => feedback.set_text(&format!(
+                            "Goblins OS could not refresh GPT-OSS readiness: {error}. Try again."
+                        )),
+                    }
+                },
+            );
+        });
+        panel.append(&retry_local);
+    }
+
     // Each engine button moves the active highlight across all three on success.
     {
         let gpt = gpt_btn.clone();
@@ -10366,6 +10832,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let core = core.clone();
         let hosted_available = hosted_available.clone();
         let codex_available = codex_available.clone();
+        let local_available = local_available.clone();
         let engine_pending = engine_pending.clone();
         gpt_btn.connect_clicked(move |_| {
             if engine_pending.get() {
@@ -10386,13 +10853,14 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             let core = core.clone();
             let hosted_available = hosted_available.clone();
             let codex_available = codex_available.clone();
+            let local_available = local_available.clone();
             let engine_pending = engine_pending.clone();
             run_settings_action(
                 move || set_engine(&core, "local-gpt-oss"),
                 move |outcome| {
                     engine_pending.set(false);
                     gpt.set_label("On-device · GPT-OSS");
-                    gpt.set_sensitive(engine_status_available);
+                    gpt.set_sensitive(local_available.get());
                     codex.set_sensitive(codex_available.get());
                     hosted.set_sensitive(hosted_available.get());
                     match outcome {
@@ -10421,6 +10889,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let core = core.clone();
         let hosted_available = hosted_available.clone();
         let codex_available = codex_available.clone();
+        let local_available = local_available.clone();
         let engine_pending = engine_pending.clone();
         codex_btn.connect_clicked(move |_| {
             if engine_pending.get() {
@@ -10441,13 +10910,14 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             let core = core.clone();
             let hosted_available = hosted_available.clone();
             let codex_available = codex_available.clone();
+            let local_available = local_available.clone();
             let engine_pending = engine_pending.clone();
             run_settings_action(
                 move || set_engine(&core, "codex"),
                 move |outcome| {
                     engine_pending.set(false);
                     codex.set_label("OpenAI account · Codex");
-                    gpt.set_sensitive(engine_status_available);
+                    gpt.set_sensitive(local_available.get());
                     codex.set_sensitive(codex_available.get());
                     hosted.set_sensitive(hosted_available.get());
                     match outcome {
@@ -10476,6 +10946,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let core = core.clone();
         let hosted_available = hosted_available.clone();
         let codex_available = codex_available.clone();
+        let local_available = local_available.clone();
         let engine_pending = engine_pending.clone();
         hosted_btn.connect_clicked(move |_| {
             if engine_pending.get() {
@@ -10498,13 +10969,14 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             let core = core.clone();
             let hosted_available = hosted_available.clone();
             let codex_available = codex_available.clone();
+            let local_available = local_available.clone();
             let engine_pending = engine_pending.clone();
             run_settings_action(
                 move || set_engine(&core, "openai-api"),
                 move |outcome| {
                     engine_pending.set(false);
                     hosted.set_label("Use administrator OpenAI key");
-                    gpt.set_sensitive(engine_status_available);
+                    gpt.set_sensitive(local_available.get());
                     codex.set_sensitive(codex_available.get());
                     hosted.set_sensitive(hosted_available.get());
                     match outcome {
@@ -10537,6 +11009,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             codex: codex_btn.clone(),
             hosted: hosted_btn.clone(),
             status_available: engine_status_available,
+            local_available: local_available.clone(),
             codex_available: codex_available.clone(),
             hosted_available: hosted_available.clone(),
             engine_pending: engine_pending.clone(),
@@ -10736,12 +11209,80 @@ fn append_goblins_ai_history(panel: &gtk4::Box, history: Option<&AiActionHistory
     append_preference_group(panel, "Recent Goblins AI actions", rows);
 }
 
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ContextSubmissionRoute {
+    engine_name: String,
+    ready: bool,
+    hosted: bool,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn context_submission_route(resident: Option<&ResidentStatus>) -> ContextSubmissionRoute {
+    let Some(resident) = resident else {
+        return ContextSubmissionRoute {
+            engine_name: "Engine unavailable".to_string(),
+            ready: false,
+            hosted: false,
+        };
+    };
+    ContextSubmissionRoute {
+        engine_name: resident.engine.selected.display_name().to_string(),
+        ready: resident.engine.ready,
+        hosted: resident.engine.ready && resident.engine.locality == ResidentEngineLocality::Cloud,
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn context_route_disclosure(route: &ContextSubmissionRoute) -> String {
+    if !route.ready {
+        return format!(
+            "{} is not ready. Nothing will be sent until the engine is set up.",
+            route.engine_name
+        );
+    }
+    if route.hosted {
+        format!(
+            "Active engine: {} · cloud. The reviewed context leaves this device only after you confirm.",
+            route.engine_name
+        )
+    } else {
+        format!(
+            "Active engine: {} · on-device. The reviewed context stays on this computer.",
+            route.engine_name
+        )
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn settings_context_review_copy(
+    route: &ContextSubmissionRoute,
+    panel: &str,
+    question: &str,
+    status_summary: &str,
+) -> String {
+    let question = bounded_settings_context_value(question, 480);
+    let question = if question.is_empty() {
+        "(no question typed)".to_string()
+    } else {
+        question
+    };
+    format!(
+        "Engine: {}. Panel: {}. Exact question: {}. Bounded OS status summary: {}. No files, screenshots, hidden windows, credentials, or secrets are included.",
+        route.engine_name, panel, question, status_summary
+    )
+}
+
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_settings_ai_help(panel: &gtk4::Box, active_panel: SettingsPanel, state: &SettingsState) {
     use gtk4::prelude::*;
 
     let core = config_core(state);
     let readiness = settings_ai_help_readiness(state);
+    let route = context_submission_route(state.resident.as_ref());
+    let panel_summary = settings_ai_panel_status_summary(active_panel, state);
+    let topic = active_panel.display_name().to_string();
+    let panel_id = active_panel.as_str().to_string();
     let entry = gtk4::Entry::new();
     entry.add_css_class("gos-search-entry");
     entry.set_placeholder_text(Some("Ask about this setting or describe the problem"));
@@ -10773,7 +11314,33 @@ fn append_settings_ai_help(panel: &gtk4::Box, active_panel: SettingsPanel, state
         &format!("Ask Goblin about {}", active_panel.display_name()),
         &["gos-row-title"],
     ));
+    let route_label = label(
+        &context_route_disclosure(&route),
+        &["gos-row-copy", "gos-engine-disclosure"],
+    );
+    route_label.set_wrap(true);
+    route_label.set_xalign(0.0);
+    row.append(&route_label);
     row.append(&controls);
+
+    let exact_context = label(
+        &settings_context_review_copy(&route, active_panel.display_name(), "", &panel_summary),
+        &["gos-row-copy"],
+    );
+    exact_context.set_wrap(true);
+    exact_context.set_selectable(true);
+    exact_context.set_xalign(0.0);
+    let review = gtk4::Expander::new(Some("Review exact context"));
+    review.add_css_class("gos-advanced-disclosure");
+    review.set_expanded(route.hosted);
+    review.set_child(Some(&exact_context));
+    set_accessible_label_description(
+        &review,
+        "Review exact Settings context",
+        "Shows the engine, panel, exact question, bounded OS status summary, and excluded data before submission.",
+    );
+    row.append(&review);
+
     row.append(&feedback);
     set_accessible_label_description(
         &row,
@@ -10781,39 +11348,87 @@ fn append_settings_ai_help(panel: &gtk4::Box, active_panel: SettingsPanel, state
         readiness.detail.as_str(),
     );
 
-    let panel_summary = settings_ai_panel_status_summary(active_panel, state);
-    let topic = active_panel.display_name().to_string();
-    let panel_id = active_panel.as_str().to_string();
+    {
+        let exact_context = exact_context.clone();
+        let route = route.clone();
+        let panel_name = active_panel.display_name().to_string();
+        let panel_summary = panel_summary.clone();
+        entry.connect_changed(move |entry| {
+            exact_context.set_text(&settings_context_review_copy(
+                &route,
+                &panel_name,
+                entry.text().as_str(),
+                &panel_summary,
+            ));
+        });
+    }
+
     let ask_enabled = readiness.enabled;
     ask.connect_clicked(move |ask| {
-        let question = entry.text().to_string();
-        ask.set_sensitive(false);
-        ask.set_label("Asking…");
-        entry.set_sensitive(false);
-        feedback.set_text("Asking Goblin through the OS-owned Settings context route.");
-
-        let ask = ask.clone();
-        let entry = entry.clone();
-        let feedback = feedback.clone();
-        let core = core.clone();
-        let panel_id = panel_id.clone();
-        let topic = topic.clone();
-        let panel_summary = panel_summary.clone();
-        run_settings_action(
-            move || ask_settings_context(&core, &panel_id, &topic, &question, &panel_summary),
-            move |outcome| {
-                ask.set_label("Ask Goblin");
-                ask.set_sensitive(ask_enabled);
-                entry.set_sensitive(true);
-                match outcome {
-                    Ok(answer) => feedback.set_text(&answer),
-                    Err(detail) => feedback.set_text(&detail),
-                }
-            },
-        );
+        let question = bounded_settings_context_value(entry.text().as_str(), 480);
+        start_settings_ai_help_request(SettingsAiHelpRequest {
+            core: core.clone(),
+            panel_id: panel_id.clone(),
+            topic: topic.clone(),
+            question,
+            panel_summary: panel_summary.clone(),
+            ask: ask.clone(),
+            entry: entry.clone(),
+            feedback: feedback.clone(),
+            ask_enabled,
+        });
     });
 
     append_preference_group(panel, "Goblin help", vec![row]);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone)]
+struct SettingsAiHelpRequest {
+    core: CoreClient,
+    panel_id: String,
+    topic: String,
+    question: String,
+    panel_summary: String,
+    ask: gtk4::Button,
+    entry: gtk4::Entry,
+    feedback: gtk4::Label,
+    ask_enabled: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn start_settings_ai_help_request(request: SettingsAiHelpRequest) {
+    use gtk4::prelude::*;
+
+    request.ask.set_sensitive(false);
+    request.ask.set_label("Asking…");
+    request.entry.set_sensitive(false);
+    request
+        .feedback
+        .set_text("Asking Goblin through the protected Settings context route.");
+
+    let core = request.core.clone();
+    let panel_id = request.panel_id.clone();
+    let topic = request.topic.clone();
+    let question = request.question.clone();
+    let panel_summary = request.panel_summary.clone();
+    let complete_request = request.clone();
+    run_settings_action(
+        move || ask_settings_context(&core, &panel_id, &topic, &question, &panel_summary),
+        move |outcome| {
+            complete_request.ask.set_label("Ask Goblin");
+            complete_request
+                .ask
+                .set_sensitive(complete_request.ask_enabled);
+            complete_request.entry.set_sensitive(true);
+            match outcome {
+                Ok(SettingsAiHelpResult::Completed(answer)) => {
+                    complete_request.feedback.set_text(&answer);
+                }
+                Err(detail) => complete_request.feedback.set_text(&detail),
+            }
+        },
+    );
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -10836,7 +11451,10 @@ fn settings_ai_help_readiness(state: &SettingsState) -> SettingsAiHelpReadiness 
     match action {
         Some(action) if action.enabled => SettingsAiHelpReadiness {
             enabled: true,
-            detail: "Ask a question about this panel. Settings sends only the panel name and a bounded OS status summary through local OS services.".to_string(),
+            detail: format!(
+                "{} Settings uses only the panel name, your exact question, and the bounded OS status summary shown before submission.",
+                context_route_disclosure(&context_submission_route(state.resident.as_ref()))
+            ),
         },
         Some(action) => SettingsAiHelpReadiness {
             enabled: false,
@@ -13379,21 +13997,6 @@ fn append_assistive_technology_settings(panel: &gtk4::Box, state: &SettingsState
     );
     append_magnifier_controls(panel, state, accessibility, assistive);
 
-    let visual = &accessibility.visual;
-    panel.append(&label("Contrast", &["gos-subsection-title"]));
-    if visual.schema_available {
-        append_accessibility_bool_row(
-            panel,
-            state,
-            "high-contrast",
-            "High contrast",
-            visual.high_contrast,
-            high_contrast_detail,
-        );
-    } else {
-        panel.append(&system_row("High contrast", &visual.detail));
-    }
-
     let typing = &accessibility.typing;
     panel.append(&label("Typing assistance", &["gos-subsection-title"]));
     if typing.schema_available {
@@ -13446,6 +14049,48 @@ fn append_assistive_technology_settings(panel: &gtk4::Box, state: &SettingsState
         );
     } else {
         panel.append(&system_row("Dwell click", &pointing.detail));
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_visual_accessibility_settings(panel: &gtk4::Box, state: &SettingsState) {
+    panel.append(&label("Visual clarity", &["gos-subsection-title"]));
+    let Some(accessibility) = &state.accessibility else {
+        panel.append(&system_row(
+            "Visual clarity",
+            "Waiting for accessibility preferences.",
+        ));
+        return;
+    };
+
+    let visual = &accessibility.visual;
+    if visual.schema_available {
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "high-contrast",
+            "High contrast",
+            visual.high_contrast,
+            high_contrast_detail,
+        );
+    } else {
+        panel.append(&system_row("High contrast", &visual.detail));
+    }
+
+    if visual.reduce_transparency_schema_available {
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "reduce-transparency",
+            "Reduce transparency",
+            visual.reduce_transparency,
+            reduce_transparency_detail,
+        );
+    } else {
+        panel.append(&system_row(
+            "Reduce transparency",
+            &visual.reduce_transparency_detail,
+        ));
     }
 }
 
@@ -14401,8 +15046,8 @@ fn text_shortcut_add_row(core: &CoreClient, shortcuts: &[TextShortcutEntry]) -> 
     row
 }
 
-/// Read-only reference of the Goblins window-management shortcuts (macOS "Keyboard ▸
-/// Shortcuts" altitude). Rebinding stays a deliberate future capability.
+/// Read-only reference of the Goblins window-management shortcuts. Rebinding
+/// stays a deliberate future capability.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_keyboard_shortcuts(panel: &gtk4::Box, state: &SettingsState) {
     let Some(shortcuts) = &state.shortcuts else {
@@ -15062,6 +15707,14 @@ fn high_contrast_detail(enabled: bool) -> &'static str {
         "High contrast is on. Interface colors use stronger contrast for legibility."
     } else {
         "High contrast is off. The desktop uses its standard color contrast."
+    }
+}
+
+fn reduce_transparency_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Reduce transparency is on. Goblins OS panels use solid, non-blurred surfaces."
+    } else {
+        "Reduce transparency is off. Goblins OS panels may use subtle translucent materials."
     }
 }
 
@@ -19618,10 +20271,17 @@ fn settings_ai_panel_status_summary(panel: SettingsPanel, state: &SettingsState)
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn bounded_status_summary(value: &str) -> String {
+    // Match the core's settings-context boundary exactly so the review shown in
+    // Settings is the same summary the engine can receive.
+    bounded_settings_context_value(value, 900)
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn bounded_settings_context_value(value: &str, max_chars: usize) -> String {
     value
         .chars()
         .filter(|character| !character.is_control())
-        .take(1200)
+        .take(max_chars)
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -19635,11 +20295,11 @@ fn ask_settings_context(
     topic: &str,
     question: &str,
     status_summary: &str,
-) -> Result<String, String> {
+) -> Result<SettingsAiHelpResult, String> {
     let body = serde_json::json!({
         "panel": panel,
         "topic": topic,
-        "question": question.trim(),
+        "question": bounded_settings_context_value(question, 480),
         "status_summary": status_summary,
     })
     .to_string();
@@ -19649,7 +20309,7 @@ fn ask_settings_context(
         serde_json::from_slice(&response.body).map_err(|error| error.to_string())?;
 
     if (200..=299).contains(&response.status) && outcome.ok {
-        Ok(outcome.text)
+        Ok(SettingsAiHelpResult::Completed(outcome.text))
     } else {
         Err(outcome.text)
     }
@@ -20455,6 +21115,7 @@ struct SettingsEngineControls {
     codex: gtk4::Button,
     hosted: gtk4::Button,
     status_available: bool,
+    local_available: Rc<Cell<bool>>,
     codex_available: Rc<Cell<bool>>,
     hosted_available: Rc<Cell<bool>>,
     engine_pending: Rc<Cell<bool>>,
@@ -20475,7 +21136,7 @@ impl SettingsEngineControls {
 
     fn finish_account_action(&self) {
         self.engine_pending.set(false);
-        self.gpt.set_sensitive(self.status_available);
+        self.gpt.set_sensitive(self.local_available.get());
         self.codex
             .set_sensitive(self.codex_available.get() && self.status_available);
         self.hosted
@@ -20941,9 +21602,8 @@ window.gos-settings-window {
   margin: 6px 0;
 }
 
-/* The main content pane gets the SAME slim macOS scrollbar as the sidebar — it
-   was falling through to the stock Adwaita scrollbar. A hover darkens the slider
-   the way macOS does. */
+/* The main content pane uses the same slim scrollbar as the sidebar instead of
+   falling through to the stock style. Hover darkens the slider consistently. */
 .gos-settings-root .gos-side-scroll scrollbar.vertical slider,
 .gos-settings-root .gos-main-scroll scrollbar.vertical slider {
   min-height: 44px;
@@ -21070,9 +21730,9 @@ window.gos-settings-window {
   min-height: 30px;
 }
 
-/* Colored rounded category tiles — the macOS-kit "system settings" signature.
-   A white glyph on a saturated, lightly-glossed tile; the tint class resolves to
-   a @gos_tint_* token so light and dark both stay vivid. */
+/* Goblins category tiles use a white glyph on a saturated, lightly-glossed
+   surface. The tint class resolves to a @gos_tint_* token so light and dark both
+   stay vivid. */
 .gos-side-icon-well {
   min-width: 26px;
   min-height: 26px;
@@ -21334,11 +21994,10 @@ window.gos-settings-window {
   padding: 4px 16px;
 }
 
-/* Native macOS push button: accent text on a borderless tinted fill, not a
-   gray-bordered rectangle. Scoped under the root (two classes) so it beats the
-   shared single-class .gos-permission-action base/hover/focus that follows it
-   in source order. The hue lives in a soft wash so the row stays calm in light
-   and dark. */
+/* Primary Goblins handoff action. Scoped under the root (two classes) so it
+   beats the shared single-class .gos-permission-action base/hover/focus that
+   follows it in source order. The hue lives in a soft wash so the row stays calm
+   in light and dark. */
 .gos-settings-root .gos-device-handoff-action {
   color: @gos_on_primary;
   border: 1px solid @gos_primary_border;
@@ -21724,8 +22383,8 @@ window.gos-settings-window {
   color: @gos_label_secondary;
   font-size: 13px;
   font-weight: 500;
-  /* Tabular figures so versions, percentages, counts, and volumes never wobble
-     as their digits change — the macOS standard for any data readout. */
+  /* Tabular figures keep versions, percentages, counts, and volumes from
+     shifting as their digits change. */
   font-feature-settings: "tnum" 1;
   font-variant-numeric: tabular-nums;
 }
@@ -21955,6 +22614,14 @@ fn test_resident_status(
             ready: engine_ready,
             provider,
             locality,
+            local_ready: engine_ready && selected_engine == ResidentEngineSelection::LocalGptOss,
+            local_detail: if engine_ready && selected_engine == ResidentEngineSelection::LocalGptOss
+            {
+                "On-device GPT-OSS is ready through the local model runtime.".to_string()
+            } else {
+                "On-device GPT-OSS is not ready. Add a compatible local model, then retry after its runtime starts."
+                    .to_string()
+            },
             cloud_relay_configured,
             local_relay_configured,
             relay_contract: relay_contract.to_string(),
@@ -22209,7 +22876,9 @@ fn test_policy_status(profile: &str, locked: bool) -> PolicyStatus {
         profile: profile.to_string(),
         locked,
         data_boundary: format!("{profile} policy keeps data boundaries explicit."),
-        secret_boundary: "Secrets stay in OS-owned services or server-side relays.".to_string(),
+        secret_boundary:
+            "OpenAI credentials stay in protected Goblins OS services or a managed organization service."
+                .to_string(),
         controls: vec![
             PolicyControl {
                 id: "cloud-openai".to_string(),
@@ -22356,8 +23025,11 @@ fn test_accessibility_status(
         },
         visual: VisualAccessibilityStatus {
             schema_available: assistive_schema_available,
+            reduce_transparency_schema_available: assistive_schema_available,
             high_contrast: Some(false),
+            reduce_transparency: Some(false),
             detail: String::new(),
+            reduce_transparency_detail: String::new(),
         },
         typing: TypingAccessibilityStatus {
             schema_available: assistive_schema_available,
@@ -22640,39 +23312,41 @@ mod tests {
         audio_volume_detail, audio_volume_label, audio_volume_title,
         background_picture_option_detail, background_shading_detail, bluetooth_adapter_detail,
         bluetooth_adapter_state_detail, bluetooth_power_detail, bluetooth_power_label,
-        bluetooth_power_outcome, camera_access_detail, cleanup_temp_detail, cleanup_trash_detail,
-        codex_login_outcome_from_response, days_label, desktop_privacy_outcome,
-        display_output_detail, display_output_title, engine_selection_success_copy,
-        facility_state_is_ready, facility_state_label, facility_user_detail, hotspot_client_title,
-        hotspot_connected_clients_detail, hotspot_connected_clients_label, hotspot_settings_inputs,
-        hotspot_toggle_outcome, input_feedback_sounds_detail, interface_sounds_detail,
-        key_repeat_detail, local_account_identity_detail, local_account_type_detail,
-        lock_screen_notifications_detail, magnifier_detail, magnifier_lens_mode_detail,
-        magnifier_zoom_label, microphone_access_detail, milliseconds_label,
-        motion_preference_detail, night_light_detail, night_light_schedule_detail,
-        night_light_temperature_label, normalized_appearance_theme, normalized_audio_volume,
-        normalized_background_picture_option, normalized_background_shading,
-        normalized_keyboard_delay, normalized_keyboard_repeat_interval, normalized_magnifier_zoom,
+        bluetooth_power_outcome, build_language_region_presentation, camera_access_detail,
+        cleanup_temp_detail, cleanup_trash_detail, codex_login_outcome_from_response, days_label,
+        desktop_privacy_outcome, display_output_detail, display_output_title,
+        engine_selection_success_copy, facility_state_is_ready, facility_state_label,
+        facility_user_detail, hotspot_client_title, hotspot_connected_clients_detail,
+        hotspot_connected_clients_label, hotspot_settings_inputs, hotspot_toggle_outcome,
+        input_feedback_sounds_detail, interface_sounds_detail, key_repeat_detail,
+        local_account_identity_detail, local_account_type_detail, locale_environment_snapshot,
+        locale_separator_name, lock_screen_notifications_detail, magnifier_detail,
+        magnifier_lens_mode_detail, magnifier_zoom_label, microphone_access_detail,
+        milliseconds_label, motion_preference_detail, night_light_detail,
+        night_light_schedule_detail, night_light_temperature_label, normalized_appearance_theme,
+        normalized_audio_volume, normalized_background_picture_option,
+        normalized_background_shading, normalized_keyboard_delay,
+        normalized_keyboard_repeat_interval, normalized_magnifier_zoom,
         normalized_night_light_temperature, normalized_old_files_age, normalized_proxy_mode,
         normalized_text_scale, normalized_unit_speed, notification_app_children_detail,
         notification_app_enable_detail, notification_app_expand_detail,
         notification_app_lock_screen_detail, notification_app_lock_screen_details_detail,
         notification_app_sound_detail, notification_banners_detail,
         notification_preference_outcome, openai_account_detail,
-        openai_login_destination_from_response, pointer_speed_label,
+        openai_login_destination_from_response, parse_locale_identity, pointer_speed_label,
         privacy_control_waiting_detail, privacy_state_label, proxy_auto_config_detail,
         proxy_endpoint_detail, proxy_ignore_hosts_detail, proxy_mode_detail, proxy_mode_outcome,
-        recent_files_detail, screen_keyboard_detail, screen_reader_detail,
-        settings_request_timeout, sidebar_keyboard_target, sidebar_movement_from_key_name,
-        sound_output_access_detail, sound_preference_outcome, sound_theme_detail,
-        storage_capacity_detail, storage_capacity_percent_text, storage_used_fraction,
-        storage_used_gb, text_scale_percent, usb_protection_detail, volume_boost_detail,
-        wallpaper_color_detail, wallpaper_placement_outcome, wallpaper_shading_outcome,
-        wallpaper_uri_detail, wifi_connect_outcome, AudioDeviceStatus, AudioEndpointStatus,
-        BluetoothAdapterStatus, CodexLoginOutcome, CoreFetchError, DisplayOutputStatus,
-        DisplaysStatus, HotspotClient, HotspotStatus, HttpResponse, LocalAccountSummary,
-        LocalModelInstallOutcome, OpenAIAuthStatus, SettingsPanel, SidebarMovement, SystemFacility,
-        LONG_CORE_JOB_TIMEOUT,
+        recent_files_detail, reduce_transparency_detail, screen_keyboard_detail,
+        screen_reader_detail, settings_request_timeout, sidebar_keyboard_target,
+        sidebar_movement_from_key_name, sound_output_access_detail, sound_preference_outcome,
+        sound_theme_detail, storage_capacity_detail, storage_capacity_percent_text,
+        storage_used_fraction, storage_used_gb, text_scale_percent, usb_protection_detail,
+        volume_boost_detail, wallpaper_color_detail, wallpaper_placement_outcome,
+        wallpaper_shading_outcome, wallpaper_uri_detail, wifi_connect_outcome, AudioDeviceStatus,
+        AudioEndpointStatus, BluetoothAdapterStatus, CodexLoginOutcome, CoreFetchError,
+        DisplayOutputStatus, DisplaysStatus, HotspotClient, HotspotStatus, HttpResponse,
+        LocalAccountSummary, LocalModelInstallOutcome, NativeLocaleFacts, OpenAIAuthStatus,
+        SettingsPanel, SidebarMovement, SystemFacility, LONG_CORE_JOB_TIMEOUT,
     };
 
     #[test]
@@ -22747,6 +23421,133 @@ mod tests {
             SettingsPanel::from_args(["--panel=wacom".to_string()].into_iter()),
             SettingsPanel::DrawingTablet
         ));
+    }
+
+    #[test]
+    fn locale_environment_uses_real_process_precedence_and_sanitizes_values() {
+        let snapshot = locale_environment_snapshot(
+            Some("de_DE.UTF-8\nignored"),
+            Some("en_US.UTF-8"),
+            Some("de:en\rignored"),
+        );
+        assert_eq!(snapshot.requested_locale, "de_DE.UTF-8");
+        assert_eq!(snapshot.requested_locale_source, "LC_ALL");
+        assert_eq!(snapshot.interface_language.as_deref(), Some("de:en"));
+
+        let fallback = locale_environment_snapshot(None, Some("en_US.UTF-8"), None);
+        assert_eq!(fallback.requested_locale, "en_US.UTF-8");
+        assert_eq!(fallback.requested_locale_source, "LANG");
+        assert_eq!(fallback.interface_language, None);
+    }
+
+    #[test]
+    fn locale_identity_parses_language_region_encoding_and_modifier() {
+        let german = parse_locale_identity("de_DE.UTF-8@euro");
+        assert_eq!(german.language, "de");
+        assert_eq!(german.region.as_deref(), Some("DE"));
+        assert_eq!(german.encoding.as_deref(), Some("UTF-8"));
+
+        let fallback = parse_locale_identity("C.UTF-8");
+        assert_eq!(fallback.language, "C");
+        assert_eq!(fallback.region, None);
+        assert_eq!(fallback.encoding.as_deref(), Some("UTF-8"));
+    }
+
+    #[test]
+    fn language_region_copy_exposes_live_formats_without_claiming_translation() {
+        let baseline_environment = locale_environment_snapshot(None, Some("C.UTF-8"), None);
+        let german_environment = locale_environment_snapshot(None, Some("de_DE.UTF-8"), Some("de"));
+        let baseline = build_language_region_presentation(
+            &baseline_environment,
+            &NativeLocaleFacts {
+                active_messages_locale: "C.UTF-8".to_string(),
+                active_time_locale: "C.UTF-8".to_string(),
+                active_numeric_locale: "C.UTF-8".to_string(),
+                date_pattern: "%m/%d/%y".to_string(),
+                date_now: "07/21/26".to_string(),
+                time_now: "14:30:00".to_string(),
+                decimal_separator: ".".to_string(),
+                grouping_separator: String::new(),
+                encoding: "UTF-8".to_string(),
+            },
+        );
+        let german = build_language_region_presentation(
+            &german_environment,
+            &NativeLocaleFacts {
+                active_messages_locale: "de_DE.UTF-8".to_string(),
+                active_time_locale: "de_DE.UTF-8".to_string(),
+                active_numeric_locale: "de_DE.UTF-8".to_string(),
+                date_pattern: "%d.%m.%Y".to_string(),
+                date_now: "21.07.2026".to_string(),
+                time_now: "14:30:00".to_string(),
+                decimal_separator: ",".to_string(),
+                grouping_separator: ".".to_string(),
+                encoding: "UTF-8".to_string(),
+            },
+        );
+
+        assert_eq!(baseline.facts.len(), 5);
+        assert_eq!(german.facts.len(), 5);
+        let changed = baseline
+            .facts
+            .iter()
+            .zip(&german.facts)
+            .filter(|(before, after)| before.value != after.value || before.detail != after.detail)
+            .count();
+        let longer = baseline
+            .facts
+            .iter()
+            .zip(&german.facts)
+            .filter(|(before, after)| after.accessible_label.len() > before.accessible_label.len())
+            .count();
+        assert!(changed >= 4);
+        assert!(longer >= 1);
+
+        let interface = &german.facts[0];
+        assert_eq!(interface.value, "German");
+        assert_eq!(
+            interface.detail,
+            "Goblins OS interface text is currently available in English."
+        );
+        assert!(interface
+            .accessible_label
+            .starts_with("Requested interface language: German."));
+        assert_eq!(german.facts[1].value, "German (Germany)");
+        assert_eq!(german.facts[2].value, "21.07.2026 · 14:30:00");
+        assert_eq!(
+            german.facts[3].value,
+            "Decimal comma · thousands separator period"
+        );
+        assert_eq!(german.facts[4].value, "Unicode (UTF-8)");
+        for fact in &german.facts {
+            let user_facing = format!(
+                "{} {} {} {}",
+                fact.title, fact.value, fact.detail, fact.accessible_label
+            );
+            for machine_term in [
+                "LANGUAGE=",
+                "LC_TIME",
+                "LC_NUMERIC",
+                "de_DE.UTF-8",
+                "%d.%m.%Y",
+                "translation catalog",
+                "locale fact",
+            ] {
+                assert!(!user_facing.contains(machine_term), "{machine_term}");
+            }
+        }
+    }
+
+    #[test]
+    fn locale_separator_names_are_readable_without_hiding_empty_grouping() {
+        assert_eq!(locale_separator_name("", "not available"), "not available");
+        assert_eq!(locale_separator_name(".", "not available"), "period");
+        assert_eq!(locale_separator_name(",", "not available"), "comma");
+        assert_eq!(locale_separator_name(" ", "not available"), "space");
+        assert_eq!(
+            locale_separator_name("\u{202f}", "not available"),
+            "narrow no-break space"
+        );
     }
 
     #[test]
@@ -23259,8 +24060,8 @@ mod tests {
         assert!(nav_group_block.contains("text-transform: none;"));
         assert!(!nav_group_block.contains("uppercase"));
         assert!(css.contains(".gos-side-nav-list {\n  padding: 0 3px 12px;"));
-        // Colored category tiles (the macOS-kit "system settings" signature):
-        // the tint classes are wired and the glyph reads white on the tile.
+        // Goblins category tint classes are wired and the glyph reads white on
+        // each tile.
         assert!(css.contains(".gos-side-icon-well.gos-tint-blue"));
         assert!(css.contains(".gos-side-icon-well.gos-tint-graphite"));
         assert!(css.contains("color: @gos_on_tint;"));
@@ -23304,8 +24105,8 @@ mod tests {
             )
         );
         assert!(css.contains(".gos-settings-root .gos-status-pill {\n  padding: 4px 9px;"));
-        // Status states render as plain trailing text (no chip): neutral, ready, and
-        // attention differ by color + weight only, matching macOS System Settings.
+        // Status states render as plain trailing text (no chip): neutral, ready,
+        // and attention differ by color and weight.
         assert!(css.contains(
             ".gos-settings-root .gos-ready {\n  color: @gos_ready;\n  background: transparent;"
         ));
@@ -23580,7 +24381,7 @@ mod tests {
     fn descriptive_values_rest_in_the_neutral_pill_not_green() {
         // A configured measurement or percentage is a descriptive value, not an
         // affirmative health state — it must read as the calm neutral pill so green
-        // stays reserved for genuinely-good status (macOS reserves green likewise).
+        // stays reserved for genuinely good status.
         for quiet in [
             "500 ms",
             "30 ms",
@@ -24312,6 +25113,8 @@ mod tests {
         assert!(magnifier_detail(false).contains("off"));
         assert!(magnifier_lens_mode_detail(true).contains("Lens mode"));
         assert!(magnifier_lens_mode_detail(false).contains("full-screen"));
+        assert!(reduce_transparency_detail(true).contains("solid, non-blurred"));
+        assert!(reduce_transparency_detail(false).contains("translucent"));
         assert_eq!(normalized_magnifier_zoom(0.1), 1.0);
         assert_eq!(normalized_magnifier_zoom(2.13), 2.25);
         assert_eq!(normalized_magnifier_zoom(f64::NAN), 2.0);
@@ -24986,8 +25789,11 @@ mod tests {
             },
             visual: super::VisualAccessibilityStatus {
                 schema_available: true,
+                reduce_transparency_schema_available: true,
                 high_contrast: Some(false),
+                reduce_transparency: Some(false),
                 detail: String::new(),
+                reduce_transparency_detail: String::new(),
             },
             typing: super::TypingAccessibilityStatus {
                 schema_available: true,
@@ -25084,8 +25890,11 @@ mod tests {
             },
             visual: super::VisualAccessibilityStatus {
                 schema_available: false,
+                reduce_transparency_schema_available: false,
                 high_contrast: None,
+                reduce_transparency: None,
                 detail: String::new(),
+                reduce_transparency_detail: String::new(),
             },
             typing: super::TypingAccessibilityStatus {
                 schema_available: false,
@@ -25429,8 +26238,11 @@ mod tests {
             },
             visual: super::VisualAccessibilityStatus {
                 schema_available: true,
+                reduce_transparency_schema_available: true,
                 high_contrast: Some(false),
+                reduce_transparency: Some(false),
                 detail: String::new(),
+                reduce_transparency_detail: String::new(),
             },
             typing: super::TypingAccessibilityStatus {
                 schema_available: true,
@@ -26303,6 +27115,40 @@ mod tests {
     }
 
     #[test]
+    fn settings_context_review_names_route_and_exact_data_boundary() {
+        let local = super::test_resident_status(
+            super::ResidentProcessState::Online,
+            super::ResidentEngineSelection::LocalGptOss,
+            true,
+            Some(2),
+        );
+        let local_route = super::context_submission_route(Some(&local));
+        assert!(!local_route.hosted);
+        assert!(super::context_route_disclosure(&local_route).contains("stays"));
+
+        let hosted = super::test_resident_status(
+            super::ResidentProcessState::Online,
+            super::ResidentEngineSelection::Codex,
+            true,
+            Some(2),
+        );
+        let hosted_route = super::context_submission_route(Some(&hosted));
+        assert!(hosted_route.hosted);
+        assert!(hosted_route.engine_name.contains("Codex"));
+        assert!(super::context_route_disclosure(&hosted_route).contains("confirm"));
+
+        let review = super::settings_context_review_copy(
+            &hosted_route,
+            "Sound",
+            "Why is output quiet?",
+            "Panel: Sound. Output volume: 25 percent.",
+        );
+        assert!(review.contains("Exact question: Why is output quiet?"));
+        assert!(review.contains("Bounded OS status summary"));
+        assert!(review.contains("No files, screenshots"));
+    }
+
+    #[test]
     fn voice_settings_copy_names_goblin_without_passive_wake_claim() {
         let voice = super::test_voice_status(false);
         let detail = super::voice_settings_detail(&voice);
@@ -26547,6 +27393,8 @@ mod tests {
                 "ready": true,
                 "provider": "gpt-oss-local-runtime",
                 "locality": "on-device",
+                "local_ready": true,
+                "local_detail": "On-device GPT-OSS is ready through the local model runtime.",
                 "cloud_relay_configured": false,
                 "local_relay_configured": true,
                 "relay_contract": "On-device GPT-OSS through the local model runtime."
@@ -26577,7 +27425,13 @@ mod tests {
             super::ResidentCapabilityState::Ready
         );
 
-        for field in ["ready", "provider", "locality"] {
+        for field in [
+            "ready",
+            "provider",
+            "locality",
+            "local_ready",
+            "local_detail",
+        ] {
             let mut missing = exact.clone();
             missing["engine"]
                 .as_object_mut()
@@ -26636,7 +27490,7 @@ mod tests {
             "local only"
         );
         assert!(policy.data_boundary.contains("local-only"));
-        assert!(policy.secret_boundary.contains("server-side"));
+        assert!(policy.secret_boundary.contains("protected Goblins OS"));
         assert!(super::policy_profile_summary_detail(&policy).contains("test-generated-at"));
 
         let mut debug_generated_at = policy.clone();

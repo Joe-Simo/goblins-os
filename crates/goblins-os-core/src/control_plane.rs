@@ -22,13 +22,15 @@ use std::os::fd::AsRawFd;
 
 use axum::{
     body::Body,
+    extract::{connect_info::Connected, ConnectInfo},
     http::{Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
+    serve::IncomingStream,
     Router,
 };
 use tokio::{
-    net::{unix::SocketAddr, TcpListener, UnixListener, UnixStream},
+    net::{TcpListener, UnixListener, UnixStream},
     sync::watch,
     task::JoinSet,
 };
@@ -41,6 +43,7 @@ const REQUIRED_SOCKET_MODE: u32 = 0o660;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClientKind {
     ControlCenter,
+    ConsentBroker,
     Dictate,
     FileBuilder,
     FocusTick,
@@ -62,8 +65,9 @@ pub(crate) enum ClientKind {
     VoiceControl,
 }
 
-const ALL_CLIENTS: [ClientKind; 17] = [
+const ALL_CLIENTS: [ClientKind; 18] = [
     ClientKind::ControlCenter,
+    ClientKind::ConsentBroker,
     ClientKind::Dictate,
     ClientKind::FileBuilder,
     ClientKind::FocusTick,
@@ -109,10 +113,16 @@ const CONTROL_CENTER_PERMISSIONS: &[Permission] = permissions![
     (POST, "/v1/models/engine"),
 ];
 
+const CONSENT_BROKER_PERMISSIONS: &[Permission] =
+    permissions![(POST, "/v1/consent/review"), (POST, "/v1/consent/decision"),];
+
 const DICTATE_PERMISSIONS: &[Permission] = permissions![(POST, "/v1/voice/dictate")];
 
-const FILE_BUILDER_PERMISSIONS: &[Permission] =
-    permissions![(POST, "/v1/apps/builds"), (POST, "/v1/ai/file-context"),];
+const FILE_BUILDER_PERMISSIONS: &[Permission] = permissions![
+    (GET, "/v1/ai/runtime"),
+    (POST, "/v1/apps/builds"),
+    (POST, "/v1/ai/file-context"),
+];
 
 const FOCUS_TICK_PERMISSIONS: &[Permission] = permissions![(POST, "/v1/focus/tick")];
 
@@ -240,6 +250,7 @@ const SETTINGS_PERMISSIONS: &[Permission] = permissions![
     (GET, "/v1/security/encryption"),
     (GET, "/v1/snapshots/status"),
     (GET, "/v1/local-models"),
+    (GET, "/v1/ai/runtime"),
     (GET, "/v1/ai/runtime/status"),
     (GET, "/v1/ai/actions"),
     (GET, "/v1/ai/action-history"),
@@ -326,6 +337,7 @@ const SHELL_PERMISSIONS: &[Permission] = permissions![
     (GET, "/v1/auth/openai/start"),
     (POST, "/v1/voice/converse"),
     (POST, "/v1/studio/turn"),
+    (POST, "/v1/studio/turn/undo"),
     (POST, "/v1/models/engine"),
     (POST, "/v1/apps/builds"),
 ];
@@ -341,6 +353,7 @@ impl ClientKind {
     pub(crate) const fn id(self) -> &'static str {
         match self {
             Self::ControlCenter => "control-center",
+            Self::ConsentBroker => "consent-broker",
             Self::Dictate => "dictate",
             Self::FileBuilder => "file-builder",
             Self::FocusTick => "focus-tick",
@@ -363,6 +376,7 @@ impl ClientKind {
     const fn permissions(self) -> &'static [Permission] {
         match self {
             Self::ControlCenter => CONTROL_CENTER_PERMISSIONS,
+            Self::ConsentBroker => CONSENT_BROKER_PERMISSIONS,
             Self::Dictate => DICTATE_PERMISSIONS,
             Self::FileBuilder => FILE_BUILDER_PERMISSIONS,
             Self::FocusTick => FOCUS_TICK_PERMISSIONS,
@@ -397,6 +411,27 @@ impl ClientKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RequestClient {
+    kind: ClientKind,
+    user_id: u32,
+}
+
+impl RequestClient {
+    pub(crate) const fn id(self) -> &'static str {
+        self.kind.id()
+    }
+
+    pub(crate) const fn user_id(self) -> u32 {
+        self.user_id
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(kind: ClientKind, user_id: u32) -> Self {
+        Self { kind, user_id }
+    }
+}
+
 pub(crate) fn capability_router(private_router: Router, client: ClientKind) -> Router {
     private_router.layer(middleware::from_fn(move |request, next| {
         enforce_capability(client, request, next)
@@ -419,10 +454,28 @@ async fn enforce_tcp_surface(request: Request<Body>, next: Next) -> Response {
     next.run(request).await
 }
 
-async fn enforce_capability(client: ClientKind, request: Request<Body>, next: Next) -> Response {
+async fn enforce_capability(
+    client: ClientKind,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    let Some(peer) = request
+        .extensions()
+        .get::<ConnectInfo<CapabilityPeerAddress>>()
+        .map(|ConnectInfo(peer)| *peer)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if peer.client != client {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     if !client.allows(request.method(), request.uri().path()) {
         return StatusCode::NOT_FOUND.into_response();
     }
+    request.extensions_mut().insert(RequestClient {
+        kind: client,
+        user_id: peer.user_id,
+    });
     next.run(request).await
 }
 
@@ -439,6 +492,16 @@ struct BoundClientSocket {
     group_id: u32,
     listener: UnixListener,
     _guard: SocketGuard,
+}
+
+/// Immutable connection identity captured from Linux `SO_PEERCRED` at accept
+/// time. Axum copies this value into every request on the accepted persistent
+/// connection; no HTTP header or process environment can influence it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CapabilityPeerAddress {
+    client: ClientKind,
+    process_id: i32,
+    user_id: u32,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -479,14 +542,21 @@ impl CapabilityListener {
 
 impl axum::serve::Listener for CapabilityListener {
     type Io = UnixStream;
-    type Addr = SocketAddr;
+    type Addr = CapabilityPeerAddress;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
             match self.listener.accept().await {
-                Ok((stream, address)) => match peer_credentials(&stream) {
+                Ok((stream, _address)) => match peer_credentials(&stream) {
                     Ok(peer) if peer.belongs_to_group(self.required_group_id) => {
-                        return (stream, address);
+                        return (
+                            stream,
+                            CapabilityPeerAddress {
+                                client: self.client,
+                                process_id: peer.process_id,
+                                user_id: peer.user_id,
+                            },
+                        );
                     }
                     Ok(peer) => {
                         tracing::debug!(
@@ -520,7 +590,17 @@ impl axum::serve::Listener for CapabilityListener {
     }
 
     fn local_addr(&self) -> io::Result<Self::Addr> {
-        self.listener.local_addr()
+        self.listener.local_addr().map(|_| CapabilityPeerAddress {
+            client: self.client,
+            process_id: std::process::id() as i32,
+            user_id: effective_uid(),
+        })
+    }
+}
+
+impl Connected<IncomingStream<'_, CapabilityListener>> for CapabilityPeerAddress {
+    fn connect_info(stream: IncomingStream<'_, CapabilityListener>) -> Self {
+        *stream.remote_addr()
     }
 }
 
@@ -900,9 +980,12 @@ where
                 socket = %client.socket_path().display(),
                 "Goblins OS core capability listener ready"
             );
-            axum::serve(CapabilityListener::new(client, group_id, listener), router)
-                .with_graceful_shutdown(wait_for_shutdown(receiver))
-                .await
+            axum::serve(
+                CapabilityListener::new(client, group_id, listener),
+                router.into_make_service_with_connect_info::<CapabilityPeerAddress>(),
+            )
+            .with_graceful_shutdown(wait_for_shutdown(receiver))
+            .await
         });
     }
 
@@ -966,12 +1049,16 @@ async fn wait_for_shutdown(mut receiver: watch::Receiver<bool>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        capability_router, validate_expected_group_id, validate_production_directory, ClientKind,
-        PeerCredentials, ALL_CLIENTS, REQUIRED_DIRECTORY_MODE,
+        capability_router, validate_expected_group_id, validate_production_directory,
+        CapabilityPeerAddress, ClientKind, PeerCredentials, RequestClient, ALL_CLIENTS,
+        REQUIRED_DIRECTORY_MODE,
     };
     use axum::{
         body::Body,
+        extract::{ConnectInfo, Extension},
         http::{Method, Request, StatusCode},
+        routing::get,
+        Router,
     };
     use tower::ServiceExt;
 
@@ -1015,6 +1102,18 @@ mod tests {
             .uri(path)
             .body(Body::empty())
             .expect("valid test request")
+    }
+
+    fn capability_request(client: ClientKind, method: Method, path: &str) -> Request<Body> {
+        let mut request = request(method, path);
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(CapabilityPeerAddress {
+                client,
+                process_id: 42,
+                user_id: 1_234,
+            }));
+        request
     }
 
     #[test]
@@ -1233,14 +1332,22 @@ mod tests {
     async fn cross_client_routes_are_denied_before_the_private_handler() {
         let today = capability_router(crate::private_router(), ClientKind::Today);
         let response = today
-            .oneshot(request(Method::GET, "/v1/settings/system"))
+            .oneshot(capability_request(
+                ClientKind::Today,
+                Method::GET,
+                "/v1/settings/system",
+            ))
             .await
             .expect("router response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let settings = capability_router(crate::private_router(), ClientKind::Settings);
         let response = settings
-            .oneshot(request(Method::GET, "/v1/today/status"))
+            .oneshot(capability_request(
+                ClientKind::Settings,
+                Method::GET,
+                "/v1/today/status",
+            ))
             .await
             .expect("router response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -1297,7 +1404,11 @@ mod tests {
     async fn wrong_method_on_an_allowed_path_is_default_denied() {
         let today = capability_router(crate::private_router(), ClientKind::Today);
         let response = today
-            .oneshot(request(Method::POST, "/v1/today/status"))
+            .oneshot(capability_request(
+                ClientKind::Today,
+                Method::POST,
+                "/v1/today/status",
+            ))
             .await
             .expect("router response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -1307,9 +1418,46 @@ mod tests {
     async fn query_data_does_not_change_the_exact_path_capability() {
         let login = capability_router(crate::private_router(), ClientKind::Login);
         let response = login
-            .oneshot(request(Method::GET, "/health?probe=capability"))
+            .oneshot(capability_request(
+                ClientKind::Login,
+                Method::GET,
+                "/health?probe=capability",
+            ))
             .await
             .expect("router response");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn authenticated_peer_uid_is_bound_to_every_private_request() {
+        async fn identity(Extension(client): Extension<RequestClient>) -> String {
+            format!("{}:{}", client.id(), client.user_id())
+        }
+
+        let private = Router::new().route("/health", get(identity));
+        let open = capability_router(private, ClientKind::Open);
+        let response = open
+            .oneshot(capability_request(ClientKind::Open, Method::GET, "/health"))
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 128)
+            .await
+            .expect("identity body");
+        assert_eq!(body, "open:1234");
+
+        let mismatched = capability_router(
+            Router::new().route("/health", get(identity)),
+            ClientKind::Open,
+        );
+        let response = mismatched
+            .oneshot(capability_request(
+                ClientKind::Login,
+                Method::GET,
+                "/health",
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

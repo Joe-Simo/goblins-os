@@ -1016,6 +1016,88 @@ capture_reduced_motion_polish_interactions() {
   REDUCED_MOTION_DIFFERENCE="$reduced_difference"
 }
 
+capture_reduced_transparency_polish_interactions() {
+  local previous_value changed_pixels trigger_path ready_path
+
+  previous_value="$(desktop_gsettings get org.goblins.os.a11y.visual reduce-transparency)"
+  trigger_path=/tmp/goblins-os-render-reduce-transparency.trigger
+  ready_path=/tmp/goblins-os-render-reduce-transparency.ready
+  rm -f "$trigger_path" "$ready_path"
+
+  export GOBLINS_OS_THEME=light
+  export GOBLINS_OS_RENDER_HOLD_WINDOW=1
+  export GOBLINS_OS_RENDER_QUERY=settings
+  cleanup_app_windows
+  # Keep the preference writer and launcher on one real desktop D-Bus session.
+  # The second frame is captured from the same window after Gio delivers the
+  # GSettings change, proving the shared backdrop reacts without an app restart.
+  desktop_user_command dbus-run-session -- bash -eu -c '
+    schema="$1"
+    key="$2"
+    trigger_path="$3"
+    ready_path="$4"
+    gsettings set "$schema" "$key" false
+    test "$(gsettings get "$schema" "$key")" = false
+    /usr/libexec/goblins-os/goblins-os-launcher &
+    app_pid=$!
+    cleanup() {
+      kill "$app_pid" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+    while [ ! -e "$trigger_path" ]; do
+      sleep 0.05
+    done
+    gsettings set "$schema" "$key" true
+    test "$(gsettings get "$schema" "$key")" = true
+    touch "$ready_path"
+    wait "$app_pid"
+  ' _ org.goblins.os.a11y.visual reduce-transparency "$trigger_path" "$ready_path" &
+
+  INTERACTION_WID="$(wait_for_exact_title "Goblins OS Launcher" || true)"
+  sleep 2.5
+  if [ -z "$INTERACTION_WID" ]; then
+    echo "RENDER-FAILED reduced-transparency launcher window was not visible" >&2
+    cleanup_app_windows
+    return 1
+  fi
+  xdotool windowactivate "$INTERACTION_WID" 2>/dev/null || true
+  xdotool windowfocus "$INTERACTION_WID" 2>/dev/null || true
+  xdotool mousemove 2 2
+  capture_existing_window "$INTERACTION_WID" 138a-launcher-standard-material.png "Launcher standard material"
+
+  touch "$trigger_path"
+  for _ in $(seq 1 40); do
+    [ -e "$ready_path" ] && break
+    sleep 0.1
+  done
+  if [ ! -e "$ready_path" ]; then
+    echo "RENDER-FAILED the real reduced-transparency preference did not become active" >&2
+    cleanup_app_windows
+    return 1
+  fi
+  sleep 0.8
+  xdotool mousemove 2 2
+  capture_existing_window "$INTERACTION_WID" 138b-launcher-reduced-transparency.png "Launcher reduced-transparency material"
+  changed_pixels="$(image_absolute_error_pixels \
+    "$OUT/138a-launcher-standard-material.png" \
+    "$OUT/138b-launcher-reduced-transparency.png")"
+  if [ "$changed_pixels" -lt 100 ]; then
+    echo "RENDER-FAILED reduced transparency did not produce a visible material change (changed_pixels=$changed_pixels)" >&2
+    cleanup_app_windows
+    return 1
+  fi
+
+  cleanup_app_windows
+  rm -f "$trigger_path" "$ready_path"
+  desktop_gsettings set org.goblins.os.a11y.visual reduce-transparency "$previous_value"
+  unset GOBLINS_OS_RENDER_QUERY
+  unset GOBLINS_OS_RENDER_HOLD_WINDOW
+
+  REDUCED_TRANSPARENCY_DIFFERENCE="$changed_pixels"
+  REDUCED_TRANSPARENCY_STANDARD_VALUE=false
+  REDUCED_TRANSPARENCY_ACTIVE_VALUE=true
+}
+
 capture_first_boot_offline_codex_if_supported() {
   local codex_status network_status
 
@@ -1051,6 +1133,9 @@ write_polish_interactions_proof() {
     "${STUDIO_DARK_MENU_DIFFERENCE:?}" \
     "${FIRST_APP_OFFLINE_ERROR_DIFFERENCE:?}" \
     "${REDUCED_MOTION_DIFFERENCE:?}" \
+    "${REDUCED_TRANSPARENCY_DIFFERENCE:?}" \
+    "${REDUCED_TRANSPARENCY_STANDARD_VALUE:?}" \
+    "${REDUCED_TRANSPARENCY_ACTIVE_VALUE:?}" \
     "${FIRST_BOOT_OFFLINE_CODEX_SUPPORTED:?}" \
     "${FIRST_BOOT_OFFLINE_CODEX_CAPTURED:?}" <<'PY'
 import hashlib
@@ -1068,8 +1153,11 @@ studio_closed_difference = int(sys.argv[6])
 studio_dark_difference = int(sys.argv[7])
 first_app_offline_difference = int(sys.argv[8])
 reduced_difference = int(sys.argv[9])
-first_boot_offline_codex_supported = sys.argv[10] == "true"
-first_boot_offline_codex_captured = sys.argv[11] == "true"
+reduced_transparency_difference = int(sys.argv[10])
+reduced_transparency_standard_value = sys.argv[11] == "true"
+reduced_transparency_active_value = sys.argv[12] == "true"
+first_boot_offline_codex_supported = sys.argv[13] == "true"
+first_boot_offline_codex_captured = sys.argv[14] == "true"
 screenshots = [
     "124-settings-models-advanced-collapsed.png",
     "125-settings-models-advanced-expanded.png",
@@ -1085,6 +1173,8 @@ screenshots = [
     "135-install-progress-reduced-motion-b.png",
     "136-settings-models-advanced-expanded-dark.png",
     "137-studio-engine-menu-dark.png",
+    "138a-launcher-standard-material.png",
+    "138b-launcher-reduced-transparency.png",
 ]
 if first_boot_offline_codex_captured:
     screenshots.append("138-first-boot-codex-offline.png")
@@ -1129,6 +1219,13 @@ proof = {
     "accessibility": {
         "proof": "source-gated",
         "account_backed_at_spi": "external",
+        "reduce_transparency": {
+            "schema": "org.goblins.os.a11y.visual",
+            "key": "reduce-transparency",
+            "same_live_window": True,
+            "standard_value": reduced_transparency_standard_value,
+            "active_value": reduced_transparency_active_value,
+        },
     },
     "comparisons": {
         "settings_expanded_changed_pixels": settings_difference,
@@ -1140,11 +1237,17 @@ proof = {
         "first_app_offline_error_changed_pixels": first_app_offline_difference,
         "reduced_motion_changed_pixels": reduced_difference,
         "reduced_motion_zero_difference": reduced_difference == 0,
+        "reduced_transparency_changed_pixels": reduced_transparency_difference,
+        "reduced_transparency_visible_difference": reduced_transparency_difference >= 100,
     },
     "screenshots": [png_evidence(name) for name in screenshots],
 }
 if not proof["comparisons"]["reduced_motion_zero_difference"]:
     raise SystemExit("RENDER-FAILED reduced-motion comparison was not zero")
+if reduced_transparency_standard_value or not reduced_transparency_active_value:
+    raise SystemExit("RENDER-FAILED reduced-transparency proof did not use false then true")
+if not proof["comparisons"]["reduced_transparency_visible_difference"]:
+    raise SystemExit("RENDER-FAILED reduced transparency did not visibly change the material")
 if first_boot_offline_codex_supported != first_boot_offline_codex_captured:
     raise SystemExit("RENDER-FAILED supported first-boot offline Codex state was not captured")
 (output / "139-polish-interactions-proof.json").write_text(
@@ -1162,6 +1265,9 @@ capture_polish_interactions() {
   STUDIO_DARK_MENU_DIFFERENCE=""
   FIRST_APP_OFFLINE_ERROR_DIFFERENCE=""
   REDUCED_MOTION_DIFFERENCE=""
+  REDUCED_TRANSPARENCY_DIFFERENCE=""
+  REDUCED_TRANSPARENCY_STANDARD_VALUE=""
+  REDUCED_TRANSPARENCY_ACTIVE_VALUE=""
   FIRST_BOOT_OFFLINE_CODEX_SUPPORTED=""
   FIRST_BOOT_OFFLINE_CODEX_CAPTURED=""
 
@@ -1169,6 +1275,7 @@ capture_polish_interactions() {
   capture_studio_polish_interactions
   capture_first_app_polish_interactions
   capture_reduced_motion_polish_interactions
+  capture_reduced_transparency_polish_interactions
   capture_first_boot_offline_codex_if_supported
   write_polish_interactions_proof
   unset GOBLINS_OS_THEME
@@ -1224,6 +1331,17 @@ capture_chrome_surface() {
   unset GOBLINS_OS_THEME
 }
 
+capture_consent_surface() {
+  # Render-only broker mode is intentionally decision-incapable: it never
+  # claims core review state or submits a decision, and the visible copy says
+  # sharing is disabled. The installed setgid entrypoint and shared GTK theme
+  # are still exercised exactly as shipped.
+  capture goblins-os-consent-broker "Goblins OS Hosted AI Review" \
+    140-hosted-context-review.png --render-proof=light
+  capture goblins-os-consent-broker "Goblins OS Hosted AI Review" \
+    141-hosted-context-review-dark.png --render-proof=dark
+}
+
 if [ "$RENDER_SCOPE" = "polish-interactions" ]; then
   capture_polish_interactions
   kill "$XVFB_PID" "$CORE_PID" "$RES_PID" 2>/dev/null || true
@@ -1250,6 +1368,14 @@ fi
 
 if [ "$RENDER_SCOPE" = "chrome" ]; then
   capture_chrome_surface
+  kill "$XVFB_PID" "$CORE_PID" "$RES_PID" 2>/dev/null || true
+  echo "=== captured artifacts ==="
+  ls -la "$OUT"
+  exit 0
+fi
+
+if [ "$RENDER_SCOPE" = "consent" ]; then
+  capture_consent_surface
   kill "$XVFB_PID" "$CORE_PID" "$RES_PID" 2>/dev/null || true
   echo "=== captured artifacts ==="
   ls -la "$OUT"
@@ -1363,6 +1489,7 @@ export GOBLINS_OS_THEME=dark
 capture goblins-os-login     "Goblins OS Login"    25-login-dark.png
 unset GOBLINS_OS_THEME
 capture_settings_light_surface
+capture_consent_surface
 
 # Unlock the session in local-only mode so the shell renders the real desktop
 # (launcher + workspace + resident strip), not just the first-boot lock screen.

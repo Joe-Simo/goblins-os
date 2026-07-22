@@ -1,10 +1,10 @@
-# Compatibility entrypoint for producing shippable candidate media.
+# Compatibility entrypoint for producing shippable aarch64 candidate media.
 #
 # This workflow delegates to the one digest-bound candidate implementation. It
 # does not move a release-channel image, create a Git tag or GitHub Release,
 # write generated evidence to Git, update the website, or promote stable.
-name: candidate-release-media
-run-name: candidate release media · ${{ github.sha }}
+name: aarch64-candidate-release-media
+run-name: aarch64 candidate release media · ${{ github.sha }}
 
 on:
   workflow_dispatch:

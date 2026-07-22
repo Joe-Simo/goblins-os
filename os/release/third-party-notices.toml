@@ -1,33 +1,46 @@
-# Third-party notice and SBOM plan. Generated outputs are architecture-specific
-# release artifacts and must live outside the source package.
+# Third-party notice and SBOM plan. Generated outputs are native aarch64 release
+# artifacts and must live outside the source package.
 
 [cargo]
 lockfile = "Cargo.lock"
-generator = "goblins-os-verify --source-root <source> --release-evidence os/signoff-proofs/sbom/<arch>/ --arch <arch> --candidate-commit <40-hex-commit> --image-ref <registry/image@sha256:64-hex-digest>"
-packages_tsv = "os/signoff-proofs/sbom/<arch>/cargo-lock-packages.tsv"
-manifest = "os/signoff-proofs/sbom/<arch>/release-evidence-manifest.json"
+generator = "goblins-os-verify --source-root <source> --release-evidence os/signoff-proofs/sbom/aarch64/ --arch aarch64 --candidate-commit <40-hex-commit> --image-ref <registry/image@sha256:64-hex-digest>"
+packages_tsv = "os/signoff-proofs/sbom/aarch64/cargo-lock-packages.tsv"
+manifest = "os/signoff-proofs/sbom/aarch64/release-evidence-manifest.json"
 license_policy = "Workspace source is AGPL-3.0-or-later (see LICENSE); dependency and bundled-component licenses remain third-party under their own terms. The 'Goblins OS' name and marks are reserved trademarks (see TRADEMARKS.md)."
 
 [rpm]
 source = "Fedora 44 bootc image package set"
-generator = "Run the packaged goblins-os-verify --release-evidence inside the exact digest-pinned Goblins OS architecture image; the same invocation must seal the Cargo and RPM inventories into the v4 manifest."
-recommended_sbom = "rpm -qa output and license scan under os/signoff-proofs/sbom/<arch>/"
-packages_tsv = "os/signoff-proofs/sbom/<arch>/rpm-packages.tsv"
-command_file = "os/signoff-proofs/sbom/<arch>/rpm-packages.command"
+generator = "Run the packaged goblins-os-verify --release-evidence inside the exact digest-pinned Goblins OS architecture image; the same invocation must seal the Cargo inventory, RPM inventory, and RPM replay-command bytes into the v5 manifest."
+recommended_sbom = "rpm -qa output and license scan under os/signoff-proofs/sbom/aarch64/"
+packages_tsv = "os/signoff-proofs/sbom/aarch64/rpm-packages.tsv"
+command_file = "os/signoff-proofs/sbom/aarch64/rpm-packages.command"
 command_file_role = "Diagnostic replay recipe only; running this file by itself does not satisfy final release evidence."
-architectures = ["aarch64", "x86_64"]
+architectures = ["aarch64"]
 
 [installer_branding_tool]
 purpose = "Build-only immutable toolchain for replacing stock Anaconda installer chrome with the Goblins OS identity."
 provenance = "os/release/installer-branding-tool.toml"
-inventory = "Extract /usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv from the exact digest-pinned image; per-architecture SHA256 values and package counts are recorded in the provenance file."
+inventory = "Extract /usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv from the exact digest-pinned Arm image; its SHA256 value and package count are recorded in the provenance file."
 shipping_boundary = "The tool image and its packages are not installed in Goblins OS; only the remastered ISO output is shipped."
+
+[codex]
+component = "OpenAI Codex CLI"
+version = "0.144.4"
+source = "https://github.com/openai/codex/releases/tag/rust-v0.144.4"
+artifact = "codex-aarch64-unknown-linux-musl.tar.gz"
+artifact_sha256 = "4d07243ef4ae6786b8b321d7aea3f9be4e1d2c597ae5407e7c1b9873334082b2"
+license = "Apache-2.0"
+license_sha256 = "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc"
+notice_sha256 = "9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915"
+license_path = "/usr/share/licenses/openai-codex/LICENSE"
+notice_path = "/usr/share/licenses/openai-codex/NOTICE"
+runtime_boundary = "The immutable aarch64 OS image owns /usr/bin/codex; account credentials remain in the owner-only Goblins OS core service storage and are never included in the image or SBOM evidence."
 
 [gnome]
 source = "Fedora RPM package set in the built image"
-coverage = "GNOME Shell, GTK, libadwaita/Adwaita assets, Nautilus, Console, Settings integrations, Flatpak, portals, and related desktop packages are captured in os/signoff-proofs/sbom/<arch>/rpm-packages.tsv."
+coverage = "GNOME Shell, GTK, libadwaita/Adwaita assets, Nautilus, Console, Settings integrations, Flatpak, portals, and related desktop packages are captured in os/signoff-proofs/sbom/aarch64/rpm-packages.tsv."
 trademark_policy = "GNOME, GTK, Flatpak, and Flathub names are factual component/package references only; Goblins OS remains the product identity."
-notice_path = "See os/release/trademark-posture.toml and the architecture-specific RPM SBOM."
+notice_path = "See os/release/trademark-posture.toml and the native aarch64 RPM SBOM."
 
 [fonts]
 inter = "rsms-inter-fonts from Fedora packages"

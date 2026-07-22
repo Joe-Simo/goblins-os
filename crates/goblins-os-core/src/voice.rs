@@ -1,10 +1,13 @@
-//! Local, on-device voice for Goblins OS.
+//! Privacy-bounded voice for Goblins OS.
 //!
 //! Voice is assembled from local, offline-capable parts so it works the same
 //! whether the engine is GPT-OSS or a bring-your-own key, and stays fully private
 //! in offline mode: speech-to-text with a local Whisper runtime, the resident
 //! model for the reply, text-to-speech with a local Piper voice, captured and
-//! played through the OS audio stack (ALSA over PipeWire). The Whisper and Piper
+//! played through the OS audio stack (ALSA over PipeWire). Audio, transcription,
+//! and speech synthesis stay on-device. If the selected reply engine is hosted,
+//! the exact transcript is retained by the core while the trusted broker asks
+//! for one explicit decision before it can leave the device. The Whisper and Piper
 //! models are weights, so — like GPT-OSS — they are never bundled in the image;
 //! the OS reports what is present and what to add, and greys voice out until then.
 
@@ -21,16 +24,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use axum::{http::StatusCode, Json};
+use axum::{extract::Extension, http::StatusCode, Json};
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::{
     ambient_authority,
     fs::{Dir, Metadata, MetadataExt, OpenOptions, OpenOptionsExt},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::bounded::{bounded_output_of, isolated_command, BoundedCommandError};
-
 const DEFAULT_VOICE_DIR: &str = "/var/lib/goblins-os/voice";
 const VOICE_WAKE_WORD: &str = "Goblin";
 const VOICE_WAKE_PHRASES: &[&str] = &["Goblin", "Hey Goblin"];
@@ -38,6 +40,7 @@ const VOICE_WAKE_LISTENER_DETAIL: &str = "Press the voice button, then say Gobli
 const REQUIRED_VOICE_WORK_MODE: u32 = 0o700;
 const REQUIRED_VOICE_PROBE_MODE: u32 = 0o600;
 const MAX_TRANSCRIPT_BYTES: usize = 64 * 1024;
+const MAX_CONVERSE_TRANSCRIPT_CHARS: usize = 6000;
 const VOICE_STORAGE_PROOF_BYTES: &[u8] = b"goblins-os-voice-storage-proof\n";
 
 #[derive(Serialize)]
@@ -69,6 +72,9 @@ pub struct ConverseOutcome {
     reply: String,
     text: String,
 }
+
+#[derive(Default, Deserialize)]
+pub struct ConverseRequest {}
 
 /// The result of a dictation pass — the recognized text to type into the focused
 /// field, or an honest reason it could not run.
@@ -349,8 +355,12 @@ fn purge_stale_voice_workspaces_at(work_path: &Path) -> io::Result<()> {
 /// A converse turn is minutes of blocking work (mic capture, Whisper, a model
 /// turn, Piper, playback), so the body runs on the blocking pool instead of
 /// pinning an async runtime worker.
-pub async fn voice_converse() -> (StatusCode, Json<ConverseOutcome>) {
-    crate::bounded::run_voice_blocking(voice_converse_blocking)
+pub async fn voice_converse(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
+    Json(request): Json<ConverseRequest>,
+) -> (StatusCode, Json<ConverseOutcome>) {
+    let client = client.map(|Extension(client)| client);
+    crate::bounded::run_voice_blocking(move || voice_converse_blocking(request, client))
         .await
         .unwrap_or_else(|_| {
             (
@@ -365,18 +375,22 @@ pub async fn voice_converse() -> (StatusCode, Json<ConverseOutcome>) {
         })
 }
 
-fn voice_converse_blocking() -> (StatusCode, Json<ConverseOutcome>) {
-    match run_converse() {
+fn voice_converse_blocking(
+    request: ConverseRequest,
+    client: Option<crate::control_plane::RequestClient>,
+) -> (StatusCode, Json<ConverseOutcome>) {
+    match run_converse(request, client) {
         Ok((transcript, reply)) => (
             StatusCode::OK,
             Json(ConverseOutcome {
                 ok: true,
-                text: "Heard you, replied out loud.".to_string(),
+                text: "Heard you, replied out loud through the selected Goblins AI engine."
+                    .to_string(),
                 transcript,
                 reply,
             }),
         ),
-        Err(detail) => (
+        Err(ConverseError::Failed(detail)) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ConverseOutcome {
                 ok: false,
@@ -459,14 +473,14 @@ fn build_status() -> VoiceStatus {
     VoiceStatus {
         source: "goblins-os-core",
         available,
-        // Every part is local, so voice never needs the network — it is safe in
-        // offline / private mode.
+        // Audio capture, transcription, and playback are local; private mode
+        // blocks hosted reply routes, so voice fails closed without network use.
         offline_safe: true,
         wake_word: VOICE_WAKE_WORD,
         wake_phrases: VOICE_WAKE_PHRASES,
         wake_listening: wake_listening_capability(),
         detail: if available {
-            "Goblin voice is ready. Press the voice button, say Goblin, and it answers out loud on this device. Background wake listening is not ready until the local wake-word listener is available."
+            "Goblin voice is ready. Audio, transcription, and playback stay on this device. GPT-OSS answers locally; a hosted reply engine requires review of the exact transcript before it leaves this device. Background wake listening is not ready until the local wake-word listener is available."
                 .to_string()
         } else {
             "Goblin voice runs on local Whisper and Piper models. Add the missing voice components; background wake listening stays off until the local wake-word listener is available.".to_string()
@@ -581,36 +595,72 @@ fn unavailable_audio_capabilities(detail: &str) -> (Capability, Capability) {
     )
 }
 
-/// The full local voice loop: capture the microphone, transcribe with Whisper,
-/// answer with the Goblins AI runtime (GPT-OSS or the user's key), synthesize the
-/// reply with Piper, and play it. Every step degrades to a clear message.
-fn run_converse() -> Result<(String, String), String> {
-    let stt = stt_capability();
+#[derive(Debug, Eq, PartialEq)]
+enum ConverseError {
+    Failed(String),
+}
+
+/// Capture and transcribe locally, then answer through the selected engine and
+/// synthesize locally. For a hosted engine, the core retains the exact
+/// transcript while the trusted broker presents one synchronous review; no
+/// transcript or review authority is returned to the requester.
+fn run_converse(
+    _request: ConverseRequest,
+    client: Option<crate::control_plane::RequestClient>,
+) -> Result<(String, String), ConverseError> {
     let tts = tts_capability();
-    if !stt.ready {
-        return Err(stt.detail);
-    }
     if !tts.ready {
-        return Err(tts.detail);
+        return Err(ConverseError::Failed(tts.detail));
     }
+    let transcript = run_dictate()
+        .and_then(|transcript| reviewed_voice_transcript(&transcript))
+        .map_err(ConverseError::Failed)?;
+    let disclosure = format!(
+        "the exact reviewed voice transcript ({} characters); microphone audio, Whisper transcription, and Piper speech stay on this device",
+        transcript.chars().count()
+    );
+    let (reply, _) = crate::resident::resident_generate_protected_context(
+        client,
+        "voice.converse",
+        "Ask Goblins AI using the reviewed voice transcript",
+        &transcript,
+        transcript.as_bytes(),
+        &disclosure,
+    )
+    .map_err(|error| match error {
+        crate::resident::ContextGenerationError::Cancelled => ConverseError::Failed(
+            "Nothing was shared. The hosted voice request was cancelled.".to_string(),
+        ),
+        crate::resident::ContextGenerationError::TimedOut => ConverseError::Failed(
+            "Nothing was shared because the hosted voice review expired.".to_string(),
+        ),
+        crate::resident::ContextGenerationError::Unavailable(detail) => ConverseError::Failed(
+            format!("The selected Goblins AI engine could not answer: {detail}."),
+        ),
+    })?;
+
     with_private_voice_workspace(|workspace| {
-        let mut input = private_voice_audio_file(workspace, "microphone")?;
-        record_audio(&mut input)?;
-        let transcript = transcribe(input.path())?;
-        if transcript.is_empty() {
-            return Err("Goblins OS didn’t catch that — try again.".to_string());
-        }
-        drop(input);
-
-        let reply = crate::resident::resident_generate(&transcript)
-            .map_err(|detail| format!("The on-device model could not answer: {detail}."))?;
-
         let reply_wav = private_voice_audio_file(workspace, "reply")?;
         synthesize(&reply, reply_wav.path())?;
         play_audio(reply_wav.path())?;
-
-        Ok((transcript, reply))
+        Ok(())
     })
+    .map_err(ConverseError::Failed)?;
+
+    Ok((transcript, reply))
+}
+
+fn reviewed_voice_transcript(transcript: &str) -> Result<String, String> {
+    let transcript = transcript.trim();
+    if transcript.is_empty() {
+        return Err("Goblins OS didn’t catch that — try again.".to_string());
+    }
+    if transcript.chars().count() > MAX_CONVERSE_TRANSCRIPT_CHARS {
+        return Err(format!(
+            "The voice transcript is too long to review safely. Keep it under {MAX_CONVERSE_TRANSCRIPT_CHARS} characters and try again."
+        ));
+    }
+    Ok(transcript.to_string())
 }
 
 fn record_audio(output: &mut tempfile::NamedTempFile) -> Result<(), String> {
@@ -910,8 +960,9 @@ fn piper_bin() -> String {
 mod tests {
     use super::{
         finish_private_voice_operation, first_model, probe_voice_storage_at,
-        purge_stale_voice_workspaces_at, Capability, VoiceStatus, VOICE_WAKE_LISTENER_DETAIL,
-        VOICE_WAKE_PHRASES, VOICE_WAKE_WORD,
+        purge_stale_voice_workspaces_at, reviewed_voice_transcript, Capability, VoiceStatus,
+        MAX_CONVERSE_TRANSCRIPT_CHARS, VOICE_WAKE_LISTENER_DETAIL, VOICE_WAKE_PHRASES,
+        VOICE_WAKE_WORD,
     };
     use std::{
         os::unix::fs::{symlink, MetadataExt, PermissionsExt},
@@ -932,6 +983,16 @@ mod tests {
         probe_voice_storage_at(&work).unwrap();
         assert!(work.is_dir());
         assert_eq!(std::fs::read_dir(&work).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn hosted_voice_review_preserves_one_exact_bounded_transcript() {
+        assert_eq!(
+            reviewed_voice_transcript("  Review this exact sentence.  ").unwrap(),
+            "Review this exact sentence."
+        );
+        assert!(reviewed_voice_transcript("").is_err());
+        assert!(reviewed_voice_transcript(&"x".repeat(MAX_CONVERSE_TRANSCRIPT_CHARS + 1)).is_err());
     }
 
     #[test]

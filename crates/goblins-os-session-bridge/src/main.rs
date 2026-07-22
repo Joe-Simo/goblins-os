@@ -28,6 +28,9 @@ const MAX_CAPTURE_DURATION_SECONDS: u64 = 7;
 const MAX_PLAYBACK_DURATION_SECONDS: u64 = 90;
 const VOICE_CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 const VOICE_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(120);
+const HOSTED_CONSENT_BROKER: &str = "/usr/libexec/goblins-os/goblins-os-consent-broker";
+const HOSTED_CONSENT_BROKER_GROUP: &str = "goblins-core-consent-broker";
+const HOSTED_CONSENT_PROCESS_TIMEOUT: Duration = Duration::from_secs(315);
 const TEXT_SHORTCUTS_RUNTIME_STATUS_PATH: &str =
     "/run/goblins-os-session/text-shortcuts-runtime-status.json";
 const TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA: &str = "goblins-os.text-shortcuts-runtime-status.v1";
@@ -46,6 +49,7 @@ const A11Y_INTERFACE_SCHEMA: &str = "org.gnome.desktop.a11y.interface";
 const A11Y_KEYBOARD_SCHEMA: &str = "org.gnome.desktop.a11y.keyboard";
 const A11Y_MAGNIFIER_SCHEMA: &str = "org.gnome.desktop.a11y.magnifier";
 const A11Y_MOUSE_SCHEMA: &str = "org.gnome.desktop.a11y.mouse";
+const GOBLINS_VISUAL_A11Y_SCHEMA: &str = "org.goblins.os.a11y.visual";
 const COLOR_SCHEMA: &str = "org.gnome.settings-daemon.plugins.color";
 const FOCUS_SCHEMA: &str = "org.goblins.os.focus";
 const NOTIFICATIONS_SCHEMA: &str = "org.gnome.desktop.notifications";
@@ -104,6 +108,7 @@ const A11Y_KEYBOARD_KEYS: &[&str] = &[
 ];
 const A11Y_MAGNIFIER_KEYS: &[&str] = &["mag-factor", "lens-mode"];
 const A11Y_MOUSE_KEYS: &[&str] = &["dwell-click-enabled"];
+const GOBLINS_VISUAL_A11Y_KEYS: &[&str] = &["reduce-transparency"];
 const COLOR_KEYS: &[&str] = &[
     "night-light-enabled",
     "night-light-schedule-automatic",
@@ -174,6 +179,7 @@ enum BridgeRequest {
     VoicePlayback {
         wav_base64: String,
     },
+    LaunchHostedConsentBroker {},
     PermissionStoreDelete {
         table: String,
         id: String,
@@ -323,9 +329,10 @@ fn handle_request(request: BridgeRequest, peer_uid: u32) -> BridgeResponse {
         BridgeRequest::VoiceAudioStatus {}
             | BridgeRequest::VoiceCapture {}
             | BridgeRequest::VoicePlayback { .. }
+            | BridgeRequest::LaunchHostedConsentBroker {}
     ) && resolve_user_id(CORE_SERVICE_USER) != Some(peer_uid)
     {
-        return failure("voice operations require the authenticated core service peer.");
+        return failure("This operation requires the authenticated core service peer.");
     }
     match request {
         BridgeRequest::Ping => success("pong".to_string()),
@@ -335,6 +342,7 @@ fn handle_request(request: BridgeRequest, peer_uid: u32) -> BridgeResponse {
         BridgeRequest::VoiceAudioStatus {} => voice_audio_status_response(),
         BridgeRequest::VoiceCapture {} => voice_capture_response(),
         BridgeRequest::VoicePlayback { wav_base64 } => voice_playback_response(&wav_base64),
+        BridgeRequest::LaunchHostedConsentBroker {} => launch_hosted_consent_broker_response(),
         BridgeRequest::PermissionStoreDelete { table, id, app } => {
             permission_store_delete_response(&table, &id, &app)
         }
@@ -350,6 +358,97 @@ fn handle_request(request: BridgeRequest, peer_uid: u32) -> BridgeResponse {
         BridgeRequest::TextShortcutsRead {} => text_shortcuts_read_response(),
         BridgeRequest::TextShortcutsWrite { shortcuts } => text_shortcuts_write_response(shortcuts),
     }
+}
+
+fn launch_hosted_consent_broker_response() -> BridgeResponse {
+    if validate_hosted_consent_broker(Path::new(HOSTED_CONSENT_BROKER)).is_err() {
+        return failure("The trusted hosted-context review surface is unavailable.");
+    }
+
+    let mut command = Command::new(HOSTED_CONSENT_BROKER);
+    configure_hosted_consent_environment(&mut command);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => return failure("The trusted hosted-context review could not start."),
+    };
+
+    // Reap the detached review process and cap its lifetime. The decision does
+    // not travel through this process or socket; the broker posts it directly
+    // through its dedicated core capability.
+    thread::spawn(move || {
+        let deadline = Instant::now() + HOSTED_CONSENT_PROCESS_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Ok(None) | Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+            }
+        }
+    });
+    success("launched".to_string())
+}
+
+fn configure_hosted_consent_environment(command: &mut Command) {
+    command.env_clear();
+    command.env("PATH", "/usr/local/bin:/usr/bin:/bin");
+    command.env("XDG_DATA_DIRS", "/usr/local/share:/usr/share");
+    for name in [
+        "DBUS_SESSION_BUS_ADDRESS",
+        "HOME",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_MESSAGES",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_TYPE",
+    ] {
+        if let Some(value) = env::var_os(name)
+            .filter(|value| !value.is_empty() && value.to_string_lossy().chars().count() <= 4096)
+        {
+            command.env(name, value);
+        }
+    }
+}
+
+fn validate_hosted_consent_broker(path: &Path) -> Result<(), ()> {
+    if path != Path::new(HOSTED_CONSENT_BROKER) {
+        return Err(());
+    }
+    for directory in [
+        Path::new("/usr"),
+        Path::new("/usr/libexec"),
+        Path::new("/usr/libexec/goblins-os"),
+    ] {
+        let metadata = fs::symlink_metadata(directory).map_err(|_| ())?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(());
+        }
+    }
+    let expected_group = resolve_group_id(HOSTED_CONSENT_BROKER_GROUP).ok_or(())?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.gid() != expected_group
+        || metadata.mode() & 0o7777 != 0o2755
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 fn unix_peer_uid(stream: &UnixStream) -> Result<u32, ()> {
@@ -413,6 +512,29 @@ fn resolve_user_id(name: &str) -> Option<u32> {
     }
     // SAFETY: getpwnam_r returned success and initialized our record storage.
     Some(unsafe { record.assume_init() }.pw_uid)
+}
+
+fn resolve_group_id(name: &str) -> Option<u32> {
+    let name = CString::new(name).ok()?;
+    let mut record = std::mem::MaybeUninit::<libc::group>::uninit();
+    let mut result = std::ptr::null_mut();
+    let mut buffer = vec![0u8; 16 * 1024];
+    // SAFETY: every pointer references valid writable storage of the supplied
+    // size, and name is NUL-terminated for the lifetime of the call.
+    let status = unsafe {
+        libc::getgrnam_r(
+            name.as_ptr(),
+            record.as_mut_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 || result.is_null() {
+        return None;
+    }
+    // SAFETY: getgrnam_r returned success and initialized our record storage.
+    Some(unsafe { record.assume_init() }.gr_gid)
 }
 
 fn text_shortcuts_runtime_status_response() -> BridgeResponse {
@@ -1103,6 +1225,7 @@ fn validate_schema_key(schema_arg: &str, key: &str) -> Result<(), String> {
         A11Y_KEYBOARD_SCHEMA => A11Y_KEYBOARD_KEYS,
         A11Y_MAGNIFIER_SCHEMA => A11Y_MAGNIFIER_KEYS,
         A11Y_MOUSE_SCHEMA => A11Y_MOUSE_KEYS,
+        GOBLINS_VISUAL_A11Y_SCHEMA => GOBLINS_VISUAL_A11Y_KEYS,
         COLOR_SCHEMA => COLOR_KEYS,
         FOCUS_SCHEMA => FOCUS_KEYS,
         NOTIFICATIONS_SCHEMA => NOTIFICATION_KEYS,
@@ -1144,6 +1267,7 @@ fn validate_list_keys_schema(schema: &str) -> Result<(), String> {
         | A11Y_KEYBOARD_SCHEMA
         | A11Y_MAGNIFIER_SCHEMA
         | A11Y_MOUSE_SCHEMA
+        | GOBLINS_VISUAL_A11Y_SCHEMA
         | COLOR_SCHEMA
         | FOCUS_SCHEMA
         | NOTIFICATIONS_SCHEMA
@@ -1185,6 +1309,7 @@ fn validate_schema_arg(schema_arg: &str) -> Result<(&str, &str), String> {
         | A11Y_KEYBOARD_SCHEMA
         | A11Y_MAGNIFIER_SCHEMA
         | A11Y_MOUSE_SCHEMA
+        | GOBLINS_VISUAL_A11Y_SCHEMA
         | COLOR_SCHEMA
         | FOCUS_SCHEMA
         | NOTIFICATIONS_SCHEMA
@@ -1696,6 +1821,12 @@ fn self_test() -> Result<(), String> {
     ])?;
     validate_gsettings_args(&[
         "set".to_string(),
+        GOBLINS_VISUAL_A11Y_SCHEMA.to_string(),
+        "reduce-transparency".to_string(),
+        "true".to_string(),
+    ])?;
+    validate_gsettings_args(&[
+        "set".to_string(),
         KEYBOARD_SCHEMA.to_string(),
         "repeat".to_string(),
         "true".to_string(),
@@ -1832,6 +1963,25 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    #[test]
+    fn consent_launch_protocol_rejects_requester_supplied_capabilities() {
+        assert!(
+            serde_json::from_value::<super::BridgeRequest>(serde_json::json!({
+                "op": "launch-hosted-consent-broker"
+            }))
+            .is_ok()
+        );
+        for forbidden in ["review_id", "lease_id", "ticket", "content"] {
+            assert!(
+                serde_json::from_value::<super::BridgeRequest>(serde_json::json!({
+                    "op": "launch-hosted-consent-broker",
+                    (forbidden): "attacker-controlled"
+                }))
+                .is_err()
+            );
+        }
+    }
+
     use super::{
         effective_user_id, encode_display_config_logical_monitors, handle_stream, monotonic_now_ns,
         read_text_shortcuts_runtime_status, read_to_end_before, valid_pcm_wave,
@@ -1840,12 +1990,12 @@ mod tests {
         validate_text_shortcuts_runtime_status, validate_text_shortcuts_runtime_status_metadata,
         validate_wpctl_args, BridgeRequest, DisplayConfigLogicalMonitor, DisplayConfigMonitor,
         PcmFormat, TextShortcutsRuntimeStatus, DEFAULT_SINK, DEFAULT_SOURCE, FOCUS_SCHEMA,
-        INPUT_SOURCES_SCHEMA, KEYBOARD_SCHEMA, MAX_CAPTURE_DURATION_SECONDS,
-        MAX_PLAYBACK_DURATION_SECONDS, MAX_REQUEST_BYTES, MOUSE_SCHEMA,
-        NOTIFICATION_APPLICATION_BASE_PATH, NOTIFICATION_APPLICATION_SCHEMA, SOUND_SCHEMA,
-        TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS, TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES,
-        TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS, TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA,
-        TOUCHPAD_SCHEMA, WM_SCHEMA,
+        GOBLINS_VISUAL_A11Y_SCHEMA, INPUT_SOURCES_SCHEMA, KEYBOARD_SCHEMA,
+        MAX_CAPTURE_DURATION_SECONDS, MAX_PLAYBACK_DURATION_SECONDS, MAX_REQUEST_BYTES,
+        MOUSE_SCHEMA, NOTIFICATION_APPLICATION_BASE_PATH, NOTIFICATION_APPLICATION_SCHEMA,
+        SOUND_SCHEMA, TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS,
+        TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES, TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS,
+        TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA, TOUCHPAD_SCHEMA, WM_SCHEMA,
     };
 
     fn pcm_wave(format: PcmFormat, data_bytes: usize) -> Vec<u8> {
@@ -2360,6 +2510,18 @@ mod tests {
             "mission-control".to_string(),
         ])
         .is_ok());
+        assert!(validate_gsettings_args(&[
+            "set".to_string(),
+            GOBLINS_VISUAL_A11Y_SCHEMA.to_string(),
+            "reduce-transparency".to_string(),
+            "true".to_string(),
+        ])
+        .is_ok());
+        assert!(validate_gsettings_args(&[
+            "list-keys".to_string(),
+            GOBLINS_VISUAL_A11Y_SCHEMA.to_string(),
+        ])
+        .is_ok());
     }
 
     #[test]
@@ -2376,6 +2538,13 @@ mod tests {
             INPUT_SOURCES_SCHEMA.to_string(),
             "sources".to_string(),
             "bad\nvalue".to_string(),
+        ])
+        .is_err());
+        assert!(validate_gsettings_args(&[
+            "set".to_string(),
+            GOBLINS_VISUAL_A11Y_SCHEMA.to_string(),
+            "blur-radius".to_string(),
+            "0".to_string(),
         ])
         .is_err());
     }

@@ -21,8 +21,10 @@ the system helps turn it into working local projects.
   not raw secrets.
 - **Honest capability states.** If a runtime, device, permission, or service is
   unavailable, the UI should say so plainly and degrade safely.
-- **Per-architecture releases.** Arm and x86_64 are separate native build tracks
-  with separate media, checksums, manifests, and proof.
+- **One production architecture.** The supported current product and release
+  target is 64-bit Arm (`aarch64`), with native media, checksums, manifests, and
+  proof. Already-published `x86_64` alpha assets remain immutable historical
+  records only; they are not supported, current, or eligible for promotion.
 
 ## Core Surfaces
 
@@ -47,6 +49,5 @@ A surface is ready when it:
   that surface.
 - Does not fabricate missing hardware, runtime, package, or screenshot evidence.
 
-The OS is release-ready when the release gate passes for every supported
-architecture and the public download, checksum, source, and package paths are
-consistent.
+The OS is release-ready when the release gate passes for `aarch64` and the
+public Arm download, checksum, source, and package paths are consistent.

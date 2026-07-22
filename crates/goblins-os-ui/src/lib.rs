@@ -153,18 +153,9 @@ mod theming {
     /// The windows are client-decorated so the OS chrome stays consistent under
     /// Wayland, Xvfb renders, and the headless GNOME desktop proof.
     pub fn window_controls(window: &gtk4::ApplicationWindow) -> gtk4::Box {
-        let controls = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        let controls = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
         controls.add_css_class("gos-window-controls");
         controls.set_valign(gtk4::Align::Center);
-
-        let close = control_button("window-close-symbolic", "Close", "gos-window-close");
-        let weak = window.downgrade();
-        close.connect_clicked(move |_| {
-            if let Some(window) = weak.upgrade() {
-                window.close();
-            }
-        });
-        controls.append(&close);
 
         let minimize = control_button(
             "window-minimize-symbolic",
@@ -192,6 +183,17 @@ mod theming {
         });
         controls.append(&zoom);
 
+        // Close sits at the trailing edge, matching the reading order of the
+        // actions instead of borrowing another desktop's colored-dot pattern.
+        let close = control_button("window-close-symbolic", "Close", "gos-window-close");
+        let weak = window.downgrade();
+        close.connect_clicked(move |_| {
+            if let Some(window) = weak.upgrade() {
+                window.close();
+            }
+        });
+        controls.append(&close);
+
         controls
     }
 
@@ -214,9 +216,38 @@ mod theming {
         ]);
 
         let icon = gtk4::Image::from_icon_name(icon_name);
-        icon.set_pixel_size(8);
+        icon.set_pixel_size(14);
         button.set_child(Some(&icon));
         button
+    }
+
+    /// Place a content column inside proportional flexible gutters.
+    ///
+    /// The column keeps a practical narrow-window minimum, then receives one
+    /// share of any extra width while two gutter shares on each side keep long
+    /// lines readable on large displays. Unlike a fixed-width centered column,
+    /// controls can grow and text can reflow as the window is resized.
+    pub fn adaptive_centered_column(column: &gtk4::Box, minimum_width: i32) -> gtk4::Box {
+        let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        row.set_hexpand(true);
+        row.set_halign(gtk4::Align::Fill);
+
+        let gutter = || {
+            let spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+            spacer.set_hexpand(true);
+            spacer
+        };
+
+        column.set_size_request(minimum_width, -1);
+        column.set_hexpand(true);
+        column.set_halign(gtk4::Align::Fill);
+
+        row.append(&gutter());
+        row.append(&gutter());
+        row.append(column);
+        row.append(&gutter());
+        row.append(&gutter());
+        row
     }
 
     /// The Goblins OS *system* mark variant for the active scheme: ink mark on
@@ -247,12 +278,27 @@ mod theming {
     }
 }
 
-/// A reusable Goblins glass backdrop: a single-child container that paints
-/// a real GSK Gaussian blur of the desktop wallpaper behind its child, then a thin
-/// translucent tint — the "material" the compositor cannot give an isolated app
-/// surface on Wayland. Because the blur is pure GSK over an asset the app already
-/// owns (the shipped wallpaper), it renders under the software (cairo) renderer
-/// too, so it appears in the headless screenshot captures, not only on real GPUs.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackdropMaterialMode {
+    Translucent,
+    Opaque,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn backdrop_material_mode(reduce_transparency: bool) -> BackdropMaterialMode {
+    if reduce_transparency {
+        BackdropMaterialMode::Opaque
+    } else {
+        BackdropMaterialMode::Translucent
+    }
+}
+
+/// A reusable Goblins material backdrop: a single-child container that paints
+/// a GSK Gaussian blur of the shipped wallpaper behind its child, then a quiet
+/// translucent tint. The OS-owned Reduce Transparency preference switches the
+/// same component to a solid, non-blurred material live. Because both paths use
+/// GSK, they also render through the software renderer used by screenshot proof.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 mod vibrancy {
     use std::env;
@@ -261,11 +307,15 @@ mod vibrancy {
     use gtk4::subclass::prelude::*;
     use gtk4::{gdk, glib, graphene};
 
-    /// macOS-ish defaults for a panel-scale surface (control center, launcher).
+    const VISUAL_ACCESSIBILITY_SCHEMA: &str = "org.goblins.os.a11y.visual";
+    const REDUCE_TRANSPARENCY_KEY: &str = "reduce-transparency";
+
+    /// Goblins material defaults for panel-scale surfaces such as Control Center
+    /// and the launcher.
     const DEFAULT_BLUR_RADIUS: f64 = 30.0;
     const DEFAULT_CORNER_RADIUS: f32 = 16.0;
-    /// A gentle saturation boost mirrors NSVisualEffectView's "vibrancy" — the
-    /// material reads a touch more alive than the raw wallpaper, never garish.
+    /// A gentle saturation lift keeps the Goblins wallpaper legible through the
+    /// material without turning it into decoration.
     const DEFAULT_SATURATION: f32 = 1.28;
 
     /// A luminance-preserving saturation matrix (Rec. 709 weights), column-major
@@ -326,16 +376,29 @@ mod vibrancy {
         None
     }
 
-    /// The neutral material tint over the blur — a thin scrim, not an opaque fill,
-    /// so the blurred wallpaper reads through (the whole point of vibrancy). Doubles
-    /// as a graceful fallback: if the wallpaper asset is missing, the surface keeps
-    /// this translucent material instead of going empty.
+    /// The neutral material tint over the blur. It also provides a stable fallback
+    /// if the wallpaper asset is unavailable.
     fn default_tint(dark: bool) -> gdk::RGBA {
         if dark {
             gdk::RGBA::new(0.110, 0.110, 0.133, 0.58)
         } else {
             gdk::RGBA::new(0.980, 0.980, 0.988, 0.60)
         }
+    }
+
+    /// The same Goblins material hue at full opacity for Reduce Transparency.
+    fn opaque_tint(dark: bool) -> gdk::RGBA {
+        if dark {
+            gdk::RGBA::new(0.110, 0.110, 0.133, 1.0)
+        } else {
+            gdk::RGBA::new(0.980, 0.980, 0.988, 1.0)
+        }
+    }
+
+    fn visual_accessibility_settings() -> Option<gtk4::gio::Settings> {
+        gtk4::gio::SettingsSchemaSource::default()
+            .and_then(|source| source.lookup(VISUAL_ACCESSIBILITY_SCHEMA, true))
+            .map(|_| gtk4::gio::Settings::new(VISUAL_ACCESSIBILITY_SCHEMA))
     }
 
     /// Cover-fit a `tw`×`th` texture into `target`, preserving aspect, centered —
@@ -364,8 +427,10 @@ mod vibrancy {
             pub texture: RefCell<Option<gdk::Texture>>,
             pub blur_radius: Cell<f64>,
             pub corner_radius: Cell<f32>,
-            pub tint: RefCell<gdk::RGBA>,
+            pub dark: Cell<bool>,
             pub saturation: Cell<f32>,
+            pub reduce_transparency: Cell<bool>,
+            pub visual_accessibility_settings: RefCell<Option<gtk4::gio::Settings>>,
         }
 
         impl Default for VibrancyBackdrop {
@@ -375,8 +440,10 @@ mod vibrancy {
                     texture: RefCell::new(None),
                     blur_radius: Cell::new(super::DEFAULT_BLUR_RADIUS),
                     corner_radius: Cell::new(super::DEFAULT_CORNER_RADIUS),
-                    tint: RefCell::new(super::default_tint(true)),
+                    dark: Cell::new(true),
                     saturation: Cell::new(super::DEFAULT_SATURATION),
+                    reduce_transparency: Cell::new(false),
+                    visual_accessibility_settings: RefCell::new(None),
                 }
             }
         }
@@ -390,6 +457,7 @@ mod vibrancy {
 
         impl ObjectImpl for VibrancyBackdrop {
             fn dispose(&self) {
+                self.visual_accessibility_settings.borrow_mut().take();
                 if let Some(child) = self.child.borrow_mut().take() {
                     child.unparent();
                 }
@@ -429,32 +497,45 @@ mod vibrancy {
                     );
                     snapshot.push_rounded_clip(&clip);
 
-                    if let Some(texture) = self.texture.borrow().as_ref() {
-                        // Overdraw by the blur kernel so the edges sample real
-                        // pixels instead of fading into transparency; the clip
-                        // above then crops the bleed back to the rounded bounds.
-                        let blur = self.blur_radius.get();
-                        let bleed = (blur as f32) * 2.0;
-                        let target =
-                            graphene::Rect::new(-bleed, -bleed, w + bleed * 2.0, h + bleed * 2.0);
-                        let cover = super::cover_rect(
-                            texture.width() as f32,
-                            texture.height() as f32,
-                            &target,
-                        );
-                        snapshot.push_blur(blur);
-                        // Saturation boost (the "vibrancy" half of the material),
-                        // applied to the wallpaper before the blur smooths it.
-                        snapshot.push_color_matrix(
-                            &super::saturation_matrix(self.saturation.get()),
-                            &graphene::Vec4::new(0.0, 0.0, 0.0, 0.0),
-                        );
-                        snapshot.append_texture(texture, &cover);
-                        snapshot.pop();
-                        snapshot.pop();
+                    let material_mode =
+                        crate::backdrop_material_mode(self.reduce_transparency.get());
+                    if material_mode == crate::BackdropMaterialMode::Translucent {
+                        if let Some(texture) = self.texture.borrow().as_ref() {
+                            // Overdraw by the blur kernel so the edges sample real
+                            // pixels instead of fading into transparency; the clip
+                            // above then crops the bleed back to the rounded bounds.
+                            let blur = self.blur_radius.get();
+                            let bleed = (blur as f32) * 2.0;
+                            let target = graphene::Rect::new(
+                                -bleed,
+                                -bleed,
+                                w + bleed * 2.0,
+                                h + bleed * 2.0,
+                            );
+                            let cover = super::cover_rect(
+                                texture.width() as f32,
+                                texture.height() as f32,
+                                &target,
+                            );
+                            snapshot.push_blur(blur);
+                            // Apply the Goblins material's restrained saturation lift
+                            // before the blur smooths the wallpaper.
+                            snapshot.push_color_matrix(
+                                &super::saturation_matrix(self.saturation.get()),
+                                &graphene::Vec4::new(0.0, 0.0, 0.0, 0.0),
+                            );
+                            snapshot.append_texture(texture, &cover);
+                            snapshot.pop();
+                            snapshot.pop();
+                        }
                     }
 
-                    let tint = *self.tint.borrow();
+                    let tint = match material_mode {
+                        crate::BackdropMaterialMode::Translucent => {
+                            super::default_tint(self.dark.get())
+                        }
+                        crate::BackdropMaterialMode::Opaque => super::opaque_tint(self.dark.get()),
+                    };
                     snapshot.append_color(&tint, &graphene::Rect::new(0.0, 0.0, w, h));
                     snapshot.pop();
                 }
@@ -480,11 +561,26 @@ mod vibrancy {
             child.set_parent(&obj);
             {
                 let imp = obj.imp();
-                *imp.tint.borrow_mut() = default_tint(dark);
+                imp.dark.set(dark);
                 if let Some(texture) = load_wallpaper_texture(dark) {
                     *imp.texture.borrow_mut() = Some(texture);
                 }
                 *imp.child.borrow_mut() = Some(child);
+            }
+            if let Some(settings) = visual_accessibility_settings() {
+                obj.imp()
+                    .reduce_transparency
+                    .set(settings.boolean(REDUCE_TRANSPARENCY_KEY));
+                let weak = obj.downgrade();
+                settings.connect_changed(Some(REDUCE_TRANSPARENCY_KEY), move |settings, _| {
+                    if let Some(obj) = weak.upgrade() {
+                        obj.imp()
+                            .reduce_transparency
+                            .set(settings.boolean(REDUCE_TRANSPARENCY_KEY));
+                        obj.queue_draw();
+                    }
+                });
+                *obj.imp().visual_accessibility_settings.borrow_mut() = Some(settings);
             }
             obj
         }
@@ -508,3 +604,17 @@ pub use theming::*;
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 pub use vibrancy::VibrancyBackdrop;
+
+#[cfg(test)]
+mod tests {
+    use super::{backdrop_material_mode, BackdropMaterialMode};
+
+    #[test]
+    fn reduced_transparency_selects_the_opaque_material_path() {
+        assert_eq!(
+            backdrop_material_mode(false),
+            BackdropMaterialMode::Translucent
+        );
+        assert_eq!(backdrop_material_mode(true), BackdropMaterialMode::Opaque);
+    }
+}

@@ -27,6 +27,7 @@ const BRIDGE_IO_TIMEOUT: Duration = Duration::from_millis(2_000);
 const VOICE_STATUS_TIMEOUT: Duration = Duration::from_secs(8);
 const VOICE_CAPTURE_TIMEOUT: Duration = Duration::from_secs(35);
 const VOICE_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(130);
+const HOSTED_CONSENT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_CAPTURE_WAV_BYTES: usize = 512 * 1024;
 const MAX_PLAYBACK_WAV_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CAPTURE_DURATION_SECONDS: u64 = 7;
@@ -154,6 +155,7 @@ enum BridgeRequest<'a> {
     VoicePlayback {
         wav_base64: String,
     },
+    LaunchHostedConsentBroker,
     PermissionStoreDelete {
         table: &'a str,
         id: &'a str,
@@ -284,6 +286,15 @@ pub(crate) fn voice_playback(wav: &[u8]) -> VoiceBridgeResult<()> {
         DetailedBridgeResult::ProtocolFailure(_) => VoiceBridgeResult::InvalidResponse,
         DetailedBridgeResult::Success(_) => VoiceBridgeResult::Success(()),
     }
+}
+
+/// Ask the desktop session to launch the fixed trusted broker. No review id,
+/// content, lease, or other authority crosses this user-owned bridge. The
+/// broker atomically claims the core's sole pending review for its
+/// kernel-authenticated desktop UID through its own protected capability after
+/// launch.
+pub(crate) fn launch_hosted_consent_broker() -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::LaunchHostedConsentBroker)
 }
 
 fn valid_pcm_wave(
@@ -444,6 +455,7 @@ fn call_bridge_detailed(request: &BridgeRequest<'_>) -> DetailedBridgeResult {
         BridgeRequest::VoiceAudioStatus => VOICE_STATUS_TIMEOUT,
         BridgeRequest::VoiceCapture => VOICE_CAPTURE_TIMEOUT,
         BridgeRequest::VoicePlayback { .. } => VOICE_PLAYBACK_TIMEOUT,
+        BridgeRequest::LaunchHostedConsentBroker => HOSTED_CONSENT_LAUNCH_TIMEOUT,
         _ => BRIDGE_IO_TIMEOUT,
     };
     let request = match serde_json::to_vec(request) {
@@ -802,6 +814,18 @@ mod tests {
         );
         for forbidden in ["path", "command", "args", "device"] {
             assert!(playback.get(forbidden).is_none());
+        }
+    }
+
+    #[test]
+    fn consent_launch_request_exposes_no_review_capability() {
+        let launch = serde_json::to_value(BridgeRequest::LaunchHostedConsentBroker).unwrap();
+        assert_eq!(
+            launch,
+            serde_json::json!({"op": "launch-hosted-consent-broker"})
+        );
+        for forbidden in ["review_id", "lease_id", "ticket", "content"] {
+            assert!(launch.get(forbidden).is_none());
         }
     }
 

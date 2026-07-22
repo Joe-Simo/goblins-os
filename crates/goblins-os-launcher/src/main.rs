@@ -1,5 +1,5 @@
-//! The Goblins OS ⌘-Space launcher — a bespoke, all-Rust GTK4 overlay in the
-//! mold of macOS Spotlight, themed in the Goblins-native language.
+//! The Goblins OS Super-Space launcher — a purpose-built, all-Rust GTK4 overlay
+//! in the Goblins-native language.
 //!
 //! One field over translucent glass. Type and it fuzzy-searches the apps you've
 //! built (the OS ships none — `GET /v1/apps`), jumps to Settings sections, does
@@ -12,9 +12,12 @@
 use std::{env, error::Error};
 
 use goblins_os_core_client::{initialize, ClientKind, CoreClient};
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+use serde::Deserialize;
 
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
-const VISUAL_CONTEXT_SUBTITLE: &str = "Capture the screen, then ask with local-only visual context";
+const VISUAL_CONTEXT_SUBTITLE: &str =
+    "Capture locally, then review the exact visual context before asking";
 // Every assistant/context/build route can reach the resident's 3600-second
 // local-model bound, so keep the read open through the shared 65-minute ceiling.
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
@@ -135,6 +138,85 @@ impl LauncherMode {
             }
             _ => Self::Normal,
         }
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Debug, Deserialize)]
+struct LauncherRuntimeStatus {
+    engine: LauncherEngineRoute,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct LauncherEngineRoute {
+    selected: String,
+    ready: bool,
+    locality: String,
+    #[serde(default)]
+    relay_contract: String,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+impl LauncherEngineRoute {
+    fn unavailable() -> Self {
+        Self {
+            selected: "none".to_string(),
+            ready: false,
+            locality: "unavailable".to_string(),
+            relay_contract: "Waiting for Goblins OS engine status.".to_string(),
+        }
+    }
+
+    fn hosted(&self) -> bool {
+        self.ready && self.locality == "cloud"
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self.selected.as_str() {
+            "local-gpt-oss" => "On-device GPT-OSS",
+            "codex" => "your OpenAI account through Codex",
+            "openai-api" => "OpenAI hosted models using the protected API key",
+            "cloud-openai" => "the managed OpenAI cloud service",
+            _ => "Engine unavailable",
+        }
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn launcher_context_disclosure(
+    route: &LauncherEngineRoute,
+    mode: LauncherMode,
+    context: &str,
+    app: &str,
+    window: &str,
+) -> String {
+    if !route.ready {
+        return "The selected engine is not ready. This context will not be sent. Open Models to set up or retry it."
+            .to_string();
+    }
+    let context_kind = match mode {
+        LauncherMode::SelectedText | LauncherMode::WritingTools => "selected text",
+        LauncherMode::ScreenContext => "provided visible text",
+        LauncherMode::VisualContext => "provided visual description",
+        _ => "typed request",
+    };
+    let boundary = format!(
+        "Exact context: {context_kind} ({} characters), app '{}', window '{}'. No other screen content, clipboard history, files, notifications, credentials, or secrets are included.",
+        context.chars().count(),
+        app,
+        window
+    );
+    if route.hosted() {
+        format!(
+            "Active engine: {} · cloud. {boundary} This context leaves this device only after you confirm.",
+            route.display_name()
+        )
+    } else {
+        format!(
+            "Active engine: {} · on-device. {boundary} This context stays on this computer.",
+            route.display_name()
+        )
     }
 }
 
@@ -613,10 +695,10 @@ fn fuzzy_score(query: &str, candidate: &str) -> Option<i32> {
     Some(score)
 }
 
-/// A user file the launcher can surface. macOS Spotlight finds any file; the
-/// launcher is the OS's ONLY search surface (the shell mode runs with
-/// `hasOverview:false`), so file search lives here. The pure ranking below is
-/// unit-tested; the directory scan + indexer query live in `mod native`.
+/// A user file the launcher can surface. The launcher is the OS's unified search
+/// surface (the shell mode runs with `hasOverview:false`), so file search lives
+/// here. The pure ranking below is unit-tested; the directory scan + indexer
+/// query live in `mod native`.
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FileHit {
@@ -674,8 +756,9 @@ mod native {
     use serde::Deserialize;
 
     use super::{
-        bounded_context_value, convert_units, eval_math, fuzzy_score, launcher_request_timeout,
-        rank_file_hits, CoreClient, FileHit, LauncherConfig, LauncherMode, LauncherResult,
+        bounded_context_value, convert_units, eval_math, fuzzy_score, launcher_context_disclosure,
+        launcher_request_timeout, rank_file_hits, CoreClient, FileHit, LauncherConfig,
+        LauncherEngineRoute, LauncherMode, LauncherResult, LauncherRuntimeStatus,
         VISUAL_CONTEXT_SUBTITLE,
     };
 
@@ -921,6 +1004,7 @@ mod native {
         // One-shot file scan, cached for the launcher's lifetime (like apps).
         let files = Rc::new(scan_user_files());
         let ai_actions = Rc::new(fetch_ai_actions(&config.core));
+        let engine_route = Rc::new(fetch_engine_route(&config.core));
         let app = gtk::Application::builder().application_id(APP_ID).build();
         app.connect_activate(move |app| {
             goblins_os_ui::init_theming("");
@@ -930,6 +1014,7 @@ mod native {
                 apps.clone(),
                 files.clone(),
                 ai_actions.clone(),
+                engine_route.clone(),
             );
         });
         // The launcher parses its own environment, not GTK CLI args.
@@ -943,14 +1028,17 @@ mod native {
         apps: Rc<Vec<BuiltApp>>,
         files: Rc<Vec<FileHit>>,
         ai_actions: Rc<AiActions>,
+        engine_route: Rc<LauncherEngineRoute>,
     ) {
         let window = gtk::ApplicationWindow::builder()
             .application(app)
             .title("Goblins OS Launcher")
             .decorated(false)
-            .resizable(false)
+            .resizable(true)
             .default_width(720)
+            .default_height(460)
             .build();
+        window.set_size_request(440, 320);
         window.add_css_class("gos-launcher-root");
         window.add_css_class("gos-window");
 
@@ -979,6 +1067,27 @@ mod native {
         field.append(&entry);
         card.append(&field);
 
+        let context_disclosure = gtk::Label::new(None);
+        context_disclosure.add_css_class("gos-launcher-route-disclosure");
+        context_disclosure.add_css_class("gos-launcher-row-sub");
+        context_disclosure.set_xalign(0.0);
+        context_disclosure.set_wrap(true);
+        context_disclosure.set_selectable(true);
+        context_disclosure.set_visible(matches!(
+            config.mode,
+            LauncherMode::SelectedText
+                | LauncherMode::WritingTools
+                | LauncherMode::ScreenContext
+                | LauncherMode::VisualContext
+        ));
+        context_disclosure.update_property(&[
+            gtk::accessible::Property::Label("Active engine and context boundary"),
+            gtk::accessible::Property::Description(
+                "Names the active local or cloud engine and the exact context included before submission.",
+            ),
+        ]);
+        card.append(&context_disclosure);
+
         let sep = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         sep.add_css_class("gos-launcher-sep");
         card.append(&sep);
@@ -986,15 +1095,16 @@ mod native {
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let scroll = gtk::ScrolledWindow::new();
         scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroll.set_min_content_height(360);
-        scroll.set_max_content_height(360);
+        scroll.set_min_content_height(220);
+        scroll.set_max_content_height(520);
+        scroll.set_vexpand(true);
         scroll.add_css_class("gos-launcher-scroll");
         scroll.set_child(Some(&list));
         card.append(&scroll);
 
-        // Spotlight-grade vibrancy: the launcher is a centered overlay over the
-        // wallpaper, the canonical macOS material surface. Wrap the card in the
-        // shared GSK backdrop-blur so the wallpaper blooms through the glass.
+        // The Goblins launcher is a centered overlay over the wallpaper. Wrap the
+        // card in the shared GSK backdrop blur so the wallpaper gives the surface
+        // context without masking the results.
         let backdrop = goblins_os_ui::VibrancyBackdrop::new(goblins_os_ui::resolve_dark(), &card);
         window.set_child(Some(&backdrop));
 
@@ -1002,11 +1112,13 @@ mod native {
             core: config.core.clone(),
             window: window.clone(),
             entry: entry.clone(),
+            context_disclosure,
             list,
             scroll,
             apps,
             files,
             ai_actions,
+            engine_route,
             mode: config.mode,
             items: RefCell::new(Vec::new()),
             rows: RefCell::new(Vec::new()),
@@ -1018,6 +1130,7 @@ mod native {
         {
             let ui = ui.clone();
             entry.connect_changed(move |entry| {
+                update_context_disclosure(&ui, entry.text().as_str());
                 refresh_results(&ui, &entry.text());
             });
         }
@@ -1065,6 +1178,7 @@ mod native {
         if !initial.is_empty() {
             entry.set_text(&initial);
         }
+        update_context_disclosure(&ui, &initial);
         refresh_results(&ui, &initial);
         present_with_fade(&window);
         entry.grab_focus();
@@ -1074,16 +1188,39 @@ mod native {
         core: CoreClient,
         window: gtk::ApplicationWindow,
         entry: gtk::Entry,
+        context_disclosure: gtk::Label,
         list: gtk::Box,
         scroll: gtk::ScrolledWindow,
         apps: Rc<Vec<BuiltApp>>,
         files: Rc<Vec<FileHit>>,
         ai_actions: Rc<AiActions>,
+        engine_route: Rc<LauncherEngineRoute>,
         mode: LauncherMode,
         items: RefCell<Vec<LauncherItem>>,
         rows: RefCell<Vec<gtk::Widget>>,
         selected: RefCell<usize>,
         building: RefCell<bool>,
+    }
+
+    fn update_context_disclosure(ui: &LauncherUi, context: &str) {
+        if !ui.context_disclosure.is_visible() {
+            return;
+        }
+        let app = context_app_name("Goblins OS Launcher");
+        let window = context_window_title(match ui.mode {
+            LauncherMode::SelectedText => "Selected text context",
+            LauncherMode::WritingTools => "Writing tools",
+            LauncherMode::ScreenContext => "Screen context",
+            LauncherMode::VisualContext => "Screenshot context",
+            _ => "Goblins OS Launcher",
+        });
+        ui.context_disclosure.set_text(&launcher_context_disclosure(
+            &ui.engine_route,
+            ui.mode,
+            context.trim(),
+            &app,
+            &window,
+        ));
     }
 
     /// A calm fade-in on the MOTION_OVERLAY tempo — honoring Reduce Motion (a clean
@@ -1255,7 +1392,9 @@ mod native {
             let title = gtk::Label::new(Some(&item.title));
             title.add_css_class("gos-launcher-row-title");
             title.set_xalign(0.0);
-            title.set_wrap(false);
+            title.set_wrap(true);
+            title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            title.set_lines(2);
             title.set_ellipsize(gtk::pango::EllipsizeMode::End);
             text.append(&title);
         }
@@ -1263,7 +1402,9 @@ mod native {
             let sub = gtk::Label::new(Some(&item.subtitle));
             sub.add_css_class("gos-launcher-row-sub");
             sub.set_xalign(0.0);
-            sub.set_wrap(false);
+            sub.set_wrap(true);
+            sub.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            sub.set_lines(2);
             sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
             text.append(&sub);
         }
@@ -1555,16 +1696,50 @@ mod native {
         );
     }
 
+    enum ContextTurnResult {
+        Completed(String),
+        Failed(String),
+    }
+
     fn ask_context(
         ui: &Rc<LauncherUi>,
         context: &str,
         working_label: &'static str,
-        submit: fn(&CoreClient, &str) -> Result<String, String>,
+        submit: fn(&CoreClient, &str) -> ContextTurnResult,
     ) {
         let context = context.trim().to_string();
         if context.is_empty() {
             return;
         }
+        if !ui.engine_route.ready {
+            show_context_error(
+                ui,
+                "The selected engine is not ready. Open Models to set up or retry it before sharing context.",
+            );
+            return;
+        }
+
+        start_context_request(ui, context, working_label, submit);
+    }
+
+    fn show_context_error(ui: &LauncherUi, detail: &str) {
+        while let Some(child) = ui.list.first_child() {
+            ui.list.remove(&child);
+        }
+        let error = gtk::Label::new(Some(detail));
+        error.add_css_class("gos-launcher-empty");
+        error.set_xalign(0.0);
+        error.set_wrap(true);
+        ui.list.append(&error);
+        ui.entry.grab_focus();
+    }
+
+    fn start_context_request(
+        ui: &Rc<LauncherUi>,
+        context: String,
+        working_label: &'static str,
+        submit: fn(&CoreClient, &str) -> ContextTurnResult,
+    ) {
         *ui.building.borrow_mut() = true;
         ui.entry.set_sensitive(false);
 
@@ -1577,15 +1752,16 @@ mod native {
         working.set_wrap(true);
         ui.list.append(&working);
 
-        let (tx, rx) = mpsc::channel::<Result<String, String>>();
+        let (tx, rx) = mpsc::channel::<ContextTurnResult>();
         let core = ui.core.clone();
+        let request_context = context.clone();
         thread::spawn(move || {
-            let _ = tx.send(submit(&core, &context));
+            let _ = tx.send(submit(&core, &request_context));
         });
 
         let ui = ui.clone();
         glib::timeout_add_local(Duration::from_millis(90), move || match rx.try_recv() {
-            Ok(Ok(answer)) => {
+            Ok(ContextTurnResult::Completed(answer)) => {
                 *ui.building.borrow_mut() = false;
                 ui.entry.set_sensitive(true);
                 while let Some(child) = ui.list.first_child() {
@@ -1599,7 +1775,7 @@ mod native {
                 ui.entry.grab_focus();
                 glib::ControlFlow::Break
             }
-            Ok(Err(detail)) => {
+            Ok(ContextTurnResult::Failed(detail)) => {
                 *ui.building.borrow_mut() = false;
                 ui.entry.set_sensitive(true);
                 while let Some(child) = ui.list.first_child() {
@@ -2252,6 +2428,12 @@ mod native {
             .unwrap_or_default()
     }
 
+    fn fetch_engine_route(core: &CoreClient) -> LauncherEngineRoute {
+        get_json::<LauncherRuntimeStatus>(core, "/v1/ai/runtime")
+            .map(|status| status.engine)
+            .unwrap_or_else(LauncherEngineRoute::unavailable)
+    }
+
     fn fetch_ai_actions(core: &CoreClient) -> AiActions {
         let fallback =
             "Goblins AI setup is not ready. Open Models to configure GPT-OSS, Codex, or a protected OpenAI service credential."
@@ -2431,17 +2613,14 @@ mod native {
         }
     }
 
-    fn submit_selected_text_context(
-        core: &CoreClient,
-        selected_text: &str,
-    ) -> Result<String, String> {
+    fn submit_selected_text_context(core: &CoreClient, selected_text: &str) -> ContextTurnResult {
         let app = context_app_name("Goblins OS Launcher");
         let window_title = context_window_title("Selected text context");
         let body = serde_json::json!({
             "text": selected_text,
             "app": app,
             "window_title": window_title,
-            "question": "Explain this selected text, summarize the important points, and suggest one safe next action."
+            "question": "Explain this selected text, summarize the important points, and suggest one safe next action.",
         })
         .to_string();
         submit_ai_context(
@@ -2453,17 +2632,14 @@ mod native {
         )
     }
 
-    fn submit_writing_tools_context(
-        core: &CoreClient,
-        selected_text: &str,
-    ) -> Result<String, String> {
+    fn submit_writing_tools_context(core: &CoreClient, selected_text: &str) -> ContextTurnResult {
         let app = context_app_name("Goblins OS Launcher");
         let window_title = context_window_title("Writing tools");
         let body = serde_json::json!({
             "text": selected_text,
             "app": app,
             "window_title": window_title,
-            "question": "Rewrite, proofread, summarize, or adjust this text. Preserve meaning unless a change is clearly requested. Return ready-to-use text first."
+            "question": "Rewrite, proofread, summarize, or adjust this text. Preserve meaning unless a change is clearly requested. Return ready-to-use text first.",
         })
         .to_string();
         submit_ai_context(
@@ -2475,7 +2651,7 @@ mod native {
         )
     }
 
-    fn submit_screen_context(core: &CoreClient, visible_context: &str) -> Result<String, String> {
+    fn submit_screen_context(core: &CoreClient, visible_context: &str) -> ContextTurnResult {
         let source = env_context_value_or(
             SCREEN_CONTEXT_SOURCE_ENV,
             "launcher-screen-context",
@@ -2488,7 +2664,7 @@ mod native {
             "app": app,
             "window_title": window_title,
             "visible_text": visible_context,
-            "question": "Summarize what is visible, identify likely next steps, and ask before changing anything."
+            "question": "Summarize what is visible, identify likely next steps, and ask before changing anything.",
         })
         .to_string();
         submit_ai_context(
@@ -2500,7 +2676,7 @@ mod native {
         )
     }
 
-    fn submit_visual_context(core: &CoreClient, visual_summary: &str) -> Result<String, String> {
+    fn submit_visual_context(core: &CoreClient, visual_summary: &str) -> ContextTurnResult {
         let source = env_context_value_or(
             SCREEN_CONTEXT_SOURCE_ENV,
             "launcher-visual-context",
@@ -2513,7 +2689,7 @@ mod native {
             "app": app,
             "window_title": window_title,
             "visual_summary": visual_summary,
-            "question": "Summarize the provided screenshot or visual description, identify likely next steps, and ask before changing anything."
+            "question": "Summarize the provided screenshot or visual description, identify likely next steps, and ask before changing anything.",
         })
         .to_string();
         submit_ai_context(
@@ -2531,20 +2707,23 @@ mod native {
         body: &str,
         reach_error: &str,
         parse_error: &str,
-    ) -> Result<String, String> {
-        let response = core
-            .post_json(path, body.as_bytes(), launcher_request_timeout(path))
-            .map_err(|_| reach_error.to_string())?;
+    ) -> ContextTurnResult {
+        let response = match core.post_json(path, body.as_bytes(), launcher_request_timeout(path)) {
+            Ok(response) => response,
+            Err(_) => return ContextTurnResult::Failed(reach_error.to_string()),
+        };
         #[derive(Deserialize)]
         struct ContextOutcome {
             text: String,
         }
-        let outcome: ContextOutcome =
-            serde_json::from_slice(&response.body).map_err(|_| parse_error.to_string())?;
+        let outcome: ContextOutcome = match serde_json::from_slice(&response.body) {
+            Ok(outcome) => outcome,
+            Err(_) => return ContextTurnResult::Failed(parse_error.to_string()),
+        };
         if response.is_success() {
-            Ok(outcome.text)
+            ContextTurnResult::Completed(outcome.text)
         } else {
-            Err(outcome.text)
+            ContextTurnResult::Failed(outcome.text)
         }
     }
 
@@ -2560,9 +2739,10 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_context_value, convert_units, eval_math, fuzzy_score, launcher_request_timeout,
-        looks_like_math, rank_file_hits, super_space_handoff_from_args, FileHit, LauncherMode,
-        LONG_CORE_JOB_TIMEOUT, VISUAL_CONTEXT_SUBTITLE,
+        bounded_context_value, convert_units, eval_math, fuzzy_score, launcher_context_disclosure,
+        launcher_request_timeout, looks_like_math, rank_file_hits, super_space_handoff_from_args,
+        FileHit, LauncherEngineRoute, LauncherMode, LauncherRuntimeStatus, LONG_CORE_JOB_TIMEOUT,
+        VISUAL_CONTEXT_SUBTITLE,
     };
 
     #[test]
@@ -2582,6 +2762,61 @@ mod tests {
             launcher_request_timeout("/v1/input/switch-next"),
             std::time::Duration::from_secs(2)
         );
+    }
+
+    #[test]
+    fn context_disclosure_names_exact_data_and_requires_hosted_confirmation() {
+        let local = LauncherEngineRoute {
+            selected: "local-gpt-oss".to_string(),
+            ready: true,
+            locality: "on-device".to_string(),
+            relay_contract: "On-device GPT-OSS through the local model runtime.".to_string(),
+        };
+        let local_copy = launcher_context_disclosure(
+            &local,
+            LauncherMode::SelectedText,
+            "four",
+            "Editor",
+            "Notes",
+        );
+        assert!(local_copy.contains("selected text (4 characters)"));
+        assert!(local_copy.contains("stays on this computer"));
+        assert!(local_copy.contains("No other screen content"));
+        assert!(local.relay_contract.contains("local model runtime"));
+
+        let hosted = LauncherEngineRoute {
+            selected: "codex".to_string(),
+            ready: true,
+            locality: "cloud".to_string(),
+            relay_contract: "OpenAI account access through Codex.".to_string(),
+        };
+        let hosted_copy = launcher_context_disclosure(
+            &hosted,
+            LauncherMode::ScreenContext,
+            "visible words",
+            "Browser",
+            "Article",
+        );
+        assert!(hosted.hosted());
+        assert!(hosted_copy.contains("provided visible text (13 characters)"));
+        assert!(hosted_copy.contains("leaves this device only after you confirm"));
+
+        let unavailable = LauncherEngineRoute::unavailable();
+        assert!(!unavailable.ready);
+        assert!(launcher_context_disclosure(
+            &unavailable,
+            LauncherMode::VisualContext,
+            "image",
+            "Photos",
+            "Preview"
+        )
+        .contains("will not be sent"));
+
+        let decoded: LauncherRuntimeStatus = serde_json::from_str(
+            r#"{"engine":{"selected":"codex","ready":true,"locality":"cloud","relay_contract":"OpenAI account access through Codex."}}"#,
+        )
+        .expect("runtime status contract");
+        assert_eq!(decoded.engine, hosted);
     }
 
     fn hit(name: &str, mtime: u64) -> FileHit {
@@ -2765,8 +3000,8 @@ mod tests {
 
     #[test]
     fn visual_context_copy_is_os_owned_not_toolkit_branding() {
-        assert!(VISUAL_CONTEXT_SUBTITLE.contains("Capture the screen"));
-        assert!(VISUAL_CONTEXT_SUBTITLE.contains("local-only visual context"));
+        assert!(VISUAL_CONTEXT_SUBTITLE.contains("Capture locally"));
+        assert!(VISUAL_CONTEXT_SUBTITLE.contains("review the exact visual context"));
         assert!(!VISUAL_CONTEXT_SUBTITLE.contains("GNOME"));
         assert!(!VISUAL_CONTEXT_SUBTITLE.contains("gdbus"));
         assert!(!VISUAL_CONTEXT_SUBTITLE.contains("D-Bus"));

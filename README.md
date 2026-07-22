@@ -1,8 +1,8 @@
 # Goblins OS
 
 Goblins OS is an open AI-native desktop for building local software. It is built
-on Fedora bootc, ships as architecture-specific release media, and keeps
-credentials out of the desktop image.
+on Fedora bootc, ships for 64-bit Arm (`aarch64`), and keeps credentials out of
+the desktop image.
 
 The project is open source. The code is licensed under AGPL-3.0-or-later. The
 Goblins OS name, marks, release identity, installer identity, desktop identity,
@@ -15,14 +15,19 @@ The current public release is available on the GitHub releases page:
 - [Goblins OS releases](https://github.com/Joe-Simo/goblins-os/releases)
 - [Website](https://goblinsos.com)
 
-Install media is built separately for each CPU family. Use the ISO that matches
-the target system:
+The current installer is built only for `aarch64`. Its verified configuration
+scope is a UEFI aarch64 virtual machine; bare-metal Arm support is not claimed
+until an exact device model completes the hardware matrix. Apple Silicon is an
+HVF proof host, not a bare-metal Goblins OS install target. Intel and AMD
+`x86_64` systems are not supported.
 
-- `x86_64` for 64-bit Intel and AMD systems
-- `aarch64` for Arm systems and Arm virtual machines
+The `x86_64` files already attached to
+[`v0.1.0-alpha.20260703`](https://github.com/Joe-Simo/goblins-os/releases/tag/v0.1.0-alpha.20260703)
+are retained as immutable historical release records. They are not a supported
+or current Goblins OS target and must not be promoted into a current channel.
 
-Always verify the published SHA256 checksums before writing an installer image
-to USB or attaching it to a VM.
+Always verify the published SHA256 checksums before attaching the installer ISO
+to a supported UEFI aarch64 virtual machine.
 
 ## What it is
 
@@ -42,9 +47,10 @@ desktop as client-side secrets.
 
 ## Containers
 
-The bootc container images are intended for Docker/Podman inspection,
-verification, automation, and derived-image workflows. Use the ISO when you want
-the full graphical desktop installer.
+The current `ghcr.io/joe-simo/goblins-os:aarch64` bootc container image is
+intended for Docker/Podman inspection, verification, automation, and
+derived-image workflows. Use the ISO when you want the full graphical desktop
+installer.
 
 Container package visibility is tracked separately from the public source repo.
 If a `docker pull` or `podman pull` command asks for authentication, the GHCR

@@ -28,13 +28,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:a5b2be1ce90514f1e4d1447bcd6eb6af51ea98644bc310c58ce649a7550e39c0
+  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:4483609aa40e0b8f16e56becda876468309345fadf1b43572ddabfc556382205
   GOBLINS_OS_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
   GOBLINS_OS_CANDIDATE_IMAGE_REF: ${{ inputs.candidate_image_ref }}
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   build-verification-iso:
@@ -100,14 +99,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq ripgrep
-      - name: Log in to GHCR
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-      - name: Pull and verify the digest-pinned candidate image
+      - name: Pull and verify the public digest-pinned candidate image anonymously
         run: |
           set -euo pipefail
-          docker pull "$GOBLINS_OS_CANDIDATE_IMAGE_REF"
+          anonymous_config="$(mktemp -d "$RUNNER_TEMP/goblins-os-anonymous-docker.XXXXXX")"
+          trap 'rm -rf -- "$anonymous_config"' EXIT
+          DOCKER_CONFIG="$anonymous_config" docker pull "$GOBLINS_OS_CANDIDATE_IMAGE_REF"
           test "$(docker image inspect --format '{{.Os}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "linux"
           test "$(docker image inspect --format '{{.Architecture}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "arm64"
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "$GOBLINS_OS_CANDIDATE_COMMIT"

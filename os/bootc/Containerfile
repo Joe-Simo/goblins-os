@@ -2,24 +2,52 @@ FROM docker.io/library/rust:1.88 AS rust-build
 
 WORKDIR /src
 RUN case "$(uname -m)" in \
-      x86_64|aarch64) ;; \
-      *) echo "Goblins OS native builds support only x86_64 and aarch64; got $(uname -m)" >&2; exit 1 ;; \
+      aarch64) ;; \
+      *) echo "Goblins OS native builds require aarch64; got $(uname -m)" >&2; exit 1 ;; \
     esac \
-    && rustc -Vv | grep -Eq '^host: (x86_64|aarch64)-'
+    && rustc -Vv | grep -Eq '^host: aarch64-'
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
       libgtk-4-dev \
       pkg-config \
       sox \
       libsox-fmt-all \
     && rm -rf /var/lib/apt/lists/*
+ARG CODEX_VERSION=0.144.4
+ARG CODEX_AARCH64_SHA256=4d07243ef4ae6786b8b321d7aea3f9be4e1d2c597ae5407e7c1b9873334082b2
+ARG CODEX_LICENSE_SHA256=d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc
+ARG CODEX_NOTICE_SHA256=9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915
+RUN codex_archive="/tmp/codex-aarch64-unknown-linux-musl.tar.gz" \
+    && codex_license="/tmp/codex-LICENSE" \
+    && codex_notice="/tmp/codex-NOTICE" \
+    && curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --retry 5 --retry-all-errors \
+      "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-aarch64-unknown-linux-musl.tar.gz" \
+      --output "${codex_archive}" \
+    && printf '%s  %s\n' "${CODEX_AARCH64_SHA256}" "${codex_archive}" | sha256sum --check --strict - \
+    && curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --retry 5 --retry-all-errors \
+      "https://raw.githubusercontent.com/openai/codex/rust-v${CODEX_VERSION}/LICENSE" \
+      --output "${codex_license}" \
+    && printf '%s  %s\n' "${CODEX_LICENSE_SHA256}" "${codex_license}" | sha256sum --check --strict - \
+    && curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --retry 5 --retry-all-errors \
+      "https://raw.githubusercontent.com/openai/codex/rust-v${CODEX_VERSION}/NOTICE" \
+      --output "${codex_notice}" \
+    && printf '%s  %s\n' "${CODEX_NOTICE_SHA256}" "${codex_notice}" | sha256sum --check --strict - \
+    && tar --extract --gzip --file "${codex_archive}" --directory /tmp \
+    && install -D -m 0755 /tmp/codex-aarch64-unknown-linux-musl /out/usr/bin/codex \
+    && install -D -m 0644 "${codex_license}" /out/usr/share/licenses/openai-codex/LICENSE \
+    && install -D -m 0644 "${codex_notice}" /out/usr/share/licenses/openai-codex/NOTICE \
+    && test "$(/out/usr/bin/codex --version)" = "codex-cli ${CODEX_VERSION}" \
+    && rm -f "${codex_archive}" "${codex_license}" "${codex_notice}" /tmp/codex-aarch64-unknown-linux-musl
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-markup/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop goblins-os-today/native-desktop"
+RUN cargo build --release --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-consent-broker/native-desktop goblins-os-markup/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop goblins-os-today/native-desktop"
 RUN install -d /out/usr/libexec/goblins-os \
     && for binary in \
       goblins-os-color-picker \
       goblins-os-control-center \
+      goblins-os-consent-broker \
       goblins-os-core \
       goblins-os-dictate \
       goblins-os-file-builder \
@@ -102,17 +130,17 @@ LABEL org.opencontainers.image.title="Goblins OS" \
     org.opencontainers.image.url="https://goblinsos.com" \
     org.opencontainers.image.documentation="https://github.com/Joe-Simo/goblins-os/blob/main/SHIP.md" \
     org.opencontainers.image.licenses="AGPL-3.0-or-later" \
-    org.goblins-os.supported-architectures="x86_64,aarch64"
+    org.goblins-os.supported-architectures="aarch64"
 
 RUN image_arch="$(rpm --eval '%{_arch}')" \
     && machine_arch="$(uname -m)" \
     && case "${machine_arch}" in \
-      x86_64|aarch64) ;; \
-      *) echo "Goblins OS native images support only x86_64 and aarch64; got ${machine_arch}" >&2; exit 1 ;; \
+      aarch64) ;; \
+      *) echo "Goblins OS native images require aarch64; got ${machine_arch}" >&2; exit 1 ;; \
     esac \
     && case "${image_arch}" in \
-      x86_64|aarch64) ;; \
-      *) echo "Fedora RPM architecture must be x86_64 or aarch64; got ${image_arch}" >&2; exit 1 ;; \
+      aarch64) ;; \
+      *) echo "Fedora RPM architecture must be aarch64; got ${image_arch}" >&2; exit 1 ;; \
     esac \
     && test "${machine_arch}" = "${image_arch}"
 
@@ -120,6 +148,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && dnf -y --setopt=retries=20 --setopt=timeout=600 --setopt=minrate=1 --setopt=install_weak_deps=False install \
       at-spi2-core \
       bolt \
+      bubblewrap \
       dbus-daemon \
       dbus-tools \
       dmidecode \
@@ -147,6 +176,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       anaconda-live \
       anaconda-install-img-deps \
       desktop-file-utils \
+      glibc-langpack-de \
       gtk4 \
       ibus \
       ibus-libpinyin \
@@ -225,6 +255,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       leptonica \
       wl-clipboard \
     && rpm -q \
+      bubblewrap \
+      glibc-langpack-de \
       orca \
       speech-dispatcher \
       espeak-ng \
@@ -284,6 +316,11 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       rsms-inter-fonts \
       google-noto-sans-fonts \
     && command -v vulkaninfo \
+    && command -v bwrap \
+    && bwrap --help | grep -F -- '--bind-fd' \
+    && bwrap --help | grep -F -- '--ro-bind-fd' \
+    && bwrap --help | grep -F -- '--unshare-cgroup-try' \
+    && locale -a | grep -Eiq '^de_DE\.utf-?8$' \
     && command -v gamescope \
     && command -v gamemoderun \
     && command -v mangohud \
@@ -347,7 +384,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && dnf clean all
 
 RUN for client in \
-      control-center dictate file-builder focus-tick installer launcher login markup open release-proof resident \
+      control-center consent-broker dictate file-builder focus-tick installer launcher login markup open release-proof resident \
       screenshot-context settings shell today visual-lookup voice-control; do \
       groupadd --system "goblins-core-${client}"; \
     done \
@@ -397,6 +434,7 @@ COPY --from=os-assets / /
 RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && for binding in \
       control-center:goblins-os-control-center \
+      consent-broker:goblins-os-consent-broker \
       dictate:goblins-os-dictate \
       file-builder:goblins-os-file-builder \
       focus-tick:goblins-os-focus-tick \
@@ -425,6 +463,7 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && getent group goblins-core-release-proof >/dev/null \
     && test -f /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /run/goblins-os-core/settings 2750 goblins-os goblins-core-settings -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
+    && grep -Fq 'd /run/goblins-os-core/consent-broker 2750 goblins-os goblins-core-consent-broker -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /run/goblins-os-core/release-proof 2750 goblins-os goblins-core-release-proof -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /var/lib/goblins-os/voice/work 0700 goblins-os goblins-os -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && test -x /usr/libexec/goblins-os/goblins-os-full-installer \
@@ -450,6 +489,10 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && command -v setpriv \
     && command -v sha256sum \
     && command -v rpm \
+    && command -v codex \
+    && test "$(codex --version)" = "codex-cli 0.144.4" \
+    && test -r /usr/share/licenses/openai-codex/LICENSE \
+    && test -r /usr/share/licenses/openai-codex/NOTICE \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.VisualLookup.desktop \

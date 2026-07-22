@@ -95,7 +95,12 @@ pub async fn openai_key_status() -> Json<OpenAiKeyStatus> {
 /// is kept inside the engine-state module so the logout path does not duplicate
 /// the authoritative persistence location or engine identifiers.
 pub(crate) fn fail_safe_from_codex_to_local() -> std::io::Result<()> {
-    fail_safe_selection_to_local(selected_engine(), EngineSelection::Codex, &engine_path())
+    let current = selected_engine();
+    let result = fail_safe_selection_to_local(current, EngineSelection::Codex, &engine_path());
+    if result.is_ok() && current == EngineSelection::Codex {
+        crate::resident::bump_hosted_authority_generation();
+    }
+    result
 }
 
 fn fail_safe_selection_to_local(
@@ -171,6 +176,7 @@ pub async fn set_resident_engine(Json(request): Json<SetEngineRequest>) -> Respo
             "The engine selection could not be saved to OS-owned state.",
         );
     }
+    crate::resident::bump_hosted_authority_generation();
     Json(build_status()).into_response()
 }
 

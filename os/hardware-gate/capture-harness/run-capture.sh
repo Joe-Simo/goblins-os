@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# Drive the full hardware-gate capture in a display-backed qemu VM and close-signoff.
+# Drive the keyless phase of hardware-gate capture in a display-backed qemu VM.
 #
 # Boots the hardware-gate ISO built with os/iso/verify-config.toml (so the
 # embedded /osbuild.ks, not a sidecar disk, drives Anaconda), waits for the bootc
 # install + first-boot GDM-autologin desktop, completes first boot through the
 # same core API contracts as the private/offline UI path, publishes the
 # in-session orchestrator for the verification-only user service, captures
-# the 32 required shots by QMP screendump on authenticated bounded events,
-# writes proof-manifest.json, and runs close-signoff.sh.
+# the 42 required shots by QMP screendump on authenticated bounded events,
+# writes and validates proof-manifest.json, seals the unsigned Authority 2
+# record, stops every candidate process, and hands off to isolated signing.
 #
 # Honest: every shot is a real framebuffer capture of the real installed OS.
 # Gaming uses the OS's own lavapipe/gamescope/pipewire stack; studio-live uses a
-# host-served model over 10.0.2.2. Works on a native Linux/KVM host (CI) and on
-# macOS/hvf. KVM is required for x86_64 at usable speed; aarch64 also runs on hvf.
+# host-served model over 10.0.2.2. The local ARM64 display-proof route runs only
+# on an Apple-Silicon macOS/HVF host; Linux provides the separate packaging gate.
 set -euo pipefail
 
 screenshot_file_is_valid_png() {
@@ -104,7 +105,9 @@ semantic_screenshot_frames_are_distinct() {
     "studio-before|13-studio-before.png" \
     "studio-running|14-studio-running.png" \
     "studio-result-app-detail|15-studio-app-detail.png" \
-    "studio-built-open|16-built-app-open.png"; do
+    "studio-built-open|16-built-app-open.png" \
+    "hosted-review-light|41-hosted-context-review.png" \
+    "hosted-review-dark|42-hosted-context-review-dark.png"; do
     frame_name="${frame_spec%%|*}"
     frame_file="${frame_spec#*|}"
     if ! normalize_semantic_screenshot_frame \
@@ -121,7 +124,9 @@ semantic_screenshot_frames_are_distinct() {
     "$scratch_dir/studio-before.bmp" \
     "$scratch_dir/studio-running.bmp" \
     "$scratch_dir/studio-result-app-detail.bmp" \
-    "$scratch_dir/studio-built-open.bmp" <<'PY'
+    "$scratch_dir/studio-built-open.bmp" \
+    "$scratch_dir/hosted-review-light.bmp" \
+    "$scratch_dir/hosted-review-dark.bmp" <<'PY'
 import struct
 import sys
 from pathlib import Path
@@ -134,6 +139,8 @@ FRAME_NAMES = (
     "studio-running",
     "studio-result-app-detail",
     "studio-built-open",
+    "hosted-review-light",
+    "hosted-review-dark",
 )
 MIN_DISTANCE_PPM = 2500
 MIN_CHANGED_CELLS = 8
@@ -208,6 +215,12 @@ pairs = (
         "studio-result-app-detail",
         "studio-built-open",
     ),
+    ("Home vs hosted review", "home", "hosted-review-light"),
+    (
+        "Hosted review light vs dark",
+        "hosted-review-light",
+        "hosted-review-dark",
+    ),
 )
 
 try:
@@ -263,7 +276,13 @@ if [ "${1:-}" = "--check-semantic-screenshots" ]; then
 fi
 
 ARCH="${GOBLINS_OS_ARCH:-$(uname -m)}"
-case "$ARCH" in arm64|aarch64) ARCH=aarch64; QEMU=qemu-system-aarch64;; x86_64|amd64) ARCH=x86_64; QEMU=qemu-system-x86_64;; *) echo "unsupported arch $ARCH"; exit 2;; esac
+case "$ARCH" in arm64|aarch64) ARCH=aarch64; QEMU=qemu-system-aarch64;; *) echo "unsupported arch $ARCH; expected aarch64 (arm64 alias accepted)" >&2; exit 2;; esac
+CAPTURE_HOST_OS="$(uname -s)"
+CAPTURE_HOST_ARCHITECTURE="$(uname -m)"
+if [ "$CAPTURE_HOST_OS" != "Darwin" ] || [ "$CAPTURE_HOST_ARCHITECTURE" != "arm64" ]; then
+  echo "unsupported local display-proof host $CAPTURE_HOST_OS/$CAPTURE_HOST_ARCHITECTURE; expected Apple-Silicon Darwin/arm64 with HVF" >&2
+  exit 2
+fi
 CANDIDATE_COMMIT="${GOBLINS_OS_CANDIDATE_COMMIT:-}"
 if [[ ! "$CANDIDATE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
   echo "GOBLINS_OS_CANDIDATE_COMMIT must name the exact 40-hex source commit used for the verification ISO." >&2
@@ -279,6 +298,39 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 HERE="$REPO/os/hardware-gate/capture-harness"
 if [ "$SCRIPT_DIR" != "$HERE" ]; then
   echo "Run the capture harness from the exact candidate checkout: $HERE/run-capture.sh" >&2
+  exit 2
+fi
+DISPLAY_AUTHORITY_CERTIFICATE="$REPO/os/release/display-proof-authority2.pem"
+DISPLAY_AUTHORITY_FINGERPRINT="$REPO/os/release/display-proof-authority2.sha256"
+DISPLAY_AUTHORITY_CA_CERTIFICATE="$REPO/os/release/display-proof-authority2-ca.pem"
+DISPLAY_AUTHORITY_CA_FINGERPRINT="$REPO/os/release/display-proof-authority2-ca.sha256"
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "Display-proof verification requires OpenSSL." >&2
+  exit 2
+fi
+if [ ! -x /usr/bin/swift ]; then
+  echo "Display-proof capture requires the Apple Swift toolchain for the local Vision secret scan." >&2
+  exit 2
+fi
+if ! /usr/bin/swiftc -typecheck "$HERE/visual-secret-scan.swift"; then
+  echo "The candidate visual secret scanner does not type-check on this capture host." >&2
+  exit 2
+fi
+if [ ! -s "$DISPLAY_AUTHORITY_CERTIFICATE" ] \
+  || [ ! -s "$DISPLAY_AUTHORITY_FINGERPRINT" ] \
+  || [ ! -s "$DISPLAY_AUTHORITY_CA_CERTIFICATE" ] \
+  || [ ! -s "$DISPLAY_AUTHORITY_CA_FINGERPRINT" ]; then
+  echo "The repository-pinned Authority 2 leaf/CA certificate set is missing." >&2
+  echo "Provision Authority 2 from the dedicated signing account before capture." >&2
+  exit 2
+fi
+if ! python3 "$HERE/evidence_bundle.py" verify-authority-certificate \
+  --certificate "$DISPLAY_AUTHORITY_CERTIFICATE" \
+  --certificate-sha256 "$DISPLAY_AUTHORITY_FINGERPRINT" \
+  --ca-certificate "$DISPLAY_AUTHORITY_CA_CERTIFICATE" \
+  --ca-certificate-sha256 "$DISPLAY_AUTHORITY_CA_FINGERPRINT" >/dev/null; then
+  echo "The repository-pinned Authority 2 leaf/CA chain is invalid, mismatched, legacy, or too close to expiry." >&2
+  echo "Rotate the authority exactly as documented before starting a long capture." >&2
   exit 2
 fi
 proof_json_passes() {
@@ -314,6 +366,12 @@ CAPTURE_EVIDENCE_DIR="${GOBLINS_OS_CAPTURE_RELEASE_EVIDENCE_DIR:-}"
 CAPTURE_NATIVE_GATE_PROOF="${GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_PROOF:-}"
 CAPTURE_NATIVE_GATE_RUN_URL="${GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_RUN_URL:-}"
 CAPTURE_NATIVE_GATE_RUN_ATTEMPT="${GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_RUN_ATTEMPT:-}"
+if [ -z "$CAPTURE_NATIVE_GATE_PROOF" ] \
+  || [ -z "$CAPTURE_NATIVE_GATE_RUN_URL" ] \
+  || [ -z "$CAPTURE_NATIVE_GATE_RUN_ATTEMPT" ]; then
+  echo "aarch64 capture requires the exact native Linux packaging proof, workflow run URL, and run attempt." >&2
+  exit 2
+fi
 EXPECTED_IMAGE_REF="${GOBLINS_OS_CAPTURE_EXPECTED_IMAGE_REF:-${GOBLINS_OS_IMAGE:-}}"
 if [[ ! "$EXPECTED_IMAGE_REF" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]; then
   echo "GOBLINS_OS_CAPTURE_EXPECTED_IMAGE_REF must name the exact digest-pinned candidate image selected for this proof." >&2
@@ -321,19 +379,12 @@ if [[ ! "$EXPECTED_IMAGE_REF" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]; then
 fi
 CAPTURE_WORKFLOW_RUN_URL="${GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL:-}"
 CAPTURE_WORKFLOW_RUN_ATTEMPT="${GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT:-}"
-if [ -n "$CAPTURE_WORKFLOW_RUN_URL" ]; then
-  [[ "$CAPTURE_WORKFLOW_RUN_URL" =~ ^https://github\.com/[^/]+/[^/]+/actions/runs/[0-9]+$ ]] || {
-    echo "GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL must be an exact GitHub Actions run URL." >&2
-    exit 2
-  }
-  [[ "$CAPTURE_WORKFLOW_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
-    echo "GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT must be a positive integer when a workflow run URL is provided." >&2
-    exit 2
-  }
-elif [ -n "$CAPTURE_WORKFLOW_RUN_ATTEMPT" ]; then
-  echo "GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT requires GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL." >&2
+if [ -n "$CAPTURE_WORKFLOW_RUN_URL" ] \
+  || { [ -n "$CAPTURE_WORKFLOW_RUN_ATTEMPT" ] && [ "$CAPTURE_WORKFLOW_RUN_ATTEMPT" != "0" ]; }; then
+  echo "Local aarch64 display evidence must not claim a capture-workflow run; the approved capture host signs it locally." >&2
   exit 2
 fi
+CAPTURE_WORKFLOW_RUN_ATTEMPT=0
 CAPTURE_REQUIRE_COMPLETE="${GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE:-0}"
 case "$CAPTURE_REQUIRE_COMPLETE" in
   0|1) ;;
@@ -511,8 +562,7 @@ copy_capture_logs() {
 dump_capture_logs() {
   copy_capture_logs
   echo "QEMU startup diagnostics"
-  command -v "$QEMU" >/dev/null 2>&1 && "$QEMU" --version | head -n 1 || true
-  [ -e /dev/kvm ] && ls -l /dev/kvm || true
+  [ -n "${QEMU_VERSION:-}" ] && printf '%s\n' "$QEMU_VERSION" || true
   [ -n "${QEMU_PID:-}" ] && ps -p "$QEMU_PID" -o pid,stat,etime,command || true
   [ -S "$WORK/qmp.sock" ] && echo "QMP socket exists: $WORK/qmp.sock" || echo "QMP socket missing: $WORK/qmp.sock"
   dump_file_tail "qemu.log" "$WORK/qemu.log"
@@ -568,19 +618,37 @@ terminate_process_bounded() {
   return 1
 }
 
+stop_capture_processes_bounded() {
+  local stopped=1
+  if [ -n "${QEMU_PID:-}" ]; then
+    if terminate_process_bounded "QEMU" "$QEMU_PID"; then
+      QEMU_PID=""
+    else
+      stopped=0
+    fi
+  fi
+  if [ -n "${HTTPD:-}" ]; then
+    if terminate_process_bounded "capture event receiver" "$HTTPD"; then
+      HTTPD=""
+    else
+      stopped=0
+    fi
+  fi
+  [ "$stopped" -eq 1 ]
+}
+
 cleanup() {
   local rc=$?
   local scratch_cleanup_safe=1
+  trap - EXIT
   if [ "$rc" -ne 0 ] && [ "${CAPTURE_STARTED:-0}" = "1" ]; then
     dump_capture_logs
   fi
-  if [ -n "${QEMU_PID:-}" ]; then
-    terminate_process_bounded "QEMU" "$QEMU_PID" || scratch_cleanup_safe=0
-    QEMU_PID=""
-  fi
-  if [ -n "${HTTPD:-}" ]; then
-    terminate_process_bounded "capture event receiver" "$HTTPD" || scratch_cleanup_safe=0
-    HTTPD=""
+  if ! stop_capture_processes_bounded; then
+    scratch_cleanup_safe=0
+    if [ "$rc" -eq 0 ] || [ "$rc" -eq 75 ]; then
+      rc=1
+    fi
   fi
   if [ -n "${TOKEN_FILE:-}" ]; then
     python3 - "$TOKEN_FILE" <<'PY' || true
@@ -630,6 +698,7 @@ try:
             "capture-receiver.ready",
             "code.fd",
             "core-proof-operation.sh",
+            "accessibility-adaptivity-proof.sh",
             "firstboot-unlock.sh",
             "orchestrator.sh",
             "scratch.qcow2",
@@ -720,7 +789,7 @@ PY
   elif [ -n "${WORK:-}" ]; then
     echo "warning: capture process did not stop cleanly; private scratch retained at $WORK" >&2
   fi
-  return "$rc"
+  exit "$rc"
 }
 trap cleanup EXIT
 
@@ -828,15 +897,17 @@ if [ -n "$CAPTURE_EVIDENCE_DIR" ]; then
     "$CAPTURE_EVIDENCE_DIR/rpm-packages.tsv"; do
     [ -s "$evidence_file" ] || { echo "missing candidate release evidence $evidence_file" >&2; exit 1; }
   done
-  grep -Fq '"architecture": "'"$ARCH"'"' "$EVIDENCE_MANIFEST" \
+  grep -Fq '"schema": "goblins-os-release-evidence-v5"' "$EVIDENCE_MANIFEST" \
+    && grep -Fq '"architecture": "'"$ARCH"'"' "$EVIDENCE_MANIFEST" \
     && grep -Fq '"candidate_commit": "'"$CANDIDATE_COMMIT"'"' "$EVIDENCE_MANIFEST" \
     && grep -Fq '"image_ref": "'"$IMAGE_REF"'"' "$EVIDENCE_MANIFEST" \
-    && grep -Fq '"image_digest_pinned": true' "$EVIDENCE_MANIFEST" || {
+    && grep -Fq '"image_digest_pinned": true' "$EVIDENCE_MANIFEST" \
+    && grep -Eq '"rpm_command_sha256": "[0-9a-f]{64}"' "$EVIDENCE_MANIFEST" || {
       echo "External release evidence is not bound to candidate $CANDIDATE_COMMIT and image $IMAGE_REF." >&2
       exit 1
     }
   goblins_os_release_evidence_hashes_match "$CAPTURE_EVIDENCE_DIR" || {
-    echo "External release evidence Cargo/RPM inventories do not match their sealed SHA256 values." >&2
+    echo "External release evidence Cargo/RPM inventories or replay-command bytes do not match their sealed SHA256 values." >&2
     exit 1
   }
   for evidence_file in \
@@ -871,6 +942,16 @@ if [ -n "$CAPTURE_EVIDENCE_DIR" ]; then
 fi
 
 EVIDENCE_MANIFEST="${EVIDENCE_MANIFEST:-$REPO/os/signoff-proofs/sbom/$ARCH/release-evidence-manifest.json}"
+EVIDENCE_DIR="$(dirname "$EVIDENCE_MANIFEST")"
+goblins_os_release_evidence_hashes_match "$EVIDENCE_DIR" || {
+  echo "Capture requires current v5 release evidence whose Cargo, RPM, and replay-command bytes match the manifest." >&2
+  exit 1
+}
+grep -Fq '"candidate_commit": "'"$CANDIDATE_COMMIT"'"' "$EVIDENCE_MANIFEST" \
+  && grep -Fq '"image_ref": "'"$IMAGE_REF"'"' "$EVIDENCE_MANIFEST" || {
+    echo "Capture release evidence does not match candidate $CANDIDATE_COMMIT and image $IMAGE_REF." >&2
+    exit 1
+  }
 if [ -n "$CAPTURE_NATIVE_GATE_PROOF" ] \
   || [ -n "$CAPTURE_NATIVE_GATE_RUN_URL" ] \
   || [ -n "$CAPTURE_NATIVE_GATE_RUN_ATTEMPT" ]; then
@@ -955,43 +1036,44 @@ PY
   NATIVE_GATE_PROOF_RELATIVE="${RUN_DIR#"$REPO/"}/native-packaging-gate.json"
 fi
 
-# Accel: KVM on Linux, HVF on macOS.
-case "$(uname -s)" in
-  Linux)
-    if [ ! -e /dev/kvm ] || [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
-      echo "native Linux capture requires readable/writable /dev/kvm for QEMU/KVM" >&2
-      [ -e /dev/kvm ] && ls -l /dev/kvm >&2 || true
-      exit 1
-    fi
-    ACCEL=kvm
-    CPU=host
-    ;;
-  Darwin)
-    ACCEL=hvf
-    CPU=host
-    ;;
-  *)
-    echo "unsupported capture host $(uname -s): need native Linux/KVM or macOS/HVF" >&2
-    exit 1
-    ;;
-esac
+# The local display route is deliberately narrower than the Linux packaging
+# gate. These fixed launch facts are copied into every signed evidence layer.
+ACCEL=hvf
+CPU=host
 QEMU_SMP="${GOBLINS_OS_QEMU_CPUS:-2}"
 SCRATCH_DISK_SIZE="${GOBLINS_OS_CAPTURE_DISK_SIZE:-80G}"
 pick() { for f in "$@"; do [ -n "$f" ] && [ -f "$f" ] && { echo "$f"; return 0; }; done; return 1; }
-VARS_TEMPLATE=""
-if [ "$ARCH" = aarch64 ]; then
-  MACHINE="virt,accel=$ACCEL,gic-version=max"
-  CODE="$(pick "${AARCH64_UEFI_CODE:-}" /opt/homebrew/share/qemu/edk2-aarch64-code.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/edk2/aarch64/QEMU_EFI-silent.fd)"
-  VARS_TEMPLATE="$(pick "${AARCH64_UEFI_VARS:-}" /usr/share/AAVMF/AAVMF_VARS.fd || true)"  # empty 64M also works on edk2-aarch64
-else
-  MACHINE="q35,accel=$ACCEL"
-  CODE="$(pick "${X86_UEFI_CODE:-}" /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/ovmf/OVMF_CODE.fd)"
-  # x86_64 OVMF requires a real VARS template matching the code build (4M code -> 4M vars).
-  case "$CODE" in
-    *_4M.fd) VARS_TEMPLATE="$(pick /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/ovmf/OVMF_VARS.fd)";;
-    *)       VARS_TEMPLATE="$(pick /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/ovmf/OVMF_VARS.fd)";;
-  esac
+MACHINE="virt,accel=$ACCEL,gic-version=max"
+QEMU_PATH="$(command -v "$QEMU" || true)"
+[ -n "$QEMU_PATH" ] || { echo "$QEMU is required for local aarch64/HVF capture" >&2; exit 2; }
+QEMU_PATH="$(python3 - "$QEMU_PATH" <<'PY'
+import os
+import stat
+import sys
+
+path = os.path.realpath(sys.argv[1])
+metadata = os.stat(path, follow_symlinks=False)
+if not stat.S_ISREG(metadata.st_mode) or not os.access(path, os.X_OK):
+    raise SystemExit("resolved QEMU executable must be an executable regular file")
+print(path)
+PY
+)" || exit 2
+QEMU_VERSION_OUTPUT="$(LC_ALL=C "$QEMU_PATH" --version)" || {
+  echo "failed to read the exact QEMU executable version" >&2
+  exit 2
+}
+QEMU_VERSION="${QEMU_VERSION_OUTPUT%%$'\n'*}"
+if [[ ! "$QEMU_VERSION" =~ ^QEMU\ emulator\ version\ [^[:cntrl:]]{1,192}$ ]]; then
+  echo "unexpected QEMU version banner: $QEMU_VERSION" >&2
+  exit 2
 fi
+QEMU_BINARY_SHA256="$(sha256_file "$QEMU_PATH")" || exit 2
+if [[ ! "$QEMU_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "failed to compute the exact QEMU executable SHA256" >&2
+  exit 2
+fi
+CODE="$(pick "${AARCH64_UEFI_CODE:-}" /opt/homebrew/share/qemu/edk2-aarch64-code.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/edk2/aarch64/QEMU_EFI-silent.fd)"
+VARS_TEMPLATE="$(pick "${AARCH64_UEFI_VARS:-}" /usr/share/AAVMF/AAVMF_VARS.fd || true)"  # empty 64M also works on edk2-aarch64
 [ -n "$CODE" ] || { echo "no UEFI code firmware found for $ARCH"; exit 1; }
 PFLASH=(-drive "if=pflash,format=raw,file=$WORK/code.fd,readonly=on" -drive "if=pflash,format=raw,file=$WORK/vars.fd")
 QEMU_AUDIO=(-audiodev none,id=audio0 -device ich9-intel-hda -device hda-output,audiodev=audio0)
@@ -1131,6 +1213,7 @@ start_capture_receiver() {
   GOS_CAPTURE_EVENTS="$WORK/capture-events.jsonl" \
   GOS_CAPTURE_FIRSTBOOT_HELPER="$WORK/firstboot-unlock.sh" \
   GOS_CAPTURE_CORE_PROOF_HELPER="$WORK/core-proof-operation.sh" \
+  GOS_CAPTURE_ACCESSIBILITY_PROOF_HELPER="$WORK/accessibility-adaptivity-proof.sh" \
   GOS_ORCHESTRATOR_DEST="$WORK/orchestrator.sh" \
   GOS_CAPTURE_ACK_DIR="$WORK/capture-acks" \
   GOS_CAPTURE_RECEIVER_READY="$WORK/capture-receiver.ready" \
@@ -1169,12 +1252,10 @@ start_qemu() {
     aarch64:firstboot)
       boot_args=(-drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2")
       ;;
-    *)
-      boot_args=(-cdrom "$ISO" -drive "file=$WORK/scratch.qcow2,if=virtio,format=qcow2" -boot order=c,once=d)
-      ;;
+    *) echo "unsupported aarch64 capture phase: $phase" >&2; return 2 ;;
   esac
   echo "capture attempt $attempt: starting QEMU ($phase)"
-  "$QEMU" -machine "$MACHINE" -cpu "$CPU" -smp "$QEMU_SMP" -m 5120 "${PFLASH[@]}" \
+  "$QEMU_PATH" -machine "$MACHINE" -cpu "$CPU" -smp "$QEMU_SMP" -m 5120 "${PFLASH[@]}" \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     -fw_cfg "name=opt/goblins/capture-token,file=$TOKEN_FILE" \
     -fw_cfg "name=opt/goblins/capture-port,string=$PORT" \
@@ -1225,16 +1306,19 @@ finally:
     os.close(descriptor)
 PY
 
-# Stage only the two immutable bootstrap helpers. The private receiver serves
+# Stage only the three immutable bootstrap/proof helpers. The private receiver serves
 # these exact leaves and the later orchestrator; no work-directory browsing or
 # generic file serving exists.
 firstboot_temporary="$(mktemp "$WORK/.firstboot-unlock.XXXXXXXX")"
 core_proof_temporary="$(mktemp "$WORK/.core-proof-operation.XXXXXXXX")"
+accessibility_proof_temporary="$(mktemp "$WORK/.accessibility-adaptivity-proof.XXXXXXXX")"
 sed "s/@GOS_PORT@/$PORT/g" "$HERE/firstboot-unlock.sh" >"$firstboot_temporary"
 install -m 0600 "$HERE/core-proof-operation.sh" "$core_proof_temporary"
+install -m 0600 "$HERE/accessibility-adaptivity-proof.sh" "$accessibility_proof_temporary"
 chmod 0600 "$firstboot_temporary"
 mv "$firstboot_temporary" "$WORK/firstboot-unlock.sh"
 mv "$core_proof_temporary" "$WORK/core-proof-operation.sh"
+mv "$accessibility_proof_temporary" "$WORK/accessibility-adaptivity-proof.sh"
 
 # Phase the run with the QMP driver (waits for Anaconda, drives it, waits for the
 # desktop, dismisses onboarding, launches the orchestrator, captures on signals).
@@ -1244,28 +1328,19 @@ attempt=1
 while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   prepare_vm_state "$attempt"
   start_capture_receiver
-  if [ "$ARCH" = aarch64 ]; then
-    start_qemu "$attempt" install
-    if run_driver install-marker; then
-      break
-    else
-      driver_rc=$?
-    fi
-    copy_capture_logs "attempt-$attempt-install"
-    if [ "$driver_rc" -eq "$INSTALL_MARKER_RC" ]; then
-      if ! wait_for_qemu_exit "capture attempt $attempt install reboot" "$AARCH64_INSTALL_REBOOT_TIMEOUT"; then
-        exit 1
-      fi
-      start_qemu "$attempt" firstboot
-      if run_driver firstboot; then
-        break
-      else
-        driver_rc=$?
-      fi
-    fi
+  start_qemu "$attempt" install
+  if run_driver install-marker; then
+    break
   else
-    start_qemu "$attempt" full
-    if run_driver full; then
+    driver_rc=$?
+  fi
+  copy_capture_logs "attempt-$attempt-install"
+  if [ "$driver_rc" -eq "$INSTALL_MARKER_RC" ]; then
+    if ! wait_for_qemu_exit "capture attempt $attempt install reboot" "$AARCH64_INSTALL_REBOOT_TIMEOUT"; then
+      exit 1
+    fi
+    start_qemu "$attempt" firstboot
+    if run_driver firstboot; then
       break
     else
       driver_rc=$?
@@ -1297,6 +1372,7 @@ FOCUS_ARM_ROUNDTRIP_PROOF="$RUN_DIR/focus-arm-roundtrip-proof.json"
 APP_PRIVACY_REVOKE_PROOF="$RUN_DIR/app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="$RUN_DIR/preview-open-render-proof.json"
 RUNTIME_BUILD_PROOF="$RUN_DIR/runtime-build-proof.json"
+ACCESSIBILITY_ADAPTIVITY_PROOF="$RUN_DIR/accessibility-adaptivity-proof.json"
 while IFS='|' read -r proof_schema proof_path; do
   if ! proof_json_passes "$proof_path" "$proof_schema"; then
     echo "HONESTY GUARD: invalid $proof_schema proof at $proof_path" >&2
@@ -1320,7 +1396,14 @@ app-privacy-revoke|$APP_PRIVACY_REVOKE_PROOF
 preview-open-render|$PREVIEW_OPEN_RENDER_PROOF
 audio-output|$RUN_DIR/audio-output-proof.json
 runtime-build|$RUNTIME_BUILD_PROOF
+accessibility-adaptivity|$ACCESSIBILITY_ADAPTIVITY_PROOF
 EOF
+if ! python3 "$SCRIPT_DIR/proof_validation.py" \
+  --proof-screenshots accessibility-adaptivity \
+  "$ACCESSIBILITY_ADAPTIVITY_PROOF" "$RUN_DIR"; then
+  echo "HONESTY GUARD: accessibility/adaptivity screenshot bindings are invalid" >&2
+  exit 4
+fi
 if ! grep -Fq '"status": "pass"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_http": "200"' "$FIREWALL_PROOF" \
   || ! grep -Fq '"disable_active": "false"' "$FIREWALL_PROOF" \
@@ -1765,6 +1848,8 @@ _surface_shots=(
   29-preview-pdf-open.png
   30-preview-image-open.png
   31-text-shortcuts-candidate-bubble-render.png
+  41-hosted-context-review.png
+  42-hosted-context-review-dark.png
 )
 _stable_hashes="$(
   for shot in "${_surface_shots[@]}"; do
@@ -1781,23 +1866,51 @@ if [ "${_stable_distinct:-0}" -lt 8 ]; then
 fi
 
 if ! semantic_screenshot_frames_are_distinct "$RUN_DIR"; then
-  echo "HONESTY GUARD: named login/Home or Studio semantic states reused the same central application crop." >&2
+  echo "HONESTY GUARD: named login/Home, Studio, or hosted-review semantic states reused the same central application crop." >&2
   echo "Clock, top-bar, and pointer-only changes do not count as distinct application proof." >&2
   exit 3
 fi
 
-# Write the proof manifest + run close-signoff. The manifest records the
-# repo-relative ISO path: close-signoff and verify-shipping-status both match
-# the exact string "os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso", and the
-# committed manifest must not leak runner-absolute paths.
-python3 - "$RUN_DIR" "${RUN_DIR#"$REPO/"}" "$ARCH" "${ISO#"$REPO/"}" "$ISO_SHA" "$DATE" "$CANDIDATE_COMMIT" "$IMAGE_REF" "$NATIVE_GATE_PROOF_RELATIVE" "$CAPTURE_WORKFLOW_RUN_URL" "${CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}" "$VERIFICATION_EVIDENCE_MANIFEST_SHA" "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_SCREENSHOT_SHA256" <<'PY'
+# Re-observe every host/executable fact immediately before sealing. A changed
+# host route or QEMU binary invalidates the capture instead of producing a seal
+# whose provenance no longer describes the executable that was launched.
+CURRENT_QEMU_VERSION_OUTPUT="$(LC_ALL=C "$QEMU_PATH" --version)" || {
+  echo "failed to re-read the exact QEMU executable version before sealing" >&2
+  exit 2
+}
+CURRENT_QEMU_VERSION="${CURRENT_QEMU_VERSION_OUTPUT%%$'\n'*}"
+CURRENT_QEMU_BINARY_SHA256="$(sha256_file "$QEMU_PATH")" || exit 2
+if [ "$(uname -s)" != "$CAPTURE_HOST_OS" ] \
+  || [ "$(uname -m)" != "$CAPTURE_HOST_ARCHITECTURE" ] \
+  || [ "$CURRENT_QEMU_VERSION" != "$QEMU_VERSION" ] \
+  || [ "$CURRENT_QEMU_BINARY_SHA256" != "$QEMU_BINARY_SHA256" ]; then
+  echo "capture host or QEMU provenance changed before evidence sealing" >&2
+  exit 2
+fi
+
+# Write the proof manifest for the Authority 2 handoff. After the detached
+# signature returns, finalize-display-proof runs close-signoff. The manifest
+# records the repo-relative ISO path: close-signoff and verify-shipping-status
+# both match the exact string "os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso",
+# and the committed manifest must not leak runner-absolute paths.
+python3 - "$RUN_DIR" "${RUN_DIR#"$REPO/"}" "$ARCH" "${ISO#"$REPO/"}" "$ISO_SHA" "$DATE" "$CANDIDATE_COMMIT" "$IMAGE_REF" "$NATIVE_GATE_PROOF_RELATIVE" "$CAPTURE_NATIVE_GATE_RUN_URL" "$CAPTURE_NATIVE_GATE_RUN_ATTEMPT" "$CAPTURE_WORKFLOW_RUN_URL" "${CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}" "$VERIFICATION_EVIDENCE_MANIFEST_SHA" "$TEXT_SHORTCUTS_LIVE_IBUS_RUNTIME_RENDER_SCREENSHOT_SHA256" "$CAPTURE_HOST_OS" "$CAPTURE_HOST_ARCHITECTURE" "$ACCEL" "$QEMU" "$QEMU_BINARY_SHA256" "$QEMU_VERSION" "$MACHINE" "$CPU" <<'PY'
 import json,sys
-run_dir,rel_run_dir,arch,iso,sha,date,candidate_commit,image_ref,native_gate_proof,capture_workflow_run,capture_workflow_attempt,verification_evidence_manifest_sha,text_shortcuts_live_ibus_runtime_render_screenshot_sha256=sys.argv[1:14]
+run_dir,rel_run_dir,arch,iso,sha,date,candidate_commit,image_ref,native_gate_proof,native_gate_run,native_gate_attempt,capture_workflow_run,capture_workflow_attempt,verification_evidence_manifest_sha,text_shortcuts_live_ibus_runtime_render_screenshot_sha256,capture_host_os,capture_host_architecture,accelerator,qemu_binary,qemu_binary_sha256,qemu_version,qemu_machine,qemu_cpu=sys.argv[1:24]
 json.dump({"architecture":arch,"candidate_commit":candidate_commit,"image_ref":image_ref,"iso":iso,"iso_sha256":sha,
           "captured_at":date+"T00:00:00Z","screenshot_run_dir":rel_run_dir,
+          "capture_environment":{"host_os":capture_host_os,
+                                 "host_architecture":capture_host_architecture,
+                                 "accelerator":accelerator,
+                                 "qemu_binary":qemu_binary,
+                                 "qemu_binary_sha256":qemu_binary_sha256,
+                                 "qemu_version":qemu_version,
+                                 "qemu_machine":qemu_machine,
+                                 "qemu_cpu":qemu_cpu},
           "capture_workflow_run":capture_workflow_run,
           "capture_workflow_run_attempt":int(capture_workflow_attempt),
           "native_packaging_gate_proof":native_gate_proof,
+          "native_packaging_gate_run":native_gate_run,
+          "native_packaging_gate_run_attempt":int(native_gate_attempt),
           "verification_iso_manifest":"verification-iso-manifest.json",
           "verification_bib_manifest":"verification-bib-manifest.json",
           "verification_release_evidence_manifest":"verification-release-evidence-manifest.json",
@@ -1820,12 +1933,24 @@ json.dump({"architecture":arch,"candidate_commit":candidate_commit,"image_ref":i
           "preview_open_render_proof":"preview-open-render-proof.json",
           "audio_output_proof":"audio-output-proof.json",
           "runtime_build_proof":"runtime-build-proof.json",
+          "accessibility_adaptivity_proof":"accessibility-adaptivity-proof.json",
           "capture_canvas_width":5120,
           "capture_canvas_height":2880,
           "capture_canvas_normalization":"centered padding without resampling",
           "capture_method":"display-backed qemu VM, software GPU/audio substrate (lavapipe/gamescope/pipewire), honestly labeled"},
          open(run_dir+"/proof-manifest.json","w"),indent=2)
 PY
+if ! stop_capture_processes_bounded; then
+  echo "Candidate QEMU or capture receiver did not stop; refusing Authority 2 handoff." >&2
+  exit 1
+fi
+python3 "$REPO/os/hardware-gate/capture-harness/proof_validation.py" \
+  --manifest "$RUN_DIR/proof-manifest.json" \
+  "$ARCH" \
+  "$CANDIDATE_COMMIT" \
+  "$IMAGE_REF" \
+  "${ISO#"$REPO/"}" \
+  "${RUN_DIR#"$REPO/"}"
 python3 "$REPO/os/hardware-gate/capture-harness/evidence_bundle.py" create \
   --repository "$REPO" \
   --run-dir "$RUN_DIR" \
@@ -1836,32 +1961,39 @@ python3 "$REPO/os/hardware-gate/capture-harness/evidence_bundle.py" create \
   --capture-workflow-run "$CAPTURE_WORKFLOW_RUN_URL" \
   --capture-workflow-run-attempt "${CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}" \
   --output "$RUN_DIR/evidence-bundle.json"
-echo "capture complete: $RUN_DIR"
-# Close-signoff matches the committed repo-relative run dir and reads its own
-# relative paths (ISO, workflow) from the repo root.
-RUNTIME_ENGINE_SOURCE="$(python3 - "$RUNTIME_BUILD_PROOF" <<'PY'
-import json
-import sys
+SCREENSHOT_PATHS=("$RUN_DIR"/[0-9][0-9]-*.png)
+if [ "${#SCREENSHOT_PATHS[@]}" -ne 42 ]; then
+  echo "Visual secret scan requires the exact 42 captured screenshots." >&2
+  exit 1
+fi
+/usr/bin/swift "$SCRIPT_DIR/visual-secret-scan.swift" \
+  --seal "$RUN_DIR/evidence-bundle.json" \
+  "${SCREENSHOT_PATHS[@]}"
+python3 "$REPO/os/hardware-gate/capture-harness/evidence_bundle.py" \
+  create-attestation \
+  --seal "$RUN_DIR/evidence-bundle.json" \
+  --certificate "$DISPLAY_AUTHORITY_CERTIFICATE" \
+  --certificate-sha256 "$DISPLAY_AUTHORITY_FINGERPRINT" \
+  --ca-certificate "$DISPLAY_AUTHORITY_CA_CERTIFICATE" \
+  --ca-certificate-sha256 "$DISPLAY_AUTHORITY_CA_FINGERPRINT" \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  --image-ref "$IMAGE_REF" \
+  --run-date "$DATE" \
+  --output "$RUN_DIR/aarch64-local-display-attestation.json"
 
-try:
-    print(json.load(open(sys.argv[1], encoding="utf-8")).get("engine_source", ""))
-except Exception:
-    print("")
-PY
-)"
-( cd "$REPO" \
-  && GOBLINS_OS_ARCH="$ARCH" \
-    GOBLINS_OS_IMAGE="$IMAGE_REF" \
-    SCREENSHOT_DIR="${RUN_DIR#"$REPO/"}" \
-    RUNTIME_ENGINE_MODE="local-model" \
-    RUNTIME_ENGINE_SOURCE="$RUNTIME_ENGINE_SOURCE" \
-    RUNTIME_ENGINE_CONFIG="${RUN_DIR#"$REPO/"}/runtime-build-proof.json" \
-    BUILT_ARTIFACT_PATH_URL="${RUN_DIR#"$REPO/"}/runtime-build-proof.json" \
-    GOBLINS_OS_NATIVE_PACKAGING_GATE_PROOF="$NATIVE_GATE_PROOF_RELATIVE" \
-    GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_URL="$CAPTURE_NATIVE_GATE_RUN_URL" \
-    GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_ATTEMPT="$CAPTURE_NATIVE_GATE_RUN_ATTEMPT" \
-    GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL="$CAPTURE_WORKFLOW_RUN_URL" \
-    GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT="${CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}" \
-    SIGNOFF_ROW_OUTPUT="${RUN_DIR#"$REPO/"}/signoff-row.md" \
-    REQUIRE_COMPLETE="$CAPTURE_REQUIRE_COMPLETE" \
-    os/hardware-gate/close-signoff.sh )
+cat >&2 <<EOF
+Unsigned ARM64/HVF capture is sealed at:
+  ${RUN_DIR#"$REPO/"}
+
+The capture process is stopping before Authority 2 unlock or signing. From the
+dedicated non-admin signing account, use a separately reviewed signer-owned copy
+of display-authority2.py to sign the transferred evidence-bundle.json and
+aarch64-local-display-attestation.json. Then return only the detached CMS file
+and finalize from this candidate checkout:
+
+  os/hardware-gate/capture-harness/finalize-display-proof.sh \\
+    ${RUN_DIR#"$REPO/"} /absolute/path/aarch64-local-display-attestation.json.cms
+
+No key-bearing account may run this candidate capture checkout.
+EOF
+exit 75

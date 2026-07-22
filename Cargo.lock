@@ -275,6 +275,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "countries-iso3166"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc849cdeaa060305ac4098554f99c6098449bc365646f336a32cde5e342fca3a"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -722,6 +731,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "goblins-os-consent-broker"
+version = "0.1.0"
+dependencies = [
+ "goblins-os-core-client",
+ "goblins-os-ui",
+ "gtk4",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goblins-os-control-center"
 version = "0.1.0"
 dependencies = [
@@ -778,6 +799,7 @@ name = "goblins-os-file-builder"
 version = "0.1.0"
 dependencies = [
  "goblins-os-core-client",
+ "gtk4",
  "serde",
  "serde_json",
 ]
@@ -885,9 +907,11 @@ dependencies = [
 name = "goblins-os-settings"
 version = "0.1.0"
 dependencies = [
+ "countries-iso3166",
  "goblins-os-core-client",
  "goblins-os-ui",
  "gtk4",
+ "libc",
  "serde",
  "serde_json",
 ]

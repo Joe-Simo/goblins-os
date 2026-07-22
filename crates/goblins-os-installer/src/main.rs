@@ -1064,7 +1064,7 @@ fn post_install_verification_summary(policy: &InstallPolicy) -> String {
 
 fn install_environment_summary(environment: &InstallEnvironment) -> String {
     let supported = if environment.supported_architectures.is_empty() {
-        "x86_64,aarch64".to_string()
+        "aarch64".to_string()
     } else {
         environment.supported_architectures.join(",")
     };
@@ -1468,14 +1468,12 @@ fn build_welcome_page(
 
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
     center.set_valign(gtk::Align::Center);
-    center.set_halign(gtk::Align::Center);
+    center.set_halign(gtk::Align::Fill);
     center.set_vexpand(true);
     center.set_hexpand(true);
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     column.add_css_class("gos-onboarding");
-    column.set_halign(gtk::Align::Center);
-    column.set_size_request(580, -1);
 
     let mark = goblins_os_ui::themed_brand_mark(76);
     mark.set_margin_bottom(24);
@@ -1775,7 +1773,7 @@ fn build_welcome_page(
     ));
     column.append(&route_feedback);
 
-    center.append(&column);
+    center.append(&goblins_os_ui::adaptive_centered_column(&column, 400));
     root.append(&center);
     root
 }
@@ -1802,13 +1800,11 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
     // ONBOARDING_STEP_HEADER_TOP.
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
     center.set_valign(gtk::Align::Start);
-    center.set_halign(gtk::Align::Center);
+    center.set_halign(gtk::Align::Fill);
     center.set_vexpand(true);
     center.set_hexpand(true);
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    column.set_size_request(620, -1);
-    column.set_halign(gtk::Align::Center);
     column.set_margin_top(ONBOARDING_STEP_HEADER_TOP);
 
     let back = button("← Welcome", &["gos-onboarding-quiet"]);
@@ -1845,7 +1841,7 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
     // bare on the canvas, so the layout does not visibly jump between guided steps.
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
     panel.add_css_class("gos-net-panel");
-    panel.set_size_request(620, -1);
+    panel.set_hexpand(true);
 
     let grid = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     grid.set_homogeneous(true);
@@ -1890,7 +1886,7 @@ fn build_appearance_page(stack: &gtk4::Stack) -> gtk4::Box {
     }
     column.append(&cont);
 
-    center.append(&column);
+    center.append(&goblins_os_ui::adaptive_centered_column(&column, 400));
     root.append(&center);
     root
 }
@@ -1907,13 +1903,11 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
     // guided steps. See ONBOARDING_STEP_HEADER_TOP.
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
     center.set_valign(gtk::Align::Start);
-    center.set_halign(gtk::Align::Center);
+    center.set_halign(gtk::Align::Fill);
     center.set_vexpand(true);
     center.set_hexpand(true);
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    column.set_size_request(620, -1);
-    column.set_halign(gtk::Align::Center);
     column.set_margin_top(ONBOARDING_STEP_HEADER_TOP);
 
     let back = button("← Appearance", &["gos-onboarding-quiet"]);
@@ -1947,7 +1941,7 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
 
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
     panel.add_css_class("gos-net-panel");
-    panel.set_size_request(620, -1);
+    panel.set_hexpand(true);
 
     let motion = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     motion.set_homogeneous(true);
@@ -2024,7 +2018,7 @@ fn build_accessibility_page(stack: &gtk4::Stack) -> gtk4::Box {
     }
     column.append(&cont);
 
-    center.append(&column);
+    center.append(&goblins_os_ui::adaptive_centered_column(&column, 400));
     root.append(&center);
     root
 }
@@ -2068,13 +2062,11 @@ fn build_first_app_page(
     // guided steps. See ONBOARDING_STEP_HEADER_TOP.
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
     center.set_valign(gtk::Align::Start);
-    center.set_halign(gtk::Align::Center);
+    center.set_halign(gtk::Align::Fill);
     center.set_vexpand(true);
     center.set_hexpand(true);
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    column.set_size_request(620, -1);
-    column.set_halign(gtk::Align::Center);
     column.set_margin_top(ONBOARDING_STEP_HEADER_TOP);
 
     let back = button("← Accessibility", &["gos-onboarding-quiet"]);
@@ -2111,7 +2103,7 @@ fn build_first_app_page(
     // slightly different internal spacing.
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
     panel.add_css_class("gos-net-panel");
-    panel.set_size_request(620, -1);
+    panel.set_hexpand(true);
 
     let entry = gtk::Entry::new();
     entry.add_css_class("gos-setup-first-app-entry");
@@ -2292,7 +2284,7 @@ fn build_first_app_page(
         });
     }
 
-    center.append(&column);
+    center.append(&goblins_os_ui::adaptive_centered_column(&column, 400));
     root.append(&center);
     root
 }
@@ -2305,10 +2297,9 @@ fn setup_choice(title: &str, detail: &str) -> gtk4::Button {
     button.add_css_class("gos-setup-choice");
 
     // Title/copy on the left, a single-select checkmark pinned to the trailing
-    // edge. macOS Setup Assistant marks the active option with a check, not only
-    // a fill — so the chosen tone/motion/type-size card is unmistakable even
-    // when two accent-tinted cards sit side by side. select_one toggles its
-    // visibility; it starts hidden and inherits the card's ink, so it stays
+    // edge. The check supplements the selected fill so the chosen
+    // tone/motion/type-size card never relies on color alone. select_one toggles
+    // its visibility; it starts hidden and inherits the card's ink, so it stays
     // legible over the accent tint in both Light and Dark.
     let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
     let body = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
@@ -2417,8 +2408,8 @@ fn interface_double(key: &str, default: f64) -> f64 {
 
 /// Mark `chosen` as the active card in a homogeneous setup group and clear the
 /// selected state from its siblings, so exactly one card in the group ever reads
-/// as selected. macOS Setup Assistant always shows the current tone/option this
-/// way; the Appearance and Accessibility steps reuse this for every group.
+/// as selected. The Appearance and Accessibility steps reuse this for every
+/// group so the current choice never depends on tint alone.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn select_one(chosen: &gtk4::Button, group: &[gtk4::Button]) {
     use gtk4::prelude::{AccessibleExtManual, WidgetExt};
@@ -2493,13 +2484,11 @@ fn build_network_page(
 
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
     center.set_valign(gtk::Align::Center);
-    center.set_halign(gtk::Align::Center);
+    center.set_halign(gtk::Align::Fill);
     center.set_vexpand(true);
     center.set_hexpand(true);
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    column.set_size_request(580, -1);
-    column.set_halign(gtk::Align::Center);
 
     let back = button("← Welcome", &["gos-onboarding-quiet"]);
     back.set_halign(gtk::Align::Start);
@@ -2528,7 +2517,7 @@ fn build_network_page(
 
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
     panel.add_css_class("gos-net-panel");
-    panel.set_size_request(580, -1);
+    panel.set_hexpand(true);
 
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -2615,7 +2604,7 @@ fn build_network_page(
         });
     }
 
-    center.append(&column);
+    center.append(&goblins_os_ui::adaptive_centered_column(&column, 400));
     root.append(&center);
     root
 }
@@ -3488,9 +3477,9 @@ fn detected_system_preparation_hint(target: &InstallTarget) -> String {
     if target
         .existing_systems
         .iter()
-        .any(|system| system.kind == "macOS/APFS")
+        .any(|system| system.kind == "APFS data")
     {
-        steps.push("macOS: create space with Disk Utility and leave APFS plus recovery intact");
+        steps.push("APFS data: preserve APFS, recovery, EFI, vendor, and data volumes; detection does not establish Apple bare-metal support");
     }
     if target
         .existing_systems
@@ -3932,8 +3921,8 @@ fn append_target_dual_boot_plan(panel: &gtk4::Box, target: &InstallTarget) {
             dual_boot_status_label(&target.dual_boot_plan.status)
         )
     };
-    // macOS Disk Utility / Installer presents storage facts as labeled rows, not a
-    // run-on sentence. A real structured plan is broken into Action / Target /
+    // Present storage facts as labeled rows instead of a run-on sentence. A real
+    // structured plan is broken into Action / Target /
     // Preserve / Bootloader / Finish rows; the no-structured-plan fallback keeps the
     // single guidance line.
     if target.dual_boot_plan.title.is_empty() {
@@ -4012,7 +4001,7 @@ fn append_dual_boot_quick_start(panel: &gtk4::Box, policy: &InstallPolicy) {
 
     panel.append(&review_row(
         "Dual-boot quick start",
-        "Use this path when keeping Windows, macOS, Linux, another OS, or data. It stays in advanced storage until the final preserve, format, and bootloader summary is correct.",
+        "Use this path when keeping an existing OS, APFS data, recovery, EFI, vendor partitions, or shared data. APFS detection is preserve-only. Advanced storage stays open until the final preserve, format, and bootloader summary is correct.",
     ));
     for item in &policy.dual_boot_quick_start {
         panel.append(&review_row(&item.title, &item.detail));
@@ -4191,7 +4180,7 @@ fn append_dual_boot_launcher(panel: &gtk4::Box, policy: &InstallPolicy) {
 
     panel.append(&review_row(
         "Install beside another OS",
-        "Choose this when you want Goblins OS alongside Windows, macOS, Linux, another OS, or a data disk. It opens advanced storage so you can choose free space or a dedicated disk before anything is written.",
+        "Choose this when you need to preserve an existing OS or APFS/data volumes. It opens advanced storage so you can choose free space or a dedicated disk before anything is written. APFS detection is preserve-only and does not establish a supported install target.",
     ));
 
     let command = handoff.command.clone();
@@ -4228,7 +4217,7 @@ fn append_dual_boot_launcher(panel: &gtk4::Box, policy: &InstallPolicy) {
     if !policy.dual_boot_choices.is_empty() {
         panel.append(&review_row(
             "What are you keeping?",
-            "Pick Windows, macOS, Linux, another OS/data, or a dedicated disk. Each choice opens advanced storage before disk writes and keeps the erase-only flow out of the way.",
+            "Pick the existing OS or data you are keeping, or choose a dedicated disk. Each choice opens advanced storage before disk writes and keeps the erase-only flow out of the way. APFS volumes are preservation targets only.",
         ));
         for choice in &policy.dual_boot_choices {
             let row = gtk4::Button::new();
@@ -4328,7 +4317,7 @@ fn append_install_environment(panel: &gtk4::Box, environment: &InstallEnvironmen
     }
 
     let supported = if environment.supported_architectures.is_empty() {
-        "x86_64 and aarch64".to_string()
+        "aarch64".to_string()
     } else {
         environment.supported_architectures.join(" and ")
     };
@@ -4575,8 +4564,8 @@ fn populate_install_disk(
     header.append(&spacer());
     panel.append(&header);
 
-    // macOS Recovery surfaces the selectable target first. Lead with the disk
-    // list so the one action this page is named for is reachable without
+    // Lead with the selectable disk list so the one action this page is named
+    // for is reachable without
     // scrolling; all advisory prose is demoted beneath the selection.
     let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
     panel.append(&list);
@@ -4594,7 +4583,7 @@ fn populate_install_disk(
         // verbose review rows below never repeat the OS list again.
         details.append(&review_row(
             "Keeping another OS or data?",
-            "If you are keeping Windows, macOS, Linux, another OS, recovery, EFI, vendor partitions, or shared data, start with advanced storage. Disk rows replace one blank disk only after typed confirmation.",
+            "If you are keeping an existing OS, APFS data, recovery, EFI, vendor partitions, or shared data, start with advanced storage. APFS detection is preserve-only. Disk rows replace one blank disk only after typed confirmation.",
         ));
         append_dual_boot_safe_route(&details, &status.policy, true);
 
@@ -4609,7 +4598,7 @@ fn populate_install_disk(
         // repetitions the old wall carried.
         details.append(&review_row(
             "Keep an existing OS",
-            "Windows, macOS, Linux, another OS, recovery, and EFI partitions stay untouched only when you use advanced storage.",
+            "Existing OS, APFS data, recovery, EFI, vendor, and shared-data partitions stay untouched only when you use advanced storage. APFS detection never marks a volume as an install target.",
         ));
         details.append(&review_row(
             "Choose install path",
@@ -4921,7 +4910,7 @@ fn populate_install_review(
             append_target_dual_boot_plan(&panel, target);
             panel.append(&review_row(
                 "Action",
-                "Erase the entire disk and write a fresh GPT layout. This does not preserve Windows, macOS, Linux, another OS, recovery, or EFI partitions on this disk.",
+                "Erase the entire disk and write a fresh GPT layout. This does not preserve an existing OS, APFS data, recovery, EFI, vendor, or shared-data partitions on this disk.",
             ));
             panel.append(&review_row(
                 "Root filesystem",
@@ -5024,7 +5013,7 @@ fn populate_install_review(
     column.append(&cont);
 
     column.append(&centered_label(
-        "This path replaces the selected disk. To keep Windows, macOS, Linux, or another OS, go back and use advanced storage instead.",
+        "This path replaces the selected disk. To keep an existing OS or APFS/data volumes, go back and use advanced storage instead. APFS is preserve-only.",
         "gos-onboarding-footnote",
         true,
     ));
@@ -5087,7 +5076,7 @@ fn populate_install_confirm(
     ));
     column.append(&centered_label(
         &format!(
-            "To erase {device} ({drive_desc}), including any Windows, macOS, Linux, other OS, recovery, and EFI partitions on that disk, type this phrase exactly."
+            "To erase {device} ({drive_desc}), including any existing OS, APFS data, recovery, EFI, vendor, and shared-data partitions on that disk, type this phrase exactly."
         ),
         "gos-onboarding-subtitle",
         true,
@@ -5116,8 +5105,8 @@ fn populate_install_confirm(
     helper.set_wrap(true);
     helper.set_xalign(0.0);
     panel.append(&helper);
-    // The destructive action and its phrase field must stay in view — macOS keeps
-    // erase confirmations on a single screen. The dual-boot plan + verbose storage/
+    // The destructive action and its phrase field must stay in view on one
+    // screen. The dual-boot plan + verbose storage/
     // boot facts go behind a collapsed "Storage & boot details" disclosure (the same
     // pattern the review screen uses), so "Erase disk and install" is never pushed
     // below the fold. The critical erase scope is already stated in the hero subtitle.
@@ -6428,11 +6417,11 @@ mod tests {
     #[test]
     fn install_review_details_split_long_sentences_without_losing_warning_terms() {
         let lines = review_detail_lines(
-            "To erase /dev/nvme1n1, including any Windows, macOS, Linux, other OS, recovery, and EFI partitions on that disk, type this phrase exactly. To keep another OS, stop here and open advanced storage with Custom/manual storage or Reclaim Space.",
+            "To erase /dev/nvme1n1, including any existing OS, APFS data, recovery, EFI, vendor, and shared-data partitions on that disk, type this phrase exactly. To keep another OS, stop here and open advanced storage with Custom/manual storage or Reclaim Space.",
         );
 
         assert!(lines.len() >= 2);
-        assert!(lines.iter().any(|line| line.contains("Windows")));
+        assert!(lines.iter().any(|line| line.contains("APFS data")));
         assert!(lines.iter().any(|line| line.contains("Reclaim Space")));
     }
 

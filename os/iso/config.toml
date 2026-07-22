@@ -27,15 +27,15 @@ network --bootproto=dhcp --device=link --activate --onboot=on
 # Destination screen: the person explicitly selects and confirms
 # the target disk or free space. Goblins OS never auto-wipes a disk, so there is
 # deliberately no clearpart / autopart here. Whole-disk installs,
-# reclaim/free-space installs, and manual storage for dual boot with Windows, macOS, Linux, or another OS
+# reclaim/free-space installs, and manual storage for preserving another OS or data
 # must stay visible in advanced storage before any write happens.
 #
 # Dual boot is first-class but not custom-reimplemented: choose Installation
 # Destination, then Custom/manual storage or Reclaim Space. Back up first, make
 # free space from the OS being kept when possible, install into unallocated free
-# space or a dedicated disk, and preserve existing Windows, macOS/APFS, Linux,
-# other OS, recovery, and EFI partitions unless the user intentionally chooses
-# to replace that system.
+# space or a dedicated disk, and preserve existing OS, APFS/data, recovery,
+# vendor, and EFI partitions unless the user intentionally chooses to replace
+# that system or data. APFS detection is not an Apple hardware support claim.
 #
 # In the native Goblins OS installer, the user-facing choice is simple: Keep my
 # current OS, Replace one blank disk, or Advanced storage. Keeping another OS
@@ -43,7 +43,7 @@ network --bootproto=dhcp --device=link --activate --onboot=on
 # path so the final preserve/format summary is visible before disk writes.
 #
 # The native first-boot installer only offers the simple blank-disk whole-disk
-# path. If a disk already has Windows, macOS/APFS, Linux, another OS, recovery,
+# path. If a disk already has an OS, APFS/data, recovery,
 # EFI, or data partitions, Goblins OS routes the user back here so advanced
 # storage can show the final manual-storage summary before any write.
 #
@@ -51,7 +51,7 @@ network --bootproto=dhcp --device=link --activate --onboot=on
 # storage and the image builder after the user confirms the final storage
 # summary. Do not proceed unless that summary names the target disk
 # or free-space assignment, every filesystem that will be formatted, every
-# preserved Windows, macOS/APFS, Linux, other OS, recovery, EFI, vendor, and data
+# preserved existing OS, APFS/data, recovery, EFI, vendor, and data
 # partition, and the bootloader/EFI target.
 # The release hardware gate captures Installation Destination, storage summary,
 # dual-boot/manual storage, and bootloader/EFI proof screenshots.

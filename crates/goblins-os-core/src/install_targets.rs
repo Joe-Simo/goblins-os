@@ -376,7 +376,7 @@ pub async fn prepare_install(
             Vec::new(),
             Some(target),
             format!(
-                "Goblins OS installs are native x86_64 or aarch64 only; this runtime is {}.",
+                "Goblins OS install media requires a native aarch64 runtime; this runtime is {}. Current support is limited to the verified UEFI virtual-machine configuration.",
                 status.environment.architecture
             ),
         );
@@ -547,9 +547,9 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
             install_path_options: vec![
                 InstallPathOption {
                     title: "Keep my current OS",
-                    summary: "Dual boot with Windows, macOS, Linux, or another OS.",
+                    summary: "Preserve an existing operating system or data layout.",
                     action: "Open advanced storage, choose Installation Destination, then Custom/manual storage or Reclaim Space. Choose unallocated free space or a separate disk for Goblins OS.",
-                    safety: "Back up first. Leave Windows, macOS/APFS, Linux, other OS, recovery, EFI, and data partitions unformatted.",
+                    safety: "Back up first. Leave existing OS, APFS/data, recovery, EFI, and vendor partitions unformatted. Detection is a preservation safeguard, not hardware-compatibility proof.",
                 },
                 InstallPathOption {
                     title: "Replace one blank disk",
@@ -567,7 +567,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
             pre_install_safety: vec![
                 InstallPlanItem {
                     title: "Back up first",
-                    detail: "Make a current backup of every Windows, macOS, Linux, other OS, recovery, EFI, and data partition you want to keep before resizing or installing.",
+                    detail: "Make a current backup of every existing OS, APFS/data, recovery, EFI, vendor, and data partition you want to keep before resizing or installing.",
                 },
                 InstallPlanItem {
                     title: "Save recovery keys",
@@ -575,11 +575,11 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
                 InstallPlanItem {
                     title: "Make space from the OS you keep",
-                    detail: "Shrink Windows from Disk Management, create macOS/APFS free space from Disk Utility, and resize Linux/LUKS/LVM with the distro or trusted live media that understands it.",
+                    detail: "Shrink or resize only with the operating system or trusted recovery media that owns and understands the filesystem. APFS detection means preserve by default; it does not claim Apple bare-metal support.",
                 },
                 InstallPlanItem {
-                    title: "Use the matching native ISO",
-                    detail: "Use goblins-os-x86_64.iso on x86_64 computers and goblins-os-aarch64.iso on aarch64 computers. Do not assume one installer image covers both.",
+                    title: "Use the verified configuration",
+                    detail: "Use goblins-os-aarch64.iso with a UEFI aarch64 virtual machine. Bare-metal Arm models require explicit device proof; Apple Silicon is an HVF proof host, not a bare-metal install target. Intel and AMD x86_64 systems are not supported.",
                 },
                 InstallPlanItem {
                     title: "Keep power connected",
@@ -593,7 +593,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
             pre_write_install_plan: vec![
                 InstallPlanItem {
                     title: "Disk choice",
-                    detail: "Simple install continues only after one eligible blank internal disk with a readable partition scan is selected. Any disk with existing Windows, macOS/APFS, Linux, other OS, recovery, EFI, data partitions, or an unreadable scan is routed to manual storage.",
+                    detail: "Simple install continues only after one eligible blank disk with a readable partition scan is selected. Any disk with an existing OS, APFS/data, recovery, EFI, vendor partitions, or an unreadable scan is routed to manual storage.",
                 },
                 InstallPlanItem {
                     title: "Partition table",
@@ -617,32 +617,32 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
             ],
             dual_boot_preflight:
-                "Before dual boot, make free space from the OS you are keeping when possible: shrink Windows from Windows Disk Management, manage macOS/APFS space from Disk Utility, and resize Linux/LUKS volumes with your existing distro tools. Back up first.",
+                "Before preserving another system, make free space with the OS or trusted recovery tool that owns the filesystem. Back up first. APFS partitions are preserve-only here and do not establish Apple bare-metal compatibility.",
             dual_boot_guidance:
-                "To keep Windows, macOS, Linux, or another OS, do not use this whole-disk erase flow. Open advanced storage, choose Installation Destination with manual storage, choose free space or a dedicated disk, and preserve existing system, recovery, and EFI partitions.",
+                "To keep an existing OS or data, do not use this whole-disk erase flow. Open advanced storage, choose Installation Destination with manual storage, choose free space or a dedicated disk, and preserve existing system, APFS/data, recovery, vendor, and EFI partitions.",
             dual_boot_preservation:
-                "Dual boot path: choose Installation Destination, then Custom/manual storage or Reclaim Space. Install Goblins OS into unallocated free space or a dedicated disk; leave Windows, macOS/APFS, Linux, other OS, recovery, and EFI partitions untouched unless you intentionally mean to replace that OS.",
+                "Preservation path: choose Installation Destination, then Custom/manual storage or Reclaim Space. Install Goblins OS into unallocated free space or a dedicated disk; leave existing OS, APFS/data, recovery, vendor, and EFI partitions untouched unless you intentionally mean to replace that data.",
             dual_boot_handoff:
-                "Keep your current OS: open advanced storage, choose Installation Destination with Custom/manual storage or Reclaim Space, select only unallocated free space or a separate disk for Goblins OS, and confirm the final summary shows existing Windows, macOS/APFS, Linux, other OS, recovery, EFI, and data partitions preserved.",
+                "Keep your current OS or data: open advanced storage, choose Installation Destination with Custom/manual storage or Reclaim Space, select only unallocated free space or a separate disk for Goblins OS, and confirm the final summary shows every existing OS, APFS/data, recovery, EFI, vendor, and data partition preserved.",
             dual_boot_safe_route: DualBootSafeRoute {
                 title: "Install beside an existing OS",
-                summary: "The safest dual-boot path starts with the OS or data you are keeping, not with a disk erase. Use it for Windows, macOS, Linux, another OS, shared data, recovery, vendor, or EFI partitions.",
+                summary: "The safest preservation path starts with the OS or data you are keeping, not with a disk erase. Detection protects existing systems, APFS/data, shared data, recovery, vendor, and EFI partitions; it does not prove hardware compatibility.",
                 primary_action: "Open advanced storage",
                 first_screen: "Choose Keep my current OS or the desktop entry named Install Goblins OS Beside Another OS.",
-                target_rule: "Choose only unallocated free space or a separate dedicated Goblins OS disk. If you need to resize, make space from Windows Disk Management, macOS Disk Utility, the Linux distro you are keeping, or trusted live media first.",
-                preserve_rule: "Leave Windows, macOS/APFS, Linux, other OS, recovery, vendor, EFI, and shared data partitions unformatted unless you intentionally mean to replace that system.",
+                target_rule: "Choose only unallocated free space or a separate dedicated Goblins OS disk. If you need to resize, use the operating system or trusted recovery media that owns and understands the filesystem first.",
+                preserve_rule: "Leave existing OS, APFS/data, recovery, vendor, EFI, and shared data partitions unformatted unless you intentionally mean to replace that system or data.",
                 final_review: "Before writing, the final storage summary must name the Goblins OS target, every filesystem that will be formatted, every preserved partition, and the bootloader/EFI target.",
                 after_install: "After install, use the firmware startup menu or boot picker and confirm Goblins OS plus every preserved system starts before changing default boot order.",
             },
             full_storage_installer: FullStorageInstallerHandoff {
                 title: "Advanced storage",
-                summary: "Use this path to keep Windows, macOS, Linux, another OS, or shared data while adding Goblins OS.",
+                summary: "Use this path to preserve an existing OS, APFS/data, or shared data while adding Goblins OS on a verified target.",
                 action_label: "Open advanced storage",
                 command: "/usr/libexec/goblins-os/goblins-os-full-installer",
                 desktop_id: "org.goblins.OS.FullInstaller.desktop",
                 storage_entry: "Installation Destination with Custom/manual storage or Reclaim Space",
                 safest_for: "Dual boot, resized free space, a dedicated non-blank disk, encryption, separate /home, LUKS/LVM, ext4, btrfs, or any layout where another OS or data must be preserved.",
-                final_check: "Before writing, the final storage summary must show the Goblins OS target, bootloader/EFI target, formatted filesystems, and every preserved Windows, macOS/APFS, Linux, other OS, recovery, EFI, vendor, and data partition.",
+                final_check: "Before writing, the final storage summary must show the Goblins OS target, bootloader/EFI target, formatted filesystems, and every preserved existing OS, APFS/data, recovery, EFI, vendor, and data partition.",
             },
             dual_boot_quick_start: vec![
                 InstallPlanItem {
@@ -651,7 +651,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
                 InstallPlanItem {
                     title: "2. Make room from the OS you keep",
-                    detail: "Shrink Windows with Disk Management, create macOS/APFS free space with Disk Utility, resize Linux/LUKS/LVM with the distro or trusted live media, or choose a separate dedicated disk.",
+                    detail: "Resize with the operating system or trusted recovery media that owns the filesystem, or choose a separate dedicated disk. Treat APFS as preserve-only; it is not an Apple install-support signal.",
                 },
                 InstallPlanItem {
                     title: "3. Install beside another OS",
@@ -659,7 +659,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
                 InstallPlanItem {
                     title: "4. Confirm preserve, format, and bootloader",
-                    detail: "Before writing, the final summary must list the Goblins OS target, bootloader/EFI target, every filesystem that will be formatted, and every Windows, macOS/APFS, Linux, other OS, recovery, EFI, vendor, and data partition that will be preserved.",
+                    detail: "Before writing, the final summary must list the Goblins OS target, bootloader/EFI target, every filesystem that will be formatted, and every existing OS, APFS/data, recovery, EFI, vendor, and data partition that will be preserved.",
                 },
                 InstallPlanItem {
                     title: "5. Test every boot path",
@@ -674,10 +674,10 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                     final_check: "Reboot with the firmware boot picker and confirm both Goblins OS and Windows start before changing boot order.",
                 },
                 DualBootReadinessItem {
-                    title: "macOS readiness",
-                    before_install: "Back up, confirm the Mac can boot the native Goblins OS architecture, and create free space with Disk Utility or use a separate disk.",
-                    installer_choice: "Choose Keep my current OS, then install only into free space or the dedicated Goblins OS disk; keep APFS containers, macOS volumes, recovery, EFI, and data partitions unformatted.",
-                    final_check: "Use the startup boot picker and confirm both Goblins OS and macOS start before changing startup disk behavior.",
+                    title: "APFS data safety",
+                    before_install: "Back up and treat every detected APFS container, recovery volume, EFI partition, and data volume as preserve-only. APFS detection does not mean this hardware can boot Goblins OS.",
+                    installer_choice: "Do not install into or resize APFS here. Use only confirmed free space or a separate disk on a verified UEFI aarch64 target.",
+                    final_check: "Confirm every APFS and recovery volume remains unformatted. Apple Silicon is an HVF proof host, not a supported bare-metal install target.",
                 },
                 DualBootReadinessItem {
                     title: "Linux readiness",
@@ -707,11 +707,11 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                     finish: "After install, use the firmware boot picker to choose Goblins OS or Windows; confirm Windows still boots before changing boot order.",
                 },
                 DualBootChoice {
-                    title: "Keep macOS",
-                    preparation: "Back up first, use Disk Utility to create free space or choose a separate disk, and confirm this Mac can boot the Goblins OS ISO for its native architecture.",
-                    install_target: "Open advanced storage, choose Installation Destination with Custom/manual storage or Reclaim Space, then choose only the free space or dedicated disk for Goblins OS.",
-                    preserve: "Leave APFS containers, macOS volumes, recovery, EFI, and data partitions unformatted.",
-                    finish: "After install, use the startup boot picker to choose Goblins OS or macOS; confirm macOS still boots before changing boot order.",
+                    title: "Protect APFS data",
+                    preparation: "Back up first. Treat APFS containers, recovery volumes, EFI partitions, and data volumes as protected data, not as evidence of a compatible install target.",
+                    install_target: "Use advanced storage only to leave APFS untouched and choose confirmed free space or a separate disk on a verified UEFI aarch64 target.",
+                    preserve: "Leave every APFS container, recovery volume, EFI partition, vendor partition, and data volume unformatted.",
+                    finish: "Confirm the preserved APFS volumes remain unchanged. Do not infer bare-metal Apple support from partition detection.",
                 },
                 DualBootChoice {
                     title: "Keep Linux",
@@ -731,7 +731,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                     title: "Use a dedicated disk",
                     preparation: "Choose a separate internal disk for Goblins OS when possible. Disconnect or leave untouched disks that contain operating systems you are keeping.",
                     install_target: "Use the simple Goblins OS flow only if the dedicated disk is blank; otherwise use Custom/manual storage so the final summary shows exactly what changes.",
-                    preserve: "Leave all Windows, macOS/APFS, Linux, other OS, recovery, EFI, and data partitions on other disks untouched.",
+                    preserve: "Leave all existing OS, APFS/data, recovery, EFI, vendor, and data partitions on other disks untouched.",
                     finish: "After install, use the firmware boot picker or boot order to choose between Goblins OS and the existing systems.",
                 },
             ],
@@ -741,8 +741,8 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                     detail: "From Windows, back up first, suspend BitLocker if it is enabled, shrink with Disk Management, then install Goblins OS only into the new unallocated space or a separate disk. Leave Windows, Microsoft Reserved, recovery, and EFI partitions untouched.",
                 },
                 DualBootGuideStep {
-                    title: "macOS/APFS",
-                    detail: "From macOS, back up first and use Disk Utility to create free space or choose a separate disk. Install Goblins OS only into that space or disk; leave APFS containers, recovery, and EFI partitions untouched when keeping macOS.",
+                    title: "APFS data",
+                    detail: "Back up first and leave APFS containers, recovery volumes, EFI partitions, and data volumes untouched. APFS detection is a preserve signal only; it does not make Apple hardware a Goblins OS install target.",
                 },
                 DualBootGuideStep {
                     title: "Linux",
@@ -775,12 +775,12 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                     boot_picker: "After install, use the firmware boot picker to start both Goblins OS and Windows before changing boot order.",
                 },
                 DualBootDecision {
-                    title: "macOS beside Goblins OS",
-                    best_for: "You want to keep macOS and add Goblins OS on compatible Apple hardware.",
-                    prepare_space: "Back up, confirm the hardware can boot the native Goblins OS architecture, then create free space with Disk Utility or use a separate disk.",
-                    install_target: "Choose Keep my current OS, open advanced storage, then use Installation Destination with Custom/manual storage or Reclaim Space and select only free space or a dedicated Goblins OS disk.",
-                    preserve: "Do not format APFS containers, macOS volumes, recovery, EFI, vendor, or data partitions.",
-                    boot_picker: "After install, use the startup boot picker to start both Goblins OS and macOS before changing startup disk behavior.",
+                    title: "APFS or Apple-origin disk",
+                    best_for: "You need to protect APFS, recovery, EFI, vendor, or data volumes discovered during a verified virtual-machine storage test.",
+                    prepare_space: "Back up and identify every volume. Treat APFS as preserve-only and do not use partition detection as a hardware-support claim.",
+                    install_target: "Choose Keep my current OS, open advanced storage, and select only confirmed free space or a separate disk on a verified UEFI aarch64 target.",
+                    preserve: "Do not format APFS containers, recovery volumes, EFI partitions, vendor partitions, or data volumes.",
+                    boot_picker: "Confirm the preserved volumes remain unchanged. Apple Silicon remains an HVF proof host, not a bare-metal Goblins OS target.",
                 },
                 DualBootDecision {
                     title: "Linux beside Goblins OS",
@@ -803,7 +803,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                     best_for: "You have a dedicated internal disk for Goblins OS and want the cleanest multi-boot setup.",
                     prepare_space: "Back up and verify which disk contains each operating system or data set before selecting a target.",
                     install_target: "Use the simple Goblins OS flow only when the dedicated disk is blank; otherwise use Custom/manual storage so every preserved or formatted row is visible.",
-                    preserve: "Leave all Windows, macOS/APFS, Linux, other OS, recovery, EFI, and data partitions on other disks untouched.",
+                    preserve: "Leave all existing OS, APFS/data, recovery, EFI, vendor, and data partitions on other disks untouched.",
                     boot_picker: "After install, use the firmware boot picker or boot order to choose between Goblins OS and preserved systems.",
                 },
             ],
@@ -822,7 +822,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
                 StorageReviewItem {
                     title: "Preserved systems",
-                    detail: "Windows, macOS/APFS, Linux, other OS, recovery, EFI, and data partitions must be listed as preserved unless the user is replacing that OS.",
+                    detail: "Existing OS, APFS/data, recovery, EFI, vendor, and data partitions must be listed as preserved unless the user is replacing that system or data.",
                 },
                 StorageReviewItem {
                     title: "Before writing",
@@ -830,7 +830,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
                 StorageReviewItem {
                     title: "Required final summary",
-                    detail: "Do not proceed unless the final summary names the target disk or free-space assignment, every filesystem that will be formatted, every Windows, macOS/APFS, Linux, other OS, recovery, EFI, vendor, and data partition that will be preserved, and the bootloader/EFI target.",
+                    detail: "Do not proceed unless the final summary names the target disk or free-space assignment, every filesystem that will be formatted, every existing OS, APFS/data, recovery, EFI, vendor, and data partition that will be preserved, and the bootloader/EFI target.",
                 },
                 StorageReviewItem {
                     title: "After reboot",
@@ -848,7 +848,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
                 InstallPlanItem {
                     title: "Check preserved systems",
-                    detail: "If you kept Windows, macOS, Linux, another OS, or a data disk, restart again and confirm each preserved system or disk is still available before changing boot order.",
+                    detail: "If you kept another OS, APFS volume, or data disk, restart again and confirm each preserved system or disk is still available before changing boot order.",
                 },
                 InstallPlanItem {
                     title: "Set boot order last",
@@ -879,11 +879,11 @@ fn build_install_environment() -> InstallEnvironment {
     let secure_boot = secure_boot_status(efi_available);
     let architecture_guidance = if native_supported {
         format!(
-            "This installer is running as native {architecture}. Use goblins-os-x86_64.iso on x86_64 computers and goblins-os-aarch64.iso on aarch64 computers; do not treat one ISO as universal."
+            "This installer is running as native {architecture}. Current support is limited to the verified UEFI aarch64 virtual-machine configuration; bare-metal device support requires model-specific proof."
         )
     } else {
         format!(
-            "This installer is running on unsupported architecture {architecture}. Goblins OS release installs are native x86_64 or aarch64 only."
+            "This installer is running on unsupported architecture {architecture}. Goblins OS release installs require native aarch64."
         )
     };
     let boot_guidance = if efi_available {
@@ -896,7 +896,7 @@ fn build_install_environment() -> InstallEnvironment {
 
     InstallEnvironment {
         architecture,
-        supported_architectures: vec!["x86_64", "aarch64"],
+        supported_architectures: vec!["aarch64"],
         native_supported,
         boot_mode,
         efi_available,
@@ -911,7 +911,7 @@ fn current_install_architecture() -> String {
 }
 
 fn native_supported_architecture(architecture: &str) -> bool {
-    matches!(architecture, "x86_64" | "aarch64")
+    architecture == "aarch64"
 }
 
 fn secure_boot_status(efi_available: bool) -> SecureBootStatus {
@@ -1147,7 +1147,7 @@ fn build_install_target(sys_path: &Path, bootc: &BootcInstallStatus) -> Option<I
 
     if !native_supported_architecture(&architecture) {
         reasons.push(format!(
-            "Goblins OS installs are native x86_64 or aarch64 only; this runtime is {architecture}"
+            "Goblins OS installs require a native aarch64 runtime in the verified UEFI virtual-machine configuration; this runtime is {architecture}"
         ));
     }
     if !bootc.available {
@@ -1174,7 +1174,7 @@ fn build_install_target(sys_path: &Path, bootc: &BootcInstallStatus) -> Option<I
     }
     if !existing_systems.is_empty() {
         reasons.push(format!(
-            "Existing {} detected. To keep Windows, macOS, Linux, or another OS, use Installation Destination with Custom/manual storage or Reclaim Space; the simple flow only installs to a blank disk.",
+            "Existing {} detected. To preserve an existing OS or data, use Installation Destination with Custom/manual storage or Reclaim Space; the simple flow only installs to a blank disk.",
             existing_systems_summary(&existing_systems)
         ));
     }
@@ -1385,8 +1385,8 @@ fn classify_existing_system(
         || haystack.contains("macos")
     {
         (
-            "macOS/APFS",
-            "Use Disk Utility to make free space first, then leave APFS and recovery partitions untouched.",
+            "APFS data",
+            "Back up and leave APFS, recovery, EFI, vendor, and data partitions untouched. Detection is a preservation signal, not Apple hardware compatibility proof.",
         )
     } else if matches!(
         fs_type.as_str(),
@@ -1701,7 +1701,7 @@ fn ineligible_install_detail(target: &InstallTarget) -> String {
     if !target.existing_systems.is_empty() {
         let systems = existing_systems_summary(&target.existing_systems);
         return format!(
-            "The simple erase flow will not install to {path} because it contains {systems}. To keep Windows, macOS, Linux, another OS, or data, open advanced storage, choose Installation Destination with Custom/manual storage or Reclaim Space, and select only unallocated free space or a separate disk for Goblins OS.",
+            "The simple erase flow will not install to {path} because it contains {systems}. To preserve an existing OS, APFS volume, or data, open advanced storage, choose Installation Destination with Custom/manual storage or Reclaim Space, and select only unallocated free space or a separate disk for Goblins OS on a verified target.",
             path = target.path
         );
     }
@@ -1857,24 +1857,8 @@ mod tests {
             .boot_entries
             .guidance
             .contains("firmware startup menu"));
-        assert!(status
-            .environment
-            .supported_architectures
-            .contains(&"x86_64"));
-        assert!(status
-            .environment
-            .supported_architectures
-            .contains(&"aarch64"));
-        assert!(
-            status
-                .environment
-                .architecture_guidance
-                .contains("goblins-os-x86_64.iso")
-                || status
-                    .environment
-                    .architecture_guidance
-                    .contains("native x86_64 or aarch64 only")
-        );
+        assert_eq!(status.environment.supported_architectures, vec!["aarch64"]);
+        assert!(status.environment.architecture_guidance.contains("aarch64"));
         assert!(status
             .environment
             .boot_guidance
@@ -1942,9 +1926,9 @@ mod tests {
                 && item.detail.contains("LUKS")
         }));
         assert!(status.policy.pre_install_safety.iter().any(|item| {
-            item.title == "Use the matching native ISO"
-                && item.detail.contains("goblins-os-x86_64.iso")
+            item.title == "Use the verified configuration"
                 && item.detail.contains("goblins-os-aarch64.iso")
+                && item.detail.contains("x86_64 systems are not supported")
         }));
         assert!(status.policy.pre_install_safety.iter().any(|item| {
             item.title == "Review before writing" && item.detail.contains("bootloader/EFI target")
@@ -1975,8 +1959,7 @@ mod tests {
             .bootloader_recovery
             .contains("firmware boot options"));
         assert!(status.policy.dual_boot_preflight.contains("Back up first"));
-        assert!(status.policy.dual_boot_guidance.contains("Windows"));
-        assert!(status.policy.dual_boot_guidance.contains("another OS"));
+        assert!(status.policy.dual_boot_guidance.contains("existing OS"));
         assert!(status.policy.dual_boot_guidance.contains("manual storage"));
         assert!(status
             .policy
@@ -1986,7 +1969,7 @@ mod tests {
             .policy
             .dual_boot_preservation
             .contains("unallocated free space"));
-        assert!(status.policy.dual_boot_preservation.contains("macOS/APFS"));
+        assert!(status.policy.dual_boot_preservation.contains("APFS/data"));
         assert!(status
             .policy
             .dual_boot_handoff
@@ -1995,7 +1978,10 @@ mod tests {
             .policy
             .dual_boot_handoff
             .contains("select only unallocated free space"));
-        assert!(status.policy.dual_boot_handoff.contains("data partitions"));
+        assert!(status
+            .policy
+            .dual_boot_handoff
+            .contains("data partition preserved"));
         assert_eq!(
             status.policy.dual_boot_safe_route.title,
             "Install beside an existing OS"
@@ -2004,7 +1990,7 @@ mod tests {
             .policy
             .dual_boot_safe_route
             .summary
-            .contains("Windows, macOS, Linux, another OS"));
+            .contains("APFS/data"));
         assert!(status
             .policy
             .dual_boot_safe_route
@@ -2042,7 +2028,7 @@ mod tests {
             .policy
             .full_storage_installer
             .summary
-            .contains("Windows, macOS, Linux, another OS"));
+            .contains("APFS/data"));
         assert!(status
             .policy
             .full_storage_installer
@@ -2087,12 +2073,14 @@ mod tests {
                 && item.final_check.contains("Windows start")
         }));
         assert!(status.policy.dual_boot_readiness.iter().any(|item| {
-            item.title == "macOS readiness"
+            item.title == "APFS data safety"
+                && item.before_install.contains("preserve-only")
                 && item
-                    .before_install
-                    .contains("native Goblins OS architecture")
-                && item.installer_choice.contains("APFS containers")
-                && item.final_check.contains("macOS start")
+                    .installer_choice
+                    .contains("Do not install into or resize APFS")
+                && item
+                    .final_check
+                    .contains("not a supported bare-metal install target")
         }));
         assert!(status.policy.dual_boot_readiness.iter().any(|item| {
             item.title == "Linux readiness"
@@ -2117,9 +2105,11 @@ mod tests {
                 && choice.preserve.contains("Microsoft Reserved")
         }));
         assert!(status.policy.dual_boot_choices.iter().any(|choice| {
-            choice.title == "Keep macOS"
-                && choice.preparation.contains("Disk Utility")
-                && choice.finish.contains("macOS still boots")
+            choice.title == "Protect APFS data"
+                && choice.preparation.contains("not as evidence")
+                && choice
+                    .finish
+                    .contains("Do not infer bare-metal Apple support")
         }));
         assert!(status.policy.dual_boot_choices.iter().any(|choice| {
             choice.title == "Keep Linux"
@@ -2145,7 +2135,7 @@ mod tests {
             .policy
             .dual_boot_guide
             .iter()
-            .any(|step| step.title == "macOS/APFS" && step.detail.contains("Disk Utility")));
+            .any(|step| step.title == "APFS data" && step.detail.contains("preserve signal")));
         assert!(status.policy.dual_boot_guide.iter().any(|step| {
             step.title == "Bootloader and EFI" && step.detail.contains("EFI System Partition")
         }));
@@ -2165,10 +2155,12 @@ mod tests {
                 && decision.boot_picker.contains("Windows")
         }));
         assert!(status.policy.dual_boot_decision_map.iter().any(|decision| {
-            decision.title == "macOS beside Goblins OS"
-                && decision.prepare_space.contains("Disk Utility")
+            decision.title == "APFS or Apple-origin disk"
+                && decision.prepare_space.contains("preserve-only")
                 && decision.preserve.contains("APFS containers")
-                && decision.boot_picker.contains("macOS")
+                && decision
+                    .boot_picker
+                    .contains("not a bare-metal Goblins OS target")
         }));
         assert!(status.policy.dual_boot_decision_map.iter().any(|decision| {
             decision.title == "Linux beside Goblins OS"
@@ -2212,9 +2204,9 @@ mod tests {
         }));
         assert!(status.policy.post_install_verification.iter().any(|item| {
             item.title == "Check preserved systems"
-                && item.detail.contains("Windows")
-                && item.detail.contains("macOS")
-                && item.detail.contains("Linux")
+                && item.detail.contains("another OS")
+                && item.detail.contains("APFS")
+                && item.detail.contains("data disk")
         }));
         assert!(status.policy.post_install_verification.iter().any(|item| {
             item.title == "Recover missing entries" && item.detail.contains("Do not format")
@@ -2290,8 +2282,8 @@ mod tests {
     }
 
     #[test]
-    fn native_architecture_policy_is_x86_64_and_aarch64_only() {
-        assert!(native_supported_architecture("x86_64"));
+    fn native_architecture_policy_is_aarch64_only() {
+        assert!(!native_supported_architecture("x86_64"));
         assert!(native_supported_architecture("aarch64"));
         assert!(!native_supported_architecture("arm"));
         assert!(!native_supported_architecture("riscv64"));
@@ -2430,7 +2422,7 @@ mod tests {
                 .iter()
                 .map(|system| system.kind.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Windows", "macOS/APFS", "Linux", "Other OS/data"]
+            vec!["Windows", "APFS data", "Linux", "Other OS/data"]
         );
         assert!(targets[0]
             .reasons
@@ -2438,7 +2430,7 @@ mod tests {
             .any(|reason| reason.contains("Custom/manual storage or Reclaim Space")));
         assert_eq!(
             targets[0].recommendation.title,
-            "Keep Windows, macOS/APFS, Linux and Other OS/data"
+            "Keep Windows, APFS data, Linux and Other OS/data"
         );
         assert!(targets[0]
             .recommendation
@@ -2460,7 +2452,7 @@ mod tests {
         assert!(targets[0]
             .dual_boot_plan
             .title
-            .contains("Keep Windows, macOS/APFS, Linux and Other OS/data"));
+            .contains("Keep Windows, APFS data, Linux and Other OS/data"));
         assert!(targets[0]
             .dual_boot_plan
             .primary_action
@@ -2482,10 +2474,9 @@ mod tests {
             .existing_systems
             .iter()
             .any(|system| system.preservation.contains("Disk Management")));
-        assert!(targets[0]
-            .existing_systems
-            .iter()
-            .any(|system| system.preservation.contains("Disk Utility")));
+        assert!(targets[0].existing_systems.iter().any(|system| system
+            .preservation
+            .contains("not Apple hardware compatibility proof")));
         assert!(targets[0]
             .existing_systems
             .iter()
@@ -2494,8 +2485,8 @@ mod tests {
             .preservation
             .contains("Treat this as data to preserve")));
         let blocked_detail = ineligible_install_detail(&targets[0]);
-        assert!(blocked_detail.contains("contains Windows, macOS/APFS, Linux and Other OS/data"));
-        assert!(blocked_detail.contains("To keep Windows, macOS, Linux, another OS, or data"));
+        assert!(blocked_detail.contains("contains Windows, APFS data, Linux and Other OS/data"));
+        assert!(blocked_detail.contains("To preserve an existing OS, APFS volume, or data"));
         assert!(blocked_detail.contains("select only unallocated free space"));
     }
 

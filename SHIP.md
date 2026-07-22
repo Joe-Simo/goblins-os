@@ -1,6 +1,6 @@
 # Goblins OS Release Engineering
 
-Goblins OS is an all-Rust, native Linux (Fedora bootc immutable) desktop OS. The
+Goblins OS is a Rust-first native Linux (Fedora bootc immutable) desktop OS. The
 steps below produce and verify the installable artifacts on Linux, and define
 the display-backed gate required for final signoff.
 
@@ -12,26 +12,31 @@ the display-backed gate required for final signoff.
   with `google-noto-sans-fonts` fallback in packaging for compatibility).
 - **Typography boundary**: no non-Inter brand font dependency is required or
   shipped.
+- **Production architecture**: 64-bit Arm (`aarch64`) is the sole supported
+  product and release target.
 
-All commands assume a native **x86_64 or aarch64 Linux host with Docker**. Release
-artifacts are architecture-specific; do not treat one ISO as covering both CPU
-families. CI runs the same native matrix — see `.github/workflows/build.yml`.
+Image, evidence, and ISO packaging commands assume a native **aarch64 Linux host
+with Docker**. Final display capture uses the separate Apple Silicon/HVF route
+defined in step 6. The Arm ISO is not compatible with Intel or AMD systems. The `x86_64` files already
+published with `v0.1.0-alpha.20260703` are retained only as immutable historical
+records; they are not supported, current, or eligible for promotion.
 
 ## What CI enforces (`.github/workflows/build.yml`)
 
-- **rust** job: per-architecture `cargo fmt --all --check`, `cargo clippy --workspace --features
+- **rust** job: `cargo fmt --all --check`, `cargo clippy --workspace --features
   <native-desktop> -- -D warnings`, `cargo test`, and a release build — the
-  canonical format/lint/type gate on native x86_64 and aarch64 runners.
-- **image** job: builds the bootc image per architecture, runs `goblins-os-verify` (must report
+  canonical format/lint/type gate on the native `aarch64` release runner.
+- **image** job: builds the Arm bootc image, runs `goblins-os-verify` (must report
   `blocked=0`), runs the install + services **self-test**
   (`os/bootc/selftest.suffix.Dockerfile`; a non-zero result fails the build), and
   renders the design-proof screenshots.
-- **installer-iso** job: builds architecture-named installable ISOs with
-  `bootc-image-builder`: `goblins-os-x86_64.iso` and `goblins-os-aarch64.iso`.
+- **installer-iso** job: builds the installable Arm ISO with
+  `bootc-image-builder`: `goblins-os-aarch64.iso`.
 
-> Non-Linux development hosts can run a useful subset of source checks, but the
-> native-desktop build, installer, and display-backed proof paths are
-> authoritative on native Linux runners.
+> Non-Linux development hosts can run a useful subset of source checks. The
+> native-desktop build and installer packaging authority is native aarch64
+> Linux; the separate final display authority is Darwin/arm64 Apple Silicon
+> with HVF. Neither route substitutes for the other.
 
 ## Secrets & provisioning (server-side only)
 
@@ -64,7 +69,7 @@ environment variables is intentionally unsupported.
 ## 1. Build the OS image
 
 ```sh
-ARCH=x86_64 # or aarch64 on a native aarch64 Linux host
+ARCH=aarch64
 DOCKER_BUILDKIT=1 docker build -f os/bootc/Containerfile -t "localhost/goblins-os:$ARCH" .
 ```
 
@@ -93,16 +98,18 @@ DOCKER_BUILDKIT=1 docker build -f /tmp/render.Dockerfile \
   --target screenshots --output type=local,dest=screenshots .
 ```
 
-Produces the genuine first-boot/desktop screens (installer, login, shell home,
-Build Studio, settings, the disk-install flow, the built-app detail view) in light
-and dark — the actual installed pixels, not mockups.
+Produces deterministic diagnostic renders from the real application binaries
+(installer, login, shell home, Build Studio, settings, disk-install flow, and
+built-app detail) in light and dark. These are visual-regression fixtures, not
+installed-session or display-backed release evidence; only step 6 can satisfy
+that gate.
 
 ## 4. Generate release and SBOM evidence
 
 ```sh
 set -euo pipefail
 
-ARCH=x86_64 # or aarch64
+ARCH=aarch64
 CANDIDATE_COMMIT="$(git rev-parse HEAD)"
 CANDIDATE_REF_JSON="<downloaded metadata-only artifact>/image-ref.json"
 jq -e --arg arch "$ARCH" --arg commit "$CANDIDATE_COMMIT" \
@@ -127,11 +134,13 @@ copy a mutable channel or commit-scoped tag into this field; the registry digest
 is the evidence identity.
 
 This source invocation can prepare diagnostic evidence and an
-`rpm-packages.command`, but it cannot satisfy final release evidence. For each
-architecture, run the packaged `goblins-os-verify --release-evidence` from the
-exact digest-pinned Goblins OS image so one invocation writes the v4 manifest,
-Cargo inventory, and architecture-specific RPM inventory. The final gate
-requires both TSV SHA256 values to match that manifest; a standalone replay of
+`rpm-packages.command`, but it cannot satisfy final release evidence. For the
+current release architecture, run the packaged
+`goblins-os-verify --release-evidence` from the
+exact digest-pinned Goblins OS image so one invocation writes the v5 manifest,
+Cargo inventory, architecture-specific RPM inventory, and RPM replay command.
+The final gate requires the Cargo TSV, RPM TSV, and `rpm-packages.command`
+SHA256 values to match that manifest; a standalone replay of
 `rpm-packages.command` is diagnostic only. A host without `rpm` records a
 `rpm-packages.not-generated.txt` blocker instead of inventing package data.
 Generated release evidence, ISO manifests, SHA files, signoff notes, release
@@ -140,9 +149,9 @@ before the hardware gate accepts them.
 
 The ISO manifest, release-evidence manifest, screenshot proof manifest, and
 signoff row must all record this same full candidate commit and immutable image
-digest reference. Both architecture tracks must match their own digest-bound
-media before stable promotion; historical evidence without either field is
-intentionally incomplete.
+digest reference. The `aarch64` track must match its digest-bound media before
+stable promotion; current Arm evidence without either field is intentionally
+incomplete.
 
 ## 5. Build the installer ISO
 
@@ -158,23 +167,23 @@ os/iso/build-iso.sh
 Uses the supported `bootc-image-builder --type anaconda-iso` (config in
 `os/iso/config.toml`). This local Docker path is for artifact proof: it pushes
 the just-built image through a Docker-local registry so bootc-image-builder can
-embed it. On a development host whose Docker engine supports both platforms,
-non-release artifact testing may set `GOBLINS_OS_ALLOW_EMULATED_DOCKER=1` and
-`GOBLINS_OS_DOCKER_PLATFORM=linux/amd64` or `linux/arm64`; that only fills local
-ISO/SHA/manifest evidence and does not satisfy the native runner or screenshot
-proof gates. Final shippable media must instead build on a native runner from the
+embed it. The builder rejects non-Arm hosts and non-Arm container engines;
+architecture emulation is not an artifact or release path. A local macOS ARM64
+build is diagnostic only and does not satisfy native Linux packaging or
+display-backed proof gates. Final shippable media must build on a native
+aarch64 Linux runner from the
 immutable pullable release image ref with `GOBLINS_OS_SHIPPABLE_RELEASE=1` and
 `GOBLINS_OS_BIB_SOURCE_IMAGE=<registry>/<image>@sha256:<64-hex-digest>`, because the
 Anaconda ISO records that source ref for post-install bootc tracking. The ISO embeds the image and opens Goblins OS advanced storage for disk selection. Storage is interactive: no
 `clearpart`/`autopart` command is baked into the kickstart, so the person must
 explicitly choose the target disk, review formatting, and confirm the
-bootloader/EFI target before writes happen. Dual boot with Windows, macOS,
-Linux, or another OS uses advanced storage with existing system, recovery, and EFI partitions
-preserved; Custom/manual storage or Reclaim
+bootloader/EFI target before writes happen. Keeping another operating system or
+data uses advanced storage with existing system, APFS/data, recovery, and EFI
+partitions preserved; Custom/manual storage or Reclaim
 Space must make the choice visible before any write. The safe dual-boot
 path is to back up first, create unallocated free space from the OS being kept
 when possible, then install Goblins OS into that free space or a dedicated disk
-while leaving Windows, macOS/APFS, Linux, other OS, recovery, and EFI partitions
+while leaving existing system, APFS/data, recovery, and EFI partitions
 untouched unless the user is intentionally replacing that OS. The native live
 installer presents the decision as three paths: **Keep my current OS** for dual
 boot through advanced storage, **Replace one blank disk** for the guarded
@@ -195,15 +204,15 @@ LUKS, LUKS/LVM, and any custom partitioning stay in advanced storage where
 the formatting, mount points, bootloader/EFI target, and
 preserved partitions are visible before writing. The installer also exposes a
 **Dual-boot assistant** for
-people keeping Windows, macOS, Linux, another OS/data partition, or a dedicated
+people keeping Windows, Linux, another OS/data partition, or a dedicated
 existing disk. Each path states what to do before install, where Goblins OS
 should be installed, what must stay unformatted, and how to choose between
 operating systems from the firmware boot picker after install. A structured
-**Dual-boot decision map** renders concise Windows, macOS, Linux, other OS/data,
-and separate-disk rows with best-fit guidance, space-preparation steps, the safe
+**Dual-boot decision map** renders concise Windows, Linux, APFS/other data, and
+separate-disk rows with best-fit guidance, space-preparation steps, the safe
 install target, preserved partitions, and the post-install startup picker check
 so the user can pick the correct path before disk selection. The native
-installer also shows **Dual-boot readiness** for Windows/macOS/Linux/other OS
+installer also shows **Dual-boot readiness** for Windows/Linux/other OS or data
 paths: back up and prepare space in the OS being kept when possible, pick
 `Keep my current OS` or manual storage, install only into unallocated free space
 or a dedicated Goblins OS disk, and confirm both systems boot before changing
@@ -211,19 +220,22 @@ boot order. Before any simple-flow write, the installer shows a **Before writing
 the selected blank disk, fresh GPT layout, bootloader/EFI target, xfs root
 filesystem, manual-storage handoff for custom formatting/encryption, and
 firmware boot-picker recovery path. Outputs:
-- `os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso`
 - `os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso`
-- matching `.sha256` files and `manifest-goblins-os-<arch>.json` manifests.
+- matching `.sha256` files and the `manifest-goblins-os-aarch64.json` manifest.
 
-## 6. Boot and install (the real-hardware gate)
+## 6. Boot and install (the display-backed gate)
 
-Write the matching architecture ISO to a USB stick, or attach it to a VM **with a
-display** (`qemu-system-x86_64` for x86_64, `qemu-system-aarch64` with UEFI for
-aarch64), then:
+Attach the verification-only `aarch64` ISO to a UEFI aarch64 VM **with a real
+display path**. The required local proof uses `qemu-system-aarch64` with HVF on
+Apple Silicon. Apple Silicon is the proof host, not a claimed bare-metal install
+target. No bare-metal Arm model is supported until that exact model completes
+the install, input, graphics, network, audio, suspend, update, rollback, and
+recovery matrix. Then:
 
 1. Boot the ISO → choose the disk/storage layout in advanced storage.
-   For dual boot, back up first, create free space from Windows/macOS/Linux when
-   possible, then use Installation Destination → Custom/manual storage or Reclaim Space.
+   For preservation-flow proof, back up first, use a controlled virtual-disk
+   fixture with existing system/APFS/data partitions, then use Installation
+   Destination → Custom/manual storage or Reclaim Space.
    Install into unallocated free space or a dedicated disk and preserve existing
    system, recovery, and EFI partitions. For single-OS installs, confirm the
    whole-disk layout on a blank disk; disks with existing partitions must show
@@ -237,21 +249,23 @@ aarch64), then:
    thinking pulse, Light/Dark/Auto switching live with the desktop preference.
 
 Capture and save evidence for this exact run in:
-- `os/screenshots/hardware-gate/<arch>/<run-date>/` (screenshots)
+- `os/screenshots/hardware-gate/aarch64/<run-date>/` (screenshots)
 - `os/signoff-notes.md` (step-by-step checklist + timestamps)
 - `os/hardware-gate/runbook.md` (reproducible command flow used)
 Generated release evidence and ISO metadata are scanned for live keys before signoff.
 
-This step cannot run in the headless build sandbox — it is the **only remaining
-external gate** for full sign-off, and it requires a machine or display-backed VM.
+This step cannot run in the headless build sandbox. It is one required external
+gate and needs Apple Silicon/HVF with a display-backed VM. Native aarch64 Linux
+packaging, exact-candidate artifact binding, capture-host signature, runtime app-build
+proof, accessibility evidence, and coherent signoff must also pass.
 
 ## External verification gates
 
-- **Real-hardware/VM boot + interaction feel** — step 5 above. Everything up to it
-  is automated and verified; the perceived smoothness of motion can only be judged
-  on a real display.
+- **Apple Silicon/HVF VM boot + interaction feel** — step 6 above. Packaging and
+  source gates are automated separately; smoothness, state fidelity, and input
+  behavior must be judged on the real display path for the exact candidate.
 - **Typography** — the shipped font stack is final and Inter-only (with Noto
   Sans fallback).
 - **A runtime model** — exercising *actual* app generation needs GPT-OSS downloaded
-  (or a BYO key / Codex configured). The GUI + core build path is complete and
+  (or your OpenAI API key / OpenAI account through Codex configured). The GUI + core build path is complete and
   honest; generation runs once an engine is present.

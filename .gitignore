@@ -41,6 +41,9 @@ os/iso/output*/
 *.sln
 *.sw?
 
-# CI: persistent x86_64-linux cargo target for in-container clippy/fmt
+# CI: persistent cargo target for native Arm checks
 .ci-target/
-.ci-target-amd64/
+
+# Python caches produced by release-proof validators
+__pycache__/
+*.py[cod]

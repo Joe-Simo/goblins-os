@@ -27,7 +27,7 @@ concurrency:
 
 env:
   CANDIDATE_COMMIT_INPUT: ${{ inputs.candidate_commit }}
-  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:a5b2be1ce90514f1e4d1447bcd6eb6af51ea98644bc310c58ce649a7550e39c0
+  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:4483609aa40e0b8f16e56becda876468309345fadf1b43572ddabfc556382205
 
 jobs:
   candidate-artifacts:
@@ -37,11 +37,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
-            runner: ubuntu-24.04
-            expected_uname: x86_64
-            platform: linux/amd64
-            image_arch: amd64
           - arch: aarch64
             runner: ubuntu-24.04-arm
             expected_uname: aarch64
@@ -142,7 +137,7 @@ jobs:
           candidate_tag="$image:candidate-$CANDIDATE_COMMIT-$TARGET_ARCH"
 
           case "$candidate_tag" in
-            "$image:x86_64"|"$image:aarch64"|"$image:latest"|"$image:stable")
+            "$image:aarch64"|"$image:latest"|"$image:stable")
               echo "Refusing to update a release-channel tag: $candidate_tag" >&2
               exit 1
               ;;
@@ -169,6 +164,11 @@ jobs:
           file: os/bootc/Containerfile
           platforms: ${{ matrix.platform }}
           push: true
+          # Release provenance/SBOMs are produced and signed by the dedicated
+          # Goblins evidence pipeline. Keep the runnable image reference to one
+          # inspectable ARM manifest with no hidden unknown-platform payloads.
+          provenance: false
+          sbom: false
           tags: ${{ steps.image.outputs.candidate_tag }}
           labels: |
             org.opencontainers.image.revision=${{ steps.candidate.outputs.commit }}
@@ -222,6 +222,26 @@ jobs:
           echo "digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
           echo "ref=$immutable_ref" >> "$GITHUB_OUTPUT"
 
+      - name: Drop registry credentials and prove anonymous digest access
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.immutable.outputs.digest }}
+          IMMUTABLE_IMAGE_REF: ${{ steps.immutable.outputs.ref }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+
+          docker logout ghcr.io
+          anonymous_digest="sha256:$(
+            docker buildx imagetools inspect --raw "$IMMUTABLE_IMAGE_REF" \
+              | sha256sum | awk '{print $1}'
+          )"
+          [[ "$anonymous_digest" == "$IMAGE_DIGEST" ]] || {
+            echo "Anonymous registry access resolved $anonymous_digest, expected $IMAGE_DIGEST." >&2
+            exit 1
+          }
+          docker pull --platform "$TARGET_PLATFORM" "$IMMUTABLE_IMAGE_REF"
+
       - name: Verify the exact candidate source and installed-root contracts
         shell: bash
         env:
@@ -273,7 +293,6 @@ jobs:
           GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 \
           GOBLINS_OS_SHIPPABLE_RELEASE=1 \
           GOBLINS_OS_BIB_SOURCE_IMAGE="$IMMUTABLE_IMAGE_REF" \
-          GOBLINS_OS_DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS=180 \
           GOBLINS_OS_CANDIDATE_COMMIT="$CANDIDATE_COMMIT" \
             os/iso/build-iso.sh
 
@@ -321,14 +340,22 @@ jobs:
           checksum="$iso.sha256"
           iso_manifest="$iso_dir/manifest-goblins-os-$TARGET_ARCH.json"
           bib_manifest="$iso_dir/manifest-anaconda-iso.json"
-          evidence_manifest="$PWD/os/signoff-proofs/sbom/$TARGET_ARCH/release-evidence-manifest.json"
+          evidence_dir="$PWD/os/signoff-proofs/sbom/$TARGET_ARCH"
+          evidence_manifest="$evidence_dir/release-evidence-manifest.json"
+          cargo_packages="$evidence_dir/cargo-lock-packages.tsv"
+          rpm_command="$evidence_dir/rpm-packages.command"
+          rpm_packages="$evidence_dir/rpm-packages.tsv"
 
-          for artifact in "$iso" "$checksum" "$iso_manifest" "$bib_manifest" "$evidence_manifest"; do
+          for artifact in \
+            "$iso" "$checksum" "$iso_manifest" "$bib_manifest" \
+            "$evidence_manifest" "$cargo_packages" "$rpm_command" "$rpm_packages"; do
             [[ -s "$artifact" ]] || {
               echo "Required candidate artifact is missing or empty: $artifact" >&2
               exit 1
             }
           done
+          . ./os/hardware-gate/release-evidence.sh
+          goblins_os_release_evidence_hashes_match "$evidence_dir"
 
           (cd "$(dirname "$iso")" && sha256sum -c "$(basename "$checksum")")
           iso_sha256="$(sha256sum "$iso" | awk '{print $1}')"
@@ -340,6 +367,7 @@ jobs:
              and .candidate_commit == $commit
              and .image == $image
              and .builder_source_image == $image
+             and .native_host_os == "Linux"
              and .native_host_arch == $arch
              and .container_engine_arch == $arch
              and .installer_config == "os/iso/config.toml"
@@ -365,7 +393,8 @@ jobs:
             --arg arch "$TARGET_ARCH" \
             --arg commit "$CANDIDATE_COMMIT" \
             --arg image "$IMMUTABLE_IMAGE_REF" \
-            '.architecture == $arch
+            '.schema == "goblins-os-release-evidence-v5"
+             and .architecture == $arch
              and .candidate_commit == $commit
              and .image_ref == $image
              and .image_digest_pinned == true' \
@@ -374,8 +403,9 @@ jobs:
           iso_manifest_sha256="$(sha256sum "$iso_manifest" | awk '{print $1}')"
           bib_manifest_sha256="$(sha256sum "$bib_manifest" | awk '{print $1}')"
           evidence_manifest_sha256="$(sha256sum "$evidence_manifest" | awk '{print $1}')"
-          cargo_packages_sha256="$(jq -er '.cargo_packages_sha256' "$evidence_manifest")"
-          rpm_packages_sha256="$(jq -er '.rpm_packages_sha256' "$evidence_manifest")"
+          cargo_packages_sha256="$(sha256sum "$cargo_packages" | awk '{print $1}')"
+          rpm_command_sha256="$(sha256sum "$rpm_command" | awk '{print $1}')"
+          rpm_packages_sha256="$(sha256sum "$rpm_packages" | awk '{print $1}')"
 
           output_dir="$PWD/candidate-output/$TARGET_ARCH"
           mkdir -p "$output_dir"
@@ -391,12 +421,13 @@ jobs:
             --arg bib_manifest_sha256 "$bib_manifest_sha256" \
             --arg evidence_manifest_sha256 "$evidence_manifest_sha256" \
             --arg cargo_packages_sha256 "$cargo_packages_sha256" \
+            --arg rpm_command_sha256 "$rpm_command_sha256" \
             --arg rpm_packages_sha256 "$rpm_packages_sha256" \
             --arg source_repository "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --arg workflow_run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --argjson workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
             '{
-              schema: "goblins-os-candidate-image-ref-v2",
+              schema: "goblins-os-candidate-image-ref-v3",
               product: "Goblins OS",
               architecture: $architecture,
               platform: $platform,
@@ -411,6 +442,7 @@ jobs:
               bib_manifest_sha256: $bib_manifest_sha256,
               release_evidence_manifest_sha256: $evidence_manifest_sha256,
               cargo_packages_sha256: $cargo_packages_sha256,
+              rpm_command_sha256: $rpm_command_sha256,
               rpm_packages_sha256: $rpm_packages_sha256,
               installer_config: "os/iso/config.toml",
               source_repository: $source_repository,
@@ -434,9 +466,10 @@ jobs:
             --arg bib_manifest_sha256 "$bib_manifest_sha256" \
             --arg evidence_manifest_sha256 "$evidence_manifest_sha256" \
             --arg cargo_packages_sha256 "$cargo_packages_sha256" \
+            --arg rpm_command_sha256 "$rpm_command_sha256" \
             --arg rpm_packages_sha256 "$rpm_packages_sha256" \
             '.architecture == $arch
-             and .schema == "goblins-os-candidate-image-ref-v2"
+             and .schema == "goblins-os-candidate-image-ref-v3"
              and .candidate_commit == $commit
              and .image_digest == $digest
              and .immutable_image_ref == $image
@@ -447,6 +480,7 @@ jobs:
              and .bib_manifest_sha256 == $bib_manifest_sha256
              and .release_evidence_manifest_sha256 == $evidence_manifest_sha256
              and .cargo_packages_sha256 == $cargo_packages_sha256
+             and .rpm_command_sha256 == $rpm_command_sha256
              and .rpm_packages_sha256 == $rpm_packages_sha256
              and .installer_config == "os/iso/config.toml"
              and .workflow_name == "candidate-artifacts"

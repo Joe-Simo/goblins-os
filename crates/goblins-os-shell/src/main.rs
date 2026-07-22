@@ -172,6 +172,61 @@ fn engine_route_disclosure(engine: Option<&str>) -> &'static str {
     }
 }
 
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn studio_submission_disclosure(engine: Option<&str>, ready: bool) -> String {
+    if !ready {
+        return "The selected engine is not ready. Your request will not be sent. Open Models to set up or retry it."
+            .to_string();
+    }
+
+    match engine {
+        Some("local-gpt-oss") => {
+            "On-device GPT-OSS · the exact request and Studio workspace stay on this computer. File changes get a one-turn local checkpoint you can undo."
+                .to_string()
+        }
+        Some("codex") => {
+            "OpenAI account via Codex · before the exact request or any current Studio workspace file can leave this device, you will review the destination, full file manifest, possible file actions, and Undo Last Turn recovery."
+                .to_string()
+        }
+        Some("openai-api") => {
+            "OpenAI hosted models · you will review the exact request and app name before they leave this device using the protected API key. Existing workspace contents are not sent; file changes get a one-turn local checkpoint."
+                .to_string()
+        }
+        Some("cloud-openai") => {
+            "Managed OpenAI cloud · you will review the exact request and app name before they leave this device. Existing workspace contents are not sent; file changes get a one-turn local checkpoint."
+                .to_string()
+        }
+        _ => "Engine status is unavailable. Your request will not be sent.".to_string(),
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn voice_submission_disclosure(engine: Option<&str>, ready: bool) -> String {
+    if !ready {
+        return "Voice can listen and transcribe on this device, but the selected reply engine is not ready. The transcript will not be sent."
+            .to_string();
+    }
+    match engine {
+        Some("local-gpt-oss") => {
+            "Microphone audio, the transcript, the reply, and speech playback stay on this device with GPT-OSS."
+                .to_string()
+        }
+        Some("codex") => {
+            "Microphone audio and transcription stay on this device. Before the exact transcript is sent to your OpenAI account through Codex, Goblins OS will show it and ask you to confirm."
+                .to_string()
+        }
+        Some("openai-api") => {
+            "Microphone audio and transcription stay on this device. Before the exact transcript is sent to OpenAI using your protected API key, Goblins OS will show it and ask you to confirm."
+                .to_string()
+        }
+        Some("cloud-openai") => {
+            "Microphone audio and transcription stay on this device. Before the exact transcript is sent to the managed OpenAI cloud service, Goblins OS will show it and ask you to confirm."
+                .to_string()
+        }
+        _ => "Voice engine status is unavailable. No transcript will be sent.".to_string(),
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn voice_wake_word(status: Option<&VoiceStatus>) -> String {
     status
@@ -210,9 +265,14 @@ struct BuildOutcome {
 #[derive(Deserialize)]
 struct ConverseOutcome {
     ok: bool,
-    transcript: String,
     reply: String,
     text: String,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+enum VoiceTurnResult {
+    Completed { reply: String },
+    Failed(String),
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -229,6 +289,8 @@ struct StudioSessionView {
     name: String,
     thread: Vec<StudioMessage>,
     files: Vec<String>,
+    #[serde(default)]
+    undo_available: bool,
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -237,6 +299,12 @@ struct StudioTurnView {
     ok: bool,
     text: String,
     session: Option<StudioSessionView>,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+enum StudioTurnResult {
+    Completed(StudioSessionView),
+    Failed(String),
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -354,9 +422,16 @@ struct ResidentProcess {
     detail: String,
 }
 
+#[cfg_attr(
+    not(all(target_os = "linux", feature = "native-desktop")),
+    allow(dead_code)
+)]
 #[derive(Clone, Deserialize)]
 struct ResidentEngine {
     selected: String,
+    ready: bool,
+    local_ready: bool,
+    local_detail: String,
     cloud_relay_configured: bool,
     local_relay_configured: bool,
 }
@@ -924,7 +999,7 @@ fn build_desktop(
     let app_detail = gtk::Box::new(gtk::Orientation::Vertical, 0);
     app_detail.set_vexpand(true);
 
-    let home = build_home(config, shell_state, &body, &app_detail);
+    let home = build_home(config, shell_state, &body, &app_detail, window);
     home.set_vexpand(true);
     let studio = build_studio(config, shell_state, &body);
     studio.set_vexpand(true);
@@ -949,6 +1024,7 @@ fn build_home(
     shell_state: &ShellState,
     stack: &gtk4::Stack,
     detail: &gtk4::Box,
+    window: Option<&gtk4::ApplicationWindow>,
 ) -> gtk4::Box {
     use gtk::prelude::*;
     use gtk4 as gtk;
@@ -956,11 +1032,10 @@ fn build_home(
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
     center.set_vexpand(true);
     center.set_valign(gtk::Align::Center);
-    center.set_halign(gtk::Align::Center);
+    center.set_halign(gtk::Align::Fill);
+    center.set_hexpand(true);
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    column.set_size_request(620, -1);
-    column.set_halign(gtk::Align::Center);
 
     // The headline + subhead already establish the build context, so no eyebrow
     // sits above them — a calmer top-of-page with one less competing element.
@@ -1033,19 +1108,24 @@ fn build_home(
     }
     column.append(&open_studio);
 
-    // Voice: ask Goblin and hear it answer, all on-device. Offered when the local
-    // Whisper/Piper models are present; the quiet button dims (with a reason) until
-    // then. A tier below the Studio pill — it's a delight, not the main route.
-    let voice_available = shell_state
+    // Voice capture, transcription, and playback are local. The selected reply
+    // engine may be local or hosted; hosted transcripts remain core-retained
+    // until the trusted broker approves that exact context once.
+    let voice_components_ready = shell_state
         .voice
         .as_ref()
         .is_some_and(|voice| voice.available);
+    let voice_engine_ready = shell_state
+        .resident
+        .as_ref()
+        .is_some_and(|resident| resident.engine.ready);
+    let voice_available = voice_components_ready && voice_engine_ready;
     let voice_word = voice_wake_word(shell_state.voice.as_ref());
     let voice = button(&format!("Say {voice_word}"), &["gos-home-settings"]);
     voice.set_halign(gtk::Align::Center);
     voice.set_margin_top(8);
     voice.set_sensitive(voice_available);
-    let voice_tooltip = shell_state
+    let component_tooltip = shell_state
         .voice
         .as_ref()
         .map(VoiceStatus::wake_tooltip)
@@ -1053,8 +1133,18 @@ fn build_home(
             "Goblin voice runs on local Whisper and Piper models. Add the missing voice components."
                 .to_string()
         });
-    voice.set_tooltip_text(Some(&voice_tooltip));
+    let voice_disclosure = voice_submission_disclosure(
+        shell_state
+            .resident
+            .as_ref()
+            .map(|resident| resident.engine.selected.as_str()),
+        voice_engine_ready,
+    );
+    voice.set_tooltip_text(Some(&format!("{component_tooltip} {voice_disclosure}")));
     column.append(&voice);
+    let voice_privacy = centered(&voice_disclosure, &["gos-home-status"], true);
+    voice_privacy.set_max_width_chars(58);
+    column.append(&voice_privacy);
 
     // The quietest tertiary: a route to Settings (engine, OpenAI account, network,
     // privacy). The dock also opens it; the home keeps a calm, affordanced link so
@@ -1099,6 +1189,7 @@ fn build_home(
 
     let ui = BuildUi {
         core: config.core.clone(),
+        window: window.cloned(),
         entry: entry.clone(),
         build: build.clone(),
         status,
@@ -1124,7 +1215,7 @@ fn build_home(
         voice.connect_clicked(move |_| start_voice(&ui, &voice_button, &voice_word));
     }
 
-    center.append(&column);
+    center.append(&goblins_os_ui::adaptive_centered_column(&column, 400));
     center
 }
 
@@ -1134,6 +1225,7 @@ fn build_home(
 #[derive(Clone)]
 struct BuildUi {
     core: CoreClient,
+    window: Option<gtk4::ApplicationWindow>,
     entry: gtk4::Entry,
     build: gtk4::Button,
     status: gtk4::Label,
@@ -1158,6 +1250,10 @@ fn thinking_dots() -> gtk4::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
     row.add_css_class("gos-thinking");
     row.set_halign(gtk::Align::Center);
+    row.update_property(&[
+        gtk::accessible::Property::Label("Goblins AI is working"),
+        gtk::accessible::Property::Description("Goblins AI is working"),
+    ]);
     // Honor the desktop reduced-motion preference (GNOME maps it onto
     // gtk-enable-animations). Raw frame-clock tick callbacks are NOT paused by
     // that setting the way built-in widget animations are, so we check it
@@ -1266,13 +1362,12 @@ fn finish_build(ui: &BuildUi, result: Result<BuiltApp, String>) {
     }
 }
 
-/// Ask Goblin: capture, transcribe, answer, and speak — entirely on-device —
-/// on a worker thread so the home shows the same calm pulse while it listens and
-/// thinks. The reply is both spoken (by the core) and shown here.
+/// Ask Goblin: capture and transcribe locally, then answer through the selected
+/// engine and speak locally. For hosted engines, the core retains the transcript
+/// while the trusted consent broker presents the exact one-time review.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn start_voice(ui: &BuildUi, voice: &gtk4::Button, wake_word: &str) {
-    use gtk::prelude::*;
-    use gtk4 as gtk;
+    use gtk4::prelude::*;
 
     ui.status.remove_css_class("gos-home-status-error");
     ui.status.add_css_class("gos-home-status-working");
@@ -1281,7 +1376,14 @@ fn start_voice(ui: &BuildUi, voice: &gtk4::Button, wake_word: &str) {
     ui.build.set_sensitive(false);
     voice.set_sensitive(false);
 
-    let (tx, rx) = std::sync::mpsc::channel::<Result<(String, String), String>>();
+    dispatch_voice_request(ui, voice);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn dispatch_voice_request(ui: &BuildUi, voice: &gtk4::Button) {
+    use gtk4 as gtk;
+
+    let (tx, rx) = std::sync::mpsc::channel::<VoiceTurnResult>();
     let core = ui.core.clone();
     std::thread::spawn(move || {
         let _ = tx.send(converse(&core));
@@ -1298,7 +1400,11 @@ fn start_voice(ui: &BuildUi, voice: &gtk4::Button, wake_word: &str) {
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    finish_voice(&ui, &voice, Err("Voice stopped unexpectedly.".to_string()));
+                    finish_voice(
+                        &ui,
+                        &voice,
+                        VoiceTurnResult::Failed("Voice stopped unexpectedly.".to_string()),
+                    );
                     gtk::glib::ControlFlow::Break
                 }
             }
@@ -1306,37 +1412,59 @@ fn start_voice(ui: &BuildUi, voice: &gtk4::Button, wake_word: &str) {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn finish_voice(ui: &BuildUi, voice: &gtk4::Button, result: Result<(String, String), String>) {
+fn finish_voice(ui: &BuildUi, voice: &gtk4::Button, result: VoiceTurnResult) {
     use gtk4::prelude::*;
 
-    ui.thinking.set_visible(false);
-    ui.build.set_sensitive(true);
-    voice.set_sensitive(true);
-    ui.status.remove_css_class("gos-home-status-working");
-
     match result {
-        Ok((_transcript, reply)) => {
+        VoiceTurnResult::Completed { reply } => {
+            restore_voice_controls(ui, voice);
             ui.status.remove_css_class("gos-home-status-error");
             ui.status.set_text(&truncate_intent(&reply));
         }
-        Err(detail) => {
+        VoiceTurnResult::Failed(detail) => {
+            restore_voice_controls(ui, voice);
             ui.status.add_css_class("gos-home-status-error");
             ui.status.set_text(&detail);
         }
     }
 }
 
-/// Drive one on-device voice turn through the core and return (heard, spoken).
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn converse(core: &CoreClient) -> Result<(String, String), String> {
-    let response = http_post_response(core, "/v1/voice/converse", "{}")
-        .map_err(|_| "Goblins OS could not reach the on-device voice service.".to_string())?;
-    let outcome: ConverseOutcome = serde_json::from_slice(&response.body)
-        .map_err(|_| "Goblins OS could not read the voice result.".to_string())?;
+fn restore_voice_controls(ui: &BuildUi, voice: &gtk4::Button) {
+    use gtk4::prelude::*;
+
+    ui.thinking.set_visible(false);
+    ui.build.set_sensitive(true);
+    voice.set_sensitive(true);
+    ui.status.remove_css_class("gos-home-status-working");
+}
+
+/// Drive one privacy-bounded voice turn through the core.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn converse(core: &CoreClient) -> VoiceTurnResult {
+    let body = serde_json::json!({}).to_string();
+    let response = match http_post_response(core, "/v1/voice/converse", &body) {
+        Ok(response) => response,
+        Err(_) => {
+            return VoiceTurnResult::Failed(
+                "Goblins OS could not reach the private voice service.".to_string(),
+            )
+        }
+    };
+    let outcome: ConverseOutcome = match serde_json::from_slice(&response.body) {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            return VoiceTurnResult::Failed(
+                "Goblins OS could not read the voice result.".to_string(),
+            )
+        }
+    };
     if (200..=299).contains(&response.status) && outcome.ok {
-        Ok((outcome.transcript, outcome.reply))
+        VoiceTurnResult::Completed {
+            reply: outcome.reply,
+        }
     } else {
-        Err(outcome.text)
+        VoiceTurnResult::Failed(outcome.text)
     }
 }
 
@@ -1415,13 +1543,11 @@ fn populate_app_detail(page: &gtk4::Box, app: &BuiltApp, stack: &gtk4::Stack) {
     let center = gtk::Box::new(gtk::Orientation::Vertical, 0);
     center.set_valign(gtk::Align::Start);
     center.set_margin_top(24);
-    center.set_halign(gtk::Align::Center);
+    center.set_halign(gtk::Align::Fill);
     center.set_vexpand(true);
     center.set_hexpand(true);
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    column.set_halign(gtk::Align::Center);
-    column.set_size_request(620, -1);
 
     let back = button("← Home", &["gos-home-settings", "gos-detail-back"]);
     back.set_halign(gtk::Align::Start);
@@ -1491,7 +1617,7 @@ fn populate_app_detail(page: &gtk4::Box, app: &BuiltApp, stack: &gtk4::Stack) {
     }
     column.append(&open);
 
-    center.append(&column);
+    center.append(&goblins_os_ui::adaptive_centered_column(&column, 400));
     page.append(&center);
 }
 
@@ -1753,6 +1879,29 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
         .engine
         .as_ref()
         .map(|engine| engine.engine.clone());
+    let active_engine_ready = shell_state
+        .resident
+        .as_ref()
+        .is_some_and(|resident| resident.engine.ready);
+    let local_engine_ready = shell_state
+        .resident
+        .as_ref()
+        .is_some_and(|resident| resident.engine.local_ready);
+    let local_engine_detail = shell_state
+        .resident
+        .as_ref()
+        .map(|resident| resident.engine.local_detail.as_str())
+        .unwrap_or("Waiting for authoritative on-device GPT-OSS readiness from Goblins OS.");
+    let route_disclosure_copy =
+        studio_submission_disclosure(active_engine.as_deref(), active_engine_ready);
+    let route_disclosure = label(&route_disclosure_copy, &["gos-studio-engine-feedback"]);
+    route_disclosure.set_wrap(true);
+    route_disclosure.set_xalign(0.0);
+    route_disclosure.update_property(&[
+        gtk::accessible::Property::Label("Active Goblins AI route"),
+        gtk::accessible::Property::Description(route_disclosure_copy.as_str()),
+    ]);
+    composer.append(&route_disclosure);
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     controls.add_css_class("gos-studio-controls");
     let codex_ready = shell_state
@@ -1765,9 +1914,15 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
         .is_some_and(|engine| engine.configured);
     controls.append(&engine_picker(
         config,
-        active_engine.as_deref(),
-        codex_ready,
-        key_ready,
+        &EnginePickerState {
+            active: active_engine.as_deref(),
+            active_ready: active_engine_ready,
+            local_ready: local_engine_ready,
+            local_detail: local_engine_detail,
+            codex_ready,
+            key_ready,
+        },
+        &route_disclosure,
     ));
     controls.append(&spacer());
     let thinking = thinking_dots();
@@ -1775,17 +1930,19 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     thinking.set_valign(gtk::Align::Center);
     controls.append(&thinking);
     let send = button("↑", &["gos-studio-send"]);
-    send.set_tooltip_text(Some("Send build request"));
+    send.set_tooltip_text(Some(
+        "Build with the active engine. Hosted routes open an exact context review first.",
+    ));
     send.update_property(&[
         gtk::accessible::Property::Label("Send build request"),
         gtk::accessible::Property::Description(
-            "Send this request to the active Goblins AI engine.",
+            "Build with the active Goblins AI engine. Hosted routes require an exact context review before sending.",
         ),
     ]);
-    send.set_sensitive(active_engine.is_some());
-    if active_engine.is_none() {
+    send.set_sensitive(active_engine_ready);
+    if !active_engine_ready {
         send.set_tooltip_text(Some(
-            "Reconnect to Goblins OS before sending a build request.",
+            "Set up or retry the selected engine in Models before sending a build request.",
         ));
     }
     controls.append(&send);
@@ -1802,6 +1959,16 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     // centered in the panel regardless of the conversation scrollbar above it.
     footer.set_margin_start(22);
     footer.set_margin_end(22);
+    let undo = button("Undo last turn", &["gos-studio-home"]);
+    undo.set_tooltip_text(Some(
+        "Restore the automatic local checkpoint from immediately before the last Studio turn.",
+    ));
+    undo.set_sensitive(
+        session
+            .as_ref()
+            .is_some_and(|session| session.undo_available),
+    );
+    footer.append(&undo);
     footer.append(&label("Local checkout", &["gos-studio-crumb"]));
     footer.append(&spacer());
     footer.append(&label("main", &["gos-studio-crumb"]));
@@ -1816,15 +1983,18 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     // opens that saved session; "+ New build" clears to the empty composer state;
     // the search field filters the list live.
     for (row, id) in &studio_rows {
-        wire_studio_open(row, &config.core, id, &conv, &title, &active_id);
+        wire_studio_open(row, &config.core, id, &conv, &title, &active_id, &undo);
     }
     {
         let conv = conv.clone();
         let input = input.clone();
         let title = title.clone();
         let active_id = active_id.clone();
-        new_build
-            .connect_clicked(move |_| reset_studio_to_new_build(&conv, &input, &title, &active_id));
+        let undo = undo.clone();
+        new_build.connect_clicked(move |_| {
+            reset_studio_to_new_build(&conv, &input, &title, &active_id);
+            undo.set_sensitive(false);
+        });
     }
     {
         let search_rows = search_rows;
@@ -1845,6 +2015,7 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
         conv,
         title,
         app_id: active_id,
+        undo: undo.clone(),
     };
     {
         let ui = ui.clone();
@@ -1853,6 +2024,10 @@ fn build_studio(config: &ShellConfig, shell_state: &ShellState, stack: &gtk4::St
     {
         let ui = ui.clone();
         input.connect_activate(move |_| start_studio_turn(&ui));
+    }
+    {
+        let ui = ui.clone();
+        undo.connect_clicked(move |_| start_studio_undo(&ui));
     }
 
     root
@@ -1869,6 +2044,7 @@ struct StudioUi {
     thinking: gtk4::Box,
     conv: gtk4::Box,
     title: gtk4::Label,
+    undo: gtk4::Button,
     /// The saved build currently open in the center, so a follow-up turn continues
     /// it instead of forking a new session. Empty = a fresh "new build".
     app_id: Rc<RefCell<String>>,
@@ -1881,7 +2057,7 @@ struct StudioProject {
     id: String,
     name: String,
     time: String,
-    dot: &'static str,
+    status: StudioStatus,
     threads: Vec<StudioThreadItem>,
 }
 
@@ -1891,8 +2067,32 @@ struct StudioThreadItem {
     id: String,
     title: String,
     time: String,
-    dot: &'static str,
+    status: StudioStatus,
     active: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone, Copy)]
+enum StudioStatus {
+    Saved,
+    Open,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+impl StudioStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Saved => "Saved",
+            Self::Open => "Open",
+        }
+    }
+
+    fn css_class(self) -> &'static str {
+        match self {
+            Self::Saved => "is-saved",
+            Self::Open => "is-open",
+        }
+    }
 }
 
 /// A single-line label with optional end-ellipsis — used for sidebar titles and
@@ -1924,18 +2124,19 @@ fn studio_text(text: &str, class: &str, ellipsize: bool, markup: bool) -> gtk4::
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn studio_dot(variant: &str) -> gtk4::Box {
+fn studio_status(status: StudioStatus) -> gtk4::Label {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
-    let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    dot.set_size_request(8, 8);
-    dot.set_valign(gtk::Align::Center);
-    dot.add_css_class("gos-studio-dot");
-    if !variant.is_empty() {
-        dot.add_css_class(variant);
-    }
-    dot
+    let status_label = gtk::Label::new(Some(status.label()));
+    status_label.set_valign(gtk::Align::Center);
+    status_label.add_css_class("gos-studio-status");
+    status_label.add_css_class(status.css_class());
+    status_label.update_property(&[
+        gtk::accessible::Property::Label(status.label()),
+        gtk::accessible::Property::Description(status.label()),
+    ]);
+    status_label
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -1944,16 +2145,21 @@ fn sidebar_project(project: &StudioProject) -> gtk4::Button {
     use gtk4 as gtk;
 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.append(&studio_dot(project.dot));
     let name = studio_text(&project.name, "", true, false);
     name.set_hexpand(true);
     row.append(&name);
+    row.append(&studio_status(project.status));
     row.append(&studio_text(&project.time, "gos-studio-time", false, false));
 
     let button = gtk::Button::new();
     button.add_css_class("gos-studio-project");
     button.set_hexpand(true);
     button.set_child(Some(&row));
+    let accessible_label = format!("Build {}, status {}", project.name, project.status.label());
+    button.update_property(&[
+        gtk::accessible::Property::Label(accessible_label.as_str()),
+        gtk::accessible::Property::Description(accessible_label.as_str()),
+    ]);
     button
 }
 
@@ -1963,10 +2169,10 @@ fn sidebar_thread(thread: &StudioThreadItem) -> gtk4::Button {
     use gtk4 as gtk;
 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.append(&studio_dot(thread.dot));
     let title = studio_text(&thread.title, "", true, false);
     title.set_hexpand(true);
     row.append(&title);
+    row.append(&studio_status(thread.status));
     row.append(&studio_text(&thread.time, "gos-studio-time", false, false));
 
     let button = gtk::Button::new();
@@ -1976,23 +2182,43 @@ fn sidebar_thread(thread: &StudioThreadItem) -> gtk4::Button {
     }
     button.set_hexpand(true);
     button.set_child(Some(&row));
+    let accessible_label = format!("Thread {}, status {}", thread.title, thread.status.label());
+    button.update_property(&[
+        gtk::accessible::Property::Label(accessible_label.as_str()),
+        gtk::accessible::Property::Description(accessible_label.as_str()),
+    ]);
+    button.update_state(&[gtk::accessible::State::Selected(Some(thread.active))]);
     button
 }
 
 /// The model picker in the composer. Every route is named explicitly with its
 /// readiness instead of hiding a provider change behind a cycling button.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn engine_picker(
-    config: &ShellConfig,
-    active: Option<&str>,
+struct EnginePickerState<'a> {
+    active: Option<&'a str>,
+    active_ready: bool,
+    local_ready: bool,
+    local_detail: &'a str,
     codex_ready: bool,
     key_ready: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn engine_picker(
+    config: &ShellConfig,
+    state: &EnginePickerState<'_>,
+    submission_disclosure: &gtk4::Label,
 ) -> gtk4::MenuButton {
     use gtk::prelude::*;
     use gtk4 as gtk;
 
     let picker = gtk::MenuButton::new();
-    picker.set_label(active.map(engine_display).unwrap_or("Engine unavailable"));
+    picker.set_label(
+        state
+            .active
+            .map(engine_display)
+            .unwrap_or("Engine unavailable"),
+    );
     // Studio's picker sits at the bottom edge of the composer. MenuButton owns
     // popup placement, so its direction must agree with the popover preference.
     // Let GTK draw the one direction-aware arrow instead of duplicating it in
@@ -2017,7 +2243,11 @@ fn engine_picker(
     list.add_css_class("gos-studio-engine-list");
 
     let feedback = label(
-        engine_route_disclosure(active),
+        if state.active_ready {
+            engine_route_disclosure(state.active)
+        } else {
+            "The selected engine is not ready. Open Models to set it up or retry."
+        },
         &["gos-studio-engine-feedback"],
     );
     feedback.set_wrap(true);
@@ -2028,18 +2258,14 @@ fn engine_picker(
         (
             "local-gpt-oss",
             "On-device · GPT-OSS",
-            active.is_some(),
-            if active.is_some() {
-                "Runs on this computer. No prompt leaves the device."
-            } else {
-                "Engine status is unavailable until Goblins OS reconnects."
-            },
+            state.local_ready,
+            state.local_detail,
         ),
         (
             "codex",
             "OpenAI account · Codex",
-            codex_ready,
-            if codex_ready {
+            state.codex_ready,
+            if state.codex_ready {
                 "Uses your OpenAI account through Codex."
             } else {
                 "Sign in to Codex in Settings before choosing this engine."
@@ -2048,8 +2274,8 @@ fn engine_picker(
         (
             "openai-api",
             "OpenAI hosted · Your API key",
-            key_ready,
-            if key_ready {
+            state.key_ready,
+            if state.key_ready {
                 "Uses OpenAI hosted models with your stored API key."
             } else {
                 "Ask a device administrator to install an OpenAI API key before choosing this engine."
@@ -2076,6 +2302,7 @@ fn engine_picker(
         let picker = picker.clone();
         let popover = popover.clone();
         let feedback = feedback.clone();
+        let submission_disclosure = submission_disclosure.clone();
         let core = config.core.clone();
         option.connect_clicked(move |button| {
             button.set_sensitive(false);
@@ -2091,11 +2318,14 @@ fn engine_picker(
             let picker = picker.clone();
             let popover = popover.clone();
             let feedback = feedback.clone();
+            let submission_disclosure = submission_disclosure.clone();
             let _poll = gtk::glib::timeout_add_local(Duration::from_millis(75), move || {
                 match rx.try_recv() {
                     Ok(Ok(())) => {
                         picker.set_label(engine_display(engine));
                         feedback.set_text(engine_route_disclosure(Some(engine)));
+                        submission_disclosure
+                            .set_text(&studio_submission_disclosure(Some(engine), true));
                         popover.popdown();
                         button.set_sensitive(ready);
                         gtk::glib::ControlFlow::Break
@@ -2122,6 +2352,24 @@ fn engine_picker(
             });
         });
         list.append(&option);
+    }
+
+    if !state.local_ready {
+        let setup = button(
+            "Set up or retry GPT-OSS",
+            &["gos-studio-engine-option", "gos-studio-engine-setup"],
+        );
+        setup.set_tooltip_text(Some(
+            "Open Models to add a compatible local model or retry readiness after its runtime starts.",
+        ));
+        setup.update_property(&[
+            gtk::accessible::Property::Label("Set up or retry on-device GPT-OSS"),
+            gtk::accessible::Property::Description(state.local_detail),
+        ]);
+        setup.connect_clicked(move |_| {
+            let _ = launch_local_action("models");
+        });
+        list.append(&setup);
     }
 
     popover.set_child(Some(&list));
@@ -2249,8 +2497,7 @@ fn thread_title(view: &StudioSessionView) -> String {
 /// the thinking pulse animates while it works.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn start_studio_turn(ui: &StudioUi) {
-    use gtk::prelude::*;
-    use gtk4 as gtk;
+    use gtk4::prelude::*;
 
     let message = ui.input.text().to_string();
     let message = message.trim().to_string();
@@ -2258,13 +2505,20 @@ fn start_studio_turn(ui: &StudioUi) {
         return;
     }
 
+    let app_id = ui.app_id.borrow().clone();
+    dispatch_studio_turn(ui, message, app_id);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn dispatch_studio_turn(ui: &StudioUi, message: String, app_id: String) {
+    use gtk4::{self as gtk, prelude::*};
+
     ui.send.set_sensitive(false);
     ui.input.set_sensitive(false);
     ui.thinking.set_visible(true);
 
-    let (tx, rx) = std::sync::mpsc::channel::<Result<StudioSessionView, String>>();
+    let (tx, rx) = std::sync::mpsc::channel::<StudioTurnResult>();
     let core = ui.core.clone();
-    let app_id = ui.app_id.borrow().clone();
     std::thread::spawn(move || {
         let _ = tx.send(studio_turn_request(&core, &message, &app_id));
     });
@@ -2281,7 +2535,9 @@ fn start_studio_turn(ui: &StudioUi) {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     finish_studio_turn(
                         &ui,
-                        Err("The build worker stopped unexpectedly.".to_string()),
+                        StudioTurnResult::Failed(
+                            "The build worker stopped unexpectedly.".to_string(),
+                        ),
                     );
                     gtk::glib::ControlFlow::Break
                 }
@@ -2290,23 +2546,95 @@ fn start_studio_turn(ui: &StudioUi) {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn finish_studio_turn(ui: &StudioUi, result: Result<StudioSessionView, String>) {
+fn finish_studio_turn(ui: &StudioUi, result: StudioTurnResult) {
     use gtk4::prelude::*;
 
-    ui.thinking.set_visible(false);
-    ui.send.set_sensitive(true);
-    ui.input.set_sensitive(true);
-
     match result {
-        Ok(view) => {
+        StudioTurnResult::Completed(view) => {
+            restore_studio_controls(ui);
             // Pin the composer to the session the core just wrote, so the next turn
             // continues this build (whether it was a fresh build or a continuation).
             *ui.app_id.borrow_mut() = view.id.clone();
             ui.input.set_text("");
             ui.title.set_text(&thread_title(&view));
             rebuild_conversation(&ui.conv, &view);
+            ui.undo.set_sensitive(view.undo_available);
+        }
+        StudioTurnResult::Failed(detail) => {
+            restore_studio_controls(ui);
+            ui.conv.append(&studio_message("agent", &detail));
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn restore_studio_controls(ui: &StudioUi) {
+    use gtk4::prelude::*;
+
+    ui.thinking.set_visible(false);
+    ui.send.set_sensitive(true);
+    ui.input.set_sensitive(true);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn start_studio_undo(ui: &StudioUi) {
+    use gtk4::{self as gtk, prelude::*};
+
+    let app_id = ui.app_id.borrow().clone();
+    if app_id.is_empty() {
+        return;
+    }
+    ui.send.set_sensitive(false);
+    ui.input.set_sensitive(false);
+    ui.undo.set_sensitive(false);
+    ui.thinking.set_visible(true);
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Option<StudioSessionView>, String>>();
+    let core = ui.core.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(studio_undo_request(&core, &app_id));
+    });
+    let ui = ui.clone();
+    let _poll =
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(90), move || {
+            match rx.try_recv() {
+                Ok(result) => {
+                    finish_studio_undo(&ui, result);
+                    gtk::glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    finish_studio_undo(
+                        &ui,
+                        Err("The Studio undo worker stopped unexpectedly.".to_string()),
+                    );
+                    gtk::glib::ControlFlow::Break
+                }
+            }
+        });
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn finish_studio_undo(ui: &StudioUi, result: Result<Option<StudioSessionView>, String>) {
+    use gtk4::prelude::*;
+
+    restore_studio_controls(ui);
+    match result {
+        Ok(Some(view)) => {
+            *ui.app_id.borrow_mut() = view.id.clone();
+            ui.title.set_text(&thread_title(&view));
+            rebuild_conversation(&ui.conv, &view);
+            ui.conv.append(&studio_message(
+                "agent",
+                "Restored the files and conversation from before the last Studio turn.",
+            ));
+            ui.undo.set_sensitive(view.undo_available);
+        }
+        Ok(None) => {
+            reset_studio_to_new_build(&ui.conv, &ui.input, &ui.title, &ui.app_id);
+            ui.undo.set_sensitive(false);
         }
         Err(detail) => {
+            ui.undo.set_sensitive(true);
             ui.conv.append(&studio_message("agent", &detail));
         }
     }
@@ -2339,6 +2667,7 @@ fn wire_studio_open(
     conv: &gtk4::Box,
     title: &gtk4::Label,
     app_id: &Rc<RefCell<String>>,
+    undo: &gtk4::Button,
 ) {
     use gtk4::prelude::*;
 
@@ -2350,12 +2679,14 @@ fn wire_studio_open(
     let conv = conv.clone();
     let title = title.clone();
     let app_id = app_id.clone();
+    let undo = undo.clone();
     row.connect_clicked(move |_| {
         if let Some(view) = load_studio_session(&core, &id) {
             // Make the composer continue this build, not fork a new one.
             *app_id.borrow_mut() = view.id.clone();
             rebuild_conversation(&conv, &view);
             title.set_text(&thread_title(&view));
+            undo.set_sensitive(view.undo_available);
         }
     });
 }
@@ -2394,12 +2725,16 @@ fn studio_projects(config: &ShellConfig, _shell_state: &ShellState) -> Vec<Studi
             id: summary.id.clone(),
             name: summary.name.clone(),
             time: String::new(),
-            dot: "is-done",
+            status: StudioStatus::Saved,
             threads: vec![StudioThreadItem {
                 id: summary.id,
                 title: summary.name,
                 time: String::new(),
-                dot: "is-done",
+                status: if index == 0 {
+                    StudioStatus::Open
+                } else {
+                    StudioStatus::Saved
+                },
                 active: index == 0,
             }],
         })
@@ -2407,25 +2742,58 @@ fn studio_projects(config: &ShellConfig, _shell_state: &ShellState) -> Vec<Studi
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn studio_turn_request(
-    core: &CoreClient,
-    message: &str,
-    app_id: &str,
-) -> Result<StudioSessionView, String> {
+fn studio_turn_request(core: &CoreClient, message: &str, app_id: &str) -> StudioTurnResult {
     // With an app_id the core continues that build; without it, it mints a new one.
     let body = if app_id.is_empty() {
-        serde_json::json!({ "message": message }).to_string()
+        serde_json::json!({
+            "message": message,
+        })
+        .to_string()
     } else {
-        serde_json::json!({ "message": message, "app_id": app_id }).to_string()
+        serde_json::json!({
+            "message": message,
+            "app_id": app_id,
+        })
+        .to_string()
     };
-    let response = http_post_response(core, "/v1/studio/turn", &body)
-        .map_err(|_| "Goblins OS could not reach the build engine.".to_string())?;
-    let outcome: StudioTurnView = serde_json::from_slice(&response.body)
-        .map_err(|_| "Goblins OS could not read the build result.".to_string())?;
+    let response = match http_post_response(core, "/v1/studio/turn", &body) {
+        Ok(response) => response,
+        Err(_) => {
+            return StudioTurnResult::Failed(
+                "Goblins OS could not reach the build engine.".to_string(),
+            )
+        }
+    };
+    let outcome: StudioTurnView = match serde_json::from_slice(&response.body) {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            return StudioTurnResult::Failed(
+                "Goblins OS could not read the build result.".to_string(),
+            )
+        }
+    };
     if (200..=299).contains(&response.status) && outcome.ok {
-        outcome
-            .session
-            .ok_or_else(|| "The build returned no session.".to_string())
+        match outcome.session {
+            Some(session) => StudioTurnResult::Completed(session),
+            None => StudioTurnResult::Failed("The build returned no session.".to_string()),
+        }
+    } else {
+        StudioTurnResult::Failed(outcome.text)
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn studio_undo_request(
+    core: &CoreClient,
+    app_id: &str,
+) -> Result<Option<StudioSessionView>, String> {
+    let body = serde_json::json!({ "app_id": app_id }).to_string();
+    let response = http_post_response(core, "/v1/studio/turn/undo", &body)
+        .map_err(|_| "Goblins OS could not reach Studio recovery.".to_string())?;
+    let outcome: StudioTurnView = serde_json::from_slice(&response.body)
+        .map_err(|_| "Goblins OS could not read the Studio recovery result.".to_string())?;
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(outcome.session)
     } else {
         Err(outcome.text)
     }
@@ -2656,7 +3024,7 @@ fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<
 
         let app_detail = gtk::Box::new(gtk::Orientation::Vertical, 0);
         app_detail.set_vexpand(true);
-        let home = build_home(&config, &shell_state, &body, &app_detail);
+        let home = build_home(&config, &shell_state, &body, &app_detail, None);
         let studio = build_studio(&config, &shell_state, &body);
         body.add_named(&home, Some("home"));
         body.add_named(&studio, Some("studio"));
@@ -3239,6 +3607,11 @@ fn local_action_command(
             &[],
             "Opening native Goblins OS Settings.",
         )),
+        "models" => Some((
+            "/usr/libexec/goblins-os/goblins-os-settings",
+            &["--panel=models"],
+            "Opening Goblins AI models and engine setup.",
+        )),
         "recovery" => Some((
             "/usr/libexec/goblins-os/goblins-os-settings",
             &["--panel=recovery"],
@@ -3451,8 +3824,9 @@ mod tests {
     use super::{
         engine_display, engine_route_disclosure, launch_local_action, local_action_command,
         openai_login_destination_from_response, shell_request_timeout, standalone_target_from_args,
-        status_label, CoreFetchError, HttpResponse, StandaloneTarget, TextShortcutsProofMode,
-        CONTROL_REQUEST_TIMEOUT, LONG_CORE_JOB_TIMEOUT,
+        status_label, studio_submission_disclosure, voice_submission_disclosure, CoreFetchError,
+        HttpResponse, StandaloneTarget, TextShortcutsProofMode, CONTROL_REQUEST_TIMEOUT,
+        LONG_CORE_JOB_TIMEOUT,
     };
 
     #[test]
@@ -3481,6 +3855,20 @@ mod tests {
             );
         }
         assert!(engine_route_disclosure(None).contains("unavailable"));
+        assert!(studio_submission_disclosure(Some("local-gpt-oss"), true).contains("stay"));
+        let codex_studio = studio_submission_disclosure(Some("codex"), true);
+        assert!(codex_studio.contains("review"));
+        assert!(codex_studio.contains("workspace file"));
+        assert!(codex_studio.contains("Undo Last Turn"));
+        assert!(
+            studio_submission_disclosure(Some("local-gpt-oss"), false).contains("will not be sent")
+        );
+        assert!(voice_submission_disclosure(Some("local-gpt-oss"), true)
+            .contains("stay on this device"));
+        let hosted_voice = voice_submission_disclosure(Some("codex"), true);
+        assert!(hosted_voice.contains("exact transcript"));
+        assert!(hosted_voice.contains("ask you to confirm"));
+        assert!(voice_submission_disclosure(Some("codex"), false).contains("will not be sent"));
 
         let source = include_str!("main.rs");
         let engine_picker_source = source
@@ -3696,6 +4084,8 @@ mod tests {
         let recovery = local_action_command("recovery").expect("recovery action");
         assert_eq!(recovery.0, "/usr/libexec/goblins-os/goblins-os-settings");
         assert_eq!(recovery.1, ["--panel=recovery"]);
+        let models = local_action_command("models").expect("models action");
+        assert_eq!(models.1, ["--panel=models"]);
         assert_eq!(
             launch_local_action("settings").unwrap(),
             Some("Opening native Goblins OS Settings.".to_string())

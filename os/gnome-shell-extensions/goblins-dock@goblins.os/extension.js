@@ -4,7 +4,7 @@
 // strips out. This extension instead adds a small chrome actor at bottom-center
 // holding the pinned surfaces (org.gnome.shell favorite-apps) plus any running
 // apps, styled by stylesheet.css to match the Goblins-native design language. No overview,
-// no struts — it floats over the wallpaper like the macOS dock.
+// no struts — it uses the same floating material as the rest of Goblins OS.
 
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';

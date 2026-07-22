@@ -8,16 +8,12 @@
 //! account credentials itself — Codex owns them under an OS-set `CODEX_HOME`.
 
 use std::{
-    collections::BTreeSet,
+    collections::BTreeMap,
     env,
     ffi::{OsStr, OsString},
     fs::{self, OpenOptions},
-    io::{self, Read},
-    os::unix::{
-        fs::{OpenOptionsExt, PermissionsExt},
-        io::AsRawFd,
-        process::CommandExt,
-    },
+    io::{self, Read, Seek, SeekFrom},
+    os::unix::fs::{MetadataExt as StdMetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Mutex, OnceLock},
@@ -32,8 +28,12 @@ use cap_std::{
     fs::{Dir, OpenOptions as CapOpenOptions, Permissions as CapPermissions},
 };
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 
 use crate::bounded::{bounded_output_of, probe_timeout};
+use crate::codex_containment::{
+    contained_codex_command, SANDBOX_CODEX_HOME, SANDBOX_RESULT, SANDBOX_WORKSPACE,
+};
 
 const DEFAULT_CODEX_HOME: &str = "/var/lib/goblins-os/codex";
 const CODEX_CHILD_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -53,6 +53,7 @@ const CODEX_EXEC_TIMEOUT: Duration = Duration::from_secs(600);
 const CODEX_LOGIN_TERMINATION_TIMEOUT: Duration = Duration::from_secs(2);
 const PRIVATE_STORAGE_LABEL: &str = "OS-owned private storage";
 const MAX_STUDIO_RESULT_BYTES: usize = 256 * 1024;
+const MAX_CODEX_AUTH_BYTES: u64 = 1024 * 1024;
 const RESIDENT_PERMISSION_PROFILE: &str = "goblins-resident";
 const STUDIO_PERMISSION_PROFILE: &str = "goblins-studio";
 
@@ -164,6 +165,75 @@ pub(crate) fn codex_available() -> bool {
     codex_installed() && codex_authenticated()
 }
 
+/// Private material for binding a pending hosted review to the exact Codex
+/// account authority. Only a domain-separated digest leaves this module; the
+/// credential bytes are never returned, logged, or serialized.
+pub(crate) fn codex_authority_fingerprint() -> Option<[u8; 32]> {
+    let bytes = read_private_codex_authority(&codex_home().join("auth.json")).ok()?;
+    let mut digest = Sha256::new();
+    digest.update(b"goblins-codex-authority-v1\0");
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
+    Some(digest.finalize().into())
+}
+
+/// Read the Codex account authority through one no-follow descriptor, twice.
+/// A review must not bind to an empty fallback digest or to bytes observed while
+/// Codex is replacing/refreshing its account file. Any unsafe metadata or
+/// concurrent mutation therefore makes the hosted route temporarily unavailable.
+fn read_private_codex_authority(path: &Path) -> io::Result<Vec<u8>> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options.open(path)?;
+    let before = file.metadata()?;
+    // SAFETY: `geteuid` has no preconditions and does not dereference pointers.
+    let effective_uid = unsafe { libc::geteuid() };
+    if !before.is_file()
+        || StdMetadataExt::nlink(&before) != 1
+        || before.len() == 0
+        || before.len() > MAX_CODEX_AUTH_BYTES
+        || StdMetadataExt::uid(&before) != effective_uid
+        || before.permissions().mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex account authority is not a private single-link file",
+        ));
+    }
+
+    let mut first = Vec::with_capacity(before.len() as usize);
+    file.by_ref()
+        .take(MAX_CODEX_AUTH_BYTES + 1)
+        .read_to_end(&mut first)?;
+    file.seek(SeekFrom::Start(0))?;
+    let mut second = Vec::with_capacity(before.len() as usize);
+    file.by_ref()
+        .take(MAX_CODEX_AUTH_BYTES + 1)
+        .read_to_end(&mut second)?;
+    let after = file.metadata()?;
+    let stable_metadata = StdMetadataExt::dev(&before) == StdMetadataExt::dev(&after)
+        && StdMetadataExt::ino(&before) == StdMetadataExt::ino(&after)
+        && before.len() == after.len()
+        && StdMetadataExt::mtime(&before) == StdMetadataExt::mtime(&after)
+        && StdMetadataExt::mtime_nsec(&before) == StdMetadataExt::mtime_nsec(&after)
+        && StdMetadataExt::ctime(&before) == StdMetadataExt::ctime(&after)
+        && StdMetadataExt::ctime_nsec(&before) == StdMetadataExt::ctime_nsec(&after);
+    if !stable_metadata
+        || first != second
+        || first.is_empty()
+        || first.len() as u64 != before.len()
+        || first.len() as u64 > MAX_CODEX_AUTH_BYTES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Codex account authority changed while it was read",
+        ));
+    }
+    Ok(first)
+}
+
 fn build_status() -> CodexStatus {
     let installed = codex_installed();
     let authentication = if installed {
@@ -237,20 +307,39 @@ pub(crate) fn run_codex(prompt: &str) -> Result<String, &'static str> {
     let last_message = workspace.join("last-message.txt");
     let _ = fs::remove_file(&last_message);
 
-    let mut command = isolated_codex_command(&codex_bin(), &codex_home());
+    let workspace_directory = Dir::open_ambient_dir(&workspace, ambient_authority())
+        .map_err(|_| "Codex workspace could not be opened safely")?
+        .into_std_file();
+    let workspace_identity = workspace_directory
+        .try_clone()
+        .map_err(|_| "Codex workspace could not be opened safely")?;
+    let home = codex_home();
+    let codex_home_directory = open_codex_home_directory(&home)
+        .map_err(|_| "Codex private storage could not be opened safely")?;
+    let mut contained = contained_codex_command(
+        &codex_bin(),
+        workspace_directory,
+        codex_home_directory,
+        None,
+    )
+    .map_err(|_| "Codex containment is not ready")?;
+    let command = contained.command_mut();
     command
         .arg("exec")
         .arg("--ephemeral")
         .arg("--ignore-user-config")
         .arg("--ignore-rules");
-    configure_resident_sandbox(&mut command);
+    let confined_workspace = configure_resident_sandbox(command, &workspace)
+        .map_err(|_| "Codex scratch access could not be confined safely")?;
+    if !directory_handle_matches_path(&workspace_identity, &confined_workspace) {
+        return Err("Codex scratch access changed before it could be confined");
+    }
     command
         .arg("--skip-git-repo-check")
         .arg("--output-last-message")
-        .arg(&last_message)
-        .arg(prompt)
-        .current_dir(&workspace);
-    let status = bounded_output_of(&mut command, CODEX_EXEC_TIMEOUT)
+        .arg(Path::new(SANDBOX_WORKSPACE).join("last-message.txt"))
+        .arg(prompt);
+    let status = bounded_output_of(contained.command_mut(), CODEX_EXEC_TIMEOUT)
         .map(|output| output.status)
         .map_err(|_| "Codex could not start")?;
     if !status.success() {
@@ -269,6 +358,7 @@ pub(crate) fn run_codex(prompt: &str) -> Result<String, &'static str> {
 struct StudioResultFile {
     directory: Dir,
     name: OsString,
+    #[cfg(test)]
     path: PathBuf,
 }
 
@@ -317,6 +407,7 @@ impl StudioResultFile {
                         0o600,
                     )))?;
                     return Ok(Self {
+                        #[cfg(test)]
                         path: apps_path.join("codex-results").join(&name),
                         directory,
                         name,
@@ -362,6 +453,27 @@ impl StudioResultFile {
         String::from_utf8(bytes)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Codex returned invalid text"))
     }
+
+    fn open_for_binding(&self) -> io::Result<fs::File> {
+        let metadata = self.directory.symlink_metadata(&self.name)?;
+        if !metadata.is_file() || metadata.nlink() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Codex result is not a private regular file",
+            ));
+        }
+        let mut options = CapOpenOptions::new();
+        options.read(true).write(true).follow(FollowSymlinks::No);
+        let file = self.directory.open_with(&self.name, &options)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.nlink() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Codex result is not a private regular file",
+            ));
+        }
+        Ok(file.into_std())
+    }
 }
 
 impl Drop for StudioResultFile {
@@ -374,7 +486,11 @@ impl Drop for StudioResultFile {
 /// final message. Codex reads, writes, and (in its sandbox) runs files in the
 /// workspace, so this is a true agent step — the Studio captures the result and
 /// then lists whatever files the agent produced. Errors carry a calm message.
-pub(crate) fn run_codex_in(workspace: &Dir, prompt: &str) -> Result<String, String> {
+pub(crate) fn run_codex_in(
+    workspace: &Dir,
+    workspace_path: &Path,
+    prompt: &str,
+) -> Result<String, String> {
     if !codex_installed() {
         return Err("Codex account support is not included in this build.".to_string());
     }
@@ -385,42 +501,46 @@ pub(crate) fn run_codex_in(workspace: &Dir, prompt: &str) -> Result<String, Stri
         return Err("Codex is blocked by Private mode or the active OS policy.".to_string());
     }
 
-    let result = StudioResultFile::create()
-        .map_err(|_| "Could not create a private Codex result file.".to_string())?;
     let workspace_directory = workspace
         .try_clone()
         .map_err(|_| "Could not open the Codex workspace.".to_string())?
         .into_std_file();
-    let workspace_fd = workspace_directory.as_raw_fd();
-
-    let mut command = isolated_codex_command(&codex_bin(), &codex_home());
+    let workspace_identity = workspace_directory
+        .try_clone()
+        .map_err(|_| "Could not open the Codex workspace.".to_string())?;
+    let result = StudioResultFile::create()
+        .map_err(|_| "Could not create a private Codex result file.".to_string())?;
+    let result_file = result
+        .open_for_binding()
+        .map_err(|_| "Could not open the private Codex result file.".to_string())?;
+    let codex_home_directory = open_codex_home_directory(&codex_home())
+        .map_err(|_| "Could not open Codex private storage safely.".to_string())?;
+    let mut contained = contained_codex_command(
+        &codex_bin(),
+        workspace_directory,
+        codex_home_directory,
+        Some(result_file),
+    )
+    .map_err(|_| "Codex containment is not ready.".to_string())?;
+    let command = contained.command_mut();
     command
         .arg("exec")
         .arg("--ephemeral")
         .arg("--ignore-user-config")
         .arg("--ignore-rules");
-    configure_studio_sandbox(&mut command);
+    let confined_workspace = configure_studio_sandbox(command, workspace_path)?;
+    if !directory_handle_matches_path(&workspace_identity, &confined_workspace) {
+        return Err("The Studio workspace changed before Codex could be confined.".to_string());
+    }
+
     command
         .arg("--skip-git-repo-check")
         .arg("--output-last-message")
-        .arg(&result.path)
+        .arg(SANDBOX_RESULT)
         .arg(prompt);
-    // SAFETY: `fchdir` is async-signal-safe and receives a valid directory fd
-    // kept alive until after the child is spawned. This binds the child to the
-    // already-open capability instead of resolving an attacker-swappable path.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::fchdir(workspace_fd) == 0 {
-                Ok(())
-            } else {
-                Err(io::Error::last_os_error())
-            }
-        });
-    }
-    let status = bounded_output_of(&mut command, CODEX_EXEC_TIMEOUT)
+    let status = bounded_output_of(contained.command_mut(), CODEX_EXEC_TIMEOUT)
         .map(|output| output.status)
         .map_err(|_| "Codex could not start.".to_string())?;
-    drop(workspace_directory);
     if !status.success() {
         return Err("Codex did not complete the request.".to_string());
     }
@@ -431,16 +551,32 @@ pub(crate) fn run_codex_in(workspace: &Dir, prompt: &str) -> Result<String, Stri
     validated_studio_message(&text)
 }
 
-fn configure_studio_sandbox(command: &mut Command) {
-    configure_codex_sandbox(command, CodexSandboxRole::Studio);
+fn configure_studio_sandbox(command: &mut Command, workspace: &Path) -> Result<PathBuf, String> {
+    configure_codex_sandbox(
+        command,
+        CodexSandboxRole::Studio,
+        &crate::app_builder::apps_dir(),
+        workspace,
+    )
 }
 
-fn configure_resident_sandbox(command: &mut Command) {
-    configure_codex_sandbox(command, CodexSandboxRole::Resident);
+fn configure_resident_sandbox(command: &mut Command, workspace: &Path) -> Result<PathBuf, String> {
+    configure_codex_sandbox(
+        command,
+        CodexSandboxRole::Resident,
+        &crate::app_builder::apps_dir(),
+        workspace,
+    )
 }
 
-fn configure_codex_sandbox(command: &mut Command, role: CodexSandboxRole) {
-    let apps = crate::app_builder::apps_dir();
+fn configure_codex_sandbox(
+    command: &mut Command,
+    role: CodexSandboxRole,
+    apps: &Path,
+    workspace: &Path,
+) -> Result<PathBuf, String> {
+    let (apps, workspace) = validated_sandbox_workspace(role, apps, workspace)
+        .map_err(|_| "Codex workspace access could not be confined safely.".to_string())?;
     let codex = codex_home();
     let credentials = env::var_os("CREDENTIALS_DIRECTORY").map(PathBuf::from);
     let auth_session = env::var_os("OPENAI_ACCOUNT_SESSION_PATH")
@@ -449,12 +585,14 @@ fn configure_codex_sandbox(command: &mut Command, role: CodexSandboxRole) {
     let filesystem = codex_filesystem_policy_override(
         role,
         &apps,
+        &workspace,
         &codex,
         credentials.as_deref(),
         &auth_session,
     );
     append_codex_permission_profile(command, role, filesystem, true);
     command.arg("--strict-config");
+    Ok(workspace)
 }
 
 fn append_codex_permission_profile(
@@ -497,19 +635,27 @@ fn append_codex_permission_profile(
 fn codex_filesystem_policy_override(
     role: CodexSandboxRole,
     apps: &Path,
+    workspace: &Path,
     codex: &Path,
     credentials: Option<&Path>,
     auth_session: &Path,
 ) -> String {
-    let mut denied = BTreeSet::from([
-        PathBuf::from("/etc/goblins-os"),
-        PathBuf::from("/run/credentials"),
-        codex.to_path_buf(),
-        auth_session.to_path_buf(),
-        apps.join("codex-results"),
+    let mut access = BTreeMap::from([
+        (PathBuf::from("/etc/goblins-os"), "deny"),
+        (PathBuf::from("/run/credentials"), "deny"),
+        (PathBuf::from("/run/goblins-os-core"), "deny"),
+        (PathBuf::from("/run/goblins-os-session"), "deny"),
+        (PathBuf::from("/run/goblins-codex"), "deny"),
+        (PathBuf::from("/var/lib/goblins-os"), "deny"),
+        (PathBuf::from(SANDBOX_CODEX_HOME), "deny"),
+        (PathBuf::from(SANDBOX_RESULT), "deny"),
+        (codex.to_path_buf(), "deny"),
+        (auth_session.to_path_buf(), "deny"),
+        (apps.to_path_buf(), "deny"),
+        (apps.join("codex-results"), "deny"),
     ]);
     if let Some(credentials) = credentials {
-        denied.insert(credentials.to_path_buf());
+        access.insert(credentials.to_path_buf(), "deny");
     }
     if let Some(state_root) = apps.parent().filter(|parent| parent.parent().is_some()) {
         for private_leaf in [
@@ -525,31 +671,169 @@ fn codex_filesystem_policy_override(
             "sound-recognition",
             "voice",
         ] {
-            denied.insert(state_root.join(private_leaf));
+            access.insert(state_root.join(private_leaf), "deny");
         }
     }
-    match role {
-        CodexSandboxRole::Resident => {
-            denied.insert(apps.join("workspace"));
-        }
-        CodexSandboxRole::Studio => {
-            denied.insert(apps.join("codex-work"));
-        }
-    }
+    access.insert(
+        workspace.to_path_buf(),
+        match role {
+            CodexSandboxRole::Resident => "read",
+            CodexSandboxRole::Studio => "write",
+        },
+    );
+    access.insert(
+        PathBuf::from(SANDBOX_WORKSPACE),
+        match role {
+            CodexSandboxRole::Resident => "read",
+            CodexSandboxRole::Studio => "write",
+        },
+    );
 
-    let entries = denied
+    let entries = access
         .into_iter()
-        .filter(|path| path.is_absolute() && path.parent().is_some())
-        .map(|path| {
+        .filter(|(path, _)| path.is_absolute() && path.parent().is_some())
+        .map(|(path, permission)| {
             let path = path.to_string_lossy();
             format!(
-                "{}=\"deny\"",
-                serde_json::to_string(path.as_ref()).expect("filesystem path is valid text")
+                "{}=\"{permission}\"",
+                serde_json::to_string(path.as_ref()).expect("filesystem path is valid text"),
             )
         })
         .collect::<Vec<_>>()
         .join(",");
     format!("permissions.{}.filesystem={{{entries}}}", role.profile())
+}
+
+fn validated_sandbox_workspace(
+    role: CodexSandboxRole,
+    apps: &Path,
+    workspace: &Path,
+) -> io::Result<(PathBuf, PathBuf)> {
+    if !absolute_normalized_path(apps) || !absolute_normalized_path(workspace) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex sandbox paths must be absolute and normalized",
+        ));
+    }
+    if fs::symlink_metadata(apps)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex apps root must not be a symbolic link",
+        ));
+    }
+    let relative = workspace.strip_prefix(apps).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex workspace must be inside the apps root",
+        )
+    })?;
+    let components = relative.components().collect::<Vec<_>>();
+    let shape_is_exact = match role {
+        CodexSandboxRole::Resident => {
+            components.as_slice() == [std::path::Component::Normal(OsStr::new("codex-work"))]
+        }
+        CodexSandboxRole::Studio => {
+            matches!(
+                components.as_slice(),
+                [std::path::Component::Normal(root), std::path::Component::Normal(id)]
+                    if *root == OsStr::new("workspace") && !id.is_empty()
+            )
+        }
+    };
+    if !shape_is_exact {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex workspace path does not match its exact OS-owned role",
+        ));
+    }
+    if role == CodexSandboxRole::Studio
+        && fs::symlink_metadata(apps.join("workspace"))?
+            .file_type()
+            .is_symlink()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Studio workspace root must not be a symbolic link",
+        ));
+    }
+    let workspace_metadata = fs::symlink_metadata(workspace)?;
+    if !workspace_metadata.is_dir() || workspace_metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex workspace must be a real directory",
+        ));
+    }
+
+    let canonical_apps = fs::canonicalize(apps)?;
+    let canonical_workspace = fs::canonicalize(workspace)?;
+    if canonical_workspace != canonical_apps.join(relative) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex workspace escaped through a linked path",
+        ));
+    }
+    Ok((canonical_apps, canonical_workspace))
+}
+
+fn absolute_normalized_path(path: &Path) -> bool {
+    path.is_absolute()
+        && path.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+}
+
+fn directory_handle_matches_path(directory: &fs::File, path: &Path) -> bool {
+    let Ok(opened) = directory.metadata() else {
+        return false;
+    };
+    let Ok(resolved) = fs::metadata(path) else {
+        return false;
+    };
+    opened.is_dir()
+        && resolved.is_dir()
+        && StdMetadataExt::dev(&opened) == StdMetadataExt::dev(&resolved)
+        && StdMetadataExt::ino(&opened) == StdMetadataExt::ino(&resolved)
+}
+
+fn open_codex_home_directory(path: &Path) -> io::Result<fs::File> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex home must be a real private directory",
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let directory = options.open(path)?;
+    let opened = directory.metadata()?;
+    // SAFETY: `geteuid` has no preconditions and does not dereference pointers.
+    let effective_uid = unsafe { libc::geteuid() };
+    if !codex_home_metadata_is_private(&opened, effective_uid) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex home must be mode 0700 and owned by the service user",
+        ));
+    }
+    if directory_handle_matches_path(&directory, path) {
+        Ok(directory)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Codex home changed while it was being opened",
+        ))
+    }
+}
+
+fn codex_home_metadata_is_private(metadata: &fs::Metadata, effective_uid: u32) -> bool {
+    metadata.is_dir()
+        && metadata.permissions().mode() & 0o7777 == 0o700
+        && StdMetadataExt::uid(metadata) == effective_uid
 }
 
 fn validated_studio_message(text: &str) -> Result<String, String> {
@@ -737,6 +1021,7 @@ fn start_login() -> (StatusCode, CodexLoginStart) {
     {
         Ok(child) => {
             *guard = Some(child);
+            crate::resident::bump_hosted_authority_generation();
             login_start(
                 StatusCode::ACCEPTED,
                 "Codex sign-in started. Opening your browser to finish.",
@@ -780,6 +1065,7 @@ fn known_authentication() -> Option<bool> {
 }
 
 fn perform_logout() -> (StatusCode, CodexLogout) {
+    crate::resident::bump_hosted_authority_generation();
     if crate::openai_key::fail_safe_from_codex_to_local().is_err() {
         return logout_outcome(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -930,10 +1216,12 @@ fn binary_present(binary: &str) -> bool {
 mod tests {
     use super::{
         append_codex_permission_profile, binary_present, clear_login_log_at,
-        codex_authentication_with, codex_filesystem_policy_override, configure_resident_sandbox,
-        configure_studio_sandbox, first_https_url, isolated_codex_command, login_start,
-        run_codex_logout, status_detail, terminate_child, validated_studio_message,
-        CodexAuthentication, CodexSandboxRole, CodexStatus, StudioResultFile,
+        codex_authentication_with, codex_filesystem_policy_override,
+        codex_home_metadata_is_private, configure_codex_sandbox, first_https_url,
+        isolated_codex_command, login_start, open_codex_home_directory,
+        read_private_codex_authority, run_codex_logout, status_detail, terminate_child,
+        validated_sandbox_workspace, validated_studio_message, CodexAuthentication,
+        CodexSandboxRole, CodexStatus, StudioResultFile, MAX_CODEX_AUTH_BYTES,
     };
     use axum::http::StatusCode;
     use std::path::Path;
@@ -1102,6 +1390,78 @@ mod tests {
         assert!(StudioResultFile::create_at(&apps).is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn codex_home_requires_exact_owner_only_mode_and_effective_uid() {
+        use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+
+        let root = tempfile::tempdir().expect("temporary root");
+        let home = root.path().join("codex-home");
+        std::fs::create_dir(&home).expect("Codex home");
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700))
+            .expect("private Codex home mode");
+
+        open_codex_home_directory(&home).expect("owner-only Codex home");
+        let metadata = std::fs::metadata(&home).expect("Codex home metadata");
+        assert!(codex_home_metadata_is_private(&metadata, metadata.uid()));
+        assert!(!codex_home_metadata_is_private(
+            &metadata,
+            metadata.uid().wrapping_add(1)
+        ));
+
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o750))
+            .expect("group-readable Codex home mode");
+        assert!(open_codex_home_directory(&home).is_err());
+
+        let linked_home = root.path().join("linked-codex-home");
+        symlink(&home, &linked_home).expect("Codex home symlink");
+        assert!(open_codex_home_directory(&linked_home).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_authority_read_is_nofollow_private_single_link_and_bounded() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = tempfile::tempdir().expect("temporary authority root");
+        let authority = root.path().join("auth.json");
+        std::fs::write(&authority, br#"{"account":"exact"}"#).expect("authority fixture");
+        std::fs::set_permissions(&authority, std::fs::Permissions::from_mode(0o600))
+            .expect("private authority mode");
+        assert_eq!(
+            read_private_codex_authority(&authority).expect("private authority"),
+            br#"{"account":"exact"}"#
+        );
+
+        let linked = root.path().join("linked-auth.json");
+        symlink(&authority, &linked).expect("authority symlink");
+        assert!(read_private_codex_authority(&linked).is_err());
+
+        std::fs::set_permissions(&authority, std::fs::Permissions::from_mode(0o640))
+            .expect("group-readable authority mode");
+        assert!(read_private_codex_authority(&authority).is_err());
+        std::fs::set_permissions(&authority, std::fs::Permissions::from_mode(0o600))
+            .expect("restore authority mode");
+
+        let second_link = root.path().join("second-auth.json");
+        std::fs::hard_link(&authority, &second_link).expect("authority hard link");
+        assert!(read_private_codex_authority(&authority).is_err());
+        std::fs::remove_file(second_link).expect("remove authority hard link");
+
+        let empty = root.path().join("empty-auth.json");
+        std::fs::write(&empty, []).expect("empty authority fixture");
+        std::fs::set_permissions(&empty, std::fs::Permissions::from_mode(0o600))
+            .expect("empty authority mode");
+        assert!(read_private_codex_authority(&empty).is_err());
+
+        let oversized = root.path().join("oversized-auth.json");
+        std::fs::write(&oversized, vec![b'x'; MAX_CODEX_AUTH_BYTES as usize + 1])
+            .expect("oversized authority fixture");
+        std::fs::set_permissions(&oversized, std::fs::Permissions::from_mode(0o600))
+            .expect("oversized authority mode");
+        assert!(read_private_codex_authority(&oversized).is_err());
+    }
+
     #[test]
     fn status_serializes_without_leaking_credentials() {
         let status = CodexStatus {
@@ -1168,20 +1528,29 @@ mod tests {
         assert!(!source.contains(&["danger", "full", "access"].join("-")));
         assert!(!source.contains(&["dangerously", "bypass"].join("-")));
 
-        for (configure, profile, base) in [
+        let root = tempfile::tempdir().expect("sandbox profile root");
+        let apps = root.path().join("apps");
+        let resident = apps.join("codex-work");
+        let studio = apps.join("workspace/live");
+        std::fs::create_dir_all(&resident).expect("resident workspace");
+        std::fs::create_dir_all(&studio).expect("Studio workspace");
+        for (role, workspace, profile, base) in [
             (
-                configure_resident_sandbox as fn(&mut Command),
+                CodexSandboxRole::Resident,
+                resident.as_path(),
                 "goblins-resident",
                 ":read-only",
             ),
             (
-                configure_studio_sandbox as fn(&mut Command),
+                CodexSandboxRole::Studio,
+                studio.as_path(),
                 "goblins-studio",
                 ":workspace",
             ),
         ] {
             let mut command = Command::new("/usr/bin/true");
-            configure(&mut command);
+            configure_codex_sandbox(&mut command, role, &apps, workspace)
+                .expect("valid exact workspace profile");
             let args = command
                 .get_args()
                 .map(|arg| arg.to_string_lossy())
@@ -1196,10 +1565,23 @@ mod tests {
     }
 
     #[test]
+    fn every_codex_exec_turn_uses_outer_containment() {
+        let source = include_str!("codex.rs");
+        assert_eq!(source.matches(".arg(\"exec\")").count(), 2);
+        let containment_call = ["contained_codex", "_command("].concat();
+        assert_eq!(source.matches(&containment_call).count(), 2);
+        assert!(source.contains("directory_handle_matches_path"));
+        assert!(source.contains("SANDBOX_WORKSPACE"));
+        assert!(source.contains("SANDBOX_CODEX_HOME"));
+        assert!(source.contains("SANDBOX_RESULT"));
+    }
+
+    #[test]
     fn codex_policies_deny_os_credentials_without_shadowing_the_workspace() {
         let studio_policy = codex_filesystem_policy_override(
             CodexSandboxRole::Studio,
             Path::new("/var/lib/goblins-os/apps"),
+            Path::new("/var/lib/goblins-os/apps/workspace/current"),
             Path::new("/var/lib/goblins-os/codex"),
             Some(Path::new("/run/credentials/goblins-os-core.service")),
             Path::new("/var/lib/goblins-os/secrets/openai/session.json"),
@@ -1207,14 +1589,21 @@ mod tests {
         let resident_policy = codex_filesystem_policy_override(
             CodexSandboxRole::Resident,
             Path::new("/var/lib/goblins-os/apps"),
+            Path::new("/var/lib/goblins-os/apps/codex-work"),
             Path::new("/var/lib/goblins-os/codex"),
             Some(Path::new("/run/credentials/goblins-os-core.service")),
             Path::new("/var/lib/goblins-os/secrets/openai/session.json"),
         );
         for denied in [
             "/etc/goblins-os",
+            "/codex-home",
             "/run/credentials",
             "/run/credentials/goblins-os-core.service",
+            "/run/goblins-codex",
+            "/run/goblins-codex/result.txt",
+            "/run/goblins-os-core",
+            "/run/goblins-os-session",
+            "/var/lib/goblins-os",
             "/var/lib/goblins-os/ai",
             "/var/lib/goblins-os/codex",
             "/var/lib/goblins-os/policy",
@@ -1224,18 +1613,23 @@ mod tests {
             assert!(studio_policy.contains(&format!("\"{denied}\"=\"deny\"")));
             assert!(resident_policy.contains(&format!("\"{denied}\"=\"deny\"")));
         }
-        assert!(studio_policy.contains("\"/var/lib/goblins-os/apps/codex-work\"=\"deny\""));
-        assert!(!studio_policy.contains("\"/var/lib/goblins-os/apps/workspace\"=\"deny\""));
-        assert!(resident_policy.contains("\"/var/lib/goblins-os/apps/workspace\"=\"deny\""));
-        assert!(!resident_policy.contains("\"/var/lib/goblins-os/apps/codex-work\"=\"deny\""));
-        for parent in ["/var/lib/goblins-os", "/var/lib/goblins-os/apps"] {
-            let parent_deny = format!("\"{parent}\"=\"deny\"");
-            assert!(!studio_policy.contains(&parent_deny));
-            assert!(!resident_policy.contains(&parent_deny));
-        }
+        assert!(studio_policy.contains("\"/var/lib/goblins-os/apps\"=\"deny\""));
+        assert!(resident_policy.contains("\"/var/lib/goblins-os/apps\"=\"deny\""));
+        assert!(studio_policy.contains("\"/var/lib/goblins-os/apps/workspace/current\"=\"write\""));
+        assert!(resident_policy.contains("\"/var/lib/goblins-os/apps/codex-work\"=\"read\""));
+        assert!(studio_policy.contains("\"/var/lib/goblins-os/apps/codex-results\"=\"deny\""));
+        assert!(resident_policy.contains("\"/var/lib/goblins-os/apps/codex-results\"=\"deny\""));
+        assert!(studio_policy.contains("\"/workspace\"=\"write\""));
+        assert!(resident_policy.contains("\"/workspace\"=\"read\""));
+        assert!(!studio_policy.contains("workspace/sibling\"=\"write\""));
 
+        let root = tempfile::tempdir().expect("sandbox configuration root");
+        let apps = root.path().join("apps");
+        let workspace = apps.join("workspace/current");
+        std::fs::create_dir_all(&workspace).expect("workspace");
         let mut command = Command::new("/usr/bin/true");
-        configure_studio_sandbox(&mut command);
+        configure_codex_sandbox(&mut command, CodexSandboxRole::Studio, &apps, &workspace)
+            .expect("exact Studio workspace profile");
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy())
@@ -1262,14 +1656,22 @@ mod tests {
         let state = root.path().join("state");
         let apps = state.join("apps");
         let studio = apps.join("workspace/live");
+        let sibling = apps.join("workspace/sibling");
         let resident = apps.join("codex-work");
+        let sessions = apps.join("sessions");
+        let undo = apps.join("studio-undo");
+        let results = apps.join("codex-results");
         let codex = state.join("codex");
         let credentials = root.path().join("credentials");
         let session = state.join("secrets/openai/session.json");
         let ai = state.join("ai");
         for directory in [
             studio.as_path(),
+            sibling.as_path(),
             resident.as_path(),
+            sessions.as_path(),
+            undo.as_path(),
+            results.as_path(),
             codex.as_path(),
             credentials.as_path(),
             session.parent().expect("session parent"),
@@ -1279,7 +1681,11 @@ mod tests {
         }
         for file in [
             studio.join("Cargo.toml"),
+            sibling.join("sibling-secret.txt"),
             resident.join("context.txt"),
+            sessions.join("live.json"),
+            undo.join("live.json"),
+            results.join("result-secret.txt"),
             codex.join("auth.json"),
             credentials.join("openai-secrets.env"),
             session.clone(),
@@ -1289,13 +1695,22 @@ mod tests {
         }
 
         let run_probe = |role: CodexSandboxRole, workspace: &Path, script: &str| {
-            let filesystem =
-                codex_filesystem_policy_override(role, &apps, &codex, Some(&credentials), &session);
+            let (confined_apps, confined_workspace) =
+                validated_sandbox_workspace(role, &apps, workspace)
+                    .expect("exact sandbox workspace");
+            let filesystem = codex_filesystem_policy_override(
+                role,
+                &confined_apps,
+                &confined_workspace,
+                &codex,
+                Some(&credentials),
+                &session,
+            );
             let mut command = Command::new("codex");
             command
                 .arg("sandbox")
                 .arg("-C")
-                .arg(workspace)
+                .arg(&confined_workspace)
                 .arg("-P")
                 .arg(role.profile());
             append_codex_permission_profile(&mut command, role, filesystem, false);
@@ -1319,14 +1734,14 @@ mod tests {
         run_probe(
             CodexSandboxRole::Studio,
             &studio,
-            "test -r Cargo.toml && touch built.txt && test ! -r \"$1/state/codex/auth.json\" && test ! -r \"$1/credentials/openai-secrets.env\" && test ! -r \"$1/state/secrets/openai/session.json\" && test ! -r \"$1/state/ai/engine\" && test ! -r \"$1/state/apps/codex-work/context.txt\"",
+            "test -r Cargo.toml && touch built.txt && test ! -r \"$1/state/codex/auth.json\" && test ! -r \"$1/credentials/openai-secrets.env\" && test ! -r \"$1/state/secrets/openai/session.json\" && test ! -r \"$1/state/ai/engine\" && test ! -r \"$1/state/apps/codex-work/context.txt\" && test ! -r \"$1/state/apps/workspace/sibling/sibling-secret.txt\" && test ! -r \"$1/state/apps/sessions/live.json\" && test ! -r \"$1/state/apps/studio-undo/live.json\" && test ! -r \"$1/state/apps/codex-results/result-secret.txt\"",
         );
         assert!(studio.join("built.txt").is_file());
 
         run_probe(
             CodexSandboxRole::Resident,
             &resident,
-            "test -r context.txt && ! touch forbidden.txt && test ! -r \"$1/state/codex/auth.json\" && test ! -r \"$1/credentials/openai-secrets.env\" && test ! -r \"$1/state/secrets/openai/session.json\" && test ! -r \"$1/state/ai/engine\" && test ! -r \"$1/state/apps/workspace/live/Cargo.toml\"",
+            "test -r context.txt && ! touch forbidden.txt && test ! -r \"$1/state/codex/auth.json\" && test ! -r \"$1/credentials/openai-secrets.env\" && test ! -r \"$1/state/secrets/openai/session.json\" && test ! -r \"$1/state/ai/engine\" && test ! -r \"$1/state/apps/workspace/live/Cargo.toml\" && test ! -r \"$1/state/apps/workspace/sibling/sibling-secret.txt\" && test ! -r \"$1/state/apps/sessions/live.json\" && test ! -r \"$1/state/apps/studio-undo/live.json\" && test ! -r \"$1/state/apps/codex-results/result-secret.txt\"",
         );
         assert!(!resident.join("forbidden.txt").exists());
     }

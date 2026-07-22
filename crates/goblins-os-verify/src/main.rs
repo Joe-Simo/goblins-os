@@ -25,11 +25,6 @@ const REVIEWED_GITHUB_ACTION_PINS: &[(&str, &str)] = &[
         "actions/upload-artifact",
         "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ),
-    ("actions/attest", "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"),
-    (
-        "actions/download-artifact",
-        "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-    ),
     (
         "docker/setup-buildx-action",
         "bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
@@ -48,6 +43,7 @@ const DEPRECATED_GITHUB_ACTION_PINS: &[&str] = &[
 ];
 
 const BINARIES: &[&str] = &[
+    "goblins-os-consent-broker",
     "goblins-os-control-center",
     "goblins-os-core",
     "goblins-os-dictate",
@@ -70,6 +66,7 @@ const BINARIES: &[&str] = &[
 ];
 
 const DESKTOP_CAPABILITY_BINARIES: &[&str] = &[
+    "goblins-os-consent-broker",
     "goblins-os-control-center",
     "goblins-os-dictate",
     "goblins-os-file-builder",
@@ -132,6 +129,7 @@ const DCONF_FILES: &[&str] = &[
 const GLIB_SCHEMA_FILES: &[&str] = &[
     "org.goblins.SoundRecognition.gschema.xml",
     "org.goblins.os.a11y.switch-control.gschema.xml",
+    "org.goblins.os.a11y.visual.gschema.xml",
     "org.goblins.os.focus.gschema.xml",
     "org.goblins.os.today.gschema.xml",
     "org.goblins.shell.extensions.wm.gschema.xml",
@@ -169,6 +167,7 @@ const NAUTILUS_SCRIPTS: &[&str] = &[
 ];
 
 const NATIVE_DESIGN_APPS: &[&str] = &[
+    "goblins-os-consent-broker",
     "goblins-os-control-center",
     "goblins-os-installer",
     "goblins-os-launcher",
@@ -176,6 +175,11 @@ const NATIVE_DESIGN_APPS: &[&str] = &[
     "goblins-os-settings",
     "goblins-os-shell",
     "goblins-os-today",
+];
+
+const CONSENT_RENDER_SCREENSHOTS: &[&str] = &[
+    "140-hosted-context-review.png",
+    "141-hosted-context-review-dark.png",
 ];
 
 const SETTINGS_RENDER_SCREENSHOTS: &[&str] = &[
@@ -281,6 +285,8 @@ const POLISH_INTERACTION_SCREENSHOTS: &[&str] = &[
     "135-install-progress-reduced-motion-b.png",
     "136-settings-models-advanced-expanded-dark.png",
     "137-studio-engine-menu-dark.png",
+    "138a-launcher-standard-material.png",
+    "138b-launcher-reduced-transparency.png",
     "138-first-boot-codex-offline.png",
 ];
 const POLISH_INTERACTION_PROOF: &str = "139-polish-interactions-proof.json";
@@ -301,7 +307,7 @@ const INSTALL_STORAGE_PROOF_SCREENSHOTS: &[&str] = &[
     "28-bootloader-efi-summary.png",
 ];
 
-const SUPPORTED_RELEASE_ARCHES: &[&str] = &["aarch64", "x86_64"];
+const SUPPORTED_RELEASE_ARCHES: &[&str] = &["aarch64"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -666,13 +672,13 @@ impl fmt::Display for VerifyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter.write_str(
-                "usage: goblins-os-verify [--source-root <path> | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64|x86_64> --candidate-commit <40-hex-commit> --image-ref <container-image-ref> | --workflow-action-pins <source-root>] [--quiet]",
+                "usage: goblins-os-verify [--source-root <path> | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64> --candidate-commit <40-hex-commit> --image-ref <container-image-ref> | --workflow-action-pins <source-root>] [--quiet]",
             ),
             Self::UnknownArgument(arg) => write!(formatter, "unknown argument {arg}"),
             Self::MissingValue(arg) => write!(formatter, "missing value for {arg}"),
             Self::InvalidArchitecture(arch) => write!(
                 formatter,
-                "unsupported architecture {arch}; expected aarch64 or x86_64"
+                "unsupported architecture {arch}; expected aarch64"
             ),
             Self::InvalidCandidateCommit(commit) => write!(
                 formatter,
@@ -801,8 +807,89 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(container_contains_check(
         root,
+        "codex-containment-runtime-is-explicitly-packaged",
+        "bubblewrap",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-containment-runtime-is-installed",
+        "command -v bwrap",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-containment-runtime-supports-descriptor-bind",
+        "bwrap --help | grep -F -- '--bind-fd'",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-containment-runtime-supports-read-only-descriptor-bind",
+        "bwrap --help | grep -F -- '--ro-bind-fd'",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-containment-runtime-supports-cgroup-fallback",
+        "bwrap --help | grep -F -- '--unshare-cgroup-try'",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-cli-version-is-pinned",
+        "ARG CODEX_VERSION=0.144.4",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-cli-aarch64-artifact-is-pinned-by-checksum",
+        "ARG CODEX_AARCH64_SHA256=4d07243ef4ae6786b8b321d7aea3f9be4e1d2c597ae5407e7c1b9873334082b2",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-cli-download-is-aarch64-only",
+        "codex-aarch64-unknown-linux-musl.tar.gz",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-cli-is-installed-in-immutable-image",
+        "install -D -m 0755 /tmp/codex-aarch64-unknown-linux-musl /out/usr/bin/codex",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-cli-installed-version-is-verified",
+        "test \"$(codex --version)\" = \"codex-cli 0.144.4\"",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-cli-license-is-installed",
+        "/usr/share/licenses/openai-codex/LICENSE",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "codex-cli-notice-is-installed",
+        "/usr/share/licenses/openai-codex/NOTICE",
+    ));
+    checks.push(codex_release_integrity_check(root));
+    checks.push(container_contains_check(
+        root,
+        "language-region-german-locale-is-in-install-transaction",
+        "      glibc-langpack-de \\\n      gtk4 \\",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "language-region-german-locale-installed-rpm-is-queried",
+        "    && rpm -q \\\n      bubblewrap \\\n      glibc-langpack-de \\\n      orca \\",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "language-region-german-locale-is-verified",
+        "locale -a | grep -Eiq '^de_DE\\.utf-?8$'",
+    ));
+    checks.push(container_contains_check(
+        root,
         "native-desktop-features",
         "goblins-os-shell/native-desktop",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "native-desktop-consent-broker-feature",
+        "goblins-os-consent-broker/native-desktop",
     ));
     checks.push(container_contains_check(
         root,
@@ -1268,7 +1355,7 @@ fn source_checks(root: &Path) -> Vec<Check> {
     checks.extend(native_design_system_checks(root));
     checks.extend(release_readiness_checks(root));
     checks.extend(secret_hygiene_checks(root));
-    checks.extend(dual_arch_release_checks(root));
+    checks.extend(arm64_release_checks(root));
     checks.extend(installer_readiness_checks(root));
     checks.extend(gaming_readiness_checks(root));
     checks.push(forbidden_source_drift_check(root));
@@ -1815,6 +1902,7 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "github.event_name == 'push' && contains(github.event.head_commit.message, '[image]')",
     ));
     checks.extend(settings_render_screenshot_checks(root));
+    checks.extend(consent_render_screenshot_checks(root));
     checks.extend(settings_interaction_screenshot_checks(root));
     checks.extend(polish_interaction_screenshot_checks(root));
     checks.push(file_check(root, "os/bootc/render-desktop.sh"));
@@ -2340,6 +2428,30 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         "installed-openai-secret-file-empty",
     ));
     checks.push(file_check(root, "usr/bin/bootc"));
+    checks.push(file_check(root, "usr/bin/codex"));
+    checks.push(path_mode_check(
+        root,
+        "usr/bin/codex",
+        0o755,
+        "installed-codex-cli-mode",
+    ));
+    checks.push(path_owner_check(
+        root,
+        "usr/bin/codex",
+        0,
+        0,
+        "installed-codex-cli-root-owner",
+    ));
+    checks.push(contains_check(
+        root.join("usr/share/licenses/openai-codex/LICENSE"),
+        "installed-codex-cli-apache-license",
+        "Apache License",
+    ));
+    checks.push(contains_check(
+        root.join("usr/share/licenses/openai-codex/NOTICE"),
+        "installed-codex-cli-upstream-notice",
+        "OpenAI Codex",
+    ));
     checks.push(file_check(root, "usr/bin/flatpak"));
     checks.push(file_check(root, "usr/bin/vulkaninfo"));
     checks.push(file_check(root, "usr/bin/vkcube"));
@@ -2769,6 +2881,12 @@ struct CargoLockPackage {
     checksum: String,
 }
 
+struct ReleaseEvidenceDigests<'a> {
+    cargo_packages: &'a str,
+    rpm_packages: Option<&'a str>,
+    rpm_command: &'a str,
+}
+
 fn candidate_commit_is_valid(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -2835,7 +2953,9 @@ fn write_release_evidence(
     let cargo_packages_path = output.join("cargo-lock-packages.tsv");
     fs::write(&cargo_packages_path, cargo_lock_packages_tsv(&packages))?;
     let cargo_packages_sha256 = sha256_path(&cargo_packages_path)?;
-    fs::write(output.join("rpm-packages.command"), rpm_packages_command())?;
+    let rpm_command_path = output.join("rpm-packages.command");
+    fs::write(&rpm_command_path, rpm_packages_command())?;
+    let rpm_command_sha256 = sha256_path(&rpm_command_path)?;
     let rpm_status = write_rpm_packages_if_available(output)?;
     let rpm_packages_path = output.join("rpm-packages.tsv");
     let rpm_packages_sha256 = if rpm_packages_path.is_file() {
@@ -2851,8 +2971,11 @@ fn write_release_evidence(
             &candidate_commit.to_ascii_lowercase(),
             image_ref,
             packages.len(),
-            &cargo_packages_sha256,
-            rpm_packages_sha256.as_deref(),
+            ReleaseEvidenceDigests {
+                cargo_packages: &cargo_packages_sha256,
+                rpm_packages: rpm_packages_sha256.as_deref(),
+                rpm_command: &rpm_command_sha256,
+            },
             &rpm_status,
         ),
     )?;
@@ -3000,17 +3123,17 @@ fn release_evidence_manifest(
     candidate_commit: &str,
     image_ref: &str,
     cargo_package_count: usize,
-    cargo_packages_sha256: &str,
-    rpm_packages_sha256: Option<&str>,
+    digests: ReleaseEvidenceDigests<'_>,
     rpm_status: &str,
 ) -> String {
-    let rpm_packages_sha256 = rpm_packages_sha256
+    let rpm_packages_sha256 = digests
+        .rpm_packages
         .map(|value| format!("\"{}\"", json_escape(value)))
         .unwrap_or_else(|| "null".to_string());
     format!(
         concat!(
             "{{\n",
-            "  \"schema\": \"goblins-os-release-evidence-v4\",\n",
+            "  \"schema\": \"goblins-os-release-evidence-v5\",\n",
             "  \"architecture\": \"{}\",\n",
             "  \"candidate_commit\": \"{}\",\n",
             "  \"image_ref\": \"{}\",\n",
@@ -3022,6 +3145,7 @@ fn release_evidence_manifest(
             "  \"rpm_packages_tsv\": \"rpm-packages.tsv\",\n",
             "  \"rpm_packages_sha256\": {},\n",
             "  \"rpm_command_file\": \"rpm-packages.command\",\n",
+            "  \"rpm_command_sha256\": \"{}\",\n",
             "  \"rpm_status\": \"{}\",\n",
             "  \"asset_provenance\": \"os/release/asset-provenance.toml\",\n",
             "  \"third_party_notices\": \"os/release/third-party-notices.toml\",\n",
@@ -3034,8 +3158,9 @@ fn release_evidence_manifest(
         json_escape(image_ref),
         image_ref_is_digest_pinned(image_ref),
         cargo_package_count,
-        json_escape(cargo_packages_sha256),
+        json_escape(digests.cargo_packages),
         rpm_packages_sha256,
+        json_escape(digests.rpm_command),
         json_escape(rpm_status)
     )
 }
@@ -3380,6 +3505,130 @@ fn contains_check(path: PathBuf, id: &str, needle: &str) -> Check {
     } else {
         blocked(id, &format!("{} is missing {}", path.display(), needle))
     }
+}
+
+fn container_arg_value<'a>(containerfile: &'a str, name: &str) -> Option<&'a str> {
+    let prefix = format!("ARG {name}=");
+    containerfile
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn toml_section_string<'a>(section: &'a str, key: &str) -> Option<&'a str> {
+    let prefix = format!("{key} = \"");
+    section
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .and_then(|value| value.strip_suffix('"'))
+        .filter(|value| !value.is_empty())
+}
+
+fn codex_release_integrity_check(root: &Path) -> Check {
+    const ID: &str = "codex-release-pins-are-enforced-and-cross-file-consistent";
+    let container_path = root.join("os/bootc/Containerfile");
+    let notices_path = root.join("os/release/third-party-notices.toml");
+    let container = match fs::read_to_string(&container_path) {
+        Ok(text) => text,
+        Err(error) => {
+            return blocked(
+                ID,
+                &format!("cannot read {}: {error}", container_path.display()),
+            );
+        }
+    };
+    let notices = match fs::read_to_string(&notices_path) {
+        Ok(text) => text,
+        Err(error) => {
+            return blocked(
+                ID,
+                &format!("cannot read {}: {error}", notices_path.display()),
+            );
+        }
+    };
+    let Some((_, codex_and_after)) = notices.split_once("[codex]") else {
+        return blocked(ID, "third-party notices has no [codex] section");
+    };
+    let codex_notice = codex_and_after
+        .split_once("\n[")
+        .map_or(codex_and_after, |(section, _)| section);
+
+    let required_args = [
+        ("CODEX_VERSION", "version"),
+        ("CODEX_AARCH64_SHA256", "artifact_sha256"),
+        ("CODEX_LICENSE_SHA256", "license_sha256"),
+        ("CODEX_NOTICE_SHA256", "notice_sha256"),
+    ];
+    let mut values = BTreeMap::new();
+    for (argument, notice_key) in required_args {
+        let Some(container_value) = container_arg_value(&container, argument) else {
+            return blocked(ID, &format!("Containerfile is missing ARG {argument}"));
+        };
+        let Some(notice_value) = toml_section_string(codex_notice, notice_key) else {
+            return blocked(ID, &format!("[codex] notices are missing {notice_key}"));
+        };
+        if container_value != notice_value {
+            return blocked(
+                ID,
+                &format!("Containerfile {argument} does not match [codex].{notice_key}"),
+            );
+        }
+        values.insert(argument, container_value);
+    }
+
+    for argument in [
+        "CODEX_AARCH64_SHA256",
+        "CODEX_LICENSE_SHA256",
+        "CODEX_NOTICE_SHA256",
+    ] {
+        let value = values
+            .get(argument)
+            .expect("required Codex checksum was inserted");
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return blocked(ID, &format!("{argument} is not a lowercase SHA-256"));
+        }
+    }
+
+    for (checksum_argument, downloaded_file) in [
+        ("CODEX_AARCH64_SHA256", "codex_archive"),
+        ("CODEX_LICENSE_SHA256", "codex_license"),
+        ("CODEX_NOTICE_SHA256", "codex_notice"),
+    ] {
+        let strict_check = format!(
+            "\"${{{checksum_argument}}}\" \"${{{downloaded_file}}}\" | sha256sum --check --strict -"
+        );
+        if !container.contains(&strict_check) {
+            return blocked(
+                ID,
+                &format!("{checksum_argument} is not consumed by a strict SHA-256 check"),
+            );
+        }
+    }
+
+    let version = values
+        .get("CODEX_VERSION")
+        .expect("required Codex version was inserted");
+    let expected_source = format!("https://github.com/openai/codex/releases/tag/rust-v{version}");
+    if toml_section_string(codex_notice, "source") != Some(expected_source.as_str()) {
+        return blocked(ID, "[codex].source does not match CODEX_VERSION");
+    }
+    if toml_section_string(codex_notice, "artifact")
+        != Some("codex-aarch64-unknown-linux-musl.tar.gz")
+    {
+        return blocked(ID, "[codex].artifact is not the pinned aarch64 release");
+    }
+
+    ready(
+        ID,
+        &format!(
+            "Codex {version} aarch64 archive, license, and notice pins match provenance and are enforced with strict SHA-256 checks"
+        ),
+    )
 }
 
 fn ordered_contains_check(path: PathBuf, id: &str, first: &str, second: &str) -> Check {
@@ -3730,8 +3979,6 @@ fn source_secret_scan_hits(root: &Path) -> Result<Vec<String>, String> {
         .arg("--glob")
         .arg("!.ci-target/**")
         .arg("--glob")
-        .arg("!.ci-target-amd64/**")
-        .arg("--glob")
         .arg("!target/**")
         .arg("--glob")
         .arg("!artifacts/**")
@@ -3816,8 +4063,6 @@ fn should_skip_secret_scan_path(relative: &Path) -> bool {
         || path.starts_with(".claude/")
         || path == ".ci-target"
         || path.starts_with(".ci-target/")
-        || path == ".ci-target-amd64"
-        || path.starts_with(".ci-target-amd64/")
         || path == "target"
         || path.starts_with("target/")
         || path == "artifacts"
@@ -3959,7 +4204,14 @@ struct NativeCoreClient {
     setgid: bool,
 }
 
-const NATIVE_CORE_CLIENTS: [NativeCoreClient; 16] = [
+const NATIVE_CORE_CLIENTS: [NativeCoreClient; 17] = [
+    NativeCoreClient {
+        slug: "consent-broker",
+        binary: "goblins-os-consent-broker",
+        entrypoint: "crates/goblins-os-consent-broker/src/main.rs",
+        kind: "ConsentBroker",
+        setgid: true,
+    },
     NativeCoreClient {
         slug: "control-center",
         binary: "goblins-os-control-center",
@@ -4074,7 +4326,8 @@ const NATIVE_CORE_CLIENTS: [NativeCoreClient; 16] = [
     },
 ];
 
-const NATIVE_CORE_CLIENT_CRATES: [&str; 14] = [
+const NATIVE_CORE_CLIENT_CRATES: [&str; 15] = [
+    "crates/goblins-os-consent-broker",
     "crates/goblins-os-control-center",
     "crates/goblins-os-file-builder",
     "crates/goblins-os-installer",
@@ -4965,7 +5218,7 @@ fn core_capability_boundary_checks(root: &Path) -> Vec<Check> {
         contains_check(
             control_plane.clone(),
             "core-capability-server-authorizes-every-accepted-stream",
-            "axum::serve(CapabilityListener::new(client, group_id, listener), router)",
+            "CapabilityListener::new(client, group_id, listener)",
         ),
         contains_check(
             control_plane.clone(),
@@ -5605,7 +5858,7 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/iso/config.toml"),
             "iso-installer-dual-boot-manual-storage",
-            "manual storage for dual boot with Windows, macOS, Linux, or another OS",
+            "manual storage for preserving another OS or data",
         ),
         contains_check(
             root.join("os/iso/config.toml"),
@@ -5620,7 +5873,7 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/iso/config.toml"),
             "iso-installer-preserves-existing-os-partitions",
-            "preserve existing Windows, macOS/APFS, Linux,\n# other OS, recovery, and EFI partitions",
+            "preserve existing OS, APFS/data, recovery,\n# vendor, and EFI partitions",
         ),
         contains_check(
             root.join("os/iso/config.toml"),
@@ -5635,7 +5888,7 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/iso/config.toml"),
             "iso-installer-required-final-summary-preserves",
-            "preserved Windows, macOS/APFS, Linux, other OS, recovery, EFI, vendor, and data",
+            "preserved existing OS, APFS/data, recovery, EFI, vendor, and data",
         ),
         contains_check(
             root.join("os/iso/config.toml"),
@@ -5645,7 +5898,7 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("SHIP.md"),
             "ship-documents-dual-boot-installer-path",
-            "Dual boot with Windows, macOS,\nLinux, or another OS uses advanced storage",
+            "Keeping another operating system or\ndata uses advanced storage",
         ),
         contains_check(
             root.join("SHIP.md"),
@@ -5660,7 +5913,7 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("SHIP.md"),
             "ship-documents-dual-boot-apfs-preservation",
-            "Windows, macOS/APFS, Linux, other OS, recovery, and EFI partitions",
+            "existing system, APFS/data, recovery, and EFI partitions",
         ),
         contains_check(
             root.join("SHIP.md"),
@@ -5825,7 +6078,7 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
             "install-policy-dual-boot-apfs-preservation",
-            "macOS/APFS",
+            "APFS data safety",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -5849,8 +6102,8 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
-            "install-policy-dual-boot-data-partitions",
-            "data partitions preserved",
+            "install-policy-preservation-signals-stay-unformatted",
+            "Leave existing OS, APFS/data, recovery, EFI, and vendor partitions unformatted.",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -5999,8 +6252,8 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
-            "install-policy-dual-boot-decision-macos",
-            "macOS beside Goblins OS",
+            "install-policy-dual-boot-decision-apfs",
+            "APFS or Apple-origin disk",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -6024,8 +6277,8 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
-            "install-policy-dual-boot-choice-macos",
-            "Keep macOS",
+            "install-policy-dual-boot-choice-apfs",
+            "Protect APFS data",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -6049,8 +6302,8 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
-            "install-policy-dual-boot-readiness-macos",
-            "macOS readiness",
+            "install-policy-dual-boot-readiness-apfs",
+            "APFS data safety",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -6074,8 +6327,8 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
-            "install-policy-macos-disk-utility",
-            "Disk Utility",
+            "install-policy-apfs-is-not-apple-hardware-support",
+            "APFS detection does not mean this hardware can boot Goblins OS",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -6115,7 +6368,7 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
             "install-policy-required-final-summary-preserves",
-            "every Windows, macOS/APFS, Linux, other OS, recovery, EFI, vendor, and data partition that will be preserved",
+            "every existing OS, APFS/data, recovery, EFI, vendor, and data partition that will be preserved",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -6294,8 +6547,8 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
-            "install-target-detects-macos-apfs-partitions",
-            "\"macOS/APFS\"",
+            "install-target-detects-apfs-partitions",
+            "\"APFS data\"",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -6474,8 +6727,8 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
-            "installer-ui-other-os-preservation",
-            "Windows, macOS, Linux, another OS, recovery, and EFI partitions",
+            "installer-ui-existing-systems-open-advanced-storage",
+            "Rows that show an existing OS, recovery, EFI, or data open advanced storage instead of erase confirmation.",
         ),
         contains_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
@@ -6860,8 +7113,8 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
-            "installer-ui-efi-erase-warning",
-            "including any Windows, macOS, Linux, other OS, recovery, and EFI partitions",
+            "installer-ui-whole-disk-erase-warning-covers-preservation-signals",
+            "including any existing OS, APFS data, recovery, EFI, vendor, and shared-data partitions",
         ),
         contains_check(
             root.join("crates/goblins-os-installer/src/main.rs"),
@@ -6946,7 +7199,17 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
             "external-gate-dual-boot-proof-handoff",
-            "preserved Windows/macOS/APFS/Linux/other OS/recovery/EFI partitions",
+            "preserved existing-OS/APFS/data/recovery/vendor/EFI partitions",
+        ),
+        contains_check(
+            root.join("os/release/architectures.toml"),
+            "release-compatibility-no-unproved-bare-metal-support",
+            "No bare-metal Arm device is supported until that exact model has current",
+        ),
+        contains_check(
+            root.join("os/release/architectures.toml"),
+            "release-compatibility-apple-silicon-is-hvf-host-only",
+            "Apple Silicon is a local HVF proof host, not a claimed bare-metal Goblins OS install target",
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
@@ -7141,6 +7404,20 @@ fn settings_render_screenshot_checks(root: &Path) -> Vec<Check> {
         .collect()
 }
 
+fn consent_render_screenshot_checks(root: &Path) -> Vec<Check> {
+    let render_script = root.join("os/bootc/render-screens.sh");
+    CONSENT_RENDER_SCREENSHOTS
+        .iter()
+        .map(|screenshot| {
+            contains_check(
+                render_script.clone(),
+                &format!("render-consent-screenshot-{screenshot}"),
+                screenshot,
+            )
+        })
+        .collect()
+}
+
 fn settings_interaction_screenshot_checks(root: &Path) -> Vec<Check> {
     let render_script = root.join("os/bootc/render-screens.sh");
     SETTINGS_INTERACTION_SCREENSHOTS
@@ -7192,6 +7469,21 @@ fn polish_interaction_screenshot_checks(root: &Path) -> Vec<Check> {
             render_script.clone(),
             "render-polish-interaction-requires-zero-motion-difference",
             "reduced_motion_zero_difference",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-uses-real-reduced-transparency-schema",
+            "org.goblins.os.a11y.visual",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-toggles-reduced-transparency-live",
+            "gsettings set \"$schema\" \"$key\" true",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-requires-visible-reduced-transparency-difference",
+            "reduced_transparency_visible_difference",
         ),
         contains_check(
             render_script.clone(),
@@ -7339,6 +7631,16 @@ fn native_design_system_checks(root: &Path) -> Vec<Check> {
             "native-workspace-overview-workspaces-strip-footer-aligned",
             "y_align: Clutter.ActorAlign.END",
         ),
+        contains_check(
+            root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell.css"),
+            "native-screencast-control-uses-goblins-semantic-red",
+            "background-color: #ff383c;",
+        ),
+        absent_check(
+            root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell.css"),
+            "native-screencast-control-does-not-copy-apple-dark-system-red",
+            "#ff453a",
+        ),
     ];
 
     for app in NATIVE_DESIGN_APPS {
@@ -7364,6 +7666,16 @@ fn native_design_system_checks(root: &Path) -> Vec<Check> {
 
 fn release_readiness_checks(root: &Path) -> Vec<Check> {
     vec![
+        contains_check(
+            root.join("os/release/architectures.toml"),
+            "release-architecture-policy-is-aarch64-only",
+            "supported = [\"aarch64\"]",
+        ),
+        absent_check(
+            root.join("os/release/architectures.toml"),
+            "release-architecture-policy-has-no-x86-contract",
+            "x86_64",
+        ),
         file_check(root, "os/release/source-tree-manifest.toml"),
         file_check(root, "os/release/asset-provenance.toml"),
         file_check(root, "os/release/third-party-notices.toml"),
@@ -7443,11 +7755,6 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/release/source-tree-manifest.toml"),
-            "source-manifest-classifies-ci-target-amd64-dir",
-            ".ci-target-amd64/",
-        ),
-        contains_check(
-            root.join("os/release/source-tree-manifest.toml"),
             "source-manifest-classifies-target-dir",
             "target/",
         ),
@@ -7473,13 +7780,28 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/release/hydrate-release-artifacts.sh"),
-            "release-hydration-default-skips-large-iso",
-            "GOBLINS_OS_DOWNLOAD_ISO",
+            "release-hydration-requires-explicit-mode",
+            "GOBLINS_OS_HYDRATION_MODE",
+        ),
+        contains_check(
+            root.join("os/release/hydrate-release-artifacts.sh"),
+            "release-hydration-has-historical-alpha-archive-mode",
+            "os/release/historical-alpha/$tag",
+        ),
+        contains_check(
+            root.join("os/release/hydrate-release-artifacts.sh"),
+            "release-hydration-has-strict-exact-candidate-mode",
+            "GOBLINS_OS_CANDIDATE_WORKFLOW_RUN_ATTEMPT",
+        ),
+        absent_check(
+            root.join("os/release/hydrate-release-artifacts.sh"),
+            "release-hydration-does-not-default-historical-alpha-tag",
+            "GOBLINS_OS_RELEASE_TAG:-v0.1.0-alpha",
         ),
         contains_check(
             root.join("os/release/hydrate-release-artifacts.sh"),
             "release-hydration-verifies-split-iso-parts",
-            "goblins-os-$arch.iso.zst.parts.sha256",
+            "goblins-os-$ARCH.iso.zst.parts.sha256",
         ),
         contains_check(
             root.join("os/release/hydrate-release-artifacts.sh"),
@@ -7494,22 +7816,17 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("GO-LIVE.md"),
             "go-live-documents-release-artifact-hydration",
-            "Published release metadata/SBOM can be hydrated",
+            "Published Arm release metadata and SBOMs can be hydrated",
         ),
         contains_check(
             root.join("GO-LIVE.md"),
             "go-live-documents-full-iso-hydration",
-            "Full ISO release media can be hydrated from split GitHub release assets",
+            "Full Arm ISO release media can be hydrated from split GitHub release assets",
         ),
         contains_check(
             root.join("GO-LIVE.md"),
-            "go-live-documents-x86-verification-iso-display-proof",
-            "`x86_64` display-backed verification-ISO screenshot/runtime run is complete",
-        ),
-        contains_check(
-            root.join("GO-LIVE.md"),
-            "go-live-documents-public-release-iso-artifact-checks",
-            "`x86_64` public release ISO artifacts are checked separately",
+            "go-live-documents-arm64-only-current-release",
+            "sole supported production and release architecture",
         ),
         file_check(root, ".github/workflows/aarch64-verification-iso.yml"),
         contains_check(
@@ -7567,11 +7884,6 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
             root.join(".dockerignore"),
             "dockerignore-ci-target-dir",
             ".ci-target",
-        ),
-        contains_check(
-            root.join(".dockerignore"),
-            "dockerignore-ci-target-amd64-dir",
-            ".ci-target-amd64",
         ),
         contains_check(
             root.join(".gitignore"),
@@ -7724,6 +8036,21 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
             "Goblins OS remains the product identity",
         ),
         contains_check(
+            root.join("os/release/third-party-notices.toml"),
+            "third-party-notices-codex-version",
+            "version = \"0.144.4\"",
+        ),
+        contains_check(
+            root.join("os/release/third-party-notices.toml"),
+            "third-party-notices-codex-aarch64-artifact",
+            "artifact = \"codex-aarch64-unknown-linux-musl.tar.gz\"",
+        ),
+        contains_check(
+            root.join("os/release/third-party-notices.toml"),
+            "third-party-notices-codex-license",
+            "license = \"Apache-2.0\"",
+        ),
+        contains_check(
             root.join("os/release/trademark-posture.toml"),
             "trademark-posture-goblins-primary",
             "Goblins OS remains the leading product identity",
@@ -7816,7 +8143,7 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/signoff-notes.md"),
             "signoff-template-uses-architecture-screenshot-root",
-            "os/screenshots/hardware-gate/<arch>/YYYY-MM-DD/",
+            "os/screenshots/hardware-gate/aarch64/YYYY-MM-DD/",
         ),
         contains_check(
             root.join("os/signoff-notes.md"),
@@ -7825,18 +8152,18 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/signoff-notes.md"),
-            "signoff-template-openai-key-is-relay-scoped",
-            "BYO OpenAI relay",
+            "signoff-template-openai-engines-use-user-language",
+            "on-device GPT-OSS | your OpenAI API key | OpenAI account through Codex",
         ),
         contains_check(
             root.join("os/signoff-notes.md"),
             "signoff-template-documents-current-docker-runner",
-            "Current release runs use Docker on native Linux runners",
+            "Current release runs use Docker on a native aarch64 Linux runner",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-records-release-evidence-path",
-            "os/signoff-proofs/sbom/<arch>/",
+            "os/signoff-proofs/sbom/aarch64/",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -7865,8 +8192,8 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/release/release-readiness-delta.toml"),
-            "release-readiness-delta-records-dual-arch-rpm-sbom-proof",
-            "dual_arch_rpm_sbom_present",
+            "release-readiness-delta-preserves-historical-alpha-evidence",
+            "historical_alpha_evidence_preserved",
         ),
         contains_check(
             root.join("os/release/release-readiness-delta.toml"),
@@ -7882,11 +8209,6 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
             root.join("os/release/release-readiness-delta.toml"),
             "release-readiness-delta-blocks-on-display-proofs",
             "display_backed_architecture_proofs_missing",
-        ),
-        contains_check(
-            root.join("os/release/release-readiness-delta.toml"),
-            "release-readiness-delta-records-x86-rpm-sbom-proof",
-            "x86_64_rpm_sbom_present",
         ),
         contains_check(
             root.join("os/release/release-readiness-delta.toml"),
@@ -7907,11 +8229,6 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
             root.join("os/release/release-readiness-delta.toml"),
             "release-readiness-delta-no-stale-disk-space-blocker",
             "disk_space_low",
-        ),
-        absent_check(
-            root.join("os/release/release-readiness-delta.toml"),
-            "release-readiness-delta-no-stale-x86-rpm-sbom-blocker",
-            "x86_64_rpm_sbom_missing",
         ),
         absent_check(
             root.join("os/release/release-readiness-delta.toml"),
@@ -8017,11 +8334,6 @@ fn secret_hygiene_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-source-secret-scan-skips-ci-target",
             "!.ci-target/**",
-        ),
-        contains_check(
-            root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-source-secret-scan-skips-ci-target-amd64",
-            "!.ci-target-amd64/**",
         ),
         contains_check(
             root.join("os/hardware-gate/secret-scan.sh"),
@@ -8133,14 +8445,51 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
     let table = document
         .as_table()
         .ok_or_else(|| "installer branding provenance root must be a table".to_string())?;
-    if table.get("schema").and_then(toml::Value::as_integer) != Some(1) {
-        return Err("installer branding provenance schema must be 1".to_string());
-    }
+    let schema = table
+        .get("schema")
+        .and_then(toml::Value::as_integer)
+        .ok_or_else(|| "installer branding provenance requires integer schema".to_string())?;
+    let promotion_eligible = match schema {
+        1 => {
+            if table.contains_key("workflow_run_attempt")
+                || table.contains_key("anonymous_pull_verified")
+            {
+                return Err(
+                    "installer branding schema 1 must not claim exact-attempt or anonymous-pull verification"
+                        .to_string(),
+                );
+            }
+            false
+        }
+        2 => {
+            if table
+                .get("workflow_run_attempt")
+                .and_then(toml::Value::as_integer)
+                .is_none_or(|attempt| attempt <= 0)
+            {
+                return Err(
+                    "installer branding schema 2 workflow_run_attempt must be positive".to_string(),
+                );
+            }
+            if table
+                .get("anonymous_pull_verified")
+                .and_then(toml::Value::as_bool)
+                != Some(true)
+            {
+                return Err(
+                    "installer branding schema 2 must record anonymous_pull_verified = true"
+                        .to_string(),
+                );
+            }
+            true
+        }
+        _ => return Err("installer branding provenance schema must be 1 or 2".to_string()),
+    };
 
     let image_ref = toml_required_string(table, "image_ref")?;
     if !exact_digest_ref(image_ref, TOOL_REPOSITORY) {
         return Err(
-            "installer branding index must pin the canonical GHCR repository by digest".to_string(),
+            "installer branding image must pin the canonical GHCR repository by digest".to_string(),
         );
     }
     let source_commit = toml_required_string(table, "source_commit")?;
@@ -8155,13 +8504,6 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
             "installer branding workflow_run must be a canonical Goblins OS Actions run"
                 .to_string(),
         );
-    }
-    if table
-        .get("workflow_run_attempt")
-        .and_then(toml::Value::as_integer)
-        .is_none_or(|attempt| attempt <= 0)
-    {
-        return Err("installer branding workflow_run_attempt must be positive".to_string());
     }
     let base_image = toml_required_string(table, "base_image")?;
     if !image_ref_is_digest_pinned(base_image) {
@@ -8231,6 +8573,14 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
                 .to_string(),
         );
     }
+    if !branding_workflow.contains("anonymous_pull_verified: true")
+        || !branding_workflow.contains("docker logout ghcr.io")
+    {
+        return Err(
+            "installer branding workflow must prove anonymous digest access after logout"
+                .to_string(),
+        );
+    }
 
     let architectures = table
         .get("architectures")
@@ -8240,45 +8590,34 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    let expected_arches = ["aarch64", "x86_64"].into_iter().collect::<BTreeSet<_>>();
+    let expected_arches = ["aarch64"].into_iter().collect::<BTreeSet<_>>();
     if actual_arches != expected_arches {
+        return Err("installer branding provenance must contain exactly aarch64".to_string());
+    }
+    let arch_table = architectures
+        .get("aarch64")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "installer branding provenance lacks aarch64 table".to_string())?;
+    let native_ref = toml_required_string(arch_table, "native_image_ref")?;
+    if !exact_digest_ref(native_ref, TOOL_REPOSITORY) {
+        return Err("installer branding aarch64 image is not an exact GHCR digest".to_string());
+    }
+    if native_ref != image_ref {
         return Err(
-            "installer branding provenance must contain exactly aarch64 and x86_64".to_string(),
+            "installer branding image_ref must equal the reviewed native aarch64 digest"
+                .to_string(),
         );
     }
-    let mut native_refs = BTreeSet::new();
-    for arch in ["aarch64", "x86_64"] {
-        let arch_table = architectures
-            .get(arch)
-            .and_then(toml::Value::as_table)
-            .ok_or_else(|| format!("installer branding provenance lacks {arch} table"))?;
-        let native_ref = toml_required_string(arch_table, "native_image_ref")?;
-        if !exact_digest_ref(native_ref, TOOL_REPOSITORY) {
-            return Err(format!(
-                "installer branding {arch} image is not an exact GHCR digest"
-            ));
-        }
-        native_refs.insert(native_ref);
-        let inventory_sha = toml_required_string(arch_table, "rpm_inventory_sha256")?;
-        if !lowercase_hex(inventory_sha, 64) {
-            return Err(format!(
-                "installer branding {arch} inventory hash is invalid"
-            ));
-        }
-        if arch_table
-            .get("rpm_package_count")
-            .and_then(toml::Value::as_integer)
-            .is_none_or(|count| count <= 0)
-        {
-            return Err(format!(
-                "installer branding {arch} package count must be positive"
-            ));
-        }
+    let inventory_sha = toml_required_string(arch_table, "rpm_inventory_sha256")?;
+    if !lowercase_hex(inventory_sha, 64) {
+        return Err("installer branding aarch64 inventory hash is invalid".to_string());
     }
-    if native_refs.len() != 2 {
-        return Err(
-            "installer branding native architecture image refs must be distinct".to_string(),
-        );
+    if arch_table
+        .get("rpm_package_count")
+        .and_then(toml::Value::as_integer)
+        .is_none_or(|count| count <= 0)
+    {
+        return Err("installer branding aarch64 package count must be positive".to_string());
     }
 
     let propagation = [
@@ -8297,10 +8636,6 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
             format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
         ),
         (
-            ".github/workflows/hardware-gate-capture.yml",
-            format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
-        ),
-        (
             ".github/workflows/aarch64-verification-iso.yml",
             format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
         ),
@@ -8310,13 +8645,18 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
             .map_err(|error| format!("cannot read {relative}: {error}"))?;
         if !content.contains(&expected) {
             return Err(format!(
-                "installer branding index is not propagated exactly to {relative}"
+                "installer branding image is not propagated exactly to {relative}"
             ));
         }
     }
 
+    let eligibility = if promotion_eligible {
+        "schema 2 exact-attempt provenance is promotion eligible"
+    } else {
+        "schema 1 provenance is source/bootstrap-valid but not promotion eligible"
+    };
     Ok(format!(
-        "reviewed installer branding index {image_ref} is hash-bound and propagated; source {source_commit}; run {workflow_run}"
+        "reviewed native aarch64 installer branding image {image_ref} is hash-bound and propagated; source {source_commit}; run {workflow_run}; {eligibility}"
     ))
 }
 
@@ -8327,7 +8667,7 @@ fn installer_branding_tool_provenance_check(root: &Path) -> Check {
     }
 }
 
-fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
+fn arm64_release_checks(root: &Path) -> Vec<Check> {
     vec![
         contains_check(
             root.join("os/release/architectures.toml"),
@@ -8366,8 +8706,33 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/release/architectures.toml"),
-            "release-architecture-aarch64-qemu-machine",
+            "release-architecture-aarch64-optional-kvm-diagnostic",
             "virt,accel=kvm,gic-version=max",
+        ),
+        contains_check(
+            root.join("os/release/architectures.toml"),
+            "release-architecture-aarch64-kvm-cannot-sign-off-display",
+            "KVM can never satisfy display signoff",
+        ),
+        contains_check(
+            root.join("os/release/architectures.toml"),
+            "release-architecture-aarch64-native-linux-packaging-authority",
+            "[authority.native_packaging]",
+        ),
+        contains_check(
+            root.join("os/release/architectures.toml"),
+            "release-architecture-aarch64-darwin-hvf-display-authority",
+            "[authority.display_signoff]",
+        ),
+        contains_check(
+            root.join("os/release/architectures.toml"),
+            "release-architecture-aarch64-darwin-arm64-host",
+            "host_architecture = \"arm64\"",
+        ),
+        contains_check(
+            root.join("os/release/architectures.toml"),
+            "release-architecture-aarch64-hvf-machine",
+            "virt,accel=hvf,gic-version=max",
         ),
         contains_check(
             root.join("os/release/architectures.toml"),
@@ -8382,57 +8747,27 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/release/architectures.toml"),
             "release-architecture-aarch64-no-emulation-baseline",
-            "do not use x86_64 emulation as baseline",
-        ),
-        contains_check(
-            root.join("os/release/architectures.toml"),
-            "release-architecture-x86-64",
-            "goblins-os-x86_64.iso",
-        ),
-        contains_check(
-            root.join("os/release/architectures.toml"),
-            "release-architecture-x86-64-iso-path",
-            "os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso",
-        ),
-        contains_check(
-            root.join("os/release/architectures.toml"),
-            "release-architecture-x86-64-sha256",
-            "goblins-os-x86_64.iso.sha256",
-        ),
-        contains_check(
-            root.join("os/release/architectures.toml"),
-            "release-architecture-x86-64-manifest",
-            "manifest-goblins-os-x86_64.json",
-        ),
-        contains_check(
-            root.join("os/release/architectures.toml"),
-            "release-architecture-x86-64-hardware-proofs",
-            "os/screenshots/hardware-gate/x86_64/<date>/",
-        ),
-        contains_check(
-            root.join("os/release/architectures.toml"),
-            "release-architecture-x86-64-rpm-sbom",
-            "os/signoff-proofs/sbom/x86_64/rpm-packages.tsv",
-        ),
-        contains_check(
-            root.join("os/release/architectures.toml"),
-            "release-architecture-x86-64-qemu",
-            "qemu-system-x86_64",
-        ),
-        contains_check(
-            root.join("os/release/architectures.toml"),
-            "release-architecture-x86-64-kvm",
-            "qemu_accel = \"kvm\"",
+            "emulated builds are not a release baseline",
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
             "iso-builder-arch-selector",
             "GOBLINS_OS_ARCH",
         ),
+        absent_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-rejects-x86-release-route",
+            "linux/amd64",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "bootc-image-labels-aarch64-only",
+            "org.goblins-os.supported-architectures=\"aarch64\"",
+        ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
-            "iso-builder-native-arch-fail-closed",
-            "must be built on a native $ARCH container engine",
+            "iso-builder-native-aarch64-engine-fails-closed",
+            "Goblins OS ARM64 media requires a native $ARCH container engine.",
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
@@ -8481,12 +8816,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join(".github/workflows/branding-tool-image.yml"),
-            "installer-branding-tool-builds-on-native-architectures",
+            "installer-branding-tool-builds-on-native-aarch64",
             "ubuntu-24.04-arm",
         ),
         contains_check(
             root.join(".github/workflows/branding-tool-image.yml"),
-            "installer-branding-tool-index-records-workflow-attempt",
+            "installer-branding-tool-provenance-records-workflow-attempt",
             "workflow_run_attempt: $workflow_run_attempt",
         ),
         installer_branding_tool_provenance_check(root),
@@ -8496,9 +8831,29 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "Rotating the immutable installer-branding tool",
         ),
         contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-consumes-native-branding-tool-v2-artifact",
+            "goblins-os-installer-branding-tool-v2",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-downloads-native-branding-tool-artifact",
+            "goblins-os-branding-tool-$TOOL_COMMIT-aarch64",
+        ),
+        contains_check(
             root.join("os/hardware-gate/release-evidence.sh"),
-            "release-evidence-requires-hash-sealed-v4-schema",
-            "goblins-os-release-evidence-v4",
+            "release-evidence-requires-command-sealed-v5-schema",
+            "goblins-os-release-evidence-v5",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/release-evidence.sh"),
+            "release-evidence-binds-rpm-command-by-sha256",
+            "rpm_command_sha256",
+        ),
+        contains_check(
+            root.join("os/release/hydrate-release-artifacts.sh"),
+            "historical-release-evidence-v4-is-read-only",
+            "historical-alpha v4 release evidence",
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
@@ -8522,8 +8877,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
-            "iso-builder-requires-native-host-and-engine-for-release",
-            "requires a native $ARCH host and container engine",
+            "iso-builder-requires-native-linux-packaging-host",
+            "shippable $ARCH media requires a native aarch64 Linux host",
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
@@ -8957,20 +9312,10 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "iso-builder-records-installer-config-in-manifest",
             "\"installer_config\": \"$CONFIG_LABEL\"",
         ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-requires-digest-pinned-candidate-image",
-            "candidate_image_ref",
-        ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-pulls-selected-candidate-image",
-            "docker pull \"$GOBLINS_OS_CANDIDATE_IMAGE_REF\"",
-        ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-verifies-candidate-oci-revision",
-            "org.opencontainers.image.revision",
+        path_absent_check(
+            root,
+            ".github/workflows/hardware-gate-capture.yml",
+            "retired-x86-hardware-gate-workflow-is-absent",
         ),
         file_check(
             root,
@@ -8978,13 +9323,48 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
-            "hardware-evidence-bundle-has-exact-v1-schema",
-            "goblins-os-hardware-evidence-bundle-v1",
+            "hardware-evidence-bundle-has-exact-v5-schema",
+            "goblins-os-hardware-evidence-bundle-v5",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
-            "hardware-evidence-bundle-requires-32nd-firstboot-shot",
-            "05-first-boot-private-unlock.png",
+            "hardware-evidence-bundle-has-capture-host-authority-schema",
+            "goblins-os-aarch64-local-display-authority-v2",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-binds-capture-environment",
+            "capture_environment",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-requires-darwin-hvf",
+            "\"accelerator\": \"hvf\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-binds-qemu-binary-hash",
+            "qemu_binary_sha256",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-requires-40th-accessibility-shot",
+            "40-accessibility-window-resize.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-requires-hosted-review-light-shot",
+            "41-hosted-context-review.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-requires-hosted-review-dark-shot",
+            "42-hosted-context-review-dark.png",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "hardware-evidence-bundle-requires-exactly-42-screenshots",
+            "len(REQUIRED_PNGS) != 42",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
@@ -9000,6 +9380,237 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
             "hardware-evidence-bundle-enforces-uniform-framebuffer",
             "evidence screenshots do not share one framebuffer size",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/proof_validation.py"),
+            "accessibility-adaptivity-proof-has-strict-schema",
+            "\"accessibility-adaptivity\": schema(",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/proof_validation.py"),
+            "hardware-proof-validator-has-adversarial-self-test",
+            "goblins-proof-validation-self-test: pass",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-runs-hardware-proof-validator-self-test",
+            "proof_validation.py --self-test",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-rejects-duplicate-signoff-fields",
+            "signoff_block_top_level_labels_are_unique",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "hardware-capture-stops-candidate-processes-before-sealing",
+            "stop_capture_processes_bounded",
+        ),
+        file_check(
+            root,
+            "os/hardware-gate/capture-harness/visual-secret-scan.swift",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/visual-secret-scan.swift"),
+            "hardware-visual-secret-scan-uses-apple-vision",
+            "import Vision",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/visual-secret-scan.swift"),
+            "hardware-visual-secret-scan-binds-signed-bytes",
+            "screenshot bytes do not match the signed canonical PNG entry",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/visual-secret-scan.swift"),
+            "hardware-visual-secret-scan-uses-pinned-tiled-ocr",
+            "VNRecognizeTextRequestRevision3",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/visual-secret-scan.swift"),
+            "hardware-visual-secret-scan-requires-exact-inventory",
+            "visual secret scan requires --seal and exactly 42 screenshots",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "hardware-capture-runs-visual-secret-scan-before-sealing",
+            "--seal \"$RUN_DIR/evidence-bundle.json\"",
+        ),
+        contains_check(
+            root.join("os/release/promote-stable.sh"),
+            "stable-promotion-repeats-visual-secret-scan",
+            "--seal \"$display_run/evidence-bundle.json\"",
+        ),
+        file_check(root, ".github/workflows/stable-promotion.yml"),
+        file_check(root, "os/release/stable-promotion.py"),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-is-serialized-across-shared-aliases",
+            "group: aarch64-stable-promotion-shared-aliases",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-pins-privileged-buildx-client",
+            "version: v0.34.1",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-pins-reviewed-zstd-source",
+            "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-requires-exact-zstd-version",
+            "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-rejects-noncanonical-display-ustar-bytes",
+            "display archive raw USTAR bytes are not the exact canonical encoding",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-rejects-noncanonical-display-zstd-bytes",
+            "display archive compressed bytes are not the exact canonical zstd encoding",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-rejects-noncanonical-iso-zstd-bytes",
+            "stable ISO compressed bytes are not the exact canonical zstd encoding",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-passes-pinned-zstd-to-display-write-check",
+            "python3 - \"$PAYLOAD_DIR\" \"$CANDIDATE_COMMIT\" \"$PINNED_ZSTD\" \"$RUNNER_TEMP\" <<'PY'",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-passes-pinned-zstd-to-iso-write-check",
+            "python3 - \"$PAYLOAD_DIR\" \"$RUNNER_TEMP\" \"$PINNED_ZSTD\" <<'PY'",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-declares-single-package-writer-boundary",
+            "only principal allowed to mutate the :aarch64 and",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-write-stage-downloads-exact-candidate-artifact",
+            "actions/artifacts/$candidate_artifact_id/zip",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-write-stage-downloads-exact-display-artifact",
+            "actions/artifacts/$display_artifact_id/zip",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-rejects-non-arm-rpm-evidence",
+            "RPM evidence contains a non-ARM package architecture",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-recomputes-public-install-metadata",
+            "public install and container metadata is not exactly reproducible",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-replays-original-payload-attempt-on-retry",
+            "PROMOTION_PAYLOAD_RUN_ATTEMPT",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-verifies-latest-release-identity",
+            "releases/latest",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-verifies-arm64-efi-machine",
+            "machine != 0xAA64",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-verifies-candidate-image-revision-label",
+            "selected OCI child revision label does not match candidate",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-promotion-verifies-arm-only-image-label",
+            "selected OCI child does not declare the ARM-only contract",
+        ),
+        contains_check(
+            root.join("os/release/stable-promotion.py"),
+            "stable-promotion-helper-recomputes-public-metadata",
+            "require_exact_public_metadata",
+        ),
+        contains_check(
+            root.join("os/release/stable-promotion.py"),
+            "stable-promotion-helper-binds-signed-display-iso",
+            "require_signed_display_iso_binding",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/accessibility-adaptivity-proof.sh"),
+            "accessibility-locale-expansion-uses-goblins-settings-surface",
+            "surface=goblins-os-settings-language-region",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/capture-harness/accessibility-adaptivity-proof.sh"),
+            "accessibility-locale-expansion-does-not-use-gnome-control-center-proxy",
+            "gnome-control-center region",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/accessibility-adaptivity-proof.sh"),
+            "accessibility-locale-expansion-fails-closed-without-real-regional-readback",
+            "goblins-locale-expansion-not-ready",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-language-region-uses-human-locale-display-names",
+            "Regional format: {regional_value}",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/Cargo.toml"),
+            "settings-language-region-uses-standard-bcp47-display-data",
+            "countries-iso3166",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-language-region-keeps-goblins-copy-honestly-english",
+            "Goblins OS interface text is currently available in English.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-language-region-emits-native-runtime-readback",
+            "settings_language_region_readback=",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-language-region-runtime-readback-is-capture-only",
+            "if env::var_os(\"GOBLINS_OS_CAPTURE_PRESENT_LEDGER\").is_some()",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/accessibility-adaptivity-proof.sh"),
+            "accessibility-locale-expansion-requires-active-native-locale",
+            "active_time_locale_valid",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/accessibility-adaptivity-proof.sh"),
+            "accessibility-locale-expansion-does-not-claim-translation",
+            "translated_goblins_copy_claimed",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/proof_validation.py"),
+            "accessibility-proof-binds-eight-screenshot-hashes",
+            "ACCESSIBILITY_SCREENSHOT_BINDINGS",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-requires-accessibility-adaptivity-proof",
+            "Accessibility/adaptivity checked",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-requires-accessibility-adaptivity-proof",
+            "accessibility_adaptivity_proof_passes",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -9021,94 +9632,123 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "shipping-status-validates-exact-proof-manifest",
             "--manifest \"$manifest\" \"$arch\" \"$SELECTED_CANDIDATE_COMMIT\"",
         ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "x86-hardware-evidence-artifact-name-is-attempt-bound",
-            "hardware-gate-evidence-${{ inputs.candidate_commit }}-${{ matrix.arch }}-${{ inputs.run_date }}-attempt-${{ github.run_attempt }}",
-        ),
         file_check(
             root,
             ".github/workflows/aarch64-local-display-attestation.yml",
         ),
-        contains_check(
-            root.join(".github/workflows/aarch64-local-display-attestation.yml"),
-            "aarch64-local-display-attestation-is-github-hosted",
-            "runs-on: ubuntu-24.04",
+        file_check(root, "os/release/display-proof-authority2.pem"),
+        file_check(root, "os/release/display-proof-authority2.sha256"),
+        file_check(root, "os/release/display-proof-authority2-ca.pem"),
+        file_check(root, "os/release/display-proof-authority2-ca.sha256"),
+        path_absent_check(
+            root,
+            "os/release/display-proof-authority.pem",
+            "retired-display-authority1-certificate-is-absent",
+        ),
+        path_absent_check(
+            root,
+            "os/release/display-proof-authority.sha256",
+            "retired-display-authority1-fingerprint-is-absent",
         ),
         contains_check(
             root.join(".github/workflows/aarch64-local-display-attestation.yml"),
-            "aarch64-local-display-attestation-has-least-signing-permissions",
-            "attestations: write",
+            "aarch64-local-display-verification-is-native-arm",
+            "runs-on: ubuntu-24.04-arm",
         ),
         contains_check(
             root.join(".github/workflows/aarch64-local-display-attestation.yml"),
-            "aarch64-local-display-attestation-has-oidc-permission",
-            "id-token: write",
+            "aarch64-local-display-attestation-asserts-native-runner",
+            "test \"$(uname -m)\" = aarch64",
         ),
         contains_check(
             root.join(".github/workflows/aarch64-local-display-attestation.yml"),
-            "aarch64-local-display-attestation-uses-reviewed-attest-action",
-            "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+            "aarch64-local-display-workflow-is-verification-only",
+            "Verify the pinned Authority 2 signature without minting authority",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "aarch64-local-display-authority-uses-two-phase-finalization",
+            "finalize-display-proof.sh",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "aarch64-local-display-capture-stops-before-private-key-use",
+            "exit 75",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/finalize-display-proof.sh"),
+            "aarch64-local-display-finalizer-requires-authority2-chain",
+            "display-proof-authority2-ca.sha256",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "aarch64-local-display-authority-validates-pinned-certificate-before-capture",
+            "verify-authority-certificate",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "aarch64-local-display-authority-verifies-pinned-fingerprints",
+            "certificate does not match its pinned fingerprint",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "aarch64-local-display-authority-identifies-generation2-leaf",
+            "display-proof Authority 2 leaf",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "aarch64-local-display-authority-identifies-generation2-ca",
+            "display-proof Authority 2 offline CA",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "aarch64-local-display-authority-verifies-detached-cms",
+            "-nointern",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-verifies-signed-local-display-seal",
-            "gh attestation verify",
+            "shipping-status-verifies-capture-host-display-authority",
+            "--signature \"$run_dir/aarch64-local-display-attestation.json.cms\"",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
-            "close-signoff-verifies-signed-local-display-seal",
-            "gh attestation verify",
+            "close-signoff-verifies-capture-host-display-authority",
+            "--signature \"$run_dir/aarch64-local-display-attestation.json.cms\"",
         ),
         contains_check(
-            root.join("os/hardware-gate/close-signoff.sh"),
-            "close-signoff-matches-local-display-artifact-bytes",
-            "github_actions_artifact_file_matches",
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "display-authority-binds-verification-iso",
+            "verification_iso_sha256",
         ),
         contains_check(
-            root.join("os/hardware-gate/close-signoff.sh"),
-            "close-signoff-authenticates-local-display-workflow-run",
-            "github_actions_run_is_successful",
-        ),
-        contains_check(
-            root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-binds-local-display-signer-workflow",
-            "--signer-workflow Joe-Simo/goblins-os/.github/workflows/aarch64-local-display-attestation.yml",
-        ),
-        contains_check(
-            root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-rejects-self-hosted-local-display-attestation",
-            "--deny-self-hosted-runners",
-        ),
-        contains_check(
-            root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-matches-exact-github-evidence-files",
-            "github_actions_artifact_file_matches",
+            root.join("os/hardware-gate/capture-harness/evidence_bundle.py"),
+            "display-authority-binds-complete-screenshot-manifest",
+            "screenshot_manifest_sha256",
         ),
         absent_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-does-not-publish-channel-images",
-            "docker/build-push-action",
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-does-not-trust-github-minted-display-attestation",
+            "gh attestation verify",
         ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-cancels-superseded-runs",
-            "cancel-in-progress: true",
+        absent_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "close-signoff-does-not-trust-github-minted-display-attestation",
+            "gh attestation verify",
         ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-kvm-runner-access-prep",
-            "sudo chmod a+rw /dev/kvm",
+        absent_check(
+            root.join(".github/workflows/aarch64-local-display-attestation.yml"),
+            "github-display-verifier-has-no-authority-minting-permission",
+            "attestations: write",
         ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-kvm-runner-access-assertion",
-            "test -r /dev/kvm && test -w /dev/kvm",
+        absent_check(
+            root.join(".github/workflows/aarch64-local-display-attestation.yml"),
+            "github-display-verifier-has-no-oidc-signing-permission",
+            "id-token: write",
         ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-installs-close-signoff-search-dependency",
-            "ripgrep",
+        absent_check(
+            root.join(".github/workflows/aarch64-local-display-attestation.yml"),
+            "github-display-verifier-does-not-create-authority-record",
+            "create-attestation",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -9116,24 +9756,9 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "rg -q",
         ),
         contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-skips-local-iso-image-build",
-            "GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1",
-        ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-uses-verification-iso-config",
-            "GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml",
-        ),
-        absent_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-no-daemon-export-build-tag",
-            "docker build -f os/bootc/Containerfile -t localhost/goblins-os",
-        ),
-        contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
-            "external-gate-requires-real-bootc-ref-for-display-proof",
-            "Display-backed shipping proof requires GOBLINS_OS_BIB_SOURCE_IMAGE",
+            "external-gate-requires-immutable-bootc-ref-for-shippable-packaging",
+            "Shippable ARM64 packaging requires GOBLINS_OS_BIB_SOURCE_IMAGE to an immutable pullable bootc image digest ref.",
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
@@ -9167,8 +9792,9 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
-            "external-gate-screenshot-dir-created-only-for-qemu-or-closeoff",
-            r#"[[ "$RUN_QEMU" == "1" || "$RUN_CLOSEOFF" == "1" ]]"#,
+            "external-gate-screenshot-dir-created-only-for-linux-diagnostic",
+            r#"if [[ "$RUN_QEMU" == "1" ]]; then
+  mkdir -p "$SCREENSHOT_DIR""#,
         ),
         absent_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
@@ -10676,16 +11302,6 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "contract_log_tail=",
         ),
         contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-serves-the-pinned-capture-model",
-            "docker exec goblins-proof-ollama ollama pull",
-        ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-verifies-capture-model-manifest",
-            "GOBLINS_OS_PROOF_OLLAMA_MODEL_MANIFEST_SHA256",
-        ),
-        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-guards-textshortcuts-candidate-replacement",
             "\"candidate_replacement\": \"on my way\"",
@@ -12166,16 +12782,6 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "_capture-logs",
         ),
         contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-uploads-artifact-on-failure",
-            "if: always()",
-        ),
-        contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-uploads-only-current-screenshot-run",
-            "os/screenshots/hardware-gate/${{ matrix.arch }}/${{ inputs.run_date }}/",
-        ),
-        contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "capture-run-manifest-links-firewall-proof",
             "firewall_live_toggle_proof",
@@ -12253,7 +12859,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-requires-arch-dated-screenshot-root",
-            "os/screenshots/hardware-gate/<arch>/<YYYY-MM-DD>/",
+            "os/screenshots/hardware-gate/aarch64/<YYYY-MM-DD>/",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -12282,8 +12888,33 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/iso/build-iso.sh"),
-            "iso-builder-emulated-docker-rust-preflight",
-            "emulation cannot run rustc",
+            "iso-builder-rejects-docker-emulation",
+            "GOBLINS_OS_ALLOW_EMULATED_DOCKER is not supported",
+        ),
+        absent_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-has-no-emulation-preflight",
+            "verify_docker_emulation_runtime",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-shippable-authority-is-native-arm64-linux",
+            "shippable $ARCH media requires a native aarch64 Linux host",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-records-native-host-os",
+            "\"native_host_os\": \"$HOST_OS\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-verifies-exact-shippable-candidate-image",
+            "verify_shippable_candidate_image",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-verifies-candidate-image-revision",
+            "org.opencontainers.image.revision",
         ),
         absent_check(
             root.join("os/iso/build-iso.sh"),
@@ -12330,9 +12961,9 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "installer-iso-workflow-generates-evidence-from-docker-image",
             "docker run --rm",
         ),
-        contains_check(
+        absent_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
-            "hardware-gate-x86-qemu",
+            "hardware-gate-has-no-x86-qemu-route",
             "qemu-system-x86_64",
         ),
         contains_check(
@@ -12342,7 +12973,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
-            "hardware-gate-native-kvm-required",
+            "hardware-gate-native-kvm-diagnostic-required",
             "QEMU_ACCEL must be kvm",
         ),
         contains_check(
@@ -12387,8 +13018,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
-            "hardware-gate-preflight-only-pass-copy",
-            "Preflight passed for native $ARCH release runner.",
+            "hardware-gate-native-packaging-preflight-pass-copy",
+            "Native $ARCH Linux packaging preflight passed; no artifact was built.",
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
@@ -12401,9 +13032,19 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "No image, ISO, SBOM, screenshot, or signoff artifact was generated.",
         ),
         contains_check(
+            root.join("os/hardware-gate/run-external-gate.sh"),
+            "hardware-gate-requires-hvf-after-linux-packaging",
+            "Darwin/arm64/HVF display proof is still required before signoff.",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/run-external-gate.sh"),
+            "hardware-gate-refuses-linux-close-signoff",
+            "RUN_CLOSEOFF=1 is not supported by the native Linux packaging helper.",
+        ),
+        contains_check(
             root.join("os/hardware-gate/runbook.md"),
             "runbook-preflight-only-command",
-            "PREFLIGHT_ONLY=1 GOBLINS_OS_ARCH",
+            "PREFLIGHT_ONLY=1 RUN_QEMU=0 GOBLINS_OS_SHIPPABLE_RELEASE=1 GOBLINS_OS_ARCH=\"$ARCH\"",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -12433,12 +13074,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
             "hardware-gate-linux-host-required",
-            "External display-backed gate requires a native Linux host with Docker and QEMU",
+            "Shippable ARM64 packaging requires a native aarch64 Linux host",
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
             "hardware-gate-native-arch-required",
-            "must be produced on a native $ARCH Linux runner",
+            "release packaging must be produced on a native aarch64 Linux runner",
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
@@ -12448,7 +13089,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
             "hardware-gate-artifact-only-mode-warns-proof-required",
-            "RUN_QEMU=0: built and verified artifacts only. Shipping still requires a later display-backed VM run and screenshot proof.",
+            "RUN_QEMU=0: built and verified artifacts only. Shipping still requires the Darwin/arm64/HVF capture harness and screenshot proof.",
         ),
         contains_check(
             root.join("os/hardware-gate/run-external-gate.sh"),
@@ -12953,7 +13594,7 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-prints-per-arch-next-command",
-            "Next evidence command for $arch",
+            "Next native Linux packaging command for $arch",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -12962,8 +13603,8 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
-            "shipping-status-next-command-explicitly-display-backed",
-            "RUN_QEMU=1",
+            "shipping-status-next-command-is-packaging-only",
+            "RUN_QEMU=0",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -12973,12 +13614,17 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-prints-artifact-only-preflight",
-            "RUN_QEMU=0",
+            "GOBLINS_OS_SHIPPABLE_RELEASE=0",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-checks-artifact-only-preflight-not-release-proof",
             "Docker artifact-only preflight passed for [$]ARCH on [$]HOST_ARCH; not release proof",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-prints-apple-silicon-hvf-capture",
+            "Apple Silicon/HVF capture after the verification ISO is present",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -13006,9 +13652,24 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "docker info",
         ),
         contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-confines-kvm-to-non-signoff-diagnostics",
+            "KVM can never satisfy the display signoff gate",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-canonical-display-machine-is-hvf",
+            "virt,accel=hvf,gic-version=max",
+        ),
+        absent_check(
+            root.join("os/hardware-gate/runbook.md"),
+            "runbook-has-no-kvm-display-capture-command",
+            "qemu-system-aarch64 -machine virt,accel=kvm",
+        ),
+        contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
             "shipping-status-arch-matrix",
-            "ARCHES=(aarch64 x86_64)",
+            "ARCHES=(aarch64)",
         ),
         contains_check(
             root.join("os/hardware-gate/verify-shipping-status.sh"),
@@ -13377,11 +14038,6 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join(".github/workflows/build.yml"),
-            "ci-x86-64-native-runner",
-            "ubuntu-24.04",
-        ),
-        contains_check(
-            root.join(".github/workflows/build.yml"),
             "ci-native-runner-arch-assertion",
             "Assert native runner architecture",
         ),
@@ -13394,11 +14050,6 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             root.join(".github/workflows/build.yml"),
             "ci-aarch64-expected-uname",
             "expected_uname: aarch64",
-        ),
-        contains_check(
-            root.join(".github/workflows/build.yml"),
-            "ci-x86-64-expected-uname",
-            "expected_uname: x86_64",
         ),
         contains_check(
             root.join(".github/workflows/build.yml"),
@@ -13487,6 +14138,16 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-records-command-sealed-v3-metadata",
+            "schema: \"goblins-os-candidate-image-ref-v3\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-binds-rpm-command-by-sha256",
+            "rpm_command_sha256: $rpm_command_sha256",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
             "candidate-workflow-requires-current-main",
             "is not the current origin/main commit",
         ),
@@ -13548,7 +14209,12 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/hardware-gate/capture-harness/run-capture.sh"),
             "aarch64-capture-propagates-native-gate-workflow-attempt",
-            "GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_ATTEMPT",
+            "GOBLINS_OS_CAPTURE_NATIVE_PACKAGING_GATE_RUN_ATTEMPT",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/capture-harness/run-capture.sh"),
+            "aarch64-capture-seals-native-gate-workflow-attempt",
+            "\"native_packaging_gate_run_attempt\"",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -13566,11 +14232,6 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
             "goblins-os-aarch64-source-verify.log",
         ),
         contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "x86-hardware-consumer-reruns-exact-source-verifier",
-            "goblins-os-x86_64-source-verify.log",
-        ),
-        contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
             "native-packaging-gate-records-source-verifier",
             "\"source_verifier\": \"pass\"",
@@ -13582,23 +14243,38 @@ fn dual_arch_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/compose-signoff-rows.sh"),
-            "dual-architecture-signoff-row-composition",
+            "aarch64-signoff-row-composition",
             "Current project completion status: complete",
         ),
         contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-pins-ollama-runtime-image",
-            "ollama/ollama@sha256:",
-        ),
-        absent_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "hardware-gate-does-not-run-remote-ollama-installer",
-            "ollama.com/install.sh",
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "aarch64-signoff-distinguishes-verification-iso",
+            "Screenshot proof verification ISO SHA256:",
         ),
         contains_check(
-            root.join(".github/workflows/hardware-gate-capture.yml"),
-            "x86-hardware-capture-requires-complete-signoff",
-            "GOBLINS_OS_CAPTURE_REQUIRE_COMPLETE=1",
+            root.join("os/hardware-gate/compose-signoff-rows.sh"),
+            "aarch64-signoff-binds-public-release-iso",
+            "Public release ISO SHA256:",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            "shipping-status-verifies-both-media-identities",
+            "signoff_block_public_release_iso_binding_matches",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/compose-signoff-rows.sh"),
+            "aarch64-signoff-composition-runs-full-staged-verifier",
+            "GOBLINS_OS_SIGNOFF_STAGING_VALIDATE=1",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/compose-signoff-rows.sh"),
+            "aarch64-signoff-composition-atomically-replaces-notes",
+            "mv -f -- \"$STAGED_SIGNOFF\" \"$SIGNOFF_NOTES\"",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/close-signoff.sh"),
+            "complete-close-signoff-leaves-notes-unmodified",
+            "Signoff notes remain untouched until compose-signoff-rows validates public media",
         ),
         contains_check(
             root.join("os/hardware-gate/close-signoff.sh"),
@@ -13731,7 +14407,7 @@ fn gaming_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/release/architectures.toml"),
             "gaming-release-native-architecture-policy",
-            "does not claim x86-only game runtimes work on Arm",
+            "does not ship or claim an x86 compatibility layer",
         ),
         contains_check(
             root.join("os/bootc/render-screens.sh"),
@@ -13916,6 +14592,301 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/main.rs"),
             "core-ai-notification-context-route",
             "/v1/ai/notification-context",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "core-hosted-context-consent-module",
+            "mod context_consent;",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-lease-id-uses-os-randomness",
+            "OsRng.fill_bytes",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-review-is-short-lived",
+            "REVIEW_TTL: Duration = Duration::from_secs(310)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-review-is-bounded",
+            "MAX_PENDING_REVIEWS: usize = 8",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-review-is-core-retained",
+            "struct StoredReview",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-review-is-bound-to-intended-desktop-uid",
+            "intended_user_id: u32",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-review-binds-origin-action-and-request",
+            "struct HostedContextScope",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-review-binds-request-digest",
+            "request_digest: request_digest(request_binding)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-review-binds-exact-outbound-digest",
+            "outbound_digest: outbound_digest(outbound_binding)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-review-admission-fails-fast",
+            "flow_serial().try_lock()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-second-review-does-not-queue",
+            "second_review_fails_fast_without_queueing_or_launching",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-approval-requires-presented-review",
+            "only_presented_broker_review_can_decide_once",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-pending-review-only-aborts",
+            "pending_review_can_only_be_aborted_and_never_approved",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-broker-atomically-claims-sole-pending-review",
+            "fn claim_for_broker",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-ambiguous-broker-claim-fails-closed",
+            "broker_claim_is_atomic_and_ambiguous_pending_state_fails_closed",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-cross-user-broker-claim-and-decision-fail-closed",
+            "broker_cannot_claim_or_decide_another_users_review",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-cross-user-broker-routes-return-gone",
+            "cross_user_broker_routes_return_gone_and_preserve_intended_review",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-broker-claim-filters-authenticated-user-id",
+            "entry.intended_user_id == broker_user_id",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-broker-decision-filters-authenticated-user-id",
+            "entry.intended_user_id != broker_user_id",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-wait-yields-tokio-worker",
+            "tokio::task::block_in_place",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-one-worker-runtime-regression-is-tested",
+            "broker_routes_progress_while_hosted_request_waits",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-bounded-blocking-runtime-regression-is-tested",
+            "bounded_blocking_hosted_wait_does_not_nested_block_in_place",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-current-thread-runtime-fails-closed",
+            "current_thread_runtime_fails_closed_without_panic_or_residual_review",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-threat-model-does-not-claim-same-uid-a11y-proof",
+            "Same-UID accessibility automation remains outside",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/context_consent.rs"),
+            "hosted-context-has-no-legacy-redeemable-ticket-store",
+            "HOSTED_CONTEXT_TICKET",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "hosted-context-broker-review-route",
+            "/v1/consent/review",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "hosted-context-broker-decision-route",
+            "/v1/consent/decision",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/control_plane.rs"),
+            "hosted-context-broker-has-dedicated-route-capability",
+            "const CONSENT_BROKER_PERMISSIONS",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/control_plane.rs"),
+            "core-preserves-peer-uid-as-connection-metadata",
+            "struct CapabilityPeerAddress",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/control_plane.rs"),
+            "core-binds-connection-metadata-through-axum-connect-info",
+            "into_make_service_with_connect_info::<CapabilityPeerAddress>()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/control_plane.rs"),
+            "core-binds-authenticated-peer-uid-to-request-client",
+            "user_id: peer.user_id",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/control_plane.rs"),
+            "core-peer-uid-request-binding-is-tested",
+            "authenticated_peer_uid_is_bound_to_every_private_request",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core-client/src/lib.rs"),
+            "hosted-context-broker-is-dedicated-core-client",
+            "ConsentBroker",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/session_bridge.rs"),
+            "hosted-context-launch-message-is-authority-free",
+            "consent_launch_request_exposes_no_review_capability",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "hosted-context-bridge-rejects-injected-capabilities",
+            "consent_launch_protocol_rejects_requester_supplied_capabilities",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "hosted-context-bridge-launches-fixed-root-owned-broker",
+            "const HOSTED_CONSENT_BROKER: &str = \"/usr/libexec/goblins-os/goblins-os-consent-broker\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "hosted-context-bridge-passes-no-stdin",
+            ".stdin(Stdio::null())",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-broker-initializes-capability-first",
+            "capability_initialization_precedes_args_review_state_and_gtk",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-broker-claims-over-protected-route",
+            ".post_json(\"/v1/consent/review\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-broker-aborts-failed-preflight",
+            "submit_decision(&core, &lease_id, \"abort\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-broker-authenticates-wayland-peer",
+            "libc::SO_PEERCRED",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-broker-pins-gnome-shell-executable",
+            "/usr/bin/gnome-shell",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-broker-rejects-lookalike-gnome-cgroups",
+            "gnome_shell_cgroup_rejects_lookalike_units_and_substrings",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-broker-strips-launcher-display-authority",
+            "std::env::remove_var(\"WAYLAND_DISPLAY\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-broker-defaults-to-cancel",
+            "window.set_default_widget(Some(&cancel))",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-broker-focuses-cancel",
+            "cancel.grab_focus()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-context-render-proof-is-decision-incapable",
+            "share.set_sensitive(approval_enabled)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "hosted-context-authority-fingerprint-binds-concrete-route",
+            "fn route_authority_fingerprint",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "hosted-context-codex-authority-generation-rotation-is-tested",
+            "codex_before",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "hosted-context-codex-authority-binds-protected-auth-state",
+            "codex_authority_fingerprint",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/auth.rs"),
+            "hosted-context-openai-auth-rotation-invalidates-review",
+            "bump_hosted_authority_generation",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "hosted-context-uses-core-broker-review",
+            "request_hosted_context_consent",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "hosted-context-route-is-resolved-again-after-approval",
+            "let approved_route = resolve_resident_route()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "hosted-context-executes-reviewed-prompt",
+            "forward_resident_message(&approved_route.relay, prompt)",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/ai.rs"),
+            "core-ai-protected-routes-do-not-trust-client-engine",
+            "hosted_consent_engine",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-does-not-trust-client-engine",
+            "hosted_consent_engine",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/app_builder.rs"),
+            "core-file-app-builder-does-not-trust-client-engine",
+            "hosted_consent_engine",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-review-uses-exact-retained-transcript",
+            "transcript.as_bytes()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/app_builder.rs"),
+            "core-file-app-builder-binds-normalized-intent-context",
+            "serde_json::to_vec(&(intent, context_kind))",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/ai.rs"),
@@ -14405,10 +15376,114 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "codex-ignores-user-execution-config",
             ".arg(\"--ignore-user-config\")",
         ),
+        file_check(
+            root,
+            "crates/goblins-os-core/src/codex_containment.rs",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "every-codex-exec-turn-uses-outer-containment",
+            "every_codex_exec_turn_uses_outer_containment",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-binds-validated-descriptors",
+            "--bind-fd",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-rejects-nonprivate-bind-handles",
+            "command_rejects_nonprivate_home_and_result_handles",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-rejects-service-writable-executable",
+            "command_rejects_service_writable_executable",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-root-is-read-only",
+            "--remount-ro",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-uses-private-pid-namespace",
+            "--unshare-pid",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-dies-with-direct-parent",
+            "--die-with-parent",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-enforces-no-new-privileges",
+            "PR_SET_NO_NEW_PRIVS",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-preserves-hosted-network",
+            "command.arg(\"--unshare-net\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-proves-descendant-cleanup",
+            "timeout_ends_descendants_without_pipe_or_post_turn_mutation",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-proves-private-state-and-network-view",
+            "fedora_runtime_hides_private_state_closes_bind_fds_and_preserves_hosted_network",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-constructs-minimal-system-view",
+            "command_has_exact_mount_and_lifetime_contract",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex_containment.rs"),
+            "codex-containment-preserves-inner-codex-sandbox-userns",
+            "Codex uses a nested Bubblewrap user namespace",
+        ),
         contains_check(
             root.join("crates/goblins-os-core/src/codex.rs"),
             "codex-studio-denies-service-owned-state-and-credentials",
             "codex_policies_deny_os_credentials_without_shadowing_the_workspace",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-home-open-requires-owner-only-service-ownership",
+            "codex_home_metadata_is_private",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-home-owner-and-mode-contract-is-tested",
+            "codex_home_requires_exact_owner_only_mode_and_effective_uid",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-profiles-deny-the-entire-apps-root",
+            "(apps.to_path_buf(), \"deny\")",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-studio-grants-only-exact-workspace-write",
+            "CodexSandboxRole::Studio => \"write\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-resident-grants-only-exact-scratch-read",
+            "CodexSandboxRole::Resident => \"read\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-studio-validates-path-against-open-directory",
+            "directory_handle_matches_path",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/codex.rs"),
+            "codex-sandbox-proof-includes-sibling-session-undo-result-canaries",
+            "sibling-secret.txt",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/codex.rs"),
@@ -14444,6 +15519,116 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-core/src/studio.rs"),
             "studio-workspace-components-open-without-following-symlinks",
             "open_dir_nofollow",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-hosted-consent-does-not-trust-client-engine",
+            "hosted_consent_engine: Option<String>",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-hosted-consent-binds-session-snapshot",
+            "session_digest",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-hosted-consent-binds-workspace-snapshot",
+            "workspace_for_chat.content_digest",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-hosted-consent-retains-exact-codex-review",
+            "studio_codex_review_content",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-hosted-review-includes-workspace-digest",
+            "Workspace snapshot SHA-256:",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-hosted-review-contract-is-tested",
+            "studio_hosted_review_is_exact_about_codex_workspace_access",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "studio-hosted-route-is-resolved-and-executed-once",
+            "resident_execute_studio_context",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-hosted-review-includes-workspace-manifest",
+            "Reviewed workspace access (Codex can read the full contents of every listed file after approval):\\n{file_manifest}",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/resident.rs"),
+            "studio-hosted-review-truthfully-labels-codex-file-access",
+            "Exact instruction and reviewed files Codex can access",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-consent-broker/src/main.rs"),
+            "hosted-review-renders-route-specific-content-label",
+            "gtk::Label::new(Some(&review.content_label))",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-file-writes-have-real-checkpoint-recovery",
+            "create_workspace_checkpoint",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-codex-runs-only-in-random-staging-copy",
+            "stage_workspace_from_checkpoint",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-workspace-session-commit-has-durable-journal",
+            "StudioTransactionJournal",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-interrupted-commit-recovers-before-reads",
+            "recover_interrupted_studio_transaction",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "studio-journals-recover-before-core-serves-clients",
+            "recover_all_studio_transactions()?;",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-durable-crash-recovery-is-tested",
+            "durable_journal_recovers_crash_between_workspace_and_session_swap",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-per-app-locks-retire-when-idle",
+            "BTreeMap<String, Weak<Mutex<()>>>",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-undo-remains-local-recovery",
+            "undo_is_local_recovery_not_a_new_policy_gated_ai_action",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-checkpoint-recovery-is-tested",
+            "studio_checkpoint_restores_previous_files_and_conversation_once",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/main.rs"),
+            "studio-undo-route-is-shipped",
+            "/v1/studio/turn/undo",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/studio.rs"),
+            "studio-disclosure-does-not-overclaim-generic-secret-exclusion",
+            "credentials, and secrets are not included",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-studio-undo-is-real",
+            "studio_undo_request",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/studio.rs"),
@@ -14588,7 +15773,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/app_builder.rs"),
             "app-builder-uses-authoritative-resident-route",
-            "resident_generate_with_engine",
+            "resident_generate_protected_context",
         ),
         absent_check(
             root.join("crates/goblins-os-core/src/app_builder.rs"),
@@ -14828,12 +16013,22 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-notification-ai-privacy-boundary",
-            "only that notification's title, body, app, and chosen action label",
+            "uses only that notification's exact title, body, app, chosen action label, and question",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-posts-ai-settings-context",
             "/v1/ai/settings-context",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-hosted-context-previews-exact-client-context",
+            "Review exact context",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-hosted-context-does-not-trust-client-engine",
+            "hosted_consent_engine",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
@@ -14904,6 +16099,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-file-builder/src/main.rs"),
             "file-helper-ask-goblins-mode",
             "/v1/ai/file-context",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-file-builder/src/main.rs"),
+            "file-helper-hosted-context-has-no-client-approval-dialog",
+            "review_hosted_context",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-file-builder/src/main.rs"),
+            "file-helper-hosted-context-does-not-trust-client-engine",
+            "hosted_consent_engine",
         ),
         contains_check(
             root.join("crates/goblins-os-file-builder/src/main.rs"),
@@ -15065,6 +16270,16 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "launcher-posts-screen-context",
             "/v1/ai/screen-context",
         ),
+        absent_check(
+            root.join("crates/goblins-os-launcher/src/main.rs"),
+            "launcher-hosted-context-has-no-client-approval-dialog",
+            "show_hosted_context_confirmation",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-launcher/src/main.rs"),
+            "launcher-hosted-context-does-not-trust-client-engine",
+            "hosted_consent_engine",
+        ),
         contains_check(
             root.join("crates/goblins-os-launcher/src/main.rs"),
             "launcher-posts-visual-summary",
@@ -15078,7 +16293,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-launcher/src/main.rs"),
             "launcher-screenshot-copy-os-owned",
-            "Capture the screen, then ask with local-only visual context",
+            "Capture locally, then review the exact visual context before asking",
         ),
         absent_check(
             root.join("crates/goblins-os-launcher/src/main.rs"),
@@ -16173,6 +17388,21 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "run_voice_blocking",
         ),
         contains_check(
+            root.join("crates/goblins-os-core/src/voice.rs"),
+            "core-voice-hosted-review-retains-one-local-transcript",
+            "let transcript = run_dictate()",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-voice-has-no-client-approval-dialog",
+            "voice_confirmation_review",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-shell/src/main.rs"),
+            "shell-voice-hosted-review-does-not-trust-client-engine",
+            "hosted_consent_engine",
+        ),
+        contains_check(
             root.join("crates/goblins-os-core/src/voice_control.rs"),
             "core-voice-control-uses-exclusive-limiter",
             "run_voice_blocking",
@@ -16215,7 +17445,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-session-bridge/src/main.rs"),
             "session-bridge-voice-authenticates-core-peer",
-            "voice operations require the authenticated core service peer.",
+            "This operation requires the authenticated core service peer.",
         ),
         contains_check(
             root.join("crates/goblins-os-session-bridge/src/main.rs"),
@@ -16453,6 +17683,71 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-accessibility-accommodation-rows",
             "Typing assistance",
+        ),
+        contains_check(
+            root.join("os/glib-schemas/org.goblins.os.a11y.visual.gschema.xml"),
+            "reduced-transparency-schema-is-goblins-owned",
+            "org.goblins.os.a11y.visual",
+        ),
+        contains_check(
+            root.join("os/glib-schemas/org.goblins.os.a11y.visual.gschema.xml"),
+            "reduced-transparency-schema-defaults-off",
+            "<key name=\"reduce-transparency\" type=\"b\">\n      <default>false</default>",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-allowlists-reduced-transparency-key",
+            "const GOBLINS_VISUAL_A11Y_KEYS: &[&str] = &[\"reduce-transparency\"]",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "session-bridge-rejects-other-visual-accessibility-keys",
+            "\"blur-radius\".to_string()",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/accessibility.rs"),
+            "core-reports-reduced-transparency-status",
+            "reduce_transparency: Option<bool>",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/accessibility.rs"),
+            "core-writes-reduced-transparency-through-accessibility-route",
+            "AccessibilityPreferenceTarget::ReduceTransparency",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-exposes-reduced-transparency-control",
+            "\"reduce-transparency\",\n            \"Reduce transparency\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-reduced-transparency-has-state-copy",
+            "Goblins OS panels use solid, non-blurred surfaces.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-ui/src/lib.rs"),
+            "shared-backdrop-watches-reduced-transparency-live",
+            "connect_changed(Some(REDUCE_TRANSPARENCY_KEY)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-ui/src/lib.rs"),
+            "shared-backdrop-skips-blur-in-opaque-mode",
+            "BackdropMaterialMode::Opaque => super::opaque_tint",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-launcher/src/main.rs"),
+            "launcher-uses-shared-accessible-material-backdrop",
+            "goblins_os_ui::VibrancyBackdrop::new",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-control-center/src/main.rs"),
+            "control-center-uses-shared-accessible-material-backdrop",
+            "goblins_os_ui::VibrancyBackdrop::new",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-login/src/main.rs"),
+            "login-uses-shared-accessible-material-backdrop",
+            "goblins_os_ui::VibrancyBackdrop::new",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/accessibility.rs"),
@@ -21183,6 +22478,31 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/bootc/run-selftest.sh"),
+            "selftest-settings-context-validates-protected-status",
+            "protected_context_status_is_valid \"$settings_ai_code\"",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "selftest-system-context-validates-protected-status",
+            "protected_context_status_is_valid \"$system_status_ai_code\"",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "selftest-selected-text-validates-protected-status",
+            "protected_context_status_is_valid \"$selected_text_ai_code\"",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "selftest-writing-context-validates-protected-status",
+            "protected_context_status_is_valid \"$writing_ai_code\"",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
+            "selftest-screen-context-validates-protected-status",
+            "protected_context_status_is_valid \"$screen_ai_code\"",
+        ),
+        contains_check(
+            root.join("os/bootc/run-selftest.sh"),
             "selftest-firewall-status-endpoint",
             "/v1/firewall/status",
         ),
@@ -21572,20 +22892,22 @@ mod tests {
         desktop_field, first_executable_initialization, image_ref_is_digest_pinned,
         image_ref_is_valid, imports_shared_core_initializer, install_files,
         is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
-        ordered_contains_check, permission_inventory, reviewed_github_action_pins_check,
-        rg_secret_scan_hit, sha256_path, should_skip_secret_scan_path,
-        source_manifest_classifies_top_level, stable_id, tmpfiles_capability_entries,
-        verify_installer_branding_tool_provenance, write_release_evidence, CheckState,
-        ForbiddenClientTokenVisitor, APPLICATIONS, AUTOSTART, BINARIES,
-        CORE_SERVICE_READ_WRITE_PATHS, DCONF_FILES, DEPRECATED_GITHUB_ACTION_PINS,
-        GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS,
-        NAUTILUS_SCRIPTS, POLISH_INTERACTION_PROOF, POLISH_INTERACTION_SCREENSHOTS,
-        REVIEWED_GITHUB_ACTION_PINS, SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS,
-        SYSTEMD_SYSTEM_DROPINS, SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
+        ordered_contains_check, permission_inventory, release_evidence_manifest,
+        reviewed_github_action_pins_check, rg_secret_scan_hit, sha256_path,
+        should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
+        tmpfiles_capability_entries, verify_installer_branding_tool_provenance,
+        write_release_evidence, CheckState, ForbiddenClientTokenVisitor, ReleaseEvidenceDigests,
+        APPLICATIONS, AUTOSTART, BINARIES, CORE_SERVICE_READ_WRITE_PATHS, DCONF_FILES,
+        DEPRECATED_GITHUB_ACTION_PINS, GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES,
+        ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS, POLISH_INTERACTION_PROOF,
+        POLISH_INTERACTION_SCREENSHOTS, REVIEWED_GITHUB_ACTION_PINS,
+        SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS,
+        SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
     };
     use std::collections::HashSet;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
     use syn::visit::Visit;
 
     #[test]
@@ -21896,9 +23218,6 @@ paths = [
             ".claude/worktrees/example"
         )));
         assert!(should_skip_secret_scan_path(Path::new(".ci-target")));
-        assert!(should_skip_secret_scan_path(Path::new(
-            ".ci-target-amd64/debug"
-        )));
         assert!(should_skip_secret_scan_path(Path::new("target/debug")));
         assert!(!should_skip_secret_scan_path(Path::new(
             "os/etc/goblins-os/openai-secrets.env"
@@ -21948,21 +23267,18 @@ paths = [
         let containerfile_sha = sha256_path(&containerfile_path).unwrap();
         let provenance = format!(
             concat!(
-                "schema = 1\n",
+                "schema = 2\n",
                 "image_ref = \"{}\"\n",
                 "source_commit = \"{}\"\n",
                 "workflow_run = \"https://github.com/Joe-Simo/goblins-os/actions/runs/123\"\n",
                 "workflow_run_attempt = 1\n",
+                "anonymous_pull_verified = true\n",
                 "base_image = \"{}\"\n",
                 "containerfile_sha256 = \"{}\"\n",
                 "public_pull_verified_on = \"2026-07-19\"\n",
                 "inventory_path_in_image = \"/usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv\"\n",
-                "[architectures.x86_64]\n",
-                "native_image_ref = \"{}@sha256:{}\"\n",
-                "rpm_inventory_sha256 = \"{}\"\n",
-                "rpm_package_count = 246\n",
                 "[architectures.aarch64]\n",
-                "native_image_ref = \"{}@sha256:{}\"\n",
+                "native_image_ref = \"{}\"\n",
                 "rpm_inventory_sha256 = \"{}\"\n",
                 "rpm_package_count = 245\n"
             ),
@@ -21970,11 +23286,7 @@ paths = [
             "3".repeat(40),
             base_image,
             containerfile_sha,
-            repository,
-            "4".repeat(64),
-            "5".repeat(64),
-            repository,
-            "6".repeat(64),
+            image_ref,
             "7".repeat(64),
         );
         write_fixture("os/release/installer-branding-tool.toml", &provenance);
@@ -21988,13 +23300,14 @@ paths = [
             ".github/workflows/branding-tool-image.yml",
             concat!(
                 "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs ",
-                "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done\n"
+                "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done\n",
+                "docker logout ghcr.io\n",
+                "anonymous_pull_verified: true\n"
             ),
         );
         for workflow in [
             ".github/workflows/build.yml",
             ".github/workflows/candidate-artifacts.yml",
-            ".github/workflows/hardware-gate-capture.yml",
             ".github/workflows/aarch64-verification-iso.yml",
         ] {
             write_fixture(
@@ -22003,7 +23316,70 @@ paths = [
             );
         }
 
-        assert!(verify_installer_branding_tool_provenance(&root).is_ok());
+        let v2_detail = verify_installer_branding_tool_provenance(&root).unwrap();
+        assert!(v2_detail.contains("schema 2 exact-attempt provenance is promotion eligible"));
+
+        let provenance_v1 = provenance
+            .replacen("schema = 2", "schema = 1", 1)
+            .replace("workflow_run_attempt = 1\n", "")
+            .replace("anonymous_pull_verified = true\n", "");
+        write_fixture("os/release/installer-branding-tool.toml", &provenance_v1);
+        let v1_detail = verify_installer_branding_tool_provenance(&root).unwrap();
+        assert!(v1_detail
+            .contains("schema 1 provenance is source/bootstrap-valid but not promotion eligible"));
+
+        write_fixture(
+            "os/release/installer-branding-tool.toml",
+            &provenance.replacen("schema = 2", "schema = 1", 1),
+        );
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("schema 1 must not claim exact-attempt or anonymous-pull verification"));
+
+        write_fixture(
+            "os/release/installer-branding-tool.toml",
+            &provenance.replace(
+                "anonymous_pull_verified = true",
+                "anonymous_pull_verified = false",
+            ),
+        );
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("must record anonymous_pull_verified = true"));
+
+        write_fixture(
+            "os/release/installer-branding-tool.toml",
+            &provenance.replace("workflow_run_attempt = 1", "workflow_run_attempt = 0"),
+        );
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("schema 2 workflow_run_attempt must be positive"));
+
+        let other_image_ref = format!("{repository}@sha256:{}", "8".repeat(64));
+        write_fixture(
+            "os/release/installer-branding-tool.toml",
+            &provenance.replacen(
+                &format!("native_image_ref = \"{image_ref}\""),
+                &format!("native_image_ref = \"{other_image_ref}\""),
+                1,
+            ),
+        );
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("image_ref must equal the reviewed native aarch64 digest"));
+
+        write_fixture(
+            "os/release/installer-branding-tool.toml",
+            &format!(
+                "{provenance}\n[architectures.x86_64]\nnative_image_ref = \"{other_image_ref}\"\nrpm_inventory_sha256 = \"{}\"\nrpm_package_count = 1\n",
+                "9".repeat(64),
+            ),
+        );
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("must contain exactly aarch64"));
+
+        write_fixture("os/release/installer-branding-tool.toml", &provenance);
 
         write_fixture(
             ".github/workflows/branding-tool-image.yml",
@@ -22142,10 +23518,12 @@ checksum = "abc123"
         assert!(manifest_text.contains(&format!("\"candidate_commit\": \"{candidate_commit}\"")));
         assert!(manifest_text.contains(&format!("\"image_ref\": \"{image_ref}\"")));
         assert!(manifest_text.contains("\"image_digest_pinned\": true"));
-        assert!(manifest_text.contains("\"schema\": \"goblins-os-release-evidence-v4\""));
+        assert!(manifest_text.contains("\"schema\": \"goblins-os-release-evidence-v5\""));
         assert!(manifest_text.contains("\"cargo_package_count\": 1"));
         let cargo_sha = sha256_path(&output.join("cargo-lock-packages.tsv")).unwrap();
         assert!(manifest_text.contains(&format!("\"cargo_packages_sha256\": \"{cargo_sha}\"")));
+        let rpm_command_sha = sha256_path(&output.join("rpm-packages.command")).unwrap();
+        assert!(manifest_text.contains(&format!("\"rpm_command_sha256\": \"{rpm_command_sha}\"")));
         let has_rpm = output.join("rpm-packages.tsv").is_file();
         let has_rpm_blocker = output.join("rpm-packages.not-generated.txt").is_file();
         assert_ne!(has_rpm, has_rpm_blocker);
@@ -22172,7 +23550,7 @@ checksum = "abc123"
             std::process::id()
         ));
         let source = root.join("source");
-        let output = root.join("sbom/x86_64");
+        let output = root.join("sbom/aarch64");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&output).unwrap();
@@ -22189,7 +23567,7 @@ checksum = "abc123"
 
         let result = write_release_evidence(
             &source,
-            "x86_64",
+            "aarch64",
             "0123456789abcdef0123456789abcdef01234567",
             "ghcr.io/joe-simo/goblins-os@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             &output,
@@ -22200,6 +23578,100 @@ checksum = "abc123"
         }
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn release_evidence_shell_validator_binds_current_command_and_scopes_legacy_v4() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-release-evidence-shell-validator-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let cargo_path = root.join("cargo-lock-packages.tsv");
+        let command_path = root.join("rpm-packages.command");
+        let rpm_path = root.join("rpm-packages.tsv");
+        fs::write(&cargo_path, "name\tversion\nalpha\t1\n").unwrap();
+        fs::write(&command_path, "#!/usr/bin/env sh\nexit 0\n").unwrap();
+        fs::write(&rpm_path, "name\tarch\nalpha\taarch64\n").unwrap();
+        let manifest = release_evidence_manifest(
+            "aarch64",
+            "0123456789abcdef0123456789abcdef01234567",
+            "ghcr.io/joe-simo/goblins-os@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            1,
+            ReleaseEvidenceDigests {
+                cargo_packages: &sha256_path(&cargo_path).unwrap(),
+                rpm_packages: Some(&sha256_path(&rpm_path).unwrap()),
+                rpm_command: &sha256_path(&command_path).unwrap(),
+            },
+            "generated from rpm database",
+        );
+        fs::write(root.join("release-evidence-manifest.json"), &manifest).unwrap();
+
+        let helper = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../os/hardware-gate/release-evidence.sh");
+        let validate = |function: &str| {
+            Command::new("bash")
+                .args([
+                    "-c",
+                    r#". "$1"; "$2" "$3""#,
+                    "release-evidence-test",
+                    helper.to_str().unwrap(),
+                    function,
+                    root.to_str().unwrap(),
+                ])
+                .status()
+                .unwrap()
+                .success()
+        };
+
+        assert!(validate("goblins_os_release_evidence_hashes_match"));
+        fs::write(&command_path, "#!/usr/bin/env sh\nexit 1\n").unwrap();
+        assert!(!validate("goblins_os_release_evidence_hashes_match"));
+
+        fs::write(&command_path, "#!/usr/bin/env sh\nexit 0\n").unwrap();
+        let legacy_manifest = manifest
+            .replace(
+                "goblins-os-release-evidence-v5",
+                "goblins-os-release-evidence-v4",
+            )
+            .lines()
+            .filter(|line| !line.contains("\"rpm_command_sha256\""))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        fs::write(root.join("release-evidence-manifest.json"), legacy_manifest).unwrap();
+        assert!(!validate("goblins_os_release_evidence_hashes_match"));
+        assert!(validate(
+            "goblins_os_historical_release_evidence_hashes_match"
+        ));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn release_evidence_rejects_non_arm_architecture() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-release-evidence-unsupported-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        for arch in ["x86_64", "amd64"] {
+            let output = root.join(format!("sbom/{arch}"));
+            let result = write_release_evidence(
+                &root,
+                arch,
+                "0123456789abcdef0123456789abcdef01234567",
+                "ghcr.io/joe-simo/goblins-os@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                &output,
+            );
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains(&format!("unsupported architecture {arch}")));
+            assert!(!output.exists());
+        }
     }
 
     #[test]
@@ -22292,7 +23764,7 @@ checksum = "abc123"
             .copied()
             .collect::<HashSet<_>>();
 
-        assert_eq!(POLISH_INTERACTION_SCREENSHOTS.len(), 15);
+        assert_eq!(POLISH_INTERACTION_SCREENSHOTS.len(), 17);
         assert_eq!(unique.len(), POLISH_INTERACTION_SCREENSHOTS.len());
         for screenshot in [
             "124-settings-models-advanced-collapsed.png",
@@ -22309,6 +23781,8 @@ checksum = "abc123"
             "135-install-progress-reduced-motion-b.png",
             "136-settings-models-advanced-expanded-dark.png",
             "137-studio-engine-menu-dark.png",
+            "138a-launcher-standard-material.png",
+            "138b-launcher-reduced-transparency.png",
             "138-first-boot-codex-offline.png",
         ] {
             assert!(
@@ -22373,6 +23847,7 @@ checksum = "abc123"
         fs::create_dir_all(root.join("crates/goblins-os-design/src")).unwrap();
         fs::create_dir_all(root.join("crates/goblins-os-ui/src")).unwrap();
         fs::create_dir_all(root.join("os/gnome-shell-extensions/goblins-wm@goblins.os")).unwrap();
+        fs::create_dir_all(root.join("os/themes/GoblinsOS/gnome-shell")).unwrap();
         for app in NATIVE_DESIGN_APPS {
             fs::create_dir_all(root.join(format!("crates/{app}/src"))).unwrap();
             fs::write(
@@ -22448,6 +23923,11 @@ checksum = "abc123"
                 "const body = new St.BoxLayout({style_class: 'goblins-wm-body', y_expand: true});\n",
                 "const spaces = new St.BoxLayout({y_align: Clutter.ActorAlign.END});\n",
             ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("os/themes/GoblinsOS/gnome-shell/gnome-shell.css"),
+            ".screen-recording-indicator { background-color: #ff383c; }\n",
         )
         .unwrap();
 

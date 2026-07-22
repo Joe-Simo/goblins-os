@@ -1,7 +1,8 @@
 /* The Goblins mark + wordmark at the left of the menu bar. The panel is light
    frosted glass in light mode and dark glass in dark mode (the gnome-shell-light.css
    overlay re-colors it), so the mark and the glyphs below must be scheme-adaptive —
-   symbolic + per-scheme color — not fixed white. Spaced like a macOS title. */
+   symbolic + per-scheme color — not fixed white. Spacing follows the compact
+   Goblins chrome rhythm. */
 .goblins-menubar {
   spacing: 7px;
   padding: 0 4px;

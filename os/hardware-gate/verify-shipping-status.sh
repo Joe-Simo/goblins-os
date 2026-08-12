@@ -40,7 +40,6 @@ SCREENSHOT_RUN_DIR="${SCREENSHOT_RUN_DIR:-${SCREENSHOT_DIR:-}}"
 FAIL_COUNT=0
 ARCHES=(aarch64)
 EXPECTED_BIB_IMAGE="quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b"
-EXPECTED_INSTALLER_BRANDING_IMAGE="$(awk -F'"' '/^image_ref = / { print $2; exit }' os/release/installer-branding-tool.toml)"
 CORE_SERVICE_READ_WRITE_PATHS="/run/goblins-os-core /var/lib/goblins-os/installer /var/lib/goblins-os/session /var/lib/goblins-os/policy /var/lib/goblins-os/ai /var/lib/goblins-os/models /var/lib/goblins-os/voice/work /var/lib/goblins-os/secrets/openai /var/lib/goblins-os/apps /var/lib/goblins-os/codex"
 SELECTED_CANDIDATE_COMMIT="${GOBLINS_OS_CANDIDATE_COMMIT:-${GITHUB_SHA:-}}"
 CANDIDATE_SELECTION_VALID=1
@@ -700,11 +699,38 @@ installer_local_ref_classifier_passes() {
 }
 
 source_secret_scan() {
-  local output="${TMPDIR:-/tmp}/goblins_os_secret_scan.$$"
-  : > "$output"
+  local output
+  local file_list
+  local candidate_file
+  local candidate_pattern
+  local rg_status=0
+  local batch=()
 
-  rg -n --hidden --no-ignore-vcs --no-ignore \
-    '^[[:space:]]*(export[[:space:]]+)?(OPENAI_API_KEY|AI_GATEWAY_API_KEY|OPENAI_ACCOUNT_CLIENT_SECRET)[[:space:]]*=[[:space:]]*([^<[:space:]#][^#]*)' \
+  if ! goblins_os_secret_scan_hasher_available; then
+    printf '%s\n' "Source secret scan requires sha256sum or shasum." >&2
+    return 2
+  fi
+
+  output="$(mktemp "${TMPDIR:-/tmp}/goblins-os-source-secret-scan.XXXXXX")" || return 2
+  file_list="$(mktemp "${TMPDIR:-/tmp}/goblins-os-source-secret-files.XXXXXX")" || {
+    rm -f "$output"
+    return 2
+  }
+
+  candidate_pattern='([A-Z][A-Z0-9_]*_(API_KEY|ACCESS_TOKEN|AUTH_TOKEN|CLIENT_SECRET|PRIVATE_KEY|SECRET_KEY|PASSWORD|PASSWD|SECRET|TOKEN)|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)"?[[:space:]]*[:,=]|(^|[^A-Za-z0-9_])(github_pat_[A-Za-z0-9_]{40,}|gh[pousr]_[A-Za-z0-9]{36,})|(^|[^A-Za-z0-9_-])(sk-proj-[A-Za-z0-9_-]{24,}|sk-[A-Za-z0-9_-]{29,}|AIza[A-Za-z0-9_-]{35}|npm_[A-Za-z0-9]{36}|glpat-[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{20,}|sk_live_[A-Za-z0-9]{16,}|ya29[.][A-Za-z0-9_-]{20,}|SG[.][A-Za-z0-9_-]{16,}[.][A-Za-z0-9_-]{16,})|(^|[^A-Z0-9])(AKIA|ASIA)[A-Z0-9]{16}($|[^A-Z0-9])'
+  if ! printf '%s\n' 'const GITHUB_TOKEN: &str = "<source-discovery-fixture>";' \
+      | rg -q "$candidate_pattern" \
+    || ! printf '%s\n' 'GH_TOKEN: ${{ github.token }}' \
+      | rg -q "$candidate_pattern" \
+    || ! printf '%s\n' 'command.env("ACME_CLOUD_API_KEY", "<source-discovery-fixture>");' \
+      | rg -q "$candidate_pattern"; then
+    printf '%s\n' "Source secret candidate discovery self-test failed." >&2
+    rm -f "$output" "$file_list"
+    return 2
+  fi
+
+  rg -l --hidden --no-ignore-vcs --no-ignore -I --max-filesize 2048K \
+    "$candidate_pattern" \
     . \
     --glob '!.git/**' \
     --glob '!.claude/**' \
@@ -719,35 +745,39 @@ source_secret_scan() {
     --glob '!os/screenshots/**' \
     --glob '!os/iso/output*/**' \
     --glob '!os/brand/*.png' \
-    >> "$output" || true
+    > "$file_list" || rg_status=$?
 
-  rg -n --hidden --no-ignore-vcs --no-ignore \
-    '(^|[^A-Za-z0-9_-])(sk-proj-[A-Za-z0-9_-]{24,}|sk-[A-Za-z0-9_-]{29,})' \
-    . \
-    --glob '!.git/**' \
-    --glob '!.claude/**' \
-    --glob '!**/node_modules/**' \
-    --glob '!**/.next/**' \
-    --glob '!**/.vercel/**' \
-    --glob '!target/**' \
-    --glob '!.ci-target/**' \
-    --glob '!artifacts/**' \
-    --glob '!libpod/**' \
-    --glob '!os/signoff-proofs/**' \
-    --glob '!os/screenshots/**' \
-    --glob '!os/iso/output*/**' \
-    --glob '!os/brand/*.png' \
-    | rg -vi 'placeholder|example|secretvalue|abcdefghijklmnopqrstuvwxyz|server-side-only-gateway-key' \
-    >> "$output" || true
+  if [ "$rg_status" -gt 1 ]; then
+    printf '%s\n' "Source secret candidate discovery failed." >&2
+    rm -f "$output" "$file_list"
+    return 2
+  fi
+
+  sort -u "$file_list" -o "$file_list"
+  while IFS= read -r candidate_file; do
+    [ -f "$candidate_file" ] || continue
+    batch+=("$candidate_file")
+    if [ "${#batch[@]}" -ge 128 ]; then
+      if ! goblins_os_scan_source_secret_batch "$output" "${batch[@]}"; then
+        rm -f "$output" "$file_list"
+        return 2
+      fi
+      batch=()
+    fi
+  done < "$file_list"
+  if ! goblins_os_scan_source_secret_batch "$output" "${batch[@]}"; then
+    rm -f "$output" "$file_list"
+    return 2
+  fi
 
   if [ -s "$output" ]; then
-    echo "Possible live secrets found:"
+    printf '%s\n' "Possible live secrets found in source; matched content is suppressed:"
     sed -n '1,20p' "$output"
-    rm -f "$output"
+    rm -f "$output" "$file_list"
     return 1
   fi
 
-  rm -f "$output"
+  rm -f "$output" "$file_list"
   return 0
 }
 
@@ -839,21 +869,27 @@ github_actions_run_is_successful() {
   local expected_commit="$2"
   local expected_attempt="$3"
   local expected_workflow_path="$4"
+  local expected_repository="${5:-Joe-Simo/goblins-os}"
   local run_id
 
-  [[ "$run_url" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || return 1
+  case "$expected_repository" in
+    Joe-Simo/goblins-os|Joe-Simo/goblins-os-publisher) ;;
+    *) return 1 ;;
+  esac
+  [ "$run_url" = "https://github.com/$expected_repository/actions/runs/${run_url##*/}" ] || return 1
+  [[ "${run_url##*/}" =~ ^[1-9][0-9]*$ ]] || return 1
   [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
   [[ "$expected_attempt" =~ ^[1-9][0-9]*$ ]] || return 1
   run_id="${run_url##*/}"
-  python3 - "$run_id" "$run_url" "$expected_commit" "$expected_attempt" "$expected_workflow_path" <<'PY'
+  python3 - "$run_id" "$run_url" "$expected_commit" "$expected_attempt" "$expected_workflow_path" "$expected_repository" <<'PY'
 import json
 import os
 import sys
 import urllib.request
 
-run_id, run_url, expected_commit, expected_attempt, expected_workflow_paths = sys.argv[1:6]
+run_id, run_url, expected_commit, expected_attempt, expected_workflow_paths, expected_repository = sys.argv[1:7]
 request = urllib.request.Request(
-    f"https://api.github.com/repos/Joe-Simo/goblins-os/actions/runs/{run_id}/attempts/{expected_attempt}",
+    f"https://api.github.com/repos/{expected_repository}/actions/runs/{run_id}/attempts/{expected_attempt}",
     headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "goblins-os-release-verifier",
@@ -877,7 +913,7 @@ expected = {
     "run_attempt": int(expected_attempt),
     "event": "workflow_dispatch",
 }
-if run.get("repository", {}).get("full_name") != "Joe-Simo/goblins-os":
+if run.get("repository", {}).get("full_name") != expected_repository:
     raise SystemExit(1)
 if run.get("path") not in expected_workflow_paths.split(","):
     raise SystemExit(1)
@@ -972,68 +1008,552 @@ PY
   return "$result"
 }
 
-installer_branding_tool_artifact_matches() {
-  local run_url="$1"
-  local source_commit="$2"
-  local run_id scratch_dir
-
-  command -v gh >/dev/null 2>&1 || return 1
-  [[ "$run_url" =~ ^https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+$ ]] || return 1
-  [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
-  run_id="${run_url##*/}"
-  scratch_dir="$(mktemp -d "${TMPDIR:-/tmp}/goblins-branding-artifact.XXXXXX")" || return 1
-  if ! gh run download "$run_id" \
-    --repo Joe-Simo/goblins-os \
-    --name "goblins-os-branding-tool-$source_commit-aarch64" \
-    --dir "$scratch_dir" >/dev/null 2>&1; then
-    rm -rf "$scratch_dir"
-    return 1
-  fi
-  if ! python3 - "$ROOT" "$scratch_dir" <<'PY'
-import hashlib
-import json
+installer_branding_tool_source_handoff_contract_passes() {
+  python3 - "$ROOT" <<'PY'
 from pathlib import Path
+import re
 import sys
 import tomllib
 
-root, artifact_root = map(Path, sys.argv[1:3])
-record = tomllib.loads((root / "os/release/installer-branding-tool.toml").read_text(encoding="utf-8"))
+root = Path(sys.argv[1])
+record = tomllib.loads(
+    (root / "os/release/installer-branding-tool.toml").read_text(encoding="utf-8")
+)
+if record.get("schema") != 1:
+    raise SystemExit(1)
+if "anonymous_pull_verified" in record or "workflow_run_attempt" in record:
+    raise SystemExit(1)
 
-def only_file(name):
-    matches = list(artifact_root.rglob(name))
-    if len(matches) != 1 or not matches[0].is_file() or matches[0].is_symlink():
+builder = (root / "os/iso/build-iso.sh").read_text(encoding="utf-8")
+if "schema-1-bootstrap-diagnostic" not in builder:
+    raise SystemExit(1)
+if "GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE" not in builder:
+    raise SystemExit(1)
+
+workflow = (root / ".github/workflows/branding-tool-image.yml").read_text(encoding="utf-8")
+required = (
+    'schema: "goblins-os-installer-branding-tool-handoff-v1"',
+    'schema: "goblins-os-actions-artifact-envelope-v1"',
+    'payload_schema: "goblins-os-installer-branding-tool-handoff-v1"',
+    'split -n 4 -d -a 2',
+    'source_repository_publish_authority: false',
+    'non_promotional: true',
+    'repository: "Joe-Simo/goblins-os-publisher"',
+    'copy_mode: "preserve-digests"',
+    'platforms: linux/arm64',
+    'select(.platform.architecture == "amd64")',
+    'artifacts/manifests/publisher-handoff/branding-tool/aarch64/handoff.json',
+    'artifacts/manifests/publisher-handoff/branding-tool/aarch64/publisher-envelope.json',
+    'artifacts/manifests/publisher-handoff/branding-tool/aarch64/SHA256SUMS',
+    'artifacts/manifests/publisher-handoff/branding-tool/aarch64/rpm-packages.tsv',
+)
+if any(item not in workflow for item in required):
+    raise SystemExit(1)
+steps = re.findall(
+    r"^      - name: Upload branding-tool OCI payload part (00|01|02|03)$",
+    workflow,
+    flags=re.MULTILINE,
+)
+if sorted(steps) != ["00", "01", "02", "03"]:
+    raise SystemExit(1)
+for suffix in ("00", "01", "02", "03"):
+    upload_name = f"goblins-os-branding-tool-oci-${{{{ inputs.candidate_commit }}}}-aarch64-attempt-${{{{ github.run_attempt }}}}-part-{suffix}"
+    envelope_name = f"goblins-os-branding-tool-oci-$CANDIDATE_COMMIT-aarch64-attempt-$GITHUB_RUN_ATTEMPT-part-{suffix}"
+    if workflow.count(upload_name) != 1 or workflow.count(envelope_name) != 1:
         raise SystemExit(1)
+if workflow.count("actions/upload-artifact@") != 5:
+    raise SystemExit(1)
+if workflow.count("- name: Upload publisher metadata and RPM inventory") != 1:
+    raise SystemExit(1)
+if "goblins-os-branding-tool-${{ inputs.candidate_commit }}-aarch64" in workflow:
+    raise SystemExit(1)
+if re.search(
+    r"packages:\s*write|contents:\s*write|docker\s+login|docker\s+push|push:\s*true|gh\s+release|git\s+push",
+    workflow,
+):
+    raise SystemExit(1)
+PY
+}
+
+installer_branding_tool_publisher_gate_contract_passes() {
+  python3 - "$ROOT" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+gate = (root / "os/hardware-gate/verify-shipping-status.sh").read_text(encoding="utf-8")
+builder = (root / "os/iso/build-iso.sh").read_text(encoding="utf-8")
+workflow = (root / ".github/workflows/aarch64-verification-iso.yml").read_text(encoding="utf-8")
+contract = (root / "os/release/PUBLISHER-BOUNDARY.md").read_text(encoding="utf-8")
+
+required_gate = (
+    '"goblins-os-installer-branding-tool-publisher-evidence-v1"',
+    '"goblins-os-iso-build-manifest-v2"',
+    '"Joe-Simo/goblins-os-publisher"',
+    '".github/workflows/publish-branding-tool-aarch64.yml"',
+    'actions/artifacts/$publisher_artifact_id/zip',
+    'publisher evidence artifact digest',
+    'archive.read(member) != evidence_path.read_bytes()',
+)
+required_builder = (
+    '"goblins-os-installer-branding-tool-publisher-evidence-v1"',
+    '"goblins-os-iso-build-manifest-v2"',
+    '"installer_branding_publisher_evidence_sha256"',
+    '"installer_branding_publisher_workflow_run"',
+)
+required_workflow = (
+    'branding_publisher_evidence_base64:',
+    'branding_publisher_evidence_sha256:',
+    'test "$(wc -c < "$evidence")" -le 32768',
+)
+required_contract = (
+    "cannot truthfully contain its own post-upload digest",
+    "verifies the downloaded ZIP against its API size and",
+)
+if (
+    any(marker not in gate for marker in required_gate)
+    or any(marker not in builder for marker in required_builder)
+    or any(marker not in workflow for marker in required_workflow)
+    or any(marker not in contract for marker in required_contract)
+):
+    raise SystemExit(1)
+if (
+    ('publisher["' + 'evidence_artifact"]') in gate
+    or '"evidence_artifact"' in builder
+    or workflow.count("GOBLINS_OS_ISO_CONFIG=os/iso/verify-config.toml") != 1
+):
+    raise SystemExit(1)
+PY
+}
+
+installer_branding_tool_publisher_evidence_passes() {
+  local evidence="$1"
+  local manifest="$2"
+  local evidence_size fields source_commit source_run source_attempt
+  local publisher_commit publisher_run publisher_attempt
+  local source_run_id publisher_run_id scratch_dir source_metadata_name
+  local publisher_evidence_name source_inventory publisher_inventory
+  local publisher_artifact_fields publisher_artifact_id publisher_artifact_digest
+  local publisher_artifact_size publisher_artifact_zip
+
+  [ -s "$evidence" ] && [ ! -L "$evidence" ] && [ -s "$manifest" ] || return 1
+  evidence_size="$(wc -c < "$evidence" | tr -d '[:space:]')"
+  if [[ ! "$evidence_size" =~ ^[1-9][0-9]*$ ]] || [ "$evidence_size" -gt 32768 ]; then
+    return 1
+  fi
+  fields="$(python3 - "$ROOT" "$evidence" "$manifest" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+
+root, evidence_path, manifest_path = map(Path, sys.argv[1:4])
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+def load(path):
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
+
+def exact_keys(value, expected):
+    if not isinstance(value, dict) or set(value) != set(expected):
+        raise ValueError("JSON key set is not exact")
+
+def positive(value):
+    return type(value) is int and value > 0
+
+try:
+    evidence = load(evidence_path)
+    manifest = load(manifest_path)
+    exact_keys(evidence, {
+        "schema", "product", "architecture", "oci_architecture",
+        "source_repository", "source_workflow", "source_handoff", "publisher",
+        "published_image", "verification", "source_repository_publish_authority",
+        "non_promotional",
+    })
+    if evidence.get("schema") != "goblins-os-installer-branding-tool-publisher-evidence-v1":
+        raise ValueError("evidence schema")
+    if evidence.get("product") != "Goblins OS installer branding tool":
+        raise ValueError("evidence product")
+    if evidence.get("architecture") != "aarch64" or evidence.get("oci_architecture") != "arm64":
+        raise ValueError("evidence architecture")
+    if evidence.get("source_repository") != "https://github.com/Joe-Simo/goblins-os":
+        raise ValueError("source repository")
+    if evidence.get("source_repository_publish_authority") is not False or evidence.get("non_promotional") is not True:
+        raise ValueError("source authority")
+
+    source = evidence["source_workflow"]
+    exact_keys(source, {
+        "path", "run", "run_id", "run_attempt", "source_commit",
+        "metadata_artifact", "payload_artifacts",
+    })
+    commit = source["source_commit"]
+    if re.fullmatch(r"[0-9a-f]{40}", commit or "") is None:
+        raise ValueError("source commit")
+    if not positive(source["run_id"]) or not positive(source["run_attempt"]):
+        raise ValueError("source run")
+    if source["path"] != ".github/workflows/branding-tool-image.yml":
+        raise ValueError("source path")
+    if source["run"] != f"https://github.com/Joe-Simo/goblins-os/actions/runs/{source['run_id']}":
+        raise ValueError("source run URL")
+
+    artifact_keys = {"name", "id", "digest", "size_in_bytes"}
+    metadata = source["metadata_artifact"]
+    exact_keys(metadata, artifact_keys)
+    source_attempt = source["run_attempt"]
+    if metadata["name"] != f"goblins-os-branding-tool-oci-{commit}-aarch64-attempt-{source_attempt}-metadata":
+        raise ValueError("metadata artifact")
+    artifacts = source["payload_artifacts"]
+    if not isinstance(artifacts, list) or len(artifacts) != 4:
+        raise ValueError("payload artifact count")
+    suffixes = set()
+    for artifact in artifacts:
+        exact_keys(artifact, artifact_keys | {"suffix"})
+        suffix = artifact["suffix"]
+        if suffix not in {"00", "01", "02", "03"} or suffix in suffixes:
+            raise ValueError("payload suffix")
+        suffixes.add(suffix)
+        if artifact["name"] != f"goblins-os-branding-tool-oci-{commit}-aarch64-attempt-{source_attempt}-part-{suffix}":
+            raise ValueError("payload name")
+    for artifact in [metadata, *artifacts]:
+        if not positive(artifact["id"]) or not positive(artifact["size_in_bytes"]):
+            raise ValueError("artifact numeric identity")
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["digest"] or "") is None:
+            raise ValueError("artifact digest")
+
+    handoff = evidence["source_handoff"]
+    exact_keys(handoff, {
+        "schema", "envelope_schema", "handoff_sha256", "envelope_sha256",
+        "checksums_sha256", "rpm_inventory_sha256", "rpm_package_count",
+        "oci_archive_sha256", "oci_archive_size_bytes", "oci_image_digest",
+        "intended_immutable_image_ref", "base_image", "containerfile_sha256",
+    })
+    if handoff["schema"] != "goblins-os-installer-branding-tool-handoff-v1":
+        raise ValueError("handoff schema")
+    if handoff["envelope_schema"] != "goblins-os-actions-artifact-envelope-v1":
+        raise ValueError("envelope schema")
+    for key in (
+        "handoff_sha256", "envelope_sha256", "checksums_sha256",
+        "rpm_inventory_sha256", "oci_archive_sha256", "containerfile_sha256",
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", handoff.get(key, "")) is None:
+            raise ValueError("handoff hash")
+    if not positive(handoff["rpm_package_count"]) or not positive(handoff["oci_archive_size_bytes"]):
+        raise ValueError("handoff numeric identity")
+    if handoff["oci_archive_size_bytes"] > 34359738368:
+        raise ValueError("handoff archive bound")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", handoff["oci_image_digest"] or "") is None:
+        raise ValueError("OCI digest")
+    image_ref = handoff["intended_immutable_image_ref"]
+    if image_ref != f"ghcr.io/joe-simo/goblins-os-installer-branding-tool@{handoff['oci_image_digest']}":
+        raise ValueError("intended image ref")
+
+    publisher = evidence["publisher"]
+    exact_keys(publisher, {
+        "repository", "workflow_path", "workflow_commit", "run", "run_id",
+        "run_attempt", "environment", "native_runner",
+    })
+    if re.fullmatch(r"[0-9a-f]{40}", publisher["workflow_commit"] or "") is None:
+        raise ValueError("publisher commit")
+    if not positive(publisher["run_id"]) or not positive(publisher["run_attempt"]):
+        raise ValueError("publisher run")
+    if publisher["repository"] != "Joe-Simo/goblins-os-publisher":
+        raise ValueError("publisher repository")
+    if publisher["workflow_path"] != ".github/workflows/publish-branding-tool-aarch64.yml":
+        raise ValueError("publisher workflow")
+    if publisher["run"] != f"https://github.com/Joe-Simo/goblins-os-publisher/actions/runs/{publisher['run_id']}":
+        raise ValueError("publisher run URL")
+    if publisher["environment"] != "candidate" or publisher["native_runner"] != "aarch64":
+        raise ValueError("publisher environment")
+
+    published = evidence["published_image"]
+    exact_keys(published, {
+        "immutable_ref", "manifest_digest", "digest_preserved",
+        "public_readback_verified", "os", "architecture", "revision", "base_image",
+        "containerfile_sha256", "rpm_inventory_sha256", "rpm_package_count",
+    })
+    if published["immutable_ref"] != image_ref or published["manifest_digest"] != handoff["oci_image_digest"]:
+        raise ValueError("published image digest")
+    if published["digest_preserved"] is not True or published["public_readback_verified"] is not True:
+        raise ValueError("publisher read-back")
+    if published["os"] != "linux" or published["architecture"] != "arm64" or published["revision"] != commit:
+        raise ValueError("published image identity")
+    for key in ("base_image", "containerfile_sha256", "rpm_inventory_sha256", "rpm_package_count"):
+        if published[key] != handoff[key]:
+            raise ValueError("published image provenance")
+
+    verification = evidence["verification"]
+    exact_keys(verification, {
+        "source_run_authenticated", "metadata_artifact_digest_verified",
+        "payload_artifact_digests_verified", "ordered_parts_verified",
+        "oci_archive_verified", "required_tools_verified", "public_manifest_verified",
+    })
+    if any(value is not True for value in verification.values()):
+        raise ValueError("publisher verification")
+
+    if hashlib.sha256((root / "os/iso/branding-tool.Containerfile").read_bytes()).hexdigest() != handoff["containerfile_sha256"]:
+        raise ValueError("Containerfile hash")
+    evidence_sha = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    manifest_expected = {
+        "schema": "goblins-os-iso-build-manifest-v2",
+        "installer_branding_image": image_ref,
+        "installer_branding_ownership_helper_image": image_ref,
+        "installer_branding_provenance_kind": "protected-publisher-evidence-v1",
+        "installer_branding_publisher_evidence": "installer-branding-publisher-evidence.json",
+        "installer_branding_publisher_evidence_sha256": evidence_sha,
+        "installer_branding_source_commit": commit,
+        "installer_branding_source_workflow_run": source["run"],
+        "installer_branding_source_workflow_run_attempt": source["run_attempt"],
+        "installer_branding_publisher_workflow_commit": publisher["workflow_commit"],
+        "installer_branding_publisher_workflow_run": publisher["run"],
+        "installer_branding_publisher_workflow_run_attempt": publisher["run_attempt"],
+        "installer_branding_handoff_sha256": handoff["handoff_sha256"],
+        "installer_branding_envelope_sha256": handoff["envelope_sha256"],
+        "installer_branding_oci_archive_sha256": handoff["oci_archive_sha256"],
+    }
+    if any(manifest.get(key) != value for key, value in manifest_expected.items()):
+        raise ValueError("ISO manifest branding evidence binding")
+except (KeyError, TypeError, ValueError, OSError, UnicodeError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+print("\t".join((
+    commit,
+    source["run"],
+    str(source["run_attempt"]),
+    publisher["workflow_commit"],
+    publisher["run"],
+    str(publisher["run_attempt"]),
+    metadata["name"],
+    f"goblins-os-branding-tool-publisher-evidence-{commit}-aarch64",
+)))
+PY
+)" || return 1
+  IFS=$'\t' read -r \
+    source_commit source_run source_attempt publisher_commit publisher_run \
+    publisher_attempt source_metadata_name publisher_evidence_name <<< "$fields"
+
+  github_actions_run_is_successful \
+    "$source_run" "$source_commit" "$source_attempt" \
+    ".github/workflows/branding-tool-image.yml" \
+    "Joe-Simo/goblins-os" || return 1
+  github_actions_run_is_successful \
+    "$publisher_run" "$publisher_commit" "$publisher_attempt" \
+    ".github/workflows/publish-branding-tool-aarch64.yml" \
+    "Joe-Simo/goblins-os-publisher" || return 1
+
+  command -v gh >/dev/null 2>&1 || return 1
+  source_run_id="${source_run##*/}"
+  publisher_run_id="${publisher_run##*/}"
+  scratch_dir="$(mktemp -d "${TMPDIR:-/tmp}/goblins-branding-publisher-evidence.XXXXXX")" || return 1
+  source_inventory="$scratch_dir/source-artifacts.json"
+  publisher_inventory="$scratch_dir/publisher-artifacts.json"
+  if ! gh api "repos/Joe-Simo/goblins-os/actions/runs/$source_run_id/artifacts?per_page=100" \
+      > "$source_inventory" 2>/dev/null \
+    || ! gh api "repos/Joe-Simo/goblins-os-publisher/actions/runs/$publisher_run_id/artifacts?per_page=100" \
+      > "$publisher_inventory" 2>/dev/null; then
+    rm -rf "$scratch_dir"
+    return 1
+  fi
+  publisher_artifact_fields="$(python3 - \
+    "$evidence" \
+    "$source_inventory" \
+    "$publisher_inventory" \
+    "$publisher_evidence_name" <<'PY'
+import json
+import re
+import sys
+
+evidence, source_inventory, publisher_inventory = (
+    json.load(open(path, encoding="utf-8")) for path in sys.argv[1:4]
+)
+publisher_evidence_name = sys.argv[4]
+
+def matches(record, actual):
+    return (
+        all(actual.get(key) == record[key] for key in ("name", "id", "digest", "size_in_bytes"))
+        and actual.get("expired") is False
+    )
+
+def positive(value):
+    return type(value) is int and value > 0
+
+source_expected = [
+    evidence["source_workflow"]["metadata_artifact"],
+    *evidence["source_workflow"]["payload_artifacts"],
+]
+source_actual = source_inventory.get("artifacts", [])
+if any(len([actual for actual in source_actual if matches(expected, actual)]) != 1 for expected in source_expected):
+    raise SystemExit(1)
+publisher_actual = publisher_inventory.get("artifacts", [])
+publisher_matches = [
+    artifact
+    for artifact in publisher_actual
+    if artifact.get("name") == publisher_evidence_name
+    and artifact.get("expired") is False
+    and positive(artifact.get("id"))
+    and positive(artifact.get("size_in_bytes"))
+    and re.fullmatch(r"sha256:[0-9a-f]{64}", artifact.get("digest") or "") is not None
+    and artifact.get("archive_download_url")
+        == f"https://api.github.com/repos/Joe-Simo/goblins-os-publisher/actions/artifacts/{artifact['id']}/zip"
+]
+if len(publisher_matches) != 1:
+    raise SystemExit(1)
+publisher_artifact = publisher_matches[0]
+print("\t".join((
+    str(publisher_artifact["id"]),
+    publisher_artifact["digest"],
+    str(publisher_artifact["size_in_bytes"]),
+)))
+PY
+  )" || {
+    rm -rf "$scratch_dir"
+    return 1
+  }
+  IFS=$'\t' read -r \
+    publisher_artifact_id publisher_artifact_digest publisher_artifact_size \
+    <<< "$publisher_artifact_fields"
+  [[ "$publisher_artifact_id" =~ ^[1-9][0-9]*$ ]] \
+    && [[ "$publisher_artifact_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    && [[ "$publisher_artifact_size" =~ ^[1-9][0-9]*$ ]] || {
+      rm -rf "$scratch_dir"
+      return 1
+    }
+
+  publisher_artifact_zip="$scratch_dir/publisher-evidence.zip"
+  if ! gh run download "$source_run_id" \
+      --repo Joe-Simo/goblins-os \
+      --name "$source_metadata_name" \
+      --dir "$scratch_dir/source-metadata" >/dev/null 2>&1 \
+    || ! gh api --method GET \
+      "repos/Joe-Simo/goblins-os-publisher/actions/artifacts/$publisher_artifact_id/zip" \
+      > "$publisher_artifact_zip" 2>/dev/null \
+    || ! python3 - \
+      "$evidence" \
+      "$scratch_dir/source-metadata" \
+      "$publisher_artifact_zip" \
+      "$publisher_artifact_digest" \
+      "$publisher_artifact_size" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import stat
+import sys
+import zipfile
+
+evidence_path = Path(sys.argv[1])
+source_root = Path(sys.argv[2])
+publisher_zip = Path(sys.argv[3])
+publisher_digest = sys.argv[4]
+publisher_size = int(sys.argv[5])
+evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+def only_file(root, name):
+    matches = list(root.rglob(name))
+    if len(matches) != 1 or not matches[0].is_file() or matches[0].is_symlink():
+        raise ValueError("artifact member identity")
     return matches[0]
 
-files = [path for path in artifact_root.rglob("*") if path.is_file() or path.is_symlink()]
-if len(files) != 2 or {path.name for path in files} != {"image-ref.json", "rpm-packages.tsv"}:
-    raise SystemExit(1)
-metadata = json.loads(only_file("image-ref.json").read_text(encoding="utf-8"))
-inventory = only_file("rpm-packages.tsv")
-aarch_record = record["architectures"]["aarch64"]
-expected = {
-    "schema": "goblins-os-installer-branding-tool-v2",
-    "architecture": "aarch64",
-    "candidate_commit": record["source_commit"],
-    "image_ref": record["image_ref"],
-    "base_image": record["base_image"],
-    "containerfile_sha256": record["containerfile_sha256"],
-    "rpm_inventory_sha256": aarch_record["rpm_inventory_sha256"],
-    "anonymous_pull_verified": record["anonymous_pull_verified"],
-    "workflow_run": record["workflow_run"],
-    "workflow_run_attempt": record["workflow_run_attempt"],
-}
-if not isinstance(metadata, dict) or set(metadata) != set(expected):
-    raise SystemExit(1)
-if any(metadata.get(key) != value for key, value in expected.items()):
-    raise SystemExit(1)
-data = inventory.read_bytes()
-if hashlib.sha256(data).hexdigest() != aarch_record["rpm_inventory_sha256"]:
-    raise SystemExit(1)
-rows = [line for line in data.decode("utf-8").splitlines() if line]
-if not rows or rows[0] != "name\tevr\tarch\tlicense\tvendor":
-    raise SystemExit(1)
-if len(rows) - 1 != aarch_record["rpm_package_count"]:
+try:
+    publisher_zip_bytes = publisher_zip.read_bytes()
+    if len(publisher_zip_bytes) != publisher_size:
+        raise ValueError("publisher evidence artifact size")
+    if f"sha256:{hashlib.sha256(publisher_zip_bytes).hexdigest()}" != publisher_digest:
+        raise ValueError("publisher evidence artifact digest")
+    with zipfile.ZipFile(publisher_zip) as archive:
+        members = archive.infolist()
+        if len(members) != 1:
+            raise ValueError("publisher evidence member set")
+        member = members[0]
+        member_type = stat.S_IFMT(member.external_attr >> 16)
+        if (
+            member.filename != "installer-branding-publisher-evidence.json"
+            or member.is_dir()
+            or member_type not in (0, stat.S_IFREG)
+            or member.file_size < 1
+            or member.file_size > 32768
+        ):
+            raise ValueError("publisher evidence member identity")
+        if archive.read(member) != evidence_path.read_bytes():
+            raise ValueError("publisher evidence bytes")
+
+    source_files = [path for path in source_root.rglob("*") if path.is_file() or path.is_symlink()]
+    if len(source_files) != 4 or {path.name for path in source_files} != {
+        "handoff.json", "publisher-envelope.json", "SHA256SUMS", "rpm-packages.tsv"
+    }:
+        raise ValueError("source metadata member set")
+    handoff_path = only_file(source_root, "handoff.json")
+    envelope_path = only_file(source_root, "publisher-envelope.json")
+    checksums_path = only_file(source_root, "SHA256SUMS")
+    inventory_path = only_file(source_root, "rpm-packages.tsv")
+    handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+    source = evidence["source_workflow"]
+    sealed = evidence["source_handoff"]
+    hashes = {
+        "handoff_sha256": hashlib.sha256(handoff_path.read_bytes()).hexdigest(),
+        "envelope_sha256": hashlib.sha256(envelope_path.read_bytes()).hexdigest(),
+        "checksums_sha256": hashlib.sha256(checksums_path.read_bytes()).hexdigest(),
+        "rpm_inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest(),
+    }
+    if any(sealed[key] != value for key, value in hashes.items()):
+        raise ValueError("source metadata hash")
+    if handoff.get("schema") != sealed["schema"] or envelope.get("schema") != sealed["envelope_schema"]:
+        raise ValueError("source metadata schema")
+    if handoff.get("candidate_commit") != source["source_commit"]:
+        raise ValueError("handoff commit")
+    if handoff.get("workflow_run") != source["run"] or handoff.get("workflow_run_attempt") != source["run_attempt"]:
+        raise ValueError("handoff run")
+    if handoff.get("image_digest") != sealed["oci_image_digest"]:
+        raise ValueError("handoff image digest")
+    if handoff.get("intended_immutable_image_ref") != sealed["intended_immutable_image_ref"]:
+        raise ValueError("handoff image ref")
+    if handoff.get("oci_archive", {}).get("sha256") != sealed["oci_archive_sha256"]:
+        raise ValueError("handoff archive hash")
+    if handoff.get("oci_archive", {}).get("size_bytes") != sealed["oci_archive_size_bytes"]:
+        raise ValueError("handoff archive size")
+    parts = handoff.get("oci_archive", {}).get("parts")
+    if not isinstance(parts, list) or len(parts) != 4:
+        raise ValueError("handoff parts")
+    expected_part_names = [
+        f"parts/goblins-os-branding-tool-aarch64.oci.tar.part-{suffix}"
+        for suffix in ("00", "01", "02", "03")
+    ]
+    if [part.get("name") for part in parts] != expected_part_names:
+        raise ValueError("handoff part order")
+    checksum_lines = checksums_path.read_text(encoding="utf-8").splitlines()
+    expected_lines = [f"{part['sha256']}  {part['name']}" for part in parts]
+    if checksum_lines != expected_lines:
+        raise ValueError("ordered part checksums")
+    if envelope.get("payload_schema") != sealed["schema"]:
+        raise ValueError("envelope payload schema")
+    if envelope.get("candidate_commit") != source["source_commit"]:
+        raise ValueError("envelope commit")
+    if envelope.get("handoff_sha256") != sealed["handoff_sha256"]:
+        raise ValueError("envelope handoff hash")
+    if envelope.get("checksums_sha256") != sealed["checksums_sha256"]:
+        raise ValueError("envelope checksums hash")
+    if envelope.get("rpm_inventory_sha256") != sealed["rpm_inventory_sha256"]:
+        raise ValueError("envelope inventory hash")
+    envelope_artifacts = envelope.get("payload_artifacts")
+    if not isinstance(envelope_artifacts, list) or len(envelope_artifacts) != 4:
+        raise ValueError("envelope artifacts")
+    source_artifacts = sorted(source["payload_artifacts"], key=lambda item: item["suffix"])
+    for expected, actual in zip(source_artifacts, envelope_artifacts):
+        if any(actual.get(key) != expected[key] for key in ("name", "id", "digest")):
+            raise ValueError("envelope artifact identity")
+    inventory_rows = inventory_path.read_text(encoding="utf-8").splitlines()
+    if not inventory_rows or inventory_rows[0] != "name\tevr\tarch\tlicense\tvendor":
+        raise ValueError("RPM inventory header")
+    if len(inventory_rows) - 1 != sealed["rpm_package_count"]:
+        raise ValueError("RPM inventory count")
+
+except (KeyError, TypeError, ValueError, OSError, UnicodeError, json.JSONDecodeError, zipfile.BadZipFile):
     raise SystemExit(1)
 PY
   then
@@ -1043,155 +1563,33 @@ PY
   rm -rf "$scratch_dir"
 }
 
-installer_branding_tool_provenance_passes() {
-  local source_commit workflow_run workflow_attempt
-  if ! python3 - "$ROOT" <<'PY'
-import datetime
-import hashlib
-from pathlib import Path
-import re
-import sys
-import tomllib
-
-root = Path(sys.argv[1])
-record_path = root / "os/release/installer-branding-tool.toml"
-try:
-    record = tomllib.loads(record_path.read_text(encoding="utf-8"))
-except Exception:
-    raise SystemExit(1)
-
-repository = "ghcr.io/joe-simo/goblins-os-installer-branding-tool"
-digest_ref = re.compile(re.escape(repository) + r"@sha256:[0-9a-f]{64}\Z")
-generic_digest_ref = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}\Z")
-run_url = re.compile(r"https://github\.com/Joe-Simo/goblins-os/actions/runs/[0-9]+\Z")
-if record.get("schema") != 2:
-    raise SystemExit(1)
-if set(record) != {
-    "schema",
-    "image_ref",
-    "source_commit",
-    "workflow_run",
-    "workflow_run_attempt",
-    "anonymous_pull_verified",
-    "base_image",
-    "containerfile_sha256",
-    "public_pull_verified_on",
-    "inventory_path_in_image",
-    "architectures",
-}:
-    raise SystemExit(1)
-image_ref = record.get("image_ref", "")
-if not digest_ref.fullmatch(image_ref):
-    raise SystemExit(1)
-if not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
-    raise SystemExit(1)
-if not run_url.fullmatch(record.get("workflow_run", "")):
-    raise SystemExit(1)
-if not isinstance(record.get("workflow_run_attempt"), int) or record["workflow_run_attempt"] < 1:
-    raise SystemExit(1)
-if record.get("anonymous_pull_verified") is not True:
-    raise SystemExit(1)
-base_image = record.get("base_image", "")
-if not generic_digest_ref.fullmatch(base_image):
-    raise SystemExit(1)
-try:
-    if datetime.date.fromisoformat(record.get("public_pull_verified_on", "")).isoformat() != record["public_pull_verified_on"]:
-        raise SystemExit(1)
-except (TypeError, ValueError):
-    raise SystemExit(1)
-if record.get("inventory_path_in_image") != "/usr/share/goblins-os-installer-branding-tool/rpm-packages.tsv":
-    raise SystemExit(1)
-
-containerfile_path = root / "os/iso/branding-tool.Containerfile"
-containerfile_bytes = containerfile_path.read_bytes()
-if hashlib.sha256(containerfile_bytes).hexdigest() != record.get("containerfile_sha256"):
-    raise SystemExit(1)
-containerfile = containerfile_bytes.decode("utf-8")
-if f"ARG FEDORA_IMAGE={base_image}\n" not in containerfile:
-    raise SystemExit(1)
-containerfile_lines = {line.strip() for line in containerfile.splitlines()}
-if "diffutils \\" not in containerfile_lines:
-    raise SystemExit(1)
-if "&& command -v cmp \\" not in containerfile_lines:
-    raise SystemExit(1)
-
-branding_workflow = (root / ".github/workflows/branding-tool-image.yml").read_text(encoding="utf-8")
-runtime_tool_check = (
-    "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs "
-    "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done"
-)
-if runtime_tool_check not in branding_workflow:
-    raise SystemExit(1)
-if branding_workflow.count("- arch: aarch64") != 1:
-    raise SystemExit(1)
-if re.search(r"\b(?:x86_64|amd64)\b", branding_workflow):
-    raise SystemExit(1)
-if "goblins-os-installer-branding-tool-v2" not in branding_workflow:
-    raise SystemExit(1)
-if "workflow_run_attempt" not in branding_workflow:
-    raise SystemExit(1)
-if branding_workflow.count("actions/upload-artifact@") != 1:
-    raise SystemExit(1)
-
-architectures = record.get("architectures", {})
-if set(architectures) != {"aarch64"}:
-    raise SystemExit(1)
-values = architectures["aarch64"]
-native_ref = values.get("native_image_ref", "")
-if native_ref != image_ref or not digest_ref.fullmatch(native_ref):
-    raise SystemExit(1)
-if not re.fullmatch(r"[0-9a-f]{64}", values.get("rpm_inventory_sha256", "")):
-    raise SystemExit(1)
-if not isinstance(values.get("rpm_package_count"), int) or values["rpm_package_count"] <= 0:
-    raise SystemExit(1)
-
-propagation = {
-    "os/iso/build-iso.sh": f'INSTALLER_BRANDING_IMAGE="${{GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-{image_ref}}}"',
-    ".github/workflows/build.yml": f"GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}",
-    ".github/workflows/candidate-artifacts.yml": f"GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}",
-    ".github/workflows/aarch64-verification-iso.yml": f"GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}",
-}
-for relative, expected in propagation.items():
-    if expected not in (root / relative).read_text(encoding="utf-8"):
-        raise SystemExit(1)
-PY
-  then
-    return 1
-  fi
-  source_commit="$(awk -F'"' '/^source_commit = / { print $2; exit }' os/release/installer-branding-tool.toml)"
-  workflow_run="$(awk -F'"' '/^workflow_run = / { print $2; exit }' os/release/installer-branding-tool.toml)"
-  workflow_attempt="$(awk -F' = ' '/^workflow_run_attempt = / { print $2; exit }' os/release/installer-branding-tool.toml)"
-  github_actions_run_is_successful \
-    "$workflow_run" \
-    "$source_commit" \
-    "$workflow_attempt" \
-    ".github/workflows/branding-tool-image.yml" \
-    || return 1
-  installer_branding_tool_artifact_matches "$workflow_run" "$source_commit"
-}
-
 iso_manifest_release_provenance_passes() {
   local manifest="$1"
   local arch="$2"
   local commit="$3"
   local image_ref="$4"
+  local branding_evidence="$5"
 
   architecture_is_canonical "$arch" || return 1
-  [ -s "$manifest" ] || return 1
+  [ -s "$manifest" ] && [ -s "$branding_evidence" ] || return 1
   python3 - \
     "$manifest" \
     "$arch" \
     "$commit" \
     "$image_ref" \
     "$EXPECTED_BIB_IMAGE" \
-    "$EXPECTED_INSTALLER_BRANDING_IMAGE" <<'PY'
+    "$branding_evidence" <<'PY'
 import json
 import sys
 
-manifest_path, arch, commit, image_ref, bib_image, branding_image = sys.argv[1:7]
+manifest_path, arch, commit, image_ref, bib_image, evidence_path = sys.argv[1:7]
 with open(manifest_path, encoding="utf-8") as handle:
     manifest = json.load(handle)
+with open(evidence_path, encoding="utf-8") as handle:
+    evidence = json.load(handle)
+branding_image = evidence.get("published_image", {}).get("immutable_ref")
 expected = {
+    "schema": "goblins-os-iso-build-manifest-v2",
     "architecture": arch,
     "candidate_commit": commit,
     "image": image_ref,
@@ -1202,6 +1600,8 @@ expected = {
     "installer_branding_applied": True,
     "installer_branding_image": branding_image,
     "installer_branding_ownership_helper_image": branding_image,
+    "installer_branding_provenance_kind": "protected-publisher-evidence-v1",
+    "installer_branding_publisher_evidence": "installer-branding-publisher-evidence.json",
     "builder_image": bib_image,
     "builder_output_ownership_helper_image": bib_image,
     "builder_source_image": image_ref,
@@ -2300,6 +2700,8 @@ Next native Linux packaging command for $arch:
   RUN_QEMU=0 \\
   GOBLINS_OS_SHIPPABLE_RELEASE=1 \\
   GOBLINS_OS_BIB_SOURCE_IMAGE=<real release bootc image ref for $arch> \\
+  GOBLINS_OS_INSTALLER_BRANDING_IMAGE=<protected-publisher branding image@sha256:digest> \\
+  GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE=<protected-publisher evidence JSON> \\
   REPO_ROOT="$ROOT" \\
   os/hardware-gate/run-external-gate.sh
 
@@ -2332,6 +2734,7 @@ Expected $arch proof files:
   os/iso/output/$arch/bootiso/goblins-os-$arch.iso
   os/iso/output/$arch/bootiso/goblins-os-$arch.iso.sha256
   os/iso/output/$arch/manifest-goblins-os-$arch.json
+  os/iso/output/$arch/installer-branding-publisher-evidence.json
   os/signoff-proofs/sbom/$arch/rpm-packages.tsv
   os/screenshots/hardware-gate/$arch/<date>/${REQ_SCREENSHOTS[0]} ... ${REQ_SCREENSHOTS[$((${#REQ_SCREENSHOTS[@]} - 1))]}
   os/screenshots/hardware-gate/$arch/<date>/proof-manifest.json
@@ -2694,6 +3097,7 @@ check "SHIP.md declares no custom kernel ownership" "rg -q 'no custom kernel|cus
 check "SHIP.md declares Inter-only typography boundary" "rg -q 'Inter is the final shipped font stack' \"$SHIP_DECL\" && rg -q 'no non-Inter brand font dependency' \"$SHIP_DECL\""
 check "No unused external brand font references in public docs" "! rg -qi --hidden --no-ignore-vcs --no-ignore 'OpenAI[ -]Sans|openai[ -]sans|openai-sans' README.md ROADMAP.md GO-LIVE.md SHIP.md CONTRIBUTING.md CLA.md NOTICE TRADEMARKS.md AGENTS.md apps/site/src apps/site/public --glob '!apps/site/.next/**' --glob '!apps/site/node_modules/**'"
 check "No typography licensing TODOs in signing docs" "! rg -qi 'licensing\s+TODO|TODO.*licensing' \"$SHIP_DECL\" \"$RUNBOOK\" \"$SIGNOFF\""
+check "Secret scanner rejects synthetic canaries without echoing matched content" "bash os/hardware-gate/secret-scan.sh --self-test >/dev/null"
 check "Source package secret scan finds no live keys" "source_secret_scan"
 check "Generated artifact/evidence secret scan finds no live keys" "goblins_os_artifact_secret_scan \"$ROOT\""
 check "installed-root verifier enforces secret file and directory modes" "rg -q 'installed-openai-secret-file-mode-0600' crates/goblins-os-verify/src/main.rs && rg -q 'installed-openai-secret-file-owner-root' crates/goblins-os-verify/src/main.rs && rg -q 'installed-openai-secret-file-empty' crates/goblins-os-verify/src/main.rs && rg -q 'var/lib/goblins-os/secrets/openai' crates/goblins-os-verify/src/main.rs"
@@ -2702,7 +3106,7 @@ check "immutable Arm image bundles checksum-enforced Codex CLI and upstream noti
 check "core secrets use systemd credentials and never enter generic child environments" "rg -Fq 'LoadCredential=openai-secrets.env:/etc/goblins-os/openai-secrets.env' os/systemd/goblins-os-core.service && ! rg -Fq 'EnvironmentFile=-/etc/goblins-os/openai-secrets.env' os/systemd/goblins-os-core.service && rg -Fq 'env::var_os(\"CREDENTIALS_DIRECTORY\")' crates/goblins-os-core/src/credentials.rs && rg -Fq 'command.env_clear();' crates/goblins-os-core/src/bounded.rs && rg -Fq 'const SESSION_ENV_ALLOWLIST' crates/goblins-os-core/src/bounded.rs"
 check "hosted OpenAI direct path uses Responses API" "rg -q '/v1/responses' crates/goblins-os-core/src/resident.rs && ! rg -q '/v1/chat.?completions' crates/goblins-os-core/src/resident.rs"
 check "OpenAI SDK bridge endpoints stay server-side" "rg -q 'GOBLINS_OS_AGENTS_SDK_RELAY_URL' os/etc/goblins-os/openai-secrets.env && rg -q 'GOBLINS_OS_CHATKIT_RELAY_URL' os/etc/goblins-os/openai-secrets.env && rg -q 'GOBLINS_OS_REALTIME_RELAY_URL' os/etc/goblins-os/openai-secrets.env && rg -q 'GOBLINS_OS_IMAGES_RELAY_URL' os/etc/goblins-os/openai-secrets.env && ! rg -q 'OPENAI_OS_' os/etc/goblins-os/openai-secrets.env && rg -q 'Official OpenAI Agents SDK' crates/goblins-os-core/src/service_catalog.rs && ! rg -q 'pub struct OpenAIService' crates/goblins-os-core/src/service_catalog.rs"
-check "Build Studio uses only the explicitly selected core engine" "rg -Fq 'crate::resident::resident_generate_protected_context(' crates/goblins-os-core/src/app_builder.rs && ! rg -q 'GOBLINS_OS_AGENTS_SDK_RELAY_URL|OPENAI_OS_AGENTS_SDK_RELAY_URL|official-openai-agents-sdk' crates/goblins-os-core/src/app_builder.rs && rg -Fq 'let selection = crate::openai_key::selected_engine();' crates/goblins-os-core/src/resident.rs && rg -Fq 'assert_eq!(route.engine_label(), selection.as_id());' crates/goblins-os-core/src/resident.rs && rg -Fq 'always uses the explicitly selected Goblins AI engine' crates/goblins-os-core/src/service_catalog.rs && ! rg -Fq 'OpenAI-centered Linux OS' crates/goblins-os-core/src/app_builder.rs"
+check "Build Studio uses only the authenticated user's explicitly selected core engine" "rg -Fq 'crate::resident::resident_generate_protected_context(' crates/goblins-os-core/src/app_builder.rs && ! rg -q 'GOBLINS_OS_AGENTS_SDK_RELAY_URL|OPENAI_OS_AGENTS_SDK_RELAY_URL|official-openai-agents-sdk' crates/goblins-os-core/src/app_builder.rs && rg -Fq 'let user_id = client.map(|client| client.user_id());' crates/goblins-os-core/src/resident.rs && rg -Fq 'let route = resolve_resident_route_for(user_id)' crates/goblins-os-core/src/resident.rs && rg -Fq '.map(crate::openai_key::selected_engine_for)' crates/goblins-os-core/src/resident.rs && rg -Fq 'assert_eq!(route.engine_label(), selection.as_id());' crates/goblins-os-core/src/resident.rs && rg -Fq 'always uses the explicitly selected Goblins AI engine' crates/goblins-os-core/src/service_catalog.rs && ! rg -Fq 'OpenAI-centered Linux OS' crates/goblins-os-core/src/app_builder.rs"
 check "Codex local chat wire is loopback-only compatibility" "rg -q 'This compatibility wire is local-only' os/codex/config.toml && rg -q 'base_url = \"http://127.0.0.1:11434/v1\"' os/codex/config.toml && rg -q 'wire_api = \"chat\"' os/codex/config.toml"
 check "bootc image declares OCI source and license labels" "rg -Fq 'org.opencontainers.image.title=\"Goblins OS\"' os/bootc/Containerfile && rg -Fq 'org.opencontainers.image.source=\"https://github.com/Joe-Simo/goblins-os\"' os/bootc/Containerfile && rg -Fq 'org.opencontainers.image.url=\"https://goblinsos.com\"' os/bootc/Containerfile && rg -Fq 'org.opencontainers.image.licenses=\"AGPL-3.0-or-later\"' os/bootc/Containerfile"
 check "browser core URL is absent from the desktop session" "rg -Fq 'GOBLINS_OS_CORE_PORT=8787' os/etc/goblins-os/environment && ! rg -Fq 'GOBLINS_OS_CORE_URL=' os/etc/goblins-os/environment && ! rg -Fq 'OPENAI_OS_' os/etc/goblins-os/environment && ! rg -Fq 'GOBLINS_OS_CORE_URL' os/session/goblins-os-session && ! rg -Fq 'OPENAI_OS_CORE_URL' os/session/goblins-os-session && rg -Fq 'std::env::var(\"GOBLINS_OS_CORE_PORT\")' crates/goblins-os-core/src/main.rs && rg -Fq 'std::env::var(\"OPENAI_OS_CORE_PORT\")' crates/goblins-os-core/src/main.rs && rg -Fq 'tcp_surface_default_denies_every_native_api_route' crates/goblins-os-core/src/control_plane.rs"
@@ -2717,7 +3121,7 @@ check "installer proof page override bypasses completed first-boot exit" "rg -Fq
 check "rust job checks fmt" "rg -q 'cargo fmt --all --check' \"$WORKFLOW\""
 check "rust job checks clippy" "rg -q 'clippy --workspace' \"$WORKFLOW\""
 check "rust job checks native desktop tests" 'rg -q --fixed-strings '\''cargo test --workspace --features "$NATIVE_FEATURES"'\'' "$WORKFLOW"'
-check "native desktop feature inventory is identical across CI and local gates" "for feature in goblins-os-installer/native-desktop goblins-os-control-center/native-desktop goblins-os-consent-broker/native-desktop goblins-os-launcher/native-desktop goblins-os-login/native-desktop goblins-os-markup/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-today/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop; do rg -Fq \"\$feature\" \"$WORKFLOW\" && rg -Fq \"\$feature\" os/bootc/gate.Dockerfile && rg -Fq \"\$feature\" os/bootc/Containerfile || exit 1; done"
+check "native desktop feature inventory is identical across CI and local gates" "for feature in goblins-os-installer/native-desktop goblins-os-control-center/native-desktop goblins-os-consent-broker/native-desktop goblins-os-openai-key-broker/native-desktop goblins-os-launcher/native-desktop goblins-os-login/native-desktop goblins-os-markup/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-today/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop; do rg -Fq \"\$feature\" \"$WORKFLOW\" && rg -Fq \"\$feature\" os/bootc/gate.Dockerfile && rg -Fq \"\$feature\" os/bootc/Containerfile || exit 1; done"
 check "rust job checks release" "rg -q 'cargo build --release --workspace' \"$WORKFLOW\""
 check "image job has verify" "rg -q 'goblins-os-verify' \"$WORKFLOW\""
 check "image job checks blocked=0" "rg -q 'blocked=0' \"$WORKFLOW\""
@@ -2770,11 +3174,12 @@ check "hardware evidence bundle is canonical, bounded, duplicate-safe, and unifo
 check "hardware evidence seal binds Darwin ARM64 HVF, exact QEMU, ISO, and screenshots" "rg -Fq 'goblins-os-hardware-evidence-bundle-v5' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq 'goblins-os-aarch64-local-display-authority-v2' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq '\"authority_generation\": 2' os/hardware-gate/capture-harness/evidence_bundle.py && rg -q '^    runs-on: ubuntu-24[.]04-arm$' .github/workflows/aarch64-local-display-attestation.yml && rg -Fq 'test \"\$(uname -m)\" = aarch64' .github/workflows/aarch64-local-display-attestation.yml && rg -Fq 'capture_environment' os/hardware-gate/capture-harness/evidence_bundle.py os/hardware-gate/capture-harness/proof_validation.py os/hardware-gate/capture-harness/run-capture.sh && rg -Fq '\"host_os\": \"Darwin\"' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq '\"accelerator\": \"hvf\"' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq 'qemu_binary_sha256' os/hardware-gate/capture-harness/evidence_bundle.py os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'verification_iso_sha256' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq 'screenshot_manifest_sha256' os/hardware-gate/capture-harness/evidence_bundle.py"
 check "hardware proof validator adversarial self-test passes" "python3 os/hardware-gate/capture-harness/proof_validation.py --self-test >/dev/null"
 check "visual secret scan binds sealed PNG bytes and uses pinned tiled Apple Vision OCR" "test -f os/hardware-gate/capture-harness/visual-secret-scan.swift && rg -Fq 'import Vision' os/hardware-gate/capture-harness/visual-secret-scan.swift && rg -Fq 'VNRecognizeTextRequestRevision3' os/hardware-gate/capture-harness/visual-secret-scan.swift && rg -Fq 'screenshot bytes do not match the signed canonical PNG entry' os/hardware-gate/capture-harness/visual-secret-scan.swift && rg -Fq -- '--seal \"\$RUN_DIR/evidence-bundle.json\"' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq -- '--seal \"\$display_run/evidence-bundle.json\"' os/release/promote-stable.sh"
-check "stable promotion serializes shared aliases and reuses the sealed payload attempt" "rg -Fq 'group: aarch64-stable-promotion-shared-aliases' .github/workflows/stable-promotion.yml && rg -Fq 'PROMOTION_PAYLOAD_RUN_ATTEMPT' .github/workflows/stable-promotion.yml"
-check "stable promotion pins its privileged Buildx client and requires one package writer" "rg -Fq 'version: v0.34.1' .github/workflows/stable-promotion.yml && rg -Fq 'driver: docker' .github/workflows/stable-promotion.yml && rg -Fq 'only principal allowed to mutate the :aarch64 and' .github/workflows/stable-promotion.yml"
-check "stable promotion pins canonical zstd and byte-checks both release archives" "rg -Fq 'eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3' .github/workflows/stable-promotion.yml && rg -Fq '*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***' .github/workflows/stable-promotion.yml && rg -Fq 'display archive raw USTAR bytes are not the exact canonical encoding' .github/workflows/stable-promotion.yml && rg -Fq 'display archive compressed bytes are not the exact canonical zstd encoding' .github/workflows/stable-promotion.yml && rg -Fq 'stable ISO compressed bytes are not the exact canonical zstd encoding' .github/workflows/stable-promotion.yml && rg -Fq 'python3 - \"\$PAYLOAD_DIR\" \"\$CANDIDATE_COMMIT\" \"\$PINNED_ZSTD\" \"\$RUNNER_TEMP\" <<'\''PY'\''' .github/workflows/stable-promotion.yml && rg -Fq 'python3 - \"\$PAYLOAD_DIR\" \"\$RUNNER_TEMP\" \"\$PINNED_ZSTD\" <<'\''PY'\''' .github/workflows/stable-promotion.yml"
-check "stable promotion independently downloads and byte-binds candidate and display artifacts" "rg -Fq 'actions/artifacts/\$candidate_artifact_id/zip' .github/workflows/stable-promotion.yml && rg -Fq 'actions/artifacts/\$display_artifact_id/zip' .github/workflows/stable-promotion.yml && rg -Fq 'downloaded workflow artifact digest differs from the selected artifact' .github/workflows/stable-promotion.yml"
-check "stable promotion independently enforces ARM64 media and public metadata" "rg -Fq 'RPM evidence contains a non-ARM package architecture' .github/workflows/stable-promotion.yml && rg -Fq 'machine != 0xAA64' .github/workflows/stable-promotion.yml && rg -Fq 'selected OCI child revision label does not match candidate' .github/workflows/stable-promotion.yml && rg -Fq 'selected OCI child does not declare the ARM-only contract' .github/workflows/stable-promotion.yml && rg -Fq 'public install and container metadata is not exactly reproducible' .github/workflows/stable-promotion.yml && rg -Fq 'require_exact_public_metadata' os/release/stable-promotion.py && rg -Fq 'require_signed_display_iso_binding' os/release/stable-promotion.py"
+check "source workflows satisfy the protected publisher boundary" "os/release/verify-publisher-boundary.sh >/dev/null"
+check "source workflows are read-only, secret-free, and non-promotional" "! rg -q --glob '*.yml' 'packages:[[:space:]]*write|contents:[[:space:]]*write|^[[:space:]]*environment:[[:space:]]*stable([[:space:]]|$)|[$][{][{][[:space:]]*secrets[.]' .github/workflows && rg -Fq 'source_repository_publish_authority: false' .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml .github/workflows/stable-promotion.yml && rg -Fq 'non_promotional: true' .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml .github/workflows/stable-promotion.yml"
+check "source workflows contain no GHCR, tag, or Release write path" "! rg -q --glob '*.yml' 'docker[[:space:]]+login|docker/login-action|docker[[:space:]]+push|podman[[:space:]]+push|oras[[:space:]]+push|push:[[:space:]]*true|buildx[[:space:]]+imagetools[[:space:]]+create|gh[[:space:]]+release|git[[:space:]]+push|GHCR_TOKEN|write:packages' .github/workflows"
+check "candidate and branding workflows seal attempt-scoped native ARM64 OCI handoffs" "rg -Fq 'schema: \"goblins-os-source-oci-handoff-v1\"' .github/workflows/candidate-artifacts.yml && rg -Fq 'schema: \"goblins-os-installer-branding-tool-handoff-v1\"' .github/workflows/branding-tool-image.yml && rg -Fq 'schema: \"goblins-os-actions-artifact-envelope-v1\"' .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml && rg -Fq 'platform: \"linux/arm64\"' .github/workflows/candidate-artifacts.yml && rg -Fq 'oci_architecture: \"arm64\"' .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml && rg -Fq 'split -n 4 -d -a 2' .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml && rg -Fq 'aarch64-attempt-\${{ github.run_attempt }}-part-' .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml && rg -Fq 'aarch64-attempt-\${{ github.run_attempt }}-metadata' .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml && [ \"\$(rg -c '^      - name: Upload OCI payload part (00|01|02|03)$' .github/workflows/candidate-artifacts.yml)\" = 4 ] && [ \"\$(rg -c '^      - name: Upload branding-tool OCI payload part (00|01|02|03)$' .github/workflows/branding-tool-image.yml)\" = 4 ]"
+check "stable source workflow emits one attempt-scoped sealed publisher request without publication authority" "rg -Fq 'schema: \"goblins-os-publisher-request-v1\"' .github/workflows/stable-promotion.yml && rg -Fq 'repository: \"Joe-Simo/goblins-os-publisher\"' .github/workflows/stable-promotion.yml && rg -Fq 'authenticate-source-run-and-artifact-digests' .github/workflows/stable-promotion.yml && rg -Fq 'copy-with-preserved-digests' .github/workflows/stable-promotion.yml && rg -Fq 'aarch64-attempt-\$CANDIDATE_RUN_ATTEMPT-part-\$suffix' .github/workflows/stable-promotion.yml && rg -Fq 'aarch64-attempt-\$BRANDING_RUN_ATTEMPT-part-\$suffix' .github/workflows/stable-promotion.yml && rg -Fq 'build-pinned-zstd-1.5.7-from-sha256-verified-source' .github/workflows/stable-promotion.yml && rg -Fq 'move-aarch64-and-stable-aliases-last' .github/workflows/stable-promotion.yml && [ \"\$(rg -c '^      - name: Upload the publisher request$' .github/workflows/stable-promotion.yml)\" = 1 ]"
+check "stable release replay rejects hidden USTAR and zstd bytes" "rg -Fq 'display-proof raw USTAR bytes are not canonical' os/release/stable-promotion.py && rg -Fq 'display-proof zstd bytes are not canonical' os/release/stable-promotion.py && rg -Fq 'release ISO zstd bytes are not canonical' os/release/stable-promotion.py && rg -Fq 'self-test accepted hidden bytes in raw USTAR padding' os/release/stable-promotion.py && rg -Fq 'self-test accepted a skippable frame in display-proof zstd bytes' os/release/stable-promotion.py && rg -Fq 'self-test accepted a skippable frame in release ISO zstd bytes' os/release/stable-promotion.py && rg -Fq -- '--zstd \"\$PINNED_ZSTD\"' os/release/promote-stable.sh && rg -Fq 'eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3' os/release/PUBLISHER-BOUNDARY.md"
 check "signoff and shipping recompute the exact hardware evidence seal" "rg -Fq 'evidence_bundle.py\" verify' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q -- '--run-directory \"[$]SCREENSHOT_DIR\" \"[$]REPO_ROOT\" \"[$]ARCH\"' os/hardware-gate/close-signoff.sh && rg -q -- '--manifest \"[$]manifest\" \"[$]arch\" \"[$]SELECTED_CANDIDATE_COMMIT\"' os/hardware-gate/verify-shipping-status.sh"
 check "aarch64 native packaging proof is exact-candidate/date/attempt artifact-bound" "rg -q 'goblins-os-aarch64-native-packaging-gate-[$][{][{] inputs[.]candidate_commit [}][}]-[$][{][{] inputs[.]run_date [}][}]-attempt-[$][{][{] github[.]run_attempt [}][}]' .github/workflows/aarch64-verification-iso.yml && rg -Fq 'NATIVE_PACKAGING_GATE_ARTIFACT' os/hardware-gate/close-signoff.sh && rg -Fq 'goblins-os-aarch64-native-packaging-gate-[$]SELECTED_CANDIDATE_COMMIT-[$]run_date-attempt-[$]native_attempt' os/hardware-gate/verify-shipping-status.sh"
 check "aarch64 local HVF proof uses isolated Authority 2 and GitHub is verification-only" "python3 os/hardware-gate/capture-harness/evidence_bundle.py verify-authority-certificate --certificate os/release/display-proof-authority2.pem --certificate-sha256 os/release/display-proof-authority2.sha256 --ca-certificate os/release/display-proof-authority2-ca.pem --ca-certificate-sha256 os/release/display-proof-authority2-ca.sha256 >/dev/null && rg -Fq 'verify-authority-certificate' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'finalize-display-proof.sh' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq 'exit 75' os/hardware-gate/capture-harness/run-capture.sh && rg -Fq '\"cms\",' os/hardware-gate/capture-harness/display-authority2.py && rg -Fq '\"-S\",' os/hardware-gate/capture-harness/display-authority2.py && rg -Fq 'display-proof-authority2-ca.sha256' os/hardware-gate/capture-harness/finalize-display-proof.sh && rg -Fq 'openssl' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq -- '-nointern' os/hardware-gate/capture-harness/evidence_bundle.py && rg -Fq -- '--signature \"\$run_dir/aarch64-local-display-attestation.json.cms\"' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -Fq 'Verify the pinned Authority 2 signature without minting authority' .github/workflows/aarch64-local-display-attestation.yml && rg -Fq 'authority_signature_base64' .github/workflows/aarch64-local-display-attestation.yml && rg -q '^permissions:$' .github/workflows/aarch64-local-display-attestation.yml && rg -q '^  contents: read$' .github/workflows/aarch64-local-display-attestation.yml && ! rg -q 'actions/attest@|attestations: write|id-token: write|create-attestation' .github/workflows/aarch64-local-display-attestation.yml && ! rg -q 'gh[[:space:]]+attestation[[:space:]]+verify' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
@@ -2855,7 +3260,7 @@ check "native design system uses Goblins-native naming" "rg -q 'GOBLINS_NATIVE_C
 check "boot splash uses Goblins mark for OS identity" "rg -q 'brand/anaconda/sidebar-logo.png' os/bootc/Containerfile && rg -q 'Goblins OS boot splash.*Goblins mark' os/plymouth/goblins-os/goblins-os.plymouth && ! rg -q 'brand/OpenAI-white-monoblossom.png[[:space:]]*\\\\' os/bootc/Containerfile"
 check "installer and login product copy uses Goblins desktop naming" "rg -q 'Goblins-native desktop' crates/goblins-os-installer/src/main.rs && rg -q 'Enter Goblins OS' crates/goblins-os-installer/src/main.rs && rg -q 'Unlock Goblins OS desktop' crates/goblins-os-login/src/main.rs && rg -q 'Goblins OS desktop unlock was rejected by local OS services' crates/goblins-os-login/src/main.rs && ! rg -q -e 'OpenAI-native desktop' -e 'Enter OpenAI desktop' -e 'Unlock OpenAI desktop' -e 'OpenAI desktop unlock' crates/goblins-os-installer/src/main.rs crates/goblins-os-login/src/main.rs"
 check "desktop metadata uses Goblins identity for OS surfaces" "rg -q 'Comment=Native Goblins OS identity gate' os/applications/org.goblins.OS.Login.desktop && rg -q 'Comment=Native recovery checks for the boot image, services, models, and Goblins identity' os/applications/org.goblins.OS.Recovery.desktop && rg -q 'Comment=Native Goblins OS policy, enterprise controls, data boundaries, and permission gates' os/applications/org.goblins.OS.Policy.desktop"
-check "OpenAI service launcher copy is Goblins-native" "rg -Fq 'unknown Goblins OS service id' crates/goblins-os-open/src/main.rs && rg -Fq 'Goblins OS service {service_id} is blocked by the active Goblins OS policy' crates/goblins-os-open/src/main.rs && ! rg -Fq 'OpenAI OS service' crates/goblins-os-open/src/main.rs && rg -Fq 'Description=Goblins OS local AI service core' os/systemd/goblins-os-core.service"
+check "OpenAI service launcher copy is Goblins-native" "rg -Fq 'unknown Goblins OS service id' crates/goblins-os-open/src/main.rs && rg -Fq 'Goblins OS service {service_id} is not allowed by the active policy or permission state' crates/goblins-os-open/src/main.rs && ! rg -Fq 'OpenAI OS service' crates/goblins-os-open/src/main.rs && rg -Fq 'Description=Goblins OS local AI service core' os/systemd/goblins-os-core.service"
 check "core service owns policy state for permission grants" "rg -q '^StateDirectory=.*goblins-os/policy' os/systemd/goblins-os-core.service && rg -q '^StateDirectoryMode=0750$' os/systemd/goblins-os-core.service"
 check "core service writable path allowlist is exact and narrow" "core_service_writable_paths_are_exact"
 check "first boot proves the production core unit owns its socket and writable mounts" "firstboot_production_core_unit_proof_is_pinned"
@@ -2867,8 +3272,8 @@ check "settings detail copy hides raw setup state" "rg -Fq '(\"not configured\",
 check "settings native app handoff uses image-owned copy" "rg -q 'Not Included' crates/goblins-os-settings/src/main.rs && rg -q 'included in the full Goblins OS image' crates/goblins-os-settings/src/main.rs && ! rg -q -e 'is not installed on this image' -e 'Not Installed' crates/goblins-os-settings/src/main.rs"
 check "settings storage pressure plan is actionable" "rg -q 'append_storage_pressure_plan' crates/goblins-os-settings/src/main.rs && rg -q 'Storage pressure plan' crates/goblins-os-settings/src/main.rs && rg -q 'Open Disk Usage Analyzer' crates/goblins-os-settings/src/main.rs && rg -q 'Open Disks' crates/goblins-os-settings/src/main.rs && rg -q 'automatic removal of aged files' crates/goblins-os-settings/src/main.rs && ! rg -q 'needs GNOME' crates/goblins-os-settings/src/main.rs"
 check "privacy cleanup copy uses aged wording" "rg -q 'Remove aged temporary files' crates/goblins-os-settings/src/main.rs crates/goblins-os-core/src/privacy.rs && ! rg -q 'Remove old temporary files' crates/goblins-os-settings/src/main.rs crates/goblins-os-core/src/privacy.rs"
-check "settings built-in capability copy avoids install-manager wording" "rg -q 'Bluetooth support is not ready on this device' crates/goblins-os-settings/src/main.rs && rg -q 'Audio routing support is not ready in this build' crates/goblins-os-settings/src/main.rs && rg -q 'Codex · not included' crates/goblins-os-settings/src/main.rs && rg -q 'Required service support is not included in this build' crates/goblins-os-settings/src/main.rs"
-check "core built-in capability copy avoids install-manager wording" "rg -q 'Bluetooth support is not ready on this device' crates/goblins-os-core/src/bluetooth.rs && rg -q 'Audio routing controls are not ready' crates/goblins-os-core/src/audio.rs && rg -q 'Codex account support is not included in this build' crates/goblins-os-core/src/codex.rs && ! rg -q -e 'Bluetooth support is not installed' -e 'WirePlumber control tooling is not installed' -e 'Codex CLI is not installed' crates/goblins-os-core/src/bluetooth.rs crates/goblins-os-core/src/audio.rs crates/goblins-os-core/src/codex.rs"
+check "settings built-in capability copy avoids install-manager wording" "rg -q 'Bluetooth support is not ready on this device' crates/goblins-os-settings/src/main.rs && rg -q 'Audio routing support is not ready in this build' crates/goblins-os-settings/src/main.rs && rg -q 'OpenAI account · Codex CLI not included' crates/goblins-os-settings/src/main.rs && rg -q 'Required service support is not included in this build' crates/goblins-os-settings/src/main.rs"
+check "core built-in capability copy avoids install-manager wording" "rg -q 'Bluetooth support is not ready on this device' crates/goblins-os-core/src/bluetooth.rs && rg -q 'Audio routing controls are not ready' crates/goblins-os-core/src/audio.rs && rg -q 'OpenAI account access through the bundled Codex CLI is not included in this build' crates/goblins-os-core/src/codex.rs && ! rg -q -e 'Bluetooth support is not installed' -e 'WirePlumber control tooling is not installed' -e 'Codex CLI is not installed' crates/goblins-os-core/src/bluetooth.rs crates/goblins-os-core/src/audio.rs crates/goblins-os-core/src/codex.rs"
 check "ISO/runbook document Custom or Reclaim Space dual boot" "rg -q 'Custom/manual storage or Reclaim Space' os/iso/config.toml os/hardware-gate/runbook.md"
 check "ISO/runbook document advanced storage handoff" "rg -q 'Open advanced storage' os/iso/config.toml os/hardware-gate/runbook.md && rg -q 'Install Goblins OS Beside Another OS' os/hardware-gate/runbook.md"
 check "runbook documents disk and Docker preflight" "rg -q '120 GiB free' os/hardware-gate/runbook.md && rg -q 'docker info' os/hardware-gate/runbook.md"
@@ -3049,7 +3454,7 @@ check "core AI safe setting route requires policy and confirmation" "rg -Fq 'pol
 check "core AI safe setting route has narrow allowlist" "rg -q 'appearance.color-scheme, accessibility.reduce-motion, or notifications.show-banners' crates/goblins-os-core/src/ai.rs && rg -q 'safe_setting_change_rejects_arbitrary_settings_and_wrong_values' crates/goblins-os-core/src/ai.rs"
 check "core AI safe setting route reuses settings wrappers" "rg -q 'apply_ai_color_scheme' crates/goblins-os-core/src/appearance.rs && rg -q 'apply_ai_reduce_motion' crates/goblins-os-core/src/accessibility.rs && rg -q 'apply_ai_notification_banners' crates/goblins-os-core/src/notifications.rs"
 check "installed self-test checks app-builder routes" "rg -q '/v1/apps/build-catalog' os/bootc/run-selftest.sh && rg -q '/v1/apps/builds' os/bootc/run-selftest.sh && rg -q 'GOBLINS_OS_APPS_DIR=/tmp/goblins-os-selftest-apps' os/bootc/run-selftest.sh"
-check "installed self-test proves core-owned engine preference persistence" "rg -Fq '/v1/models/openai-key' os/bootc/run-selftest.sh && rg -Fq 'POST /v1/models/engine' os/bootc/run-selftest.sh && rg -Fq 'engine_file=\"\$GOBLINS_OS_AI_STATE/engine\"' os/bootc/run-selftest.sh && rg -Fq 'goblins-os:goblins-os:600' os/bootc/run-selftest.sh && rg -Fq '(POST, \"/v1/models/engine\")' crates/goblins-os-core/src/control_plane.rs"
+check "installed self-test proves per-user core-owned engine preference persistence" "rg -Fq '/v1/models/openai-key' os/bootc/run-selftest.sh && rg -Fq 'POST /v1/models/engine' os/bootc/run-selftest.sh && rg -Fq 'engine_file=\"\$GOBLINS_OS_AI_STATE/users/0/engine\"' os/bootc/run-selftest.sh && rg -Fq 'goblins-os:goblins-os:600' os/bootc/run-selftest.sh && rg -Fq '(POST, \"/v1/models/engine\")' crates/goblins-os-core/src/control_plane.rs"
 check "bootc image includes gaming Vulkan tools and compositor substrate" "rg -q 'mesa-vulkan-drivers' os/bootc/Containerfile && rg -q 'vulkan-tools' os/bootc/Containerfile && rg -q 'gamescope' os/bootc/Containerfile && rg -q 'gamemode' os/bootc/Containerfile && rg -q 'mangohud' os/bootc/Containerfile"
 check "bootc image includes gaming video audio and controller diagnostics" "rg -q 'mesa-va-drivers' os/bootc/Containerfile && rg -q 'libvdpau' os/bootc/Containerfile && rg -q 'vdpauinfo' os/bootc/Containerfile && rg -q 'pipewire-utils' os/bootc/Containerfile && rg -q 'pipewire-pulseaudio' os/bootc/Containerfile && rg -q 'pipewire-alsa' os/bootc/Containerfile && rg -q 'command -v pw-play' os/bootc/Containerfile && rg -q 'command -v pw-record' os/bootc/Containerfile && rg -q 'command -v pw-dump' os/bootc/Containerfile && rg -q 'evtest' os/bootc/Containerfile && rg -q 'usbutils' os/bootc/Containerfile"
 check "bootc image excludes Steam and steam-devices packages" "! rg -q '^[[:space:]]+steam([[:space:]\\\\]|$)|^[[:space:]]+steam-devices([[:space:]\\\\]|$)' os/bootc/Containerfile && rg -q '! rpm -q steam' os/bootc/Containerfile && rg -q '! rpm -q steam-devices' os/bootc/Containerfile"
@@ -3115,10 +3520,12 @@ check "semantic screenshot states fail closed across capture and signoff" "rg -q
 check "signoff row distinguishes and binds verification and public release media" "rg -q 'Screenshot proof verification ISO SHA256' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Public release ISO SHA256' os/hardware-gate/compose-signoff-rows.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'signoff_block_verification_iso_binding_matches' os/hardware-gate/verify-shipping-status.sh && rg -q 'signoff_block_public_release_iso_binding_matches' os/hardware-gate/verify-shipping-status.sh"
 check "release proof binds ISO, SBOM, screenshots, and signoff to one candidate commit" "rg -q 'candidate_commit' os/iso/build-iso.sh os/hardware-gate/capture-harness/run-capture.sh crates/goblins-os-verify/src/main.rs && rg -q 'Candidate/source commit' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'signoff_block_candidate_commit_matches' os/hardware-gate/verify-shipping-status.sh"
 check "release workflows propagate selected commit and image provenance" "rg -q 'GOBLINS_OS_CANDIDATE_COMMIT: [$][{][{] github[.]sha [}][}]' .github/workflows/build.yml && rg -q 'candidate_commit: [$][{][{] github[.]sha [}][}]' .github/workflows/release.yml && rg -q 'uses: ./[.]github/workflows/candidate-artifacts[.]yml' .github/workflows/release.yml && rg -q 'GOBLINS_OS_CANDIDATE_COMMIT: [$][{][{] inputs[.]candidate_commit [}][}]' .github/workflows/aarch64-verification-iso.yml && rg -q -- '--candidate-commit \"[$]GOBLINS_OS_CANDIDATE_COMMIT\"' .github/workflows/build.yml .github/workflows/aarch64-verification-iso.yml && rg -q -- '--candidate-commit \"[$]CANDIDATE_COMMIT\"' .github/workflows/candidate-artifacts.yml && rg -q -- '--image-ref' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/aarch64-verification-iso.yml"
-check "candidate artifact workflow is digest-bound and non-promotional" "test -f .github/workflows/candidate-artifacts.yml && rg -q 'candidate_commit:' .github/workflows/candidate-artifacts.yml && rg -q 'steps[.]build[.]outputs[.]digest' .github/workflows/candidate-artifacts.yml && rg -q 'GOBLINS_OS_BIB_SOURCE_IMAGE=\"[$]IMMUTABLE_IMAGE_REF\"' .github/workflows/candidate-artifacts.yml && rg -q 'bib_image_ref.*IMMUTABLE_IMAGE_REF' .github/workflows/candidate-artifacts.yml && rg -q 'is not the current origin/main commit' .github/workflows/candidate-artifacts.yml && rg -q 'goblins-os-candidate-ref-' .github/workflows/candidate-artifacts.yml && rg -q 'contents: read' .github/workflows/candidate-artifacts.yml && ! rg -q 'contents: write|git push|gh release|goblins-os:(aarch64|latest|stable)' .github/workflows/candidate-artifacts.yml"
-check "candidate workflow gates the exact published digest before artifact production" "rg -q -- '--source-root /workspace' .github/workflows/candidate-artifacts.yml && rg -q -- '--installed-root /' .github/workflows/candidate-artifacts.yml && rg -q -- '--target selftest' .github/workflows/candidate-artifacts.yml && rg -q 'Verify the exact candidate source and installed-root contracts' .github/workflows/candidate-artifacts.yml && rg -q 'Run the exact candidate install and services self-test' .github/workflows/candidate-artifacts.yml"
+check "candidate artifact workflow is digest-bound and non-promotional" "test -f .github/workflows/candidate-artifacts.yml && rg -q 'candidate_commit:' .github/workflows/candidate-artifacts.yml && rg -q 'steps[.]build[.]outputs[.]digest' .github/workflows/candidate-artifacts.yml && rg -Fq 'outputs: type=oci,dest=' .github/workflows/candidate-artifacts.yml && rg -Fq 'source_repository_publish_authority: false' .github/workflows/candidate-artifacts.yml && rg -Fq 'non_promotional: true' .github/workflows/candidate-artifacts.yml && rg -Fq 'repository: \"Joe-Simo/goblins-os-publisher\"' .github/workflows/candidate-artifacts.yml && rg -Fq 'copy_mode: \"preserve-digests\"' .github/workflows/candidate-artifacts.yml && rg -q 'is not current origin/main' .github/workflows/candidate-artifacts.yml && rg -q 'contents: read' .github/workflows/candidate-artifacts.yml && ! rg -q 'contents: write|git push|gh release|goblins-os:(aarch64|latest|stable)' .github/workflows/candidate-artifacts.yml"
+check "candidate workflow gates and seals the exact OCI digest before handoff" "rg -q -- '--source-root /workspace' .github/workflows/candidate-artifacts.yml && rg -q -- '--installed-root /' .github/workflows/candidate-artifacts.yml && rg -q -- '--target selftest' .github/workflows/candidate-artifacts.yml && rg -Fq 'Verify exact source and installed-root contracts' .github/workflows/candidate-artifacts.yml && rg -Fq 'Run the exact candidate install and services self-test' .github/workflows/candidate-artifacts.yml && rg -Fq 'Seal and split the OCI publisher payload' .github/workflows/candidate-artifacts.yml && rg -Fq 'Bind immutable Actions artifacts into the publisher envelope' .github/workflows/candidate-artifacts.yml && rg -Fq 'sha256sum \"\$raw_manifest\"' .github/workflows/candidate-artifacts.yml"
 check "release workflows pin third-party actions to full commits" "! rg -q 'uses:[[:space:]]+(actions|docker)/[^@]+@v[0-9]+' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/branding-tool-image.yml .github/workflows/aarch64-verification-iso.yml .github/workflows/aarch64-local-display-attestation.yml && rg -q 'actions/checkout@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml .github/workflows/aarch64-local-display-attestation.yml && rg -q 'docker/build-push-action@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml && rg -q 'actions/upload-artifact@[0-9a-f]{40}' .github/workflows/candidate-artifacts.yml .github/workflows/aarch64-local-display-attestation.yml"
-check "release media uses one exact reviewed build and branding tool chain" "rg -q 'bootc-image-builder@sha256:[0-9a-f]{64}' os/iso/build-iso.sh && installer_branding_tool_provenance_passes && rg -q 'shippable release media cannot skip Goblins installer branding' os/iso/build-iso.sh && rg -q 'shippable release media forbids GOBLINS_OS_BIB_AUTH_FILE' os/iso/build-iso.sh && ! rg -q 'dnf -y install' os/iso/remaster-anaconda-branding.sh && rg -Fq 'cmp --silent \"\$BRAND/sidebar-bg.png\" \"\$PIX/sidebar-bg.png\"' os/iso/remaster-anaconda-branding.sh && rg -Fq 'installer stylesheet still contains the legacy Fedora accent' os/iso/remaster-anaconda-branding.sh && rg -q 'checkisomd5 --verbose' os/iso/remaster-anaconda-branding.sh"
+check "branding source workflow seals the four-part OCI handoff without publication authority" "installer_branding_tool_source_handoff_contract_passes"
+check "release media requires protected-publisher branding evidence instead of schema-1 bootstrap history" "rg -q 'bootc-image-builder@sha256:[0-9a-f]{64}' os/iso/build-iso.sh && rg -Fq 'GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE' os/iso/build-iso.sh .github/workflows/aarch64-verification-iso.yml && rg -Fq 'schema-1-bootstrap-diagnostic' os/iso/build-iso.sh && rg -Fq 'goblins-os-installer-branding-tool-publisher-evidence-v1' os/iso/build-iso.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'shippable release media cannot skip Goblins installer branding' os/iso/build-iso.sh && rg -q 'shippable release media forbids GOBLINS_OS_BIB_AUTH_FILE' os/iso/build-iso.sh && ! rg -q 'dnf -y install' os/iso/remaster-anaconda-branding.sh && rg -Fq 'cmp --silent \"\$BRAND/sidebar-bg.png\" \"\$PIX/sidebar-bg.png\"' os/iso/remaster-anaconda-branding.sh && rg -Fq 'installer stylesheet still contains the legacy Fedora accent' os/iso/remaster-anaconda-branding.sh && rg -q 'checkisomd5 --verbose' os/iso/remaster-anaconda-branding.sh"
+check "final gate authenticates the non-self-referential publisher evidence artifact" "installer_branding_tool_publisher_gate_contract_passes"
 check "release evidence hash-seals Cargo, RPM, and replay-command bytes" "rg -Fq 'goblins-os-release-evidence-v5' crates/goblins-os-verify/src/main.rs os/hardware-gate/release-evidence.sh && rg -Fq 'rpm_command_sha256' crates/goblins-os-verify/src/main.rs .github/workflows/candidate-artifacts.yml os/hardware-gate/compose-signoff-rows.sh os/release/hydrate-release-artifacts.sh && rg -Fq 'goblins_os_historical_release_evidence_hashes_match' os/hardware-gate/release-evidence.sh os/release/hydrate-release-artifacts.sh && rg -Fq 'goblins_os_release_evidence_hashes_match' .github/workflows/build.yml .github/workflows/candidate-artifacts.yml .github/workflows/aarch64-verification-iso.yml os/hardware-gate/run-external-gate.sh os/hardware-gate/close-signoff.sh"
 check "native aarch64 proof binds the exact verification artifacts and workflow attempt" "rg -q 'verification_iso_sha256' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'release_evidence_manifest_sha256' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'workflow_run_attempt' .github/workflows/aarch64-verification-iso.yml os/hardware-gate/capture-harness/run-capture.sh os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh && rg -q 'Native packaging gate run attempt:' os/hardware-gate/close-signoff.sh os/hardware-gate/verify-shipping-status.sh"
 check "final gate retains exact candidate workflow metadata" "rg -q 'os/signoff-proofs/candidate/[$]arch/image-ref[.]json' os/hardware-gate/verify-shipping-status.sh && rg -q 'candidate_artifact_metadata_passes' os/hardware-gate/verify-shipping-status.sh && rg -q 'GOBLINS_OS_CANDIDATE_WORKFLOW_RUN=' os/hardware-gate/runbook.md && rg -q 'GOBLINS_OS_CANDIDATE_WORKFLOW_RUN_ATTEMPT=' os/hardware-gate/runbook.md"
@@ -3137,6 +3544,7 @@ for arch in "${ARCHES[@]}"; do
   SHA_PATH="$ISO_PATH.sha256"
   MANIFEST_PATH="os/iso/output/$arch/manifest-goblins-os-$arch.json"
   BIB_MANIFEST_PATH="os/iso/output/$arch/manifest-anaconda-iso.json"
+  BRANDING_PUBLISHER_EVIDENCE="os/iso/output/$arch/installer-branding-publisher-evidence.json"
   SBOM_DIR="os/signoff-proofs/sbom/$arch"
   SBOM_MANIFEST="$SBOM_DIR/release-evidence-manifest.json"
   CARGO_TSV="$SBOM_DIR/cargo-lock-packages.tsv"
@@ -3154,6 +3562,7 @@ for arch in "${ARCHES[@]}"; do
     PUBLIC_ISO_SHA="$(sha256_of_file "$ISO_PATH" 2>/dev/null || true)"
   fi
   check_file "$arch ISO manifest exists" "$MANIFEST_PATH" || ARCH_MISSING+=("ISO manifest")
+  check_file "$arch protected-publisher branding evidence exists" "$BRANDING_PUBLISHER_EVIDENCE" || ARCH_MISSING+=("branding publisher evidence")
   check_file_contains "$arch ISO manifest records architecture" "$MANIFEST_PATH" "\"architecture\": \"$arch\"" || ARCH_MISSING+=("ISO manifest architecture")
   if ! check_file_contains "$arch ISO manifest records selected candidate commit" "$MANIFEST_PATH" "\"candidate_commit\": \"$SELECTED_CANDIDATE_COMMIT\""; then
     ARCH_MISSING+=("ISO candidate commit")
@@ -3174,12 +3583,22 @@ for arch in "${ARCHES[@]}"; do
     "$MANIFEST_PATH" \
     "$arch" \
     "$SELECTED_CANDIDATE_COMMIT" \
-    "$IMAGE_REF"; then
+    "$IMAGE_REF" \
+    "$BRANDING_PUBLISHER_EVIDENCE"; then
     echo "[PASS] $arch public ISO records the exact native, pinned builder and Goblins-branding provenance"
   else
     echo "[FAIL] $arch public ISO provenance must use native builders, reviewed tool digests, Goblins branding, and the human-safe config"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     ARCH_MISSING+=("public ISO builder/branding provenance")
+  fi
+  if installer_branding_tool_publisher_evidence_passes \
+    "$BRANDING_PUBLISHER_EVIDENCE" \
+    "$MANIFEST_PATH"; then
+    echo "[PASS] $arch ISO branding is bound to authenticated source handoff and protected-publisher evidence"
+  else
+    echo "[FAIL] $arch ISO branding requires exact four-part source metadata, protected-publisher import proof, and matching published bytes"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    ARCH_MISSING+=("authenticated branding publisher evidence")
   fi
   check_file_contains "$arch ISO manifest records installer payload source kind" "$MANIFEST_PATH" "\"installer_payload_source_kind\":" || ARCH_MISSING+=("ISO manifest payload source kind")
   check_file_contains "$arch ISO manifest records nonlocal installer payload source" "$MANIFEST_PATH" "\"installer_payload_source_local_only\": false" || ARCH_MISSING+=("ISO manifest nonlocal payload source")

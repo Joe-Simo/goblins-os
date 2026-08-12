@@ -18,7 +18,19 @@ the system helps turn it into working local projects.
   image-based and release-verifiable.
 - **Clear security boundary.** Credentials stay outside the public image and out
   of client-side code. Desktop apps receive status and capability information,
-  not raw secrets.
+  not raw secrets. Goblins OS, its public repository, build, CI, verification,
+  screenshots, and release artifacts contain and use zero personal or provider
+  API keys. An installed user may add only their own key at runtime through the
+  protected per-user credential window.
+- **Upstream Codex compatibility without redistribution.** ChatGPT remains a
+  fixed official web surface. Goblins OS may open a compatible separately
+  installed Codex app through one fixed, policy-gated native action, with a
+  fixed official web fallback when the app is absent. The public image does not
+  embed, repackage, or rehost OpenAI's proprietary app. Each third-party
+  process or handler command that the launcher creates starts from an empty,
+  reviewed environment so no inherited API key, token, or account credential
+  is passed to that command. A pre-existing browser retains its own process
+  environment and account session.
 - **Honest capability states.** If a runtime, device, permission, or service is
   unavailable, the UI should say so plainly and degrade safely.
 - **One production architecture.** The supported current product and release

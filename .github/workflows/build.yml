@@ -46,6 +46,7 @@ env:
     goblins-os-installer/native-desktop
     goblins-os-control-center/native-desktop
     goblins-os-consent-broker/native-desktop
+    goblins-os-openai-key-broker/native-desktop
     goblins-os-launcher/native-desktop
     goblins-os-login/native-desktop
     goblins-os-markup/native-desktop
@@ -71,6 +72,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
+      - name: Verify source/publisher release boundary
+        run: ./os/release/verify-publisher-boundary.sh
       - name: Assert native runner architecture
         run: |
           test "$(uname -m)" = "${{ matrix.expected_uname }}"

@@ -1,23 +1,19 @@
-# Compatibility entrypoint for producing shippable aarch64 candidate media.
-#
-# This workflow delegates to the one digest-bound candidate implementation. It
-# does not move a release-channel image, create a Git tag or GitHub Release,
-# write generated evidence to Git, update the website, or promote stable.
-name: aarch64-candidate-release-media
-run-name: aarch64 candidate release media · ${{ github.sha }}
+# Compatibility entrypoint for producing the verified aarch64 OCI publisher
+# handoff. Shippable media and every registry/tag/Release mutation belong to the
+# separate protected publisher repository.
+name: aarch64-candidate-oci-handoff
+run-name: aarch64 candidate OCI handoff · ${{ github.sha }}
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   candidate-artifacts:
     permissions:
       contents: read
-      packages: write
     uses: ./.github/workflows/candidate-artifacts.yml
     with:
       candidate_commit: ${{ github.sha }}

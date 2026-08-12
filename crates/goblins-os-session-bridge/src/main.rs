@@ -31,6 +31,12 @@ const VOICE_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(120);
 const HOSTED_CONSENT_BROKER: &str = "/usr/libexec/goblins-os/goblins-os-consent-broker";
 const HOSTED_CONSENT_BROKER_GROUP: &str = "goblins-core-consent-broker";
 const HOSTED_CONSENT_PROCESS_TIMEOUT: Duration = Duration::from_secs(315);
+const OPENAI_KEY_BROKER: &str = "/usr/libexec/goblins-os/goblins-os-openai-key-broker";
+const OPENAI_KEY_BROKER_GROUP: &str = "goblins-core-openai-key-broker";
+// Covers claim (5s), the full entry window (180s), encryption (15s), commit
+// (5s), and a short bounded failure-notice window while remaining below the
+// core's five-minute operation lease.
+const OPENAI_KEY_BROKER_PROCESS_TIMEOUT: Duration = Duration::from_secs(240);
 const TEXT_SHORTCUTS_RUNTIME_STATUS_PATH: &str =
     "/run/goblins-os-session/text-shortcuts-runtime-status.json";
 const TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA: &str = "goblins-os.text-shortcuts-runtime-status.v1";
@@ -180,6 +186,7 @@ enum BridgeRequest {
         wav_base64: String,
     },
     LaunchHostedConsentBroker {},
+    LaunchOpenAiKeyBroker {},
     PermissionStoreDelete {
         table: String,
         id: String,
@@ -330,6 +337,7 @@ fn handle_request(request: BridgeRequest, peer_uid: u32) -> BridgeResponse {
             | BridgeRequest::VoiceCapture {}
             | BridgeRequest::VoicePlayback { .. }
             | BridgeRequest::LaunchHostedConsentBroker {}
+            | BridgeRequest::LaunchOpenAiKeyBroker {}
     ) && resolve_user_id(CORE_SERVICE_USER) != Some(peer_uid)
     {
         return failure("This operation requires the authenticated core service peer.");
@@ -343,6 +351,7 @@ fn handle_request(request: BridgeRequest, peer_uid: u32) -> BridgeResponse {
         BridgeRequest::VoiceCapture {} => voice_capture_response(),
         BridgeRequest::VoicePlayback { wav_base64 } => voice_playback_response(&wav_base64),
         BridgeRequest::LaunchHostedConsentBroker {} => launch_hosted_consent_broker_response(),
+        BridgeRequest::LaunchOpenAiKeyBroker {} => launch_openai_key_broker_response(),
         BridgeRequest::PermissionStoreDelete { table, id, app } => {
             permission_store_delete_response(&table, &id, &app)
         }
@@ -381,6 +390,44 @@ fn launch_hosted_consent_broker_response() -> BridgeResponse {
     // through its dedicated core capability.
     thread::spawn(move || {
         let deadline = Instant::now() + HOSTED_CONSENT_PROCESS_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Ok(None) | Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+            }
+        }
+    });
+    success("launched".to_string())
+}
+
+fn launch_openai_key_broker_response() -> BridgeResponse {
+    if validate_openai_key_broker(Path::new(OPENAI_KEY_BROKER)).is_err() {
+        return failure("The protected credential entry surface is unavailable.");
+    }
+
+    let mut command = Command::new(OPENAI_KEY_BROKER);
+    configure_hosted_consent_environment(&mut command);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => return failure("The protected credential entry surface could not start."),
+    };
+
+    // Reap the fixed broker and cap its lifetime. No operation details or
+    // decisions return through this process or socket; the broker talks only to
+    // its already-authenticated core capability.
+    thread::spawn(move || {
+        let deadline = Instant::now() + OPENAI_KEY_BROKER_PROCESS_TIMEOUT;
         loop {
             match child.try_wait() {
                 Ok(Some(_)) => return,
@@ -439,6 +486,37 @@ fn validate_hosted_consent_broker(path: &Path) -> Result<(), ()> {
         }
     }
     let expected_group = resolve_group_id(HOSTED_CONSENT_BROKER_GROUP).ok_or(())?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.gid() != expected_group
+        || metadata.mode() & 0o7777 != 0o2755
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn validate_openai_key_broker(path: &Path) -> Result<(), ()> {
+    if path != Path::new(OPENAI_KEY_BROKER) {
+        return Err(());
+    }
+    for directory in [
+        Path::new("/usr"),
+        Path::new("/usr/libexec"),
+        Path::new("/usr/libexec/goblins-os"),
+    ] {
+        let metadata = fs::symlink_metadata(directory).map_err(|_| ())?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(());
+        }
+    }
+    let expected_group = resolve_group_id(OPENAI_KEY_BROKER_GROUP).ok_or(())?;
     let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
@@ -1975,6 +2053,31 @@ mod tests {
             assert!(
                 serde_json::from_value::<super::BridgeRequest>(serde_json::json!({
                     "op": "launch-hosted-consent-broker",
+                    (forbidden): "attacker-controlled"
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn key_broker_launch_protocol_rejects_requester_supplied_capabilities() {
+        assert!(
+            serde_json::from_value::<super::BridgeRequest>(serde_json::json!({
+                "op": "launch-open-ai-key-broker"
+            }))
+            .is_ok()
+        );
+        for forbidden in [
+            "user_id",
+            "operation",
+            "lease_id",
+            "credential",
+            "encrypted_credential",
+        ] {
+            assert!(
+                serde_json::from_value::<super::BridgeRequest>(serde_json::json!({
+                    "op": "launch-open-ai-key-broker",
                     (forbidden): "attacker-controlled"
                 }))
                 .is_err()

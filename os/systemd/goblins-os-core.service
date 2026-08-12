@@ -12,6 +12,10 @@ User=goblins-os
 Group=goblins-os
 SupplementaryGroups=goblins-session-bridge goblins-core-resident
 EnvironmentFile=-/etc/goblins-os/environment
+# Build Studio's Codex CLI account state is core-private. Never export this path
+# through the shared desktop environment: any compatible desktop app owns its
+# own user session and must not inherit the service account's CODEX_HOME.
+Environment=CODEX_HOME=/var/lib/goblins-os/codex
 LoadCredential=openai-secrets.env:/etc/goblins-os/openai-secrets.env
 ExecStart=/usr/libexec/goblins-os/goblins-os-core
 Restart=always
@@ -23,6 +27,7 @@ RestartMaxDelaySec=60
 StateDirectory=goblins-os/models goblins-os/ai goblins-os/policy
 StateDirectoryMode=0750
 UMask=0077
+LimitCORE=0
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

@@ -6,6 +6,7 @@ members = [
   "crates/goblins-os-consent-broker",
   "crates/goblins-os-core",
   "crates/goblins-os-core-client",
+  "crates/goblins-os-openai-key-broker",
   "crates/goblins-os-design",
   "crates/goblins-os-file-builder",
   "crates/goblins-os-installer",

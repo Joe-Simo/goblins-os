@@ -23,6 +23,9 @@ records; they are not supported, current, or eligible for promotion.
 
 ## What CI enforces (`.github/workflows/build.yml`)
 
+- **publisher-boundary** check: every source workflow is read-only, consumes no
+  repository/environment secret, contains no registry/tag/Release write path,
+  and delegates publication to the separate protected publisher repository.
 - **rust** job: `cargo fmt --all --check`, `cargo clippy --workspace --features
   <native-desktop> -- -D warnings`, `cargo test`, and a release build — the
   canonical format/lint/type gate on the native `aarch64` release runner.
@@ -40,16 +43,23 @@ records; they are not supported, current, or eligible for promotion.
 
 ## Secrets & provisioning (server-side only)
 
-The image bakes in **no credentials**. Operators supply OpenAI account / relay
-secrets in `/etc/goblins-os/openai-secrets.env` (shipped empty, mode `0600
-root:root`). systemd (PID 1) copies it into `goblins-os-core`'s private runtime
-credential directory with `LoadCredential=`; the core reads named auth/relay
-values directly from that file, never from its process environment. No desktop
-user or group can read it, and generic core subprocesses receive a closed,
-non-secret environment. It is **never** sourced into the desktop session — the
-world-readable `/etc/goblins-os/environment` holds non-secret config only, and
-the client GUIs receive readiness booleans and opaque storage labels, never
-tokens or credential paths.
+The stock public image, release workflow, screenshots, and canonical release
+proof use **no maintainer-owned or provider credential**. Each installed user
+chooses on-device GPT-OSS, signs in to their own OpenAI account through the
+bundled Codex CLI, or adds their own OpenAI API key at runtime through the
+protected per-user credential window.
+
+Optional enterprise or self-hosted deployments may supply an operator-managed
+OpenAI account or assistant-route secret in
+`/etc/goblins-os/openai-secrets.env` (shipped empty, mode `0600 root:root`).
+systemd (PID 1) copies it into `goblins-os-core`'s private runtime credential
+directory with `LoadCredential=`; the core reads named values directly from that
+file, never from its process environment. No desktop user or group can read it,
+and generic core subprocesses receive a closed, non-secret environment. It is
+**never** sourced into the desktop session — the world-readable
+`/etc/goblins-os/environment` holds non-secret config only, and the client GUIs
+receive readiness booleans and opaque storage labels, never tokens or credential
+paths.
 
 Encrypted-at-rest provisioning uses the same runtime contract. An operator can
 replace the plaintext unit directive with this drop-in after creating the
@@ -65,6 +75,41 @@ The credential payload keeps the existing literal `NAME=VALUE` format and key
 names. Matching outer quotes remain accepted for migration compatibility, but
 shell expansion is not supported. Direct secret injection through service
 environment variables is intentionally unsupported.
+
+## ChatGPT web and compatible Codex Linux app boundary
+
+The ChatGPT and Codex launchers first pass the existing core health, session,
+and cloud-policy gates. ChatGPT opens only the fixed official
+`https://chatgpt.com` surface. Codex invokes only `/usr/bin/chatgpt` with the
+fixed `codex:` deep link when a compatible app is separately installed; only a
+missing executable falls back to `https://chatgpt.com/codex`. Unknown service
+states and other spawn failures fail closed. Every upstream-app or web-handler
+command that Goblins starts uses an empty environment plus a reviewed allowlist
+of desktop runtime variables and a fixed `PATH`, so that command inherits no
+unrelated keys, tokens, credentials, proxy settings, loader hooks, or
+service-owned `CODEX_HOME`.
+
+Goblins installs a higher-priority hidden `chatgpt.desktop` association for the
+`codex:` scheme that routes ordinary desktop links through the Goblins wrapper.
+This protects OS-owned desktop entry and link flows; a user who manually invokes
+a separately installed third-party executable remains outside the Goblins
+launcher boundary. The compatible app owns its own per-user sign-in session.
+Build Studio remains a separate Goblins OS surface with its existing GPT-OSS,
+OpenAI account through Codex, and user-supplied API-key engine choices.
+
+The public Goblins OS source, image, ISO, and release assets do not embed,
+extract, modify, rehost, or redistribute OpenAI's proprietary RPM. The package
+audited on 2026-08-12 was an `aarch64` runtime but also contained non-runtime
+foreign-architecture native dependency prebuilds, so it was not eligible for
+the literal Arm-only image contract. Re-audit every future upstream package;
+do not treat this time-specific result as a permanent product claim. A local
+RPM layer is not offered: it would make the bootc deployment locally modified
+and would pin that package instead of preserving the OS and app update
+contracts. Do not expose an install button until a supported,
+transactional bootc-native lifecycle can download and verify OpenAI's bytes on
+the user's machine, rebuild on both OS and app updates, stage a rollback-capable
+derived deployment, and remove it cleanly. Compatible Codex launch routing is
+real; publisher identity and bundled installation are intentionally not claimed.
 
 ## 1. Build the OS image
 
@@ -104,14 +149,27 @@ built-app detail) in light and dark. These are visual-regression fixtures, not
 installed-session or display-backed release evidence; only step 6 can satisfy
 that gate.
 
-## 4. Generate release and SBOM evidence
+## 4. Generate the exact-candidate handoff and evidence
+
+The public source repository does not publish containers. Dispatch
+`candidate-artifacts.yml` for the exact current `main` commit. It builds and
+verifies the native ARM64 image locally, then uploads four hash-sealed OCI
+payload parts plus a metadata envelope and release evidence. Artifact names,
+schemas, checksums, and the independent publisher verification contract are in
+[`os/release/PUBLISHER-BOUNDARY.md`](os/release/PUBLISHER-BOUNDARY.md).
+
+The protected `Joe-Simo/goblins-os-publisher` repository must authenticate that
+exact source run/attempt, reassemble and verify the OCI archive, import it with
+digest preservation, and prove that the public registry digest equals the
+source handoff digest. Only its resulting metadata may be used as the
+pullable-candidate input below.
 
 ```sh
 set -euo pipefail
 
 ARCH=aarch64
 CANDIDATE_COMMIT="$(git rev-parse HEAD)"
-CANDIDATE_REF_JSON="<downloaded metadata-only artifact>/image-ref.json"
+CANDIDATE_REF_JSON="<downloaded protected-publisher candidate metadata>/image-ref.json"
 jq -e --arg arch "$ARCH" --arg commit "$CANDIDATE_COMMIT" \
   '.architecture == $arch
    and .candidate_commit == $commit
@@ -128,10 +186,11 @@ cargo run -p goblins-os-verify -- \
   --image-ref "$IMAGE_REF"
 ```
 
-Generate and download `CANDIDATE_REF_JSON` from the exact
-`candidate-artifacts.yml` run documented in the hardware-gate runbook. Do not
-copy a mutable channel or commit-scoped tag into this field; the registry digest
-is the evidence identity.
+Generate and download `CANDIDATE_REF_JSON` from the exact protected publisher
+import run documented in the hardware-gate runbook. The source handoff's
+`intended_immutable_image_ref` is a required expected value, not proof that the
+image was published. Do not copy a mutable channel or commit-scoped tag into
+this field; the independently verified registry digest is the evidence identity.
 
 This source invocation can prepare diagnostic evidence and an
 `rpm-packages.command`, but it cannot satisfy final release evidence. For the
@@ -170,11 +229,15 @@ the just-built image through a Docker-local registry so bootc-image-builder can
 embed it. The builder rejects non-Arm hosts and non-Arm container engines;
 architecture emulation is not an artifact or release path. A local macOS ARM64
 build is diagnostic only and does not satisfy native Linux packaging or
-display-backed proof gates. Final shippable media must build on a native
-aarch64 Linux runner from the
+display-backed proof gates. Final shippable media must build only in the
+protected publisher repository on a native aarch64 Linux runner from the
 immutable pullable release image ref with `GOBLINS_OS_SHIPPABLE_RELEASE=1` and
 `GOBLINS_OS_BIB_SOURCE_IMAGE=<registry>/<image>@sha256:<64-hex-digest>`, because the
-Anaconda ISO records that source ref for post-install bootc tracking. The ISO embeds the image and opens Goblins OS advanced storage for disk selection. Storage is interactive: no
+Anaconda ISO records that source ref for post-install bootc tracking. It also
+requires the exact protected-publisher branding-tool record through
+`GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE` and its matching digest ref
+through `GOBLINS_OS_INSTALLER_BRANDING_IMAGE`; the checked-in schema-1 record is
+diagnostic only. The ISO embeds the image and opens Goblins OS advanced storage for disk selection. Storage is interactive: no
 `clearpart`/`autopart` command is baked into the kickstart, so the person must
 explicitly choose the target disk, review formatting, and confirm the
 bootloader/EFI target before writes happen. Keeping another operating system or
@@ -252,7 +315,9 @@ Capture and save evidence for this exact run in:
 - `os/screenshots/hardware-gate/aarch64/<run-date>/` (screenshots)
 - `os/signoff-notes.md` (step-by-step checklist + timestamps)
 - `os/hardware-gate/runbook.md` (reproducible command flow used)
-Generated release evidence and ISO metadata are scanned for live keys before signoff.
+Generated release evidence and ISO metadata are scanned for live keys before
+signoff. Source-repository OCI handoffs are non-promotional and cannot satisfy
+this gate by themselves.
 
 This step cannot run in the headless build sandbox. It is one required external
 gate and needs Apple Silicon/HVF with a display-backed VM. Native aarch64 Linux
@@ -266,6 +331,9 @@ proof, accessibility evidence, and coherent signoff must also pass.
   behavior must be judged on the real display path for the exact candidate.
 - **Typography** — the shipped font stack is final and Inter-only (with Noto
   Sans fallback).
-- **A runtime model** — exercising *actual* app generation needs GPT-OSS downloaded
-  (or your OpenAI API key / OpenAI account through Codex configured). The GUI + core build path is complete and
-  honest; generation runs once an engine is present.
+- **A runtime model** — canonical release proof exercises actual app generation
+  with downloaded GPT-OSS. It never requests, reads, validates, or uses a
+  maintainer's or user's API key or OpenAI account. Installed users may
+  separately choose their own API key or OpenAI account through Codex at runtime;
+  the GUI + core build path remains complete and honest once their selected
+  engine is ready.

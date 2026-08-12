@@ -56,7 +56,12 @@
 #                      daemon on constrained CI runners.
 #   GOBLINS_OS_SHIPPABLE_RELEASE
 #                      set 1 to require release-grade source images and the
-#                      canonical schema-2 ARM64 branding-tool provenance record
+#                      protected-publisher ARM64 branding-tool evidence record
+#   GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE
+#                      path to the exact protected-publisher JSON evidence for
+#                      the digest in GOBLINS_OS_INSTALLER_BRANDING_IMAGE;
+#                      required when GOBLINS_OS_SHIPPABLE_RELEASE=1 and bounded
+#                      to 32 KiB so its base64 workflow input stays bounded
 #   GOBLINS_OS_CANDIDATE_COMMIT
 #                      exact 40-hex source commit used for this image and ISO;
 #                      required for every artifact, including non-release tests
@@ -75,7 +80,9 @@ case "$CONFIG_LABEL" in
   "$REPO_ROOT"/*) CONFIG_LABEL="${CONFIG_LABEL#"$REPO_ROOT/"}" ;;
 esac
 BIB="${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b}"
-INSTALLER_BRANDING_IMAGE="${GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:4483609aa40e0b8f16e56becda876468309345fadf1b43572ddabfc556382205}"
+INSTALLER_BRANDING_IMAGE_OVERRIDE="${GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-}"
+INSTALLER_BRANDING_IMAGE="${INSTALLER_BRANDING_IMAGE_OVERRIDE:-ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:4483609aa40e0b8f16e56becda876468309345fadf1b43572ddabfc556382205}"
+INSTALLER_BRANDING_PUBLISHER_EVIDENCE="${GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE:-}"
 ROOTFS="${GOBLINS_OS_ROOTFS:-xfs}"
 CONTAINER_RUNTIME="${GOBLINS_OS_CONTAINER_RUNTIME:-docker}"
 DOCKER_REGISTRY_PORT="${GOBLINS_OS_DOCKER_REGISTRY_PORT:-5002}"
@@ -93,6 +100,17 @@ BIB_SOURCE_IMAGE_USED=""
 BIB_SOURCE_KIND=""
 BIB_SOURCE_LOCAL_ONLY="false"
 INSTALLER_BRANDING_APPLIED="false"
+INSTALLER_BRANDING_PROVENANCE_KIND="schema-1-bootstrap-diagnostic"
+INSTALLER_BRANDING_PUBLISHER_EVIDENCE_SHA256=""
+INSTALLER_BRANDING_SOURCE_COMMIT=""
+INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN=""
+INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN_ATTEMPT="0"
+INSTALLER_BRANDING_PUBLISHER_WORKFLOW_COMMIT=""
+INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN=""
+INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN_ATTEMPT="0"
+INSTALLER_BRANDING_HANDOFF_SHA256=""
+INSTALLER_BRANDING_ENVELOPE_SHA256=""
+INSTALLER_BRANDING_OCI_ARCHIVE_SHA256=""
 DOCKER_PLATFORM=""
 
 normalize_arch() {
@@ -129,81 +147,265 @@ require_command() {
   fi
 }
 
-require_shippable_branding_provenance() {
-  local provenance="$REPO_ROOT/os/release/installer-branding-tool.toml"
+sha256_digest() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "error: no sha256sum or shasum command available." >&2
+    exit 1
+  fi
+}
+
+require_shippable_branding_publisher_evidence() {
+  local evidence_path="$INSTALLER_BRANDING_PUBLISHER_EVIDENCE"
+  local evidence_size evidence_sha fields
 
   if [ "$SHIPPABLE_RELEASE" != "1" ]; then
     return 0
   fi
-  require_command python3
-  [ -f "$provenance" ] || {
-    echo "error: missing canonical installer branding-tool provenance: $provenance" >&2
+  if [ -z "$INSTALLER_BRANDING_IMAGE_OVERRIDE" ]; then
+    echo "error: shippable release media requires an explicit GOBLINS_OS_INSTALLER_BRANDING_IMAGE selected from protected-publisher evidence." >&2
     exit 1
-  }
-
-  python3 - "$provenance" "$INSTALLER_BRANDING_IMAGE" <<'PY'
+  fi
+  if [ -z "$evidence_path" ]; then
+    echo "error: shippable release media requires GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE." >&2
+    echo "       The checked-in schema-1 installer-branding-tool.toml is bootstrap/diagnostic history, not promotion evidence." >&2
+    exit 1
+  fi
+  case "$evidence_path" in
+    /*) ;;
+    *) evidence_path="$REPO_ROOT/$evidence_path" ;;
+  esac
+  if [ ! -f "$evidence_path" ] || [ -L "$evidence_path" ]; then
+    echo "error: protected-publisher branding evidence must be a regular non-symlink file: $evidence_path" >&2
+    exit 1
+  fi
+  evidence_size="$(wc -c < "$evidence_path" | tr -d '[:space:]')"
+  if [[ ! "$evidence_size" =~ ^[1-9][0-9]*$ ]] || [ "$evidence_size" -gt 32768 ]; then
+    echo "error: protected-publisher branding evidence must contain 1 through 32768 bytes." >&2
+    exit 1
+  fi
+  require_command python3
+  evidence_sha="$(sha256_digest "$evidence_path")"
+  fields="$(python3 - "$evidence_path" "$INSTALLER_BRANDING_IMAGE" "$REPO_ROOT/os/iso/branding-tool.Containerfile" <<'PY'
+import hashlib
+import json
 from pathlib import Path
+import re
 import sys
 
-try:
-    import tomllib
-except ModuleNotFoundError:
-    raise SystemExit(
-        "error: Python 3.11 or newer is required to verify shippable installer "
-        "branding-tool provenance."
-    )
-
-record_path = Path(sys.argv[1])
+evidence_path = Path(sys.argv[1])
 expected_ref = sys.argv[2]
+containerfile_path = Path(sys.argv[3])
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+def exact_keys(value, expected, label):
+    if not isinstance(value, dict) or set(value) != set(expected):
+        raise ValueError(f"{label} key set is not exact")
+
+def positive_int(value, label):
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{label} must be a positive integer")
+
 try:
-    with record_path.open("rb") as source:
-        record = tomllib.load(source)
-except (OSError, tomllib.TOMLDecodeError) as error:
-    raise SystemExit(
-        f"error: cannot parse canonical installer branding-tool provenance "
-        f"{record_path}: {error}"
+    record = json.loads(
+        evidence_path.read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
     )
+except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+    raise SystemExit(f"error: invalid protected-publisher branding evidence: {error}")
 
-if record.get("schema") != 2:
-    raise SystemExit(
-        "error: shippable release media requires schema 2 installer "
-        "branding-tool provenance; publish and pin a current native ARM64 artifact."
-    )
+try:
+    exact_keys(record, {
+        "schema", "product", "architecture", "oci_architecture",
+        "source_repository", "source_workflow", "source_handoff", "publisher",
+        "published_image", "verification", "source_repository_publish_authority",
+        "non_promotional",
+    }, "publisher evidence")
+    if record["schema"] != "goblins-os-installer-branding-tool-publisher-evidence-v1":
+        raise ValueError("publisher evidence schema is not supported")
+    if record["product"] != "Goblins OS installer branding tool":
+        raise ValueError("publisher evidence product is not exact")
+    if record["architecture"] != "aarch64" or record["oci_architecture"] != "arm64":
+        raise ValueError("publisher evidence is not ARM64-only")
+    if record["source_repository"] != "https://github.com/Joe-Simo/goblins-os":
+        raise ValueError("publisher evidence source repository is not exact")
+    if record["source_repository_publish_authority"] is not False or record["non_promotional"] is not True:
+        raise ValueError("publisher evidence changes the non-promotional source boundary")
 
-if record.get("anonymous_pull_verified") is not True:
-    raise SystemExit(
-        "error: shippable release media requires schema 2 provenance from an "
-        "anonymous digest-access check."
-    )
+    source = record["source_workflow"]
+    exact_keys(source, {
+        "path", "run", "run_id", "run_attempt", "source_commit",
+        "metadata_artifact", "payload_artifacts",
+    }, "source workflow")
+    commit = source["source_commit"]
+    if re.fullmatch(r"[0-9a-f]{40}", commit or "") is None:
+        raise ValueError("branding source commit is not exact lowercase 40-hex")
+    positive_int(source["run_id"], "source workflow run ID")
+    positive_int(source["run_attempt"], "source workflow run attempt")
+    expected_source_run = f"https://github.com/Joe-Simo/goblins-os/actions/runs/{source['run_id']}"
+    if source["path"] != ".github/workflows/branding-tool-image.yml" or source["run"] != expected_source_run:
+        raise ValueError("source workflow identity is not exact")
 
-architectures = record.get("architectures")
-if not isinstance(architectures, dict) or set(architectures) != {"aarch64"}:
-    raise SystemExit(
-        "error: shippable release media requires exactly one installer "
-        "branding-tool architecture table: architectures.aarch64."
-    )
+    artifact_keys = {"name", "id", "digest", "size_in_bytes"}
+    metadata = source["metadata_artifact"]
+    exact_keys(metadata, artifact_keys, "metadata artifact")
+    source_attempt = source["run_attempt"]
+    if metadata["name"] != f"goblins-os-branding-tool-oci-{commit}-aarch64-attempt-{source_attempt}-metadata":
+        raise ValueError("metadata artifact name is not exact")
+    artifacts = source["payload_artifacts"]
+    if not isinstance(artifacts, list) or len(artifacts) != 4:
+        raise ValueError("source workflow must bind exactly four payload artifacts")
+    seen_suffixes = set()
+    for artifact in artifacts:
+        exact_keys(artifact, artifact_keys | {"suffix"}, "payload artifact")
+        suffix = artifact["suffix"]
+        if suffix not in {"00", "01", "02", "03"} or suffix in seen_suffixes:
+            raise ValueError("payload artifact suffix set is not exact")
+        seen_suffixes.add(suffix)
+        if artifact["name"] != f"goblins-os-branding-tool-oci-{commit}-aarch64-attempt-{source_attempt}-part-{suffix}":
+            raise ValueError("payload artifact name is not exact")
+    for artifact in [metadata, *artifacts]:
+        positive_int(artifact["id"], "Actions artifact ID")
+        positive_int(artifact["size_in_bytes"], "Actions artifact size")
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["digest"] or "") is None:
+            raise ValueError("Actions artifact digest is not exact")
 
-aarch64 = architectures["aarch64"]
-if not isinstance(aarch64, dict):
-    raise SystemExit(
-        "error: architectures.aarch64 must be a TOML table in the canonical "
-        "installer branding-tool provenance."
-    )
+    handoff = record["source_handoff"]
+    exact_keys(handoff, {
+        "schema", "envelope_schema", "handoff_sha256", "envelope_sha256",
+        "checksums_sha256", "rpm_inventory_sha256", "rpm_package_count",
+        "oci_archive_sha256", "oci_archive_size_bytes", "oci_image_digest",
+        "intended_immutable_image_ref", "base_image", "containerfile_sha256",
+    }, "source handoff")
+    if handoff["schema"] != "goblins-os-installer-branding-tool-handoff-v1":
+        raise ValueError("source handoff schema is not exact")
+    if handoff["envelope_schema"] != "goblins-os-actions-artifact-envelope-v1":
+        raise ValueError("source envelope schema is not exact")
+    for key in (
+        "handoff_sha256", "envelope_sha256", "checksums_sha256",
+        "rpm_inventory_sha256", "oci_archive_sha256", "containerfile_sha256",
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", handoff[key] or "") is None:
+            raise ValueError(f"{key} is not exact SHA-256")
+    positive_int(handoff["rpm_package_count"], "RPM package count")
+    positive_int(handoff["oci_archive_size_bytes"], "OCI archive size")
+    if handoff["oci_archive_size_bytes"] > 34359738368:
+        raise ValueError("OCI archive exceeds the source handoff bound")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", handoff["oci_image_digest"] or "") is None:
+        raise ValueError("OCI image digest is not exact")
+    if handoff["intended_immutable_image_ref"] != expected_ref:
+        raise ValueError("publisher evidence does not match GOBLINS_OS_INSTALLER_BRANDING_IMAGE")
+    if expected_ref.rsplit("@", 1)[-1] != handoff["oci_image_digest"]:
+        raise ValueError("branding image ref does not preserve the source OCI digest")
 
-image_ref = record.get("image_ref")
-native_image_ref = aarch64.get("native_image_ref")
-if image_ref != expected_ref or native_image_ref != expected_ref:
-    raise SystemExit(
-        "error: GOBLINS_OS_INSTALLER_BRANDING_IMAGE must exactly match both "
-        "schema-2 ARM64 branding-tool provenance pins."
-    )
+    publisher = record["publisher"]
+    exact_keys(publisher, {
+        "repository", "workflow_path", "workflow_commit", "run", "run_id",
+        "run_attempt", "environment", "native_runner",
+    }, "publisher")
+    if re.fullmatch(r"[0-9a-f]{40}", publisher["workflow_commit"] or "") is None:
+        raise ValueError("publisher workflow commit is not exact lowercase 40-hex")
+    positive_int(publisher["run_id"], "publisher workflow run ID")
+    positive_int(publisher["run_attempt"], "publisher workflow run attempt")
+    expected_publisher_run = f"https://github.com/Joe-Simo/goblins-os-publisher/actions/runs/{publisher['run_id']}"
+    if publisher != {
+        "repository": "Joe-Simo/goblins-os-publisher",
+        "workflow_path": ".github/workflows/publish-branding-tool-aarch64.yml",
+        "workflow_commit": publisher["workflow_commit"],
+        "run": expected_publisher_run,
+        "run_id": publisher["run_id"],
+        "run_attempt": publisher["run_attempt"],
+        "environment": "candidate",
+        "native_runner": "aarch64",
+    }:
+        raise ValueError("protected publisher identity is not exact")
+
+    published = record["published_image"]
+    exact_keys(published, {
+        "immutable_ref", "manifest_digest", "digest_preserved",
+        "public_readback_verified", "os", "architecture", "revision", "base_image",
+        "containerfile_sha256", "rpm_inventory_sha256", "rpm_package_count",
+    }, "published image")
+    if published["immutable_ref"] != expected_ref or published["manifest_digest"] != handoff["oci_image_digest"]:
+        raise ValueError("published branding image does not preserve the source digest")
+    if published["digest_preserved"] is not True or published["public_readback_verified"] is not True:
+        raise ValueError("published branding image lacks digest-preserving public read-back")
+    if published["os"] != "linux" or published["architecture"] != "arm64" or published["revision"] != commit:
+        raise ValueError("published branding image identity is not exact native ARM64")
+    for key in ("base_image", "containerfile_sha256", "rpm_inventory_sha256", "rpm_package_count"):
+        if published[key] != handoff[key]:
+            raise ValueError(f"published branding image changes {key}")
+
+    verification = record["verification"]
+    exact_keys(verification, {
+        "source_run_authenticated", "metadata_artifact_digest_verified",
+        "payload_artifact_digests_verified", "ordered_parts_verified",
+        "oci_archive_verified", "required_tools_verified", "public_manifest_verified",
+    }, "publisher verification")
+    if any(value is not True for value in verification.values()):
+        raise ValueError("protected publisher verification is incomplete")
+
+    containerfile = containerfile_path.read_bytes()
+    if hashlib.sha256(containerfile).hexdigest() != handoff["containerfile_sha256"]:
+        raise ValueError("branding Containerfile differs from publisher evidence")
+    base_line = f"ARG FEDORA_IMAGE={handoff['base_image']}\n".encode()
+    if base_line not in containerfile:
+        raise ValueError("branding base image differs from publisher evidence")
+except (KeyError, TypeError, ValueError) as error:
+    raise SystemExit(f"error: protected-publisher branding evidence failed: {error}")
+
+print("\t".join((
+    commit,
+    source["run"],
+    str(source["run_attempt"]),
+    publisher["workflow_commit"],
+    publisher["run"],
+    str(publisher["run_attempt"]),
+    handoff["handoff_sha256"],
+    handoff["envelope_sha256"],
+    handoff["oci_archive_sha256"],
+    published["immutable_ref"],
+)))
 PY
+)" || exit 1
+  IFS=$'\t' read -r \
+    INSTALLER_BRANDING_SOURCE_COMMIT \
+    INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN \
+    INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN_ATTEMPT \
+    INSTALLER_BRANDING_PUBLISHER_WORKFLOW_COMMIT \
+    INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN \
+    INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN_ATTEMPT \
+    INSTALLER_BRANDING_HANDOFF_SHA256 \
+    INSTALLER_BRANDING_ENVELOPE_SHA256 \
+    INSTALLER_BRANDING_OCI_ARCHIVE_SHA256 \
+    evidence_image_ref <<< "$fields"
+  if [ "$evidence_image_ref" != "$INSTALLER_BRANDING_IMAGE" ]; then
+    echo "error: protected-publisher evidence parser returned a different branding image." >&2
+    exit 1
+  fi
+  if [ "$evidence_sha" != "$(sha256_digest "$evidence_path")" ]; then
+    echo "error: protected-publisher branding evidence changed while it was being verified." >&2
+    exit 1
+  fi
+  INSTALLER_BRANDING_PUBLISHER_EVIDENCE="$evidence_path"
+  INSTALLER_BRANDING_PUBLISHER_EVIDENCE_SHA256="$evidence_sha"
+  INSTALLER_BRANDING_PROVENANCE_KIND="protected-publisher-evidence-v1"
 }
 
 # Release mode must prove the branding helper before host, runtime, output, or
-# media setup. The truthful legacy schema-1 record intentionally fails closed
-# until a current native ARM64 schema-2 artifact is published and pinned.
-require_shippable_branding_provenance
+# media setup. The truthful legacy schema-1 record remains only a bootstrap and
+# non-release diagnostic pin; it can never authorize shippable media.
+require_shippable_branding_publisher_evidence
 
 require_docker_dns_label() {
   local label="$1"
@@ -571,6 +773,8 @@ finalize_outputs() {
   local source_iso="$1"
   local source_manifest="$2"
   local iso_count
+  local branding_evidence_name=""
+  local branding_evidence_output="$OUTDIR/installer-branding-publisher-evidence.json"
 
   [ -s "$source_iso" ] || {
     echo "error: bootc-image-builder did not produce the exact expected bootiso/install.iso" >&2
@@ -591,11 +795,22 @@ finalize_outputs() {
   # Replace Fedora's Anaconda chrome with the Goblins identity before sealing the
   # checksum, so the shipped ISO's installer carries zero Fedora branding.
   brand_installer "$ISO_PATH"
+  if [ "$SHIPPABLE_RELEASE" = "1" ]; then
+    if [ "$INSTALLER_BRANDING_PUBLISHER_EVIDENCE" != "$branding_evidence_output" ]; then
+      cp "$INSTALLER_BRANDING_PUBLISHER_EVIDENCE" "$branding_evidence_output"
+    fi
+    if [ "$INSTALLER_BRANDING_PUBLISHER_EVIDENCE_SHA256" != "$(sha256_digest "$branding_evidence_output")" ]; then
+      echo "error: copied protected-publisher branding evidence does not match its verified SHA-256." >&2
+      exit 1
+    fi
+    branding_evidence_name="installer-branding-publisher-evidence.json"
+  fi
   # Emit a portable, basename-relative checksum so no machine-specific absolute
   # path is baked into a shipping artifact; verify with `cd <dir> && sha256sum -c`.
   (cd "$(dirname "$ISO_PATH")" && sha256_file "$(basename "$ISO_PATH")") > "$SHA_PATH"
   cat > "$MANIFEST_PATH" <<EOF
 {
+  "schema": "goblins-os-iso-build-manifest-v2",
   "product": "Goblins OS",
   "architecture": "$ARCH",
   "candidate_commit": "$CANDIDATE_COMMIT",
@@ -613,6 +828,18 @@ finalize_outputs() {
   "installer_branding_applied": $INSTALLER_BRANDING_APPLIED,
   "installer_branding_image": "$INSTALLER_BRANDING_IMAGE",
   "installer_branding_ownership_helper_image": "$INSTALLER_BRANDING_IMAGE",
+  "installer_branding_provenance_kind": "$INSTALLER_BRANDING_PROVENANCE_KIND",
+  "installer_branding_publisher_evidence": "$branding_evidence_name",
+  "installer_branding_publisher_evidence_sha256": "$INSTALLER_BRANDING_PUBLISHER_EVIDENCE_SHA256",
+  "installer_branding_source_commit": "$INSTALLER_BRANDING_SOURCE_COMMIT",
+  "installer_branding_source_workflow_run": "$INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN",
+  "installer_branding_source_workflow_run_attempt": $INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN_ATTEMPT,
+  "installer_branding_publisher_workflow_commit": "$INSTALLER_BRANDING_PUBLISHER_WORKFLOW_COMMIT",
+  "installer_branding_publisher_workflow_run": "$INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN",
+  "installer_branding_publisher_workflow_run_attempt": $INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN_ATTEMPT,
+  "installer_branding_handoff_sha256": "$INSTALLER_BRANDING_HANDOFF_SHA256",
+  "installer_branding_envelope_sha256": "$INSTALLER_BRANDING_ENVELOPE_SHA256",
+  "installer_branding_oci_archive_sha256": "$INSTALLER_BRANDING_OCI_ARCHIVE_SHA256",
   "builder_image": "$BIB",
   "builder_output_ownership_helper_image": "$BIB",
   "builder_source_image": "$BIB_SOURCE_IMAGE_USED",

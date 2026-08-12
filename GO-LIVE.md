@@ -50,6 +50,13 @@ installation choice or current container target.
   separately from the public release ISO artifact chain. Neither proof route
   can substitute for the other.
 - [x] Source and generated artifact scans check for live secrets.
+- [x] The source contract keeps ChatGPT on its fixed official web surface and
+  opens only the fixed Codex native action when a compatible app is separately
+  installed. Native and web-handler commands launched by Goblins start from an
+  empty reviewed environment, and a higher-priority desktop association routes
+  ordinary `codex:` links through Goblins safeguards. The public image recipe
+  contains no OpenAI RPM, extracted proprietary payload, package repository, or
+  rehosted app bytes.
 - [x] The hydrated Arm public release ISO SHA256 is
   `13b2b59ea03054d66b3f8c0986c2314631437e57074685c515a1dffa3a4f6fbf`.
 - [x] Retire the mismatched July 5 `aarch64` display-backed verification-ISO
@@ -62,12 +69,38 @@ installation choice or current container target.
   repaired or reused. Stable proof must come from a fresh exact-candidate
   capture and signoff that identify the same verification ISO.
 - [ ] Produce one coherent `aarch64` signoff row for one exact candidate.
+- [ ] On that exact Arm candidate, prove the missing-package web fallback. Defer
+  installed native proof until OpenAI supplies a pure-Arm package eligible for
+  the Arm-only contract, or use an isolated upstream compatibility appliance
+  that is explicitly not a Goblins OS image, candidate, or evidence source.
+  Prove fixed `codex:` activation, empty-environment launch, and the hidden
+  desktop association there. Neither path authorizes adding proprietary bytes
+  to the public release image.
 - [ ] Run `./os/hardware-gate/verify-shipping-status.sh` after the Arm-only policy,
   SHA linkage, and exact-candidate checks are enforced. A prior pass is not
   stable-readiness evidence because it predates the corrected media-linkage
   requirement and does not authenticate an exact stable candidate.
 
 ## Stable Release Promotion
+
+Stable publication is a two-repository operation. The public source repository
+only produces verified, immutable Actions handoffs. The separately protected
+`Joe-Simo/goblins-os-publisher` repository is the sole GHCR, tag, and GitHub
+Release writer. The enforceable boundary and exact artifact schemas are defined
+in [`os/release/PUBLISHER-BOUNDARY.md`](os/release/PUBLISHER-BOUNDARY.md).
+
+- [ ] Create and protect `Joe-Simo/goblins-os-publisher`, including required
+  review/rulesets and protected `candidate` and `stable` environments.
+- [ ] Remove write/admin Actions access for this source repository from both
+  GHCR packages; disable inherited package access; grant write access only to
+  the protected publisher repository.
+- [ ] Set this source repository's Actions token default to read-only and make
+  `os/release/verify-publisher-boundary.sh` a required check for workflow changes.
+- [ ] Install the narrowly scoped release GitHub App only in the publisher's
+  protected environment; do not copy its identity or private key into source.
+- [ ] Implement and review the publisher's pinned ARM64 import and stable-release
+  workflows, including independent Actions-artifact, OCI, ISO, SBOM, Authority
+  2, signoff, secret-scan, and public read-back verification.
 
 - [x] Make the current Arm GHCR package public and verify:
 
@@ -84,13 +117,17 @@ exact candidate workflow.
   exact stable candidate.
 - [ ] Export that full commit as `GOBLINS_OS_CANDIDATE_COMMIT` for every Arm ISO,
   release-evidence, capture, close-signoff, and shipping-status command.
-- [ ] Dispatch the canonical candidate workflow for that commit, retain its
-  exact run URL, and require the native `aarch64` release job to pass.
-- [ ] Download the metadata-only Arm candidate artifact from that exact run.
-  Validate architecture, candidate commit, `non_promotional: true`, and its
-  `immutable_image_ref`; never substitute the commit-scoped tag.
-- [ ] Retain the digest-bound Arm shippable media and package evidence from that
-  exact run without moving any public channel.
+- [ ] Dispatch source `candidate-artifacts.yml` for that commit, retain its exact
+  run URL/attempt, and require its native `aarch64` OCI verification to pass.
+- [ ] Authenticate the metadata envelope and all four source OCI part artifacts;
+  validate architecture, candidate commit, source gates, Actions artifact
+  digests, part checksums, complete archive checksum, `non_promotional: true`,
+  and `source_repository_publish_authority: false`.
+- [ ] Dispatch the protected publisher candidate-import workflow. Require a
+  digest-preserving import and independently prove the public GHCR digest equals
+  the source handoff before building any verification or shippable ISO.
+- [ ] Retain the publisher's digest-bound Arm shippable media and package
+  evidence from that exact candidate without moving any public channel.
 - [ ] Build the `aarch64` verification ISO with its exact digest, then complete
   the local native HVF display-backed capture. Do not use hydrated public release
   media for automated capture. Require the repository-pinned capture-host CMS
@@ -102,6 +139,12 @@ exact candidate workflow.
 - [ ] Run `GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT"
   ./os/hardware-gate/verify-shipping-status.sh` in that evidence workspace and
   require a fully green Arm result before any promotion.
+- [ ] Dispatch source `stable-promotion.yml` to create the authenticated
+  `goblins-os-publisher-request-v1` handoff with the exact OS candidate commit
+  and reviewed branding-tool source commit; verify its GitHub artifact digest.
+- [ ] Dispatch protected publisher `publish-aarch64.yml` with that exact request.
+  The publisher must revalidate every source byte, publish only the allowlisted
+  ARM64 artifacts, move `:aarch64`/`:stable` last, and verify public read-back.
 - [ ] Preserve the selected source commit; attach reviewed generated evidence to
   the release instead of advancing or rebuilding the candidate merely to store
   proof.
@@ -111,9 +154,7 @@ exact candidate workflow.
 - [ ] Run website checks after the stable release data is updated:
 
 ```sh
-bun run lint
-bun run typecheck
-bun run build
+(cd apps/site && bun run verify:data && bun run lint && bun run typecheck && bun run build)
 ```
 
 - [ ] Deploy the stable production website.

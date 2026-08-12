@@ -9,6 +9,7 @@ image/jpeg=org.gnome.Loupe.desktop
 image/png=org.gnome.Loupe.desktop
 image/tiff=org.gnome.Loupe.desktop
 image/webp=org.gnome.Loupe.desktop
+x-scheme-handler/codex=chatgpt.desktop
 
 [Added Associations]
 application/pdf=org.gnome.Papers.desktop;
@@ -21,3 +22,4 @@ image/jpeg=org.gnome.Loupe.desktop;
 image/png=org.gnome.Loupe.desktop;
 image/tiff=org.gnome.Loupe.desktop;
 image/webp=org.gnome.Loupe.desktop;
+x-scheme-handler/codex=chatgpt.desktop;

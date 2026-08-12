@@ -44,6 +44,7 @@ const REQUIRED_SOCKET_MODE: u32 = 0o660;
 pub(crate) enum ClientKind {
     ControlCenter,
     ConsentBroker,
+    OpenAiKeyBroker,
     Dictate,
     FileBuilder,
     FocusTick,
@@ -65,9 +66,10 @@ pub(crate) enum ClientKind {
     VoiceControl,
 }
 
-const ALL_CLIENTS: [ClientKind; 18] = [
+const ALL_CLIENTS: [ClientKind; 19] = [
     ClientKind::ControlCenter,
     ClientKind::ConsentBroker,
+    ClientKind::OpenAiKeyBroker,
     ClientKind::Dictate,
     ClientKind::FileBuilder,
     ClientKind::FocusTick,
@@ -116,6 +118,12 @@ const CONTROL_CENTER_PERMISSIONS: &[Permission] = permissions![
 const CONSENT_BROKER_PERMISSIONS: &[Permission] =
     permissions![(POST, "/v1/consent/review"), (POST, "/v1/consent/decision"),];
 
+const OPENAI_KEY_BROKER_PERMISSIONS: &[Permission] = permissions![
+    (POST, "/v1/openai-key-broker/claim"),
+    (POST, "/v1/openai-key-broker/commit"),
+    (POST, "/v1/openai-key-broker/decision"),
+];
+
 const DICTATE_PERMISSIONS: &[Permission] = permissions![(POST, "/v1/voice/dictate")];
 
 const FILE_BUILDER_PERMISSIONS: &[Permission] = permissions![
@@ -132,6 +140,7 @@ const INSTALLER_PERMISSIONS: &[Permission] = permissions![
     (GET, "/v1/codex/status"),
     (GET, "/v1/policy/status"),
     (GET, "/v1/network/status"),
+    (GET, "/v1/models/openai-key"),
     (GET, "/v1/installer/readiness"),
     (GET, "/v1/installer/install-targets"),
     (GET, "/v1/installer/install-targets/progress"),
@@ -143,6 +152,7 @@ const INSTALLER_PERMISSIONS: &[Permission] = permissions![
     (POST, "/v1/network/wifi/connect"),
     (POST, "/v1/installer/install-targets/prepare"),
     (POST, "/v1/codex/login"),
+    (POST, "/v1/models/openai-key/manage"),
     (POST, "/v1/models/engine"),
     (POST, "/v1/policy/permissions/grant"),
     (POST, "/v1/apps/builds"),
@@ -286,6 +296,7 @@ const SETTINGS_PERMISSIONS: &[Permission] = permissions![
     (GET, "/v1/codex/login/url"),
     (POST, "/v1/policy/permissions/grant"),
     (POST, "/v1/ai/settings-context"),
+    (POST, "/v1/models/openai-key/manage"),
     (POST, "/v1/models/engine"),
     (POST, "/v1/local-models/install"),
     (POST, "/v1/privacy"),
@@ -354,6 +365,7 @@ impl ClientKind {
         match self {
             Self::ControlCenter => "control-center",
             Self::ConsentBroker => "consent-broker",
+            Self::OpenAiKeyBroker => "openai-key-broker",
             Self::Dictate => "dictate",
             Self::FileBuilder => "file-builder",
             Self::FocusTick => "focus-tick",
@@ -377,6 +389,7 @@ impl ClientKind {
         match self {
             Self::ControlCenter => CONTROL_CENTER_PERMISSIONS,
             Self::ConsentBroker => CONSENT_BROKER_PERMISSIONS,
+            Self::OpenAiKeyBroker => OPENAI_KEY_BROKER_PERMISSIONS,
             Self::Dictate => DICTATE_PERMISSIONS,
             Self::FileBuilder => FILE_BUILDER_PERMISSIONS,
             Self::FocusTick => FOCUS_TICK_PERMISSIONS,
@@ -1293,6 +1306,7 @@ mod tests {
             .expect("core crate must have a crates directory");
         for (client, crate_name) in [
             (ClientKind::ControlCenter, "goblins-os-control-center"),
+            (ClientKind::OpenAiKeyBroker, "goblins-os-openai-key-broker"),
             (ClientKind::FileBuilder, "goblins-os-file-builder"),
             (ClientKind::Installer, "goblins-os-installer"),
             (ClientKind::Launcher, "goblins-os-launcher"),

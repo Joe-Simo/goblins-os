@@ -1,4 +1,4 @@
-use axum::{http::Uri, Json};
+use axum::{extract::Extension, http::Uri, Json};
 use serde::Serialize;
 
 use crate::{
@@ -37,13 +37,15 @@ pub struct ServiceCatalog {
     services: Vec<ServiceCatalogEntry>,
 }
 
-pub async fn service_catalog() -> Json<ServiceCatalog> {
+pub async fn service_catalog(
+    Extension(client): Extension<crate::control_plane::RequestClient>,
+) -> Json<ServiceCatalog> {
     Json(ServiceCatalog {
-        services: build_services(),
+        services: build_services(Some(client.user_id())),
     })
 }
 
-fn build_services() -> Vec<ServiceCatalogEntry> {
+fn build_services(user_id: Option<u32>) -> Vec<ServiceCatalogEntry> {
     vec![
         ServiceCatalogEntry {
             id: "chatgpt",
@@ -54,23 +56,24 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
             status: service_status("cloud-openai", ServiceStatus::External),
             api_surface: "official-web-app",
             sdk: "not-applicable",
-            os_boundary: "external browser surface opened by OS launcher",
-            secret_boundary: "No API key or token is passed to Goblins OS clients.",
-            readiness: "Opens the official ChatGPT surface when cloud OpenAI policy allows it."
+            os_boundary: "Goblins OS opens the fixed official ChatGPT web surface through its policy-gated launcher.",
+            secret_boundary: "The launcher starts the fixed web-handler command from an empty, reviewed desktop environment and passes no provider or account credential to that command. A pre-existing browser owns its own environment and account session.",
+            readiness: "Opens the official ChatGPT web surface when cloud OpenAI policy allows it."
                 .to_string(),
         },
         ServiceCatalogEntry {
             id: "codex",
             name: "Codex",
-            role: "Coding agent, app builder, and Build Studio engine",
-            launch: "https://chatgpt.com/codex",
+            role: "Codex workspace via compatible app or official web",
+            launch: "local://goblins-os/openai/codex",
             policy_control: "cloud-openai",
-            status: codex_service_status(),
-            api_surface: "codex",
-            sdk: "OpenAI Codex CLI / Codex SDK account-owned path",
-            os_boundary: "Goblins OS drives Codex in an OS-owned workspace; Codex owns account credentials.",
-            secret_boundary: "Codex credentials stay under CODEX_HOME and are never returned by the core API.",
-            readiness: codex_readiness(),
+            status: service_status("cloud-openai", ServiceStatus::External),
+            api_surface: "compatible-linux-app-codex-deep-link",
+            sdk: "Compatible installed Codex app",
+            os_boundary: "The Goblins launcher opens a compatible installed Codex app; Build Studio remains a separate OS-owned workspace and engine experience. Ordinary desktop Codex links are routed through the Goblins wrapper, while a manually invoked third-party executable remains outside this launcher boundary.",
+            secret_boundary: "The launcher starts the compatible app from an empty, reviewed desktop environment. Any installed app owns its own per-user account session; Goblins OS does not inject one.",
+            readiness: "Opens a compatible installed Codex app when available, or the official Codex web surface otherwise, when cloud OpenAI policy allows it."
+                .to_string(),
         },
         ServiceCatalogEntry {
             id: "build-studio",
@@ -78,12 +81,12 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
             role: "The OS app model: create applications from intent instead of installing them",
             launch: "local://goblins-os/apps/build",
             policy_control: "app-builder",
-            status: build_studio_status(),
+            status: build_studio_status(user_id),
             api_surface: "resident-generate",
             sdk: "Codex when the account engine is selected; Responses API when your own OpenAI key is selected; the managed OpenAI service when explicitly selected; local GPT-OSS otherwise",
             os_boundary: "Rust Build Studio owns policy and storage and always uses the explicitly selected Goblins AI engine.",
             secret_boundary: "Build Studio never receives raw API keys, account tokens, or tool credentials.",
-            readiness: build_studio_readiness(),
+            readiness: build_studio_readiness(user_id),
         },
         ServiceCatalogEntry {
             id: "platform",
@@ -107,17 +110,17 @@ fn build_services() -> Vec<ServiceCatalogEntry> {
             policy_control: "cloud-openai",
             status: configured_service_status(
                 "cloud-openai",
-                responses_api_configured(),
+                responses_api_configured(user_id),
                 ServiceStatus::ServerGated,
             ),
             api_surface: "/v1/responses",
             sdk: "Official OpenAI API surface called from Rust over the server-side core",
             os_boundary: "Goblins OS makes hosted requests inside its protected system service; apps use only approved Goblins OS actions.",
             secret_boundary: "Your OpenAI key stays in protected system storage or a managed organization service.",
-            readiness: if responses_api_configured() {
+            readiness: if responses_api_configured(user_id) {
                 "Configured for server-side Responses API calls.".to_string()
             } else {
-                "Ask a device administrator to install an OpenAI key or configure the managed organization service.".to_string()
+                "Add your own OpenAI API key in Settings, or ask a device administrator to configure the managed organization service.".to_string()
             },
         },
         ServiceCatalogEntry {
@@ -297,34 +300,11 @@ fn configured_service_status(
     }
 }
 
-fn codex_service_status() -> ServiceStatus {
-    match policy_state_for_control("cloud-openai") {
-        PolicyControlState::Allowed if crate::codex::codex_available() => {
-            ServiceStatus::ServerGated
-        }
-        PolicyControlState::Allowed => ServiceStatus::NotConfigured,
-        PolicyControlState::Denied => ServiceStatus::PolicyBlocked,
-        PolicyControlState::PermissionGated => ServiceStatus::PermissionGated,
-    }
-}
-
-fn codex_readiness() -> String {
-    if crate::codex::codex_available() {
-        "Codex is installed and signed in with the user's OpenAI account.".to_string()
-    } else if crate::codex::codex_installed() {
-        "Codex is installed; sign in with the user's OpenAI account before selecting it."
-            .to_string()
-    } else {
-        "Start from the full Goblins OS image with Codex included before using the account-owned builder."
-            .to_string()
-    }
-}
-
-fn build_studio_status() -> ServiceStatus {
+fn build_studio_status(user_id: Option<u32>) -> ServiceStatus {
     match policy_state_for_control("app-builder") {
         PolicyControlState::Denied => ServiceStatus::PolicyBlocked,
         PolicyControlState::PermissionGated => ServiceStatus::PermissionGated,
-        PolicyControlState::Allowed => match crate::resident::active_engine_locality() {
+        PolicyControlState::Allowed => match crate::resident::active_engine_locality(user_id) {
             Some(crate::resident::EngineLocality::OnDevice) => ServiceStatus::Local,
             Some(crate::resident::EngineLocality::Cloud) => ServiceStatus::ServerGated,
             None => ServiceStatus::NotConfigured,
@@ -332,7 +312,7 @@ fn build_studio_status() -> ServiceStatus {
     }
 }
 
-fn build_studio_readiness() -> String {
+fn build_studio_readiness(user_id: Option<u32>) -> String {
     match policy_state_for_control("app-builder") {
         PolicyControlState::Denied => {
             return "Build Studio is blocked by the active Goblins OS policy.".to_string();
@@ -343,7 +323,7 @@ fn build_studio_readiness() -> String {
         PolicyControlState::Allowed => {}
     }
 
-    match crate::resident::active_engine_locality() {
+    match crate::resident::active_engine_locality(user_id) {
         Some(crate::resident::EngineLocality::OnDevice) => {
             "Ready through the selected on-device Goblins AI engine.".to_string()
         }
@@ -354,8 +334,9 @@ fn build_studio_readiness() -> String {
     }
 }
 
-fn responses_api_configured() -> bool {
-    (crate::openai_key::stored_api_key().is_some() && crate::resident::openai_api_base_is_valid())
+fn responses_api_configured(user_id: Option<u32>) -> bool {
+    (user_id.is_some_and(crate::openai_key_provisioning::credential_is_stored)
+        && crate::resident::openai_api_base_is_valid())
         || crate::resident::managed_cloud_route_configured()
 }
 
@@ -392,7 +373,7 @@ mod tests {
 
     #[test]
     fn every_service_opens_a_real_openai_surface_or_an_os_owned_action() {
-        for service in build_services() {
+        for service in build_services(None) {
             if let Some(rest) = service.launch.strip_prefix("https://") {
                 // Web tiles are only allowed to open genuine OpenAI surfaces.
                 assert!(
@@ -419,7 +400,7 @@ mod tests {
     fn each_openai_service_has_its_own_distinct_surface() {
         // Guards against the regression where several first-class services all
         // collapsed onto one generic placeholder URL.
-        let launches: Vec<&str> = build_services()
+        let launches: Vec<&str> = build_services(None)
             .iter()
             .map(|service| service.launch)
             .collect();
@@ -433,7 +414,34 @@ mod tests {
 
     #[test]
     fn catalog_declares_current_openai_surfaces_and_sdk_boundaries() {
-        let services = build_services();
+        let services = build_services(None);
+        let chatgpt = services
+            .iter()
+            .find(|service| service.id == "chatgpt")
+            .expect("ChatGPT service");
+        assert_eq!(chatgpt.launch, "https://chatgpt.com");
+        assert_eq!(chatgpt.api_surface, "official-web-app");
+        assert!(chatgpt.os_boundary.contains("official ChatGPT web"));
+        assert!(chatgpt.secret_boundary.contains("web-handler command"));
+        assert!(chatgpt.secret_boundary.contains("pre-existing browser"));
+
+        let codex = services
+            .iter()
+            .find(|service| service.id == "codex")
+            .expect("Codex service");
+        assert_eq!(codex.launch, "local://goblins-os/openai/codex");
+        assert_eq!(
+            codex.role,
+            "Codex workspace via compatible app or official web"
+        );
+        assert_eq!(codex.api_surface, "compatible-linux-app-codex-deep-link");
+        assert_eq!(codex.sdk, "Compatible installed Codex app");
+        assert!(codex
+            .os_boundary
+            .contains("Build Studio remains a separate"));
+        assert!(codex.secret_boundary.contains("empty, reviewed"));
+        assert!(codex.os_boundary.contains("manually invoked"));
+
         let responses = services
             .iter()
             .find(|service| service.id == "responses-api")
@@ -456,6 +464,7 @@ mod tests {
             .iter()
             .find(|service| service.id == "build-studio")
             .expect("build studio service");
+        assert_eq!(build_studio.launch, "local://goblins-os/apps/build");
         assert!(build_studio.sdk.contains("Codex"));
         assert!(build_studio.sdk.contains("Responses API"));
         assert!(build_studio.sdk.contains("explicitly selected"));

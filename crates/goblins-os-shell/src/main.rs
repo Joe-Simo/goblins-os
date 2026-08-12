@@ -2230,7 +2230,7 @@ fn engine_picker(
     picker.update_property(&[
         gtk::accessible::Property::Label("Choose Goblins AI engine"),
         gtk::accessible::Property::Description(
-            "Choose on-device GPT-OSS, your OpenAI account through Codex, or hosted models using an administrator-installed protected service credential.",
+            "Choose on-device GPT-OSS, your OpenAI account through Codex, or hosted models using your API key from protected Goblins OS storage.",
         ),
     ]);
 
@@ -2268,7 +2268,7 @@ fn engine_picker(
             if state.codex_ready {
                 "Uses your OpenAI account through Codex."
             } else {
-                "Sign in to Codex in Settings before choosing this engine."
+                "Sign in with your OpenAI account through Codex in Settings before choosing this engine."
             },
         ),
         (
@@ -2278,7 +2278,7 @@ fn engine_picker(
             if state.key_ready {
                 "Uses OpenAI hosted models with your stored API key."
             } else {
-                "Ask a device administrator to install an OpenAI API key before choosing this engine."
+                "Add your API key in the separate protected window from Settings before choosing this engine."
             },
         ),
     ];

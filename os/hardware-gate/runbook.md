@@ -158,20 +158,27 @@ ISO from that exact commit. Never re-sign old evidence with a new authority;
 historical proof remains bound to the public chain in its own immutable source
 commit.
 
-### Rotating the immutable installer-branding tool
+### Rotating the immutable installer-branding tool (publisher boundary)
+
+The current procedure is the sealed OCI handoff in
+[`os/release/PUBLISHER-BOUNDARY.md`](../release/PUBLISHER-BOUNDARY.md). Dispatch
+`branding-tool-image.yml` only to produce the four source OCI parts and metadata
+envelope. The protected publisher must authenticate, reassemble, inspect, and
+digest-preservingly import those bytes. This source repository never logs in to
+GHCR.
 
 Rotate the tool whenever its Containerfile, base image, supported-architecture
 policy, workflow semantics, or provenance schema changes. The tool must be
 built natively on aarch64, reviewed, anonymously pullable, and digest-pinned
 before any candidate ISO uses it.
 
-The ARM-only schema-2 transition is deliberately a two-commit bootstrap. First
-push commit A with the reviewed ARM-only workflow and the existing schema-1
-record, then build the branding tool from A. Commit B must record A's exact
-workflow run, attempt, digest, and inventory in schema 2 and propagate that
-digest through every build path. Select B—not A—as the OS candidate. This
-one-time rotation is required even though the Containerfile and Fedora base
-image themselves did not change.
+`os/release/installer-branding-tool.toml` remains the immutable schema-1
+bootstrap/diagnostic record. Do not update it to claim publication and never use
+it as promotion authority. Shippable and verification ISO builds instead require
+the exact protected-publisher JSON evidence defined in
+`PUBLISHER-BOUNDARY.md`. That record binds the four source payload artifacts,
+metadata envelope, ordered archive, native ARM64 image digest, publisher
+workflow identity, and public digest-preserving read-back.
 
 ```sh
 set -euo pipefail
@@ -187,71 +194,35 @@ TOOL_RUN_ID="${TOOL_RUN_URL##*/}"
 gh run watch "$TOOL_RUN_ID" --exit-status
 TOOL_RUN_ATTEMPT="$(gh run view "$TOOL_RUN_ID" --json attempt --jq '.attempt')"
 [[ "$TOOL_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-TOOL_TMP="$(mktemp -d "${TMPDIR:-/tmp}/goblins-branding-review.XXXXXX")"
-trap 'rm -rf "$TOOL_TMP"' EXIT
-TOOL_RUN_METADATA="$TOOL_TMP/workflow-run.json"
-gh api "repos/Joe-Simo/goblins-os/actions/runs/$TOOL_RUN_ID/attempts/$TOOL_RUN_ATTEMPT" \
-  > "$TOOL_RUN_METADATA"
-jq -e \
-  --arg commit "$TOOL_COMMIT" \
-  --arg run "$TOOL_RUN_URL" \
-  --argjson attempt "$TOOL_RUN_ATTEMPT" \
-  '.html_url == $run
-   and .conclusion == "success"
-   and .head_sha == $commit
-   and .event == "workflow_dispatch"
-   and .path == ".github/workflows/branding-tool-image.yml"
-   and .run_attempt == $attempt' \
-  "$TOOL_RUN_METADATA" >/dev/null
-gh run download "$TOOL_RUN_ID" \
-  -n "goblins-os-branding-tool-$TOOL_COMMIT-aarch64" \
-  -D "$TOOL_TMP"
-TOOL_INDEX="$TOOL_TMP/image-ref.json"
-TOOL_INVENTORY="$TOOL_TMP/rpm-packages.tsv"
-test -s "$TOOL_INDEX"
-test ! -L "$TOOL_INDEX"
-test -s "$TOOL_INVENTORY"
-test ! -L "$TOOL_INVENTORY"
-TOOL_REF="$(jq -er '.image_ref' "$TOOL_INDEX")"
-jq -e \
-  --arg architecture "aarch64" \
-  --arg commit "$TOOL_COMMIT" \
-  --arg run "$TOOL_RUN_URL" \
-  --argjson attempt "$TOOL_RUN_ATTEMPT" \
-  '.schema == "goblins-os-installer-branding-tool-v2"
-   and .architecture == $architecture
-   and .candidate_commit == $commit
-   and .workflow_run == $run
-   and .workflow_run_attempt == $attempt
-   and (.image_ref | test("^ghcr\\.io/joe-simo/goblins-os-installer-branding-tool@sha256:[0-9a-f]{64}$"))
-   and (.base_image | test("^docker\\.io/library/fedora@sha256:[0-9a-f]{64}$"))
-   and (.containerfile_sha256 | test("^[0-9a-f]{64}$"))
-   and (.rpm_inventory_sha256 | test("^[0-9a-f]{64}$"))
-   and .anonymous_pull_verified == true' \
-  "$TOOL_INDEX" >/dev/null
-test "$(shasum -a 256 "$TOOL_INVENTORY" | awk '{print $1}')" = \
-  "$(jq -er '.rpm_inventory_sha256' "$TOOL_INDEX")"
-PUBLIC_DOCKER_CONFIG="$TOOL_TMP/public-docker"
-mkdir -p "$PUBLIC_DOCKER_CONFIG"
-DOCKER_CONFIG="$PUBLIC_DOCKER_CONFIG" docker manifest inspect "$TOOL_REF" \
-  > "$TOOL_TMP/public-manifest.json"
-jq -e \
-  '([.manifests[]? | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length) == 1
-   and ([.manifests[]? | select(.platform.architecture == "amd64")] | length) == 0' \
-  "$TOOL_TMP/public-manifest.json" >/dev/null
 ```
 
-Review the full aarch64 RPM inventory and its licenses. Then update
-`os/release/installer-branding-tool.toml` with the exact immutable image and
-`architectures.aarch64.native_image_ref`, inventory hash/count, source commit,
-workflow run and attempt, `anonymous_pull_verified = true`, base image,
-Containerfile SHA256, and public-pull date.
-Propagate that native digest through every
-release workflow and `os/iso/build-iso.sh`, then run `goblins-os-verify`; its
-semantic provenance check rejects Containerfile, base-image, architecture, or
-pin drift. Never substitute a tag for the reviewed digest.
+Authenticate all five source artifacts (parts `00` through `03` plus metadata)
+by run ID, attempt, artifact ID, size, and Actions digest. Dispatch only the
+protected publisher's `publish-branding-tool-aarch64.yml`. Review its full RPM
+inventory and evidence artifact, then use that exact JSON and immutable image
+ref as `GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE` and
+`GOBLINS_OS_INSTALLER_BRANDING_IMAGE`. Never substitute a tag or the source
+handoff's intended ref for publisher evidence. The JSON is bounded to 32 KiB
+and does not claim its own post-upload artifact ID or digest. The final shipping
+gate derives the exact artifact name from the source commit, authenticates the
+publisher run and artifact through the GitHub API, verifies the raw ZIP size and
+SHA-256, and compares its sole JSON member byte for byte with the evidence copied
+beside the ISO manifest.
 
-### Canonical exact-candidate build
+### Canonical exact-candidate build (publisher boundary)
+
+The current source build produces only the five immutable artifacts documented
+in [`os/release/PUBLISHER-BOUNDARY.md`](../release/PUBLISHER-BOUNDARY.md): four
+OCI byte-range artifacts and one metadata/evidence artifact. After the source
+run passes, the protected publisher independently verifies and imports the OCI
+archive. Record the publisher's exact candidate-import run URL/attempt and use
+only its anonymously readable, digest-pinned `image-ref.json` for
+`AARCH64_IMAGE_REF`. The source `intended_immutable_image_ref` is an expectation,
+not proof that publication occurred.
+
+The command sequence below is retained only as pre-boundary audit history. Its
+former `goblins-os-candidate-ref-*` artifact no longer exists and it must not be
+used for a new candidate.
 
 Build the native aarch64 release through the single non-promotional candidate
 workflow. It accepts only the current, clean, pushed `origin/main` commit. Save
@@ -361,10 +332,20 @@ native GitHub arm runner and download the short-lived artifact:
 set -euo pipefail
 
 RUN_DATE="${RUN_DATE:-$(date -u +%F)}"
+BRANDING_PUBLISHER_EVIDENCE="<downloaded protected-publisher installer-branding-publisher-evidence.json>"
+test -s "$BRANDING_PUBLISHER_EVIDENCE"
+test ! -L "$BRANDING_PUBLISHER_EVIDENCE"
+test "$(wc -c < "$BRANDING_PUBLISHER_EVIDENCE")" -le 32768
+BRANDING_IMAGE_REF="$(jq -er '.published_image.immutable_ref' "$BRANDING_PUBLISHER_EVIDENCE")"
+BRANDING_EVIDENCE_SHA256="$(shasum -a 256 "$BRANDING_PUBLISHER_EVIDENCE" | awk '{print $1}')"
+BRANDING_EVIDENCE_BASE64="$(base64 < "$BRANDING_PUBLISHER_EVIDENCE" | tr -d '\n')"
 AARCH64_RUN_URL="$(gh workflow run aarch64-verification-iso.yml --ref main \
   -f run_date="$RUN_DATE" \
   -f candidate_commit="$GOBLINS_OS_CANDIDATE_COMMIT" \
-  -f candidate_image_ref="$AARCH64_IMAGE_REF")"
+  -f candidate_image_ref="$AARCH64_IMAGE_REF" \
+  -f branding_image_ref="$BRANDING_IMAGE_REF" \
+  -f branding_publisher_evidence_base64="$BRANDING_EVIDENCE_BASE64" \
+  -f branding_publisher_evidence_sha256="$BRANDING_EVIDENCE_SHA256")"
 printf '%s\n' "$AARCH64_RUN_URL"
 [[ "$AARCH64_RUN_URL" =~ /actions/runs/[0-9]+$ ]] || {
   echo "The aarch64 dispatch did not return an exact run URL; stop and record its candidate-filtered run ID." >&2
@@ -511,13 +492,13 @@ credential pattern. It reports only the affected filename and credential class,
 never recognized text or a secret. Stable promotion repeats the same sealed-byte
 scan over the signed screenshots before it creates public release assets.
 
-The protected `stable` GitHub environment and package policy are a required
-single-writer boundary: no user, token, workflow, app, or deployment outside
-`.github/workflows/stable-promotion.yml` may mutate the `:aarch64` or `:stable`
-GHCR tags or publish stable GitHub releases. The workflow serializes its own
-promotions and compares channel digests immediately before mutation, but a
-registry tag update has no portable compare-and-swap operation; concurrency is
-therefore not a substitute for revoking every other package writer.
+The protected `stable` environment in `Joe-Simo/goblins-os-publisher` and GHCR
+package policy are the required single-writer boundary. No user, token,
+workflow, app, or deployment outside the reviewed publisher workflows may
+mutate `:aarch64` or `:stable` or publish a stable GitHub Release. Source
+`stable-promotion.yml` only emits an authenticated publisher request. Registry
+tag updates have no portable compare-and-swap operation, so concurrency is not
+a substitute for revoking every other package writer.
 
 `run-capture.sh` creates the unsigned
 `aarch64-local-display-attestation.json`, stops every candidate process, and
@@ -685,6 +666,8 @@ GOBLINS_OS_IMAGE="$RELEASE_IMAGE" \
 GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 \
 GOBLINS_OS_CANDIDATE_COMMIT="$GOBLINS_OS_CANDIDATE_COMMIT" \
 GOBLINS_OS_BIB_SOURCE_IMAGE="$RELEASE_IMAGE" \
+GOBLINS_OS_INSTALLER_BRANDING_IMAGE="$BRANDING_IMAGE_REF" \
+GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE="$BRANDING_PUBLISHER_EVIDENCE" \
 GOBLINS_OS_SHIPPABLE_RELEASE=1 \
 os/iso/build-iso.sh
 ```
@@ -693,23 +676,29 @@ Expected outputs:
 - `os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso`
 - `os/iso/output/$ARCH/bootiso/goblins-os-$ARCH.iso.sha256`
 - `os/iso/output/$ARCH/manifest-goblins-os-$ARCH.json`
+- `os/iso/output/$ARCH/installer-branding-publisher-evidence.json`
 
-The generated ISO manifest must record `"installer_payload_source_local_only": false`,
-`"shippable_release": true`, `"candidate_commit"` equal to the exact selected
-commit, and `"builder_source_image"` equal to the digest-pinned `RELEASE_IMAGE`.
+The generated ISO manifest must use schema `goblins-os-iso-build-manifest-v2`,
+record `"installer_payload_source_local_only": false`, `"shippable_release":
+true`, `"candidate_commit"` equal to the exact selected commit,
+`"builder_source_image"` equal to the digest-pinned `RELEASE_IMAGE`, and the
+exact SHA-256 plus source/publisher identities from the copied branding
+evidence.
 If any field differs, discard
 that ISO for release signoff and rebuild with `GOBLINS_OS_BIB_SOURCE_IMAGE`
 pointing at the real release image.
 
-The GitHub `candidate-artifacts` workflow builds each exact candidate under a
-commit-scoped GHCR tag, captures the registry digest, and produces shippable ISO
-and SBOM artifacts without updating a release channel or writing evidence to
-Git. The `aarch64-verification-iso` workflow consumes that digest directly and
-only uploads short-lived artifacts. The local-display
+The GitHub `candidate-artifacts` workflow builds and verifies each exact
+candidate locally, then exports a four-part OCI archive plus a metadata/evidence
+envelope. It neither authenticates to GHCR nor produces shippable media. The
+protected publisher imports the exact bytes and proves their public digest;
+only then may `aarch64-verification-iso` consume that digest and upload
+short-lived verification artifacts. The local-display
 attestation workflow only re-verifies and uploads bytes already signed by the
 approved capture host; it cannot mint display authority. None can write
-repository contents. Download and review the aarch64 output in a disposable
-exact-candidate checkout before attaching the proof to the release.
+repository contents, packages, tags, or Releases. Download and review the
+aarch64 output in a disposable exact-candidate checkout before handing proof to
+the publisher.
 
 ## Optional Linux/KVM boot diagnostic (never signoff)
 

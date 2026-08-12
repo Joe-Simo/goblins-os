@@ -8,6 +8,7 @@ ADAPTER="$REPO_ROOT/os/release/stable-promotion-gh-adapter.sh"
 REPOSITORY="Joe-Simo/goblins-os"
 SOURCE_REPOSITORY="https://github.com/$REPOSITORY"
 PINNED_ZSTD_VERSION='*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***'
+PINNED_ZSTD=''
 
 log() {
   printf '[goblins-stable] %s\n' "$*"
@@ -28,7 +29,14 @@ require_env() {
 }
 
 assert_exact_zstd() {
-  [ "$(zstd --version)" = "$PINNED_ZSTD_VERSION" ] \
+  PINNED_ZSTD="$(command -v zstd)"
+  case "$PINNED_ZSTD" in
+    /*) ;;
+    *) die "stable asset creation requires an absolute zstd executable path" ;;
+  esac
+  [ -x "$PINNED_ZSTD" ] \
+    || die "stable asset creation requires an executable zstd path"
+  [ "$("$PINNED_ZSTD" --version)" = "$PINNED_ZSTD_VERSION" ] \
     || die "stable asset creation requires the exact reviewed zstd 1.5.7 compressor"
 }
 
@@ -302,7 +310,7 @@ prepare() {
     --promotion-workflow-run-attempt "$GOBLINS_OS_PROMOTION_WORKFLOW_RUN_ATTEMPT" \
     --source-date-epoch "$source_epoch" \
     --final-gate-log "$final_gate_log" \
-    --zstd "$(command -v zstd)"
+    --zstd "$PINNED_ZSTD"
   scan_promotion_files "$output_dir"
   python3 "$HELPER" verify-payload \
     --payload "$output_dir" \
@@ -317,7 +325,7 @@ prepare() {
     --run-date "$run_date" \
     --image-ref "$image_ref" \
     --repository "$REPO_ROOT" \
-    --zstd "$(command -v zstd)"
+    --zstd "$PINNED_ZSTD"
   rm -f -- "$final_gate_log"
   log "Prepared exact stable payload at $output_dir"
 }
@@ -336,6 +344,7 @@ verify_payload() {
   require_env GOBLINS_OS_PROMOTION_PAYLOAD_DIR
   require_command python3
   require_command zstd
+  assert_exact_zstd
   python3 "$HELPER" verify-payload \
     --payload "$GOBLINS_OS_PROMOTION_PAYLOAD_DIR" \
     --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
@@ -349,7 +358,7 @@ verify_payload() {
     --run-date "$GOBLINS_OS_DISPLAY_RUN_DATE" \
     --image-ref "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
     --repository "$REPO_ROOT" \
-    --zstd "$(command -v zstd)"
+    --zstd "$PINNED_ZSTD"
 }
 
 usage() {

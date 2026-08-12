@@ -893,6 +893,11 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(container_contains_check(
         root,
+        "native-desktop-openai-key-broker-feature",
+        "goblins-os-openai-key-broker/native-desktop",
+    ));
+    checks.push(container_contains_check(
+        root,
         "native-desktop-ui-feature",
         "goblins-os-ui/native-desktop",
     ));
@@ -1352,6 +1357,7 @@ fn source_checks(root: &Path) -> Vec<Check> {
     checks.extend(systemd_hardening_checks(root));
     checks.push(bootc_install_config_check(root));
     checks.extend(goblins_ai_contract_checks(root));
+    checks.extend(official_openai_native_app_contract_checks(root));
     checks.extend(native_design_system_checks(root));
     checks.extend(release_readiness_checks(root));
     checks.extend(secret_hygiene_checks(root));
@@ -2452,6 +2458,59 @@ fn installed_checks(root: &Path) -> Vec<Check> {
         "installed-codex-cli-upstream-notice",
         "OpenAI Codex",
     ));
+    checks.push(path_absent_check(
+        root,
+        "usr/bin/chatgpt",
+        "installed-chatgpt-compatible-app-binary-absent",
+    ));
+    checks.push(path_absent_check(
+        root,
+        "usr/lib/chatgpt",
+        "installed-chatgpt-compatible-app-payload-absent",
+    ));
+    checks.push(path_absent_check(
+        root,
+        "usr/share/applications/chatgpt.desktop",
+        "installed-upstream-chatgpt-desktop-entry-absent",
+    ));
+    checks.push(file_check(
+        root,
+        "usr/lib/goblins-os/application-overrides/chatgpt.desktop",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/goblins-os/application-overrides/chatgpt.desktop"),
+        "installed-codex-uri-shim-uses-goblins-wrapper",
+        "Exec=/usr/libexec/goblins-os/goblins-os-open codex",
+    ));
+    checks.push(file_check(
+        root,
+        "usr/lib/tmpfiles.d/goblins-os-application-overrides.conf",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/tmpfiles.d/goblins-os-application-overrides.conf"),
+        "installed-codex-uri-shim-materializes-in-machine-local-precedence-path",
+        "L+ /var/usrlocal/share/applications/chatgpt.desktop - - - - /usr/lib/goblins-os/application-overrides/chatgpt.desktop",
+    ));
+    checks.push(contains_check(
+        root.join("usr/share/applications/mimeapps.list"),
+        "installed-codex-uri-handler-defaults-to-goblins-shim",
+        "x-scheme-handler/codex=chatgpt.desktop",
+    ));
+    checks.push(contains_check(
+        root.join("usr/share/applications/mimeapps.list"),
+        "installed-codex-uri-handler-adds-goblins-shim-association",
+        "x-scheme-handler/codex=chatgpt.desktop;",
+    ));
+    checks.push(absent_check(
+        root.join("etc/goblins-os/environment"),
+        "installed-shared-environment-does-not-export-codex-home",
+        "CODEX_HOME=",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/system/goblins-os-core.service"),
+        "installed-core-service-binds-private-codex-home",
+        "Environment=CODEX_HOME=/var/lib/goblins-os/codex",
+    ));
     checks.push(file_check(root, "usr/bin/flatpak"));
     checks.push(file_check(root, "usr/bin/vulkaninfo"));
     checks.push(file_check(root, "usr/bin/vkcube"));
@@ -3350,10 +3409,18 @@ fn file_has_no_active_secrets_check(root: &Path, relative: &str, id: &str) -> Ch
 
 fn path_absent_check(root: &Path, relative: &str, id: &str) -> Check {
     let path = root.join(relative);
-    if path.exists() {
-        blocked(id, &format!("{} exists", path.display()))
-    } else {
-        ready(id, &format!("{} is absent", path.display()))
+    match fs::symlink_metadata(&path) {
+        Ok(_) => blocked(
+            id,
+            &format!("{} exists, including as a possible symlink", path.display()),
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ready(id, &format!("{} is absent", path.display()))
+        }
+        Err(error) => blocked(
+            id,
+            &format!("could not prove {} absent: {error}", path.display()),
+        ),
     }
 }
 
@@ -3754,12 +3821,10 @@ fn github_workflow_paths(root: &Path) -> Result<Vec<PathBuf>, String> {
             )
         })?;
         let path = entry.path();
-        if path.is_file()
-            && matches!(
-                path.extension().and_then(|extension| extension.to_str()),
-                Some("yml" | "yaml")
-            )
-        {
+        if matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("yml" | "yaml")
+        ) {
             paths.push(path);
         }
     }
@@ -3771,6 +3836,171 @@ fn github_workflow_paths(root: &Path) -> Result<Vec<PathBuf>, String> {
         ))
     } else {
         Ok(paths)
+    }
+}
+
+fn regular_file_without_symlink(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "{} must be a regular non-symlink file",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+const SOURCE_PUBLISHER_FORBIDDEN_MARKERS: &[&str] = &[
+    "packages: write",
+    "contents: write",
+    "environment: stable",
+    "docker login",
+    "docker/login-action",
+    "docker push",
+    "podman push",
+    "oras push",
+    "push: true",
+    "buildx imagetools create",
+    "gh release",
+    "gh workflow run",
+    "repository_dispatch",
+    "/dispatches",
+    "gh api --method post",
+    "gh api -x post",
+    "git push",
+    "ghcr_token",
+    "write:packages",
+    "${{ secrets.",
+];
+
+fn top_level_permissions_are_read_only(source: &str) -> bool {
+    let mut lines = source.lines();
+    let Some(_) = lines.find(|line| line.trim_end() == "permissions:") else {
+        return false;
+    };
+    let mut permission_count = 0usize;
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if !line.chars().next().is_some_and(char::is_whitespace) {
+            break;
+        }
+        if !line.starts_with("  ") || line.starts_with("    ") {
+            return false;
+        }
+        let Some((name, access)) = trimmed.split_once(':') else {
+            return false;
+        };
+        if name.is_empty() || !matches!(access.trim(), "read" | "none") {
+            return false;
+        }
+        permission_count += 1;
+    }
+    permission_count > 0
+}
+
+fn source_workflow_publisher_boundary_problems(root: &Path) -> Vec<String> {
+    let paths = match github_workflow_paths(root) {
+        Ok(paths) => paths,
+        Err(error) => return vec![error],
+    };
+    let mut problems = Vec::new();
+    for path in paths {
+        if let Err(error) = regular_file_without_symlink(&path) {
+            problems.push(error);
+            continue;
+        }
+        let source = read_to_string(&path);
+        if !top_level_permissions_are_read_only(&source) {
+            problems.push(format!(
+                "{} lacks an explicit read-only top-level permissions block",
+                path.display()
+            ));
+        }
+        for line in source.lines() {
+            let trimmed = line.trim();
+            let Some((permission, access)) = trimmed.split_once(':') else {
+                continue;
+            };
+            if access.trim() == "write"
+                && !permission.is_empty()
+                && permission
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+            {
+                problems.push(format!("{} grants {permission}: write", path.display()));
+            }
+        }
+        let source = source.to_ascii_lowercase();
+        for marker in SOURCE_PUBLISHER_FORBIDDEN_MARKERS {
+            if source.contains(marker) {
+                problems.push(format!("{} contains {marker}", path.display()));
+            }
+        }
+    }
+    problems
+}
+
+fn fixed_four_part_upload_check(
+    root: &Path,
+    relative: &str,
+    step_prefix: &str,
+    artifact_prefix: &str,
+    payload_prefix: &str,
+    id: &str,
+) -> Check {
+    let path = root.join(relative);
+    let source = read_to_string(&path);
+    let actual = source
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(step_prefix))
+        .collect::<Vec<_>>();
+    let sections_are_sealed = ["00", "01", "02", "03"].iter().all(|suffix| {
+        let marker = format!("{step_prefix}{suffix}");
+        let Some((_, tail)) = source.split_once(&marker) else {
+            return false;
+        };
+        let section = tail
+            .split_once("\n      - name:")
+            .map_or(tail, |(section, _)| section);
+        section.contains(&format!("name: {artifact_prefix}{suffix}"))
+            && section.contains(&format!("path: {payload_prefix}{suffix}"))
+            && section.contains("if-no-files-found: error")
+            && section.contains("compression-level: 0")
+    });
+    if actual == ["00", "01", "02", "03"] && sections_are_sealed {
+        ready(
+            id,
+            &format!(
+                "{} uploads exactly ordered, uncompressed, fail-closed parts 00 through 03",
+                path.display()
+            ),
+        )
+    } else {
+        blocked(
+            id,
+            &format!(
+                "{} uploads {:?}; expected exactly four ordered, uncompressed, fail-closed payload parts with exact names and paths",
+                path.display(),
+                actual
+            ),
+        )
+    }
+}
+
+fn source_workflow_publisher_boundary_check(root: &Path) -> Check {
+    const ID: &str = "source-workflows-have-no-publication-authority";
+    let problems = source_workflow_publisher_boundary_problems(root);
+    if problems.is_empty() {
+        ready(
+            ID,
+            "source workflows are read-only, consume no repository secrets, and contain no registry, tag, or Release writer",
+        )
+    } else {
+        blocked(ID, &problems.join("; "))
     }
 }
 
@@ -3992,7 +4222,7 @@ fn source_secret_scan_hits(root: &Path) -> Result<Vec<String>, String> {
         .arg("!os/iso/output/**")
         .arg("-e")
         .arg(
-            r"OPENAI_API_KEY|AI_GATEWAY_API_KEY|OPENAI_ACCOUNT_CLIENT_SECRET|sk-proj-[A-Za-z0-9_-]{24,}|sk-[A-Za-z0-9_-]{29,}|^[[:space:]]*(export[[:space:]]+)?[A-Za-z0-9_]*(KEY|SECRET|TOKEN)[[:space:]]*=",
+            r"OPENAI_API_KEY|AI_GATEWAY_API_KEY|AZURE_OPENAI_API_KEY|OPENAI_ACCOUNT_CLIENT_SECRET|OPENAI_ACCOUNT_ACCESS_TOKEN|OPENAI_ACCOUNT_AUTH_TOKEN|GOBLINS_OS_RESIDENT_RELAY_TOKEN|sk-proj-[A-Za-z0-9_-]{24,}|sk-[A-Za-z0-9_-]{29,}|^[[:space:]]*(export[[:space:]]+)?[A-Za-z0-9_]*(KEY|SECRET|TOKEN)[[:space:]]*=",
         )
         .arg(".");
 
@@ -4091,7 +4321,11 @@ fn is_suspicious_secret_line(line: &str) -> bool {
     let active_secret_assignment = [
         "OPENAI_API_KEY",
         "AI_GATEWAY_API_KEY",
+        "AZURE_OPENAI_API_KEY",
         "OPENAI_ACCOUNT_CLIENT_SECRET",
+        "OPENAI_ACCOUNT_ACCESS_TOKEN",
+        "OPENAI_ACCOUNT_AUTH_TOKEN",
+        "GOBLINS_OS_RESIDENT_RELAY_TOKEN",
     ]
     .iter()
     .any(|name| {
@@ -4195,6 +4429,714 @@ fn desktop_exec_checks(root: &Path) -> Vec<Check> {
     checks
 }
 
+fn official_openai_native_app_contract_checks(root: &Path) -> Vec<Check> {
+    vec![
+        official_openai_service_launch_check(root, "chatgpt", "https://chatgpt.com"),
+        official_openai_service_launch_check(root, "codex", "local://goblins-os/openai/codex"),
+        contains_check(
+            root.join("crates/goblins-os-core/src/service_catalog.rs"),
+            "openai-codex-compatible-app-or-official-web-copy",
+            "role: \"Codex workspace via compatible app or official web\"",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-core/src/service_catalog.rs"),
+            "openai-codex-compatible-app-does-not-claim-official-publisher",
+            "role: \"Official OpenAI coding workspace\"",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/service_catalog.rs"),
+            "openai-web-handler-environment-copy-is-command-scoped",
+            "A pre-existing browser owns its own environment and account session.",
+        ),
+        official_openai_launcher_contract_check(root),
+        official_openai_reviewed_environment_check(root),
+        official_openai_desktop_wrapper_check(root),
+        official_openai_image_absence_assertions_check(root),
+        official_openai_rpm_not_redistributed_check(root),
+    ]
+}
+
+fn official_openai_service_launch_check(
+    root: &Path,
+    service_id: &str,
+    expected_launch: &str,
+) -> Check {
+    let id = format!("openai-{service_id}-catalog-launch-is-exact");
+    let path = root.join("crates/goblins-os-core/src/service_catalog.rs");
+    let source = read_to_string(&path);
+    let Some(catalog) = source
+        .split_once("fn build_services(")
+        .map(|(_, tail)| tail)
+    else {
+        return blocked(
+            &id,
+            &format!("{} has no build_services catalog", path.display()),
+        );
+    };
+    let marker = format!("id: \"{service_id}\",");
+    let Some(service_and_after) = catalog.split_once(&marker).map(|(_, tail)| tail) else {
+        return blocked(
+            &id,
+            &format!("{} has no {service_id} service entry", path.display()),
+        );
+    };
+    let service = service_and_after
+        .split_once("ServiceCatalogEntry {")
+        .map_or(service_and_after, |(entry, _)| entry);
+    let launches = service
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("launch: \"")
+                .and_then(|value| value.strip_suffix("\","))
+        })
+        .collect::<Vec<_>>();
+
+    if launches == [expected_launch] {
+        ready(
+            &id,
+            &format!(
+                "{} maps {service_id} only to {expected_launch}",
+                path.display()
+            ),
+        )
+    } else {
+        blocked(
+            &id,
+            &format!(
+                "{} maps {service_id} through {:?}; expected only {expected_launch}",
+                path.display(),
+                launches
+            ),
+        )
+    }
+}
+
+fn source_section<'a>(source: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let (_, tail) = source.split_once(start)?;
+    tail.split_once(end).map(|(section, _)| section)
+}
+
+fn normalized_source(source: &str) -> String {
+    source.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn official_openai_launcher_contract_check(root: &Path) -> Check {
+    const ID: &str = "openai-codex-native-launcher-is-fixed-and-fails-closed";
+    let path = root.join("crates/goblins-os-open/src/main.rs");
+    let source = read_to_string(&path);
+    let Some(classifier) =
+        source_section(&source, "fn classify_launch_target", "fn openai_https_url")
+    else {
+        return blocked(
+            ID,
+            &format!("{} has no bounded target classifier", path.display()),
+        );
+    };
+    let Some(fallback) = source_section(
+        &source,
+        "fn launch_compatible_codex_app_with",
+        "fn compatible_codex_launch",
+    ) else {
+        return blocked(
+            ID,
+            &format!("{} has no bounded Codex fallback", path.display()),
+        );
+    };
+    let Some(mapping) = source_section(&source, "fn compatible_codex_launch", "fn launch_uri")
+    else {
+        return blocked(ID, &format!("{} has no Codex app mapping", path.display()));
+    };
+    let status = source_section(
+        &source,
+        "fn service_status_allows_launch",
+        "fn classify_launch_target",
+    )
+    .map(normalized_source)
+    .unwrap_or_default();
+    let notifications = source_section(&source, "fn notify_launcher_error", "fn https_host")
+        .map(normalized_source)
+        .unwrap_or_default();
+    let initialization = source_section(&source, "fn main()", "fn run(")
+        .map(normalized_source)
+        .unwrap_or_default();
+    let pre_initialized = initialization
+        .split_once("match run(core)")
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(&initialization);
+
+    let classifier = normalized_source(classifier);
+    let fallback = normalized_source(fallback);
+    let mapping = normalized_source(mapping);
+    let required_classifier = [
+        "\"openai/codex\" => Ok(LaunchTarget::CompatibleCodexApp)",
+        "_ if action.starts_with(\"openai/\") => { Err(LauncherError::UnsupportedTarget(target.to_string())) }",
+    ];
+    let required_mapping = [
+        "program: \"/usr/bin/chatgpt\"",
+        "args: &[\"codex:\"]",
+        "fallback_uri: \"https://chatgpt.com/codex\"",
+    ];
+    let required_fallback = [
+        "Err(error) if error.kind() == io::ErrorKind::NotFound => fallback(launch.fallback_uri)",
+        "Err(_) => Err(LauncherError::SpawnFailed(launch.program.to_string()))",
+    ];
+    let required_status =
+        "matches!( status, \"external\" | \"server-gated\" | \"local\" | \"not-configured\" )";
+    let required_notifications = [
+        "LauncherError::SpawnFailed(_)",
+        "The compatible installed Codex app could not start.",
+        "\"/usr/bin/notify-send\"",
+    ];
+
+    let mut missing = required_classifier
+        .iter()
+        .filter(|needle| !classifier.contains(**needle))
+        .chain(
+            required_mapping
+                .iter()
+                .filter(|needle| !mapping.contains(**needle)),
+        )
+        .chain(
+            required_fallback
+                .iter()
+                .filter(|needle| !fallback.contains(**needle)),
+        )
+        .copied()
+        .collect::<Vec<_>>();
+    if classifier.contains("openai/chatgpt") {
+        missing.push("no native ChatGPT local action; ChatGPT is fixed web only");
+    }
+    if fallback.matches("fallback(").count() != 1 {
+        missing.push("exactly one fallback call, guarded only by ErrorKind::NotFound");
+    }
+    if !status.contains(required_status) {
+        missing.push("an explicit service-status allowlist that denies empty and unknown states");
+    }
+    if !source.contains("fn notify_user(title: &str, body: &str)") {
+        missing.push("a user-visible notification helper");
+    }
+    if pre_initialized.contains("notify_user")
+        || pre_initialized.contains("Command::new")
+        || pre_initialized.contains(".spawn()")
+    {
+        missing.push("no child process or notification before capability initialization succeeds");
+    }
+    missing.extend(
+        required_notifications
+            .iter()
+            .filter(|needle| !notifications.contains(**needle))
+            .copied(),
+    );
+
+    if missing.is_empty() {
+        ready(
+            ID,
+            "ChatGPT remains fixed web-only; Codex alone uses the compatible app's fixed deep link, falls back only when the executable is missing, denies unknown states, and reports failures visibly",
+        )
+    } else {
+        blocked(
+            ID,
+            &format!(
+                "{} is missing launcher contract: {}",
+                path.display(),
+                missing.join("; ")
+            ),
+        )
+    }
+}
+
+fn quoted_array_values(source: &str, name: &str) -> Option<Vec<String>> {
+    let marker = format!("const {name}:");
+    let (_, tail) = source.split_once(&marker)?;
+    let (_, values_and_after) = tail.split_once("= &[")?;
+    let (values, _) = values_and_after.split_once("];")?;
+    values
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            line.strip_prefix('"')
+                .and_then(|value| value.strip_suffix("\","))
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+fn official_openai_reviewed_environment_check(root: &Path) -> Check {
+    const ID: &str = "openai-native-web-and-notification-launchers-use-reviewed-environment";
+    const SHARED_DESKTOP_CREDENTIALS: &[&str] = &[
+        "OPENAI_API_KEY",
+        "AI_GATEWAY_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "OPENAI_ACCOUNT_CLIENT_SECRET",
+        "OPENAI_ACCOUNT_ACCESS_TOKEN",
+        "OPENAI_ACCOUNT_AUTH_TOKEN",
+        "OPENAI_CREDENTIAL_FILE",
+        "CODEX_HOME",
+        "GOBLINS_OS_RESIDENT_RELAY_TOKEN",
+    ];
+    const EXPECTED_DESKTOP_ENVIRONMENT: &[&str] = &[
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_ADDRESS",
+        "LC_COLLATE",
+        "LC_CTYPE",
+        "LC_IDENTIFICATION",
+        "LC_MEASUREMENT",
+        "LC_MESSAGES",
+        "LC_MONETARY",
+        "LC_NAME",
+        "LC_NUMERIC",
+        "LC_PAPER",
+        "LC_TELEPHONE",
+        "LC_TIME",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "WAYLAND_SOCKET",
+        "XAUTHORITY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "AT_SPI_BUS_ADDRESS",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE",
+        "XDG_SESSION_CLASS",
+        "XDG_SEAT",
+        "XDG_VTNR",
+        "DESKTOP_SESSION",
+        "GNOME_DESKTOP_SESSION_ID",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_DATA_DIRS",
+        "XDG_CONFIG_DIRS",
+        "XDG_ACTIVATION_TOKEN",
+        "DESKTOP_STARTUP_ID",
+        "PULSE_SERVER",
+        "PIPEWIRE_REMOTE",
+        "GTK_THEME",
+        "GDK_SCALE",
+        "GDK_DPI_SCALE",
+        "GTK_USE_PORTAL",
+    ];
+
+    let path = root.join("crates/goblins-os-open/src/main.rs");
+    let source = read_to_string(&path);
+    let client_path = root.join("crates/goblins-os-core-client/src/lib.rs");
+    let client_source = read_to_string(&client_path);
+    let shared_environment_path = root.join("os/etc/goblins-os/environment");
+    let shared_environment = read_to_string(&shared_environment_path);
+    let core_service_path = root.join("os/systemd/goblins-os-core.service");
+    let core_service = read_to_string(&core_service_path);
+    let expected = EXPECTED_DESKTOP_ENVIRONMENT
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    let actual = quoted_array_values(&source, "SAFE_DESKTOP_ENVIRONMENT");
+    let helper = source_section(
+        &source,
+        "fn reviewed_desktop_command",
+        "fn launch_compatible_codex_app_with",
+    )
+    .map(normalized_source)
+    .unwrap_or_default();
+    let web = source_section(&source, "fn launch_uri", "fn launch_local_action")
+        .map(normalized_source)
+        .unwrap_or_default();
+    let command_status = source_section(&source, "fn command_status", "fn https_host")
+        .map(normalized_source)
+        .unwrap_or_default();
+    let client_sanitizer = source_section(
+        &client_source,
+        "fn sanitized_environment_name",
+        "fn dangerous_environment_name",
+    )
+    .map(normalized_source)
+    .unwrap_or_default();
+
+    let contract_holds = actual.as_ref() == Some(&expected)
+        && source.contains("const FIXED_DESKTOP_PATH: &str = \"/usr/local/bin:/usr/bin:/bin\";")
+        && helper.contains("command.env_clear();")
+        && helper.contains("command.current_dir(\"/\");")
+        && helper.contains("command.stdin(Stdio::null());")
+        && helper.contains("command.env(\"PATH\", FIXED_DESKTOP_PATH);")
+        && helper.contains("for variable in SAFE_DESKTOP_ENVIRONMENT")
+        && helper.contains("command.env(variable, value);")
+        && !source.contains("command.env_remove(")
+        && web.contains("command_status(\"/usr/bin/gio\", &[\"open\", uri])?")
+        && web.contains("command_status(\"/usr/bin/xdg-open\", &[uri])?")
+        && command_status.contains("reviewed_desktop_command(program, args).status()")
+        && source.contains("let mut command = reviewed_desktop_command(program, args);")
+        && source.contains("command.stdout(Stdio::null()).stderr(Stdio::null());")
+        && source.contains("let _ = reviewed_desktop_command(")
+        && SHARED_DESKTOP_CREDENTIALS
+            .iter()
+            .all(|variable| client_sanitizer.contains(&format!("\"{variable}\"")))
+        && !shared_environment
+            .lines()
+            .any(|line| line.trim_start().starts_with("CODEX_HOME="))
+        && core_service
+            .lines()
+            .filter(|line| line.trim() == "Environment=CODEX_HOME=/var/lib/goblins-os/codex")
+            .count()
+            == 1;
+
+    if contract_holds {
+        ready(
+            ID,
+            "Goblins starts the native Codex child, web-handler commands, and error-notification command from an empty environment with an exact reviewed desktop allowlist and fixed PATH; desktop initialization strips CODEX_HOME while the core service binds it privately",
+        )
+    } else {
+        blocked(
+            ID,
+            &format!(
+                "{}, {}, {}, and {} do not bind core-only CODEX_HOME plus desktop initialization and native child/web-handler command/notification command spawning to the exact empty-environment allowlist contract (launcher found {:?})",
+                path.display(),
+                client_path.display(),
+                shared_environment_path.display(),
+                core_service_path.display(),
+                actual
+            ),
+        )
+    }
+}
+
+fn official_openai_desktop_wrapper_check(root: &Path) -> Check {
+    const ID: &str = "openai-desktop-entries-and-codex-uri-use-goblins-wrapper";
+    let entries = [
+        (
+            "os/applications/org.goblins.OS.OpenAI.ChatGPT.desktop",
+            "/usr/libexec/goblins-os/goblins-os-open chatgpt",
+        ),
+        (
+            "os/applications/org.goblins.OS.OpenAI.Codex.desktop",
+            "/usr/libexec/goblins-os/goblins-os-open codex",
+        ),
+    ];
+    let mut problems = Vec::new();
+    for (relative, expected_exec) in entries {
+        let path = root.join(relative);
+        let text = read_to_string(&path);
+        if desktop_field(&text, "Exec") != Some(expected_exec) {
+            problems.push(format!(
+                "{relative} does not use exact Exec={expected_exec}"
+            ));
+        }
+        if desktop_field(&text, "StartupWMClass").is_some() {
+            problems.push(format!("{relative} declares an unverified StartupWMClass"));
+        }
+    }
+
+    let shim_relative = "os/application-overrides/chatgpt.desktop";
+    let shim = read_to_string(root.join(shim_relative));
+    for (field, expected) in [
+        ("Exec", "/usr/libexec/goblins-os/goblins-os-open codex"),
+        ("NoDisplay", "true"),
+        ("MimeType", "x-scheme-handler/codex;"),
+    ] {
+        if desktop_field(&shim, field) != Some(expected) {
+            problems.push(format!(
+                "{shim_relative} does not declare exact {field}={expected}"
+            ));
+        }
+    }
+    if desktop_field(&shim, "StartupWMClass").is_some() {
+        problems.push(format!(
+            "{shim_relative} declares an unverified StartupWMClass"
+        ));
+    }
+
+    let tmpfiles_relative = "os/tmpfiles/goblins-os-application-overrides.conf";
+    let tmpfiles = read_to_string(root.join(tmpfiles_relative));
+    for line in [
+        "d /var/usrlocal/share 0755 root root -",
+        "d /var/usrlocal/share/applications 0755 root root -",
+        "L+ /var/usrlocal/share/applications/chatgpt.desktop - - - - /usr/lib/goblins-os/application-overrides/chatgpt.desktop",
+    ] {
+        if tmpfiles.lines().filter(|candidate| *candidate == line).count() != 1 {
+            problems.push(format!(
+                "{tmpfiles_relative} must contain exactly one `{line}`"
+            ));
+        }
+    }
+
+    let mimeapps_relative = "os/applications/mimeapps.list";
+    let mimeapps = read_to_string(root.join(mimeapps_relative));
+    for line in [
+        "x-scheme-handler/codex=chatgpt.desktop",
+        "x-scheme-handler/codex=chatgpt.desktop;",
+    ] {
+        if mimeapps
+            .lines()
+            .filter(|candidate| *candidate == line)
+            .count()
+            != 1
+        {
+            problems.push(format!(
+                "{mimeapps_relative} must contain exactly one `{line}`"
+            ));
+        }
+    }
+
+    let container_relative = "os/bootc/Containerfile";
+    let container = read_to_string(root.join(container_relative));
+    for marker in [
+        "COPY os/application-overrides/ /usr/lib/goblins-os/application-overrides/",
+        "COPY os/tmpfiles/goblins-os-application-overrides.conf /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf",
+        "test -L /usr/local && test \"$(readlink -f /usr/local)\" = \"/var/usrlocal\"",
+        "desktop-file-validate /usr/lib/goblins-os/application-overrides/chatgpt.desktop",
+        "grep -Fxq 'L+ /var/usrlocal/share/applications/chatgpt.desktop - - - - /usr/lib/goblins-os/application-overrides/chatgpt.desktop' /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf",
+        "grep -Fxq 'x-scheme-handler/codex=chatgpt.desktop' /usr/share/applications/mimeapps.list",
+        "grep -Fxq 'x-scheme-handler/codex=chatgpt.desktop;' /usr/share/applications/mimeapps.list",
+    ] {
+        if !container.contains(marker) {
+            problems.push(format!(
+                "{container_relative} does not assert immutable shim contract `{marker}`"
+            ));
+        }
+    }
+    if container.contains("COPY os/application-overrides/ /usr/local/")
+        || container.contains("COPY os/application-overrides/ /usr/local/share/applications/")
+    {
+        problems.push(format!(
+            "{container_relative} must not copy immutable image content directly into machine-local /usr/local"
+        ));
+    }
+
+    if problems.is_empty() {
+        ready(
+            ID,
+            "ChatGPT stays web-only, Codex and codex: links use the Goblins wrapper, and the hidden same-ID handler is materialized from immutable image content into the higher-priority machine-local applications directory without fabricated window classes",
+        )
+    } else {
+        blocked(ID, &problems.join("; "))
+    }
+}
+
+fn official_openai_image_absence_assertions_check(root: &Path) -> Check {
+    const ID: &str = "compatible-codex-app-payload-is-absent-from-public-image";
+    let relative = "os/bootc/Containerfile";
+    let source = read_to_string(root.join(relative));
+    let required = [
+        "test ! -e /usr/bin/chatgpt && test ! -L /usr/bin/chatgpt",
+        "test ! -e /usr/lib/chatgpt && test ! -L /usr/lib/chatgpt",
+        "test ! -e /usr/share/applications/chatgpt.desktop && test ! -L /usr/share/applications/chatgpt.desktop",
+        "! rpm -q chatgpt",
+    ];
+    let missing = required
+        .iter()
+        .filter(|marker| !source.contains(**marker))
+        .copied()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        ready(
+            ID,
+            "the public image build rejects the compatible app binary, payload, upstream desktop entry (including dangling symlinks), and installed chatgpt RPM",
+        )
+    } else {
+        blocked(
+            ID,
+            &format!(
+                "{relative} is missing installed-image absence assertions: {}",
+                missing.join("; ")
+            ),
+        )
+    }
+}
+
+fn openai_distribution_scan_excludes(relative: &Path) -> bool {
+    const EXCLUDED_DIRECTORIES: &[&str] = &[
+        ".git",
+        ".claude",
+        ".ci-target",
+        "target",
+        "node_modules",
+        ".next",
+        ".vercel",
+        "artifacts",
+        "libpod",
+        "os/signoff-proofs",
+        "os/screenshots",
+        "os/iso/output",
+    ];
+    let relative = relative.to_string_lossy();
+    EXCLUDED_DIRECTORIES
+        .iter()
+        .any(|excluded| relative == *excluded || relative.starts_with(&format!("{excluded}/")))
+}
+
+fn collect_production_files(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("could not read {}: {error}", directory.display()))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("could not inspect {}: {error}", directory.display()))?;
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| format!("{} escaped source root {}", path.display(), root.display()))?;
+        if openai_distribution_scan_excludes(relative) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("could not inspect {}: {error}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{} must not be a symlink in production source",
+                path.display()
+            ));
+        } else if metadata.is_dir() {
+            collect_production_files(root, &path, files)?;
+        } else if metadata.is_file() {
+            files.push(path);
+        } else {
+            return Err(format!(
+                "{} must be a regular file or directory in production source",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "md" | "mdx"))
+}
+
+fn is_verifier_self_source(relative: &Path) -> bool {
+    relative == Path::new("crates/goblins-os-verify/src/main.rs")
+}
+
+const RPM_LEAD_MAGIC: &[u8] = &[0xed, 0xab, 0xee, 0xdb];
+
+fn rpm_binary_magic(path: &Path) -> Result<bool, String> {
+    use std::io::Read as _;
+
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+    let mut magic = [0_u8; 4];
+    let read = file
+        .read(&mut magic)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    Ok(read == magic.len() && magic == RPM_LEAD_MAGIC)
+}
+
+fn chatgpt_rpm_distribution_marker(source: &str) -> bool {
+    let source = source.to_ascii_lowercase();
+    let immutable_artifact_markers = [
+        "codex-app-prod/linux/rpm",
+        "chatgpt.aarch64.rpm",
+        "chatgpt.x86_64.rpm",
+        "chatgpt_rpm",
+        "chatgpt-rpm",
+    ];
+    if immutable_artifact_markers
+        .iter()
+        .any(|marker| source.contains(marker))
+    {
+        return true;
+    }
+
+    source.lines().any(|line| {
+        line.contains("chatgpt")
+            && (line.contains(".rpm")
+                || line.contains("dnf install")
+                || line.contains("rpm-ostree install")
+                || line.contains("rpm -i")
+                || line.contains("curl ")
+                || line.contains("wget ")
+                || line.contains("upload-artifact")
+                || line.contains("gh release upload"))
+    })
+}
+
+fn official_openai_rpm_not_redistributed_check(root: &Path) -> Check {
+    const ID: &str = "compatible-codex-proprietary-rpm-is-not-embedded-or-published";
+    let mut source_files = Vec::new();
+    if let Err(error) = collect_production_files(root, root, &mut source_files) {
+        return blocked(ID, &error);
+    }
+    let mut violations = Vec::new();
+    for path in source_files {
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        let relative_display = relative.display().to_string();
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        if file_name.starts_with("chatgpt") && file_name.ends_with(".rpm") {
+            violations.push(format!(
+                "{relative_display} has a prohibited ChatGPT RPM filename"
+            ));
+        }
+        match rpm_binary_magic(&path) {
+            Ok(true) => violations.push(format!("{relative_display} contains RPM lead magic")),
+            Ok(false) => {}
+            Err(error) => violations.push(error),
+        }
+
+        // Markdown may document the no-redistribution boundary. The verifier's own
+        // source necessarily contains the exact forbidden strings. Generated/build
+        // and evidence directories are excluded by openai_distribution_scan_excludes;
+        // every other regular non-Markdown source file is scanned fail closed.
+        if is_markdown_path(&path) || is_verifier_self_source(relative) {
+            continue;
+        }
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                violations.push(format!("could not inspect {}: {error}", path.display()));
+                continue;
+            }
+        };
+        if metadata.len() > SECRET_SCAN_MAX_FILE_BYTES {
+            // Large regular assets still receive filename and RPM-magic checks.
+            // They are not source text and are not allocated into memory.
+            continue;
+        }
+        match read_bounded_text_file(&path, metadata.len()) {
+            Some(source) if chatgpt_rpm_distribution_marker(&source) => {
+                violations.push(relative_display)
+            }
+            Some(_) => {}
+            None => {
+                // Non-text production assets are covered by the filename and RPM
+                // magic checks above; source-text marker matching is inapplicable.
+            }
+        }
+    }
+    violations.sort();
+    violations.dedup();
+
+    if violations.is_empty() {
+        ready(
+            ID,
+            "all non-Markdown production source, artifact filenames, and file magic outside tightly documented build/evidence and verifier-self exclusions contain no compatible Codex ChatGPT RPM distribution path",
+        )
+    } else {
+        blocked(
+            ID,
+            &format!(
+                "proprietary ChatGPT RPM distribution markers found in {}",
+                violations.join(", ")
+            ),
+        )
+    }
+}
+
 #[derive(Clone, Copy)]
 struct NativeCoreClient {
     slug: &'static str,
@@ -4204,7 +5146,7 @@ struct NativeCoreClient {
     setgid: bool,
 }
 
-const NATIVE_CORE_CLIENTS: [NativeCoreClient; 17] = [
+const NATIVE_CORE_CLIENTS: [NativeCoreClient; 18] = [
     NativeCoreClient {
         slug: "consent-broker",
         binary: "goblins-os-consent-broker",
@@ -4217,6 +5159,13 @@ const NATIVE_CORE_CLIENTS: [NativeCoreClient; 17] = [
         binary: "goblins-os-control-center",
         entrypoint: "crates/goblins-os-control-center/src/main.rs",
         kind: "ControlCenter",
+        setgid: true,
+    },
+    NativeCoreClient {
+        slug: "openai-key-broker",
+        binary: "goblins-os-openai-key-broker",
+        entrypoint: "crates/goblins-os-openai-key-broker/src/main.rs",
+        kind: "OpenAiKeyBroker",
         setgid: true,
     },
     NativeCoreClient {
@@ -5360,7 +6309,7 @@ fn core_capability_boundary_checks(root: &Path) -> Vec<Check> {
         ordered_contains_check(
             client.clone(),
             "core-client-desktop-only-permanently-drops-effective-and-saved-group",
-            "if !kind.requires_no_new_privs() {",
+            "initialize_linux_capability_entry(",
             "libc::setresgid(real_gid, real_gid, real_gid)",
         ),
         contains_check(
@@ -7683,6 +8632,34 @@ fn release_readiness_checks(root: &Path) -> Vec<Check> {
         file_check(root, "os/release/architectures.toml"),
         file_check(root, "os/release/release-readiness-delta.toml"),
         file_check(root, "os/release/hydrate-release-artifacts.sh"),
+        file_check(root, "os/release/PUBLISHER-BOUNDARY.md"),
+        file_check(root, "os/release/verify-publisher-boundary.sh"),
+        source_workflow_publisher_boundary_check(root),
+        contains_check(
+            root.join("os/release/verify-publisher-boundary.sh"),
+            "publisher-boundary-script-enforces-source-read-only-authority",
+            "a source workflow grants publication or stable-environment authority",
+        ),
+        contains_check(
+            root.join("os/release/verify-publisher-boundary.sh"),
+            "publisher-boundary-script-enforces-no-source-writer-path",
+            "a source workflow contains a registry, tag, or Release write path",
+        ),
+        contains_check(
+            root.join("os/release/verify-publisher-boundary.sh"),
+            "publisher-boundary-script-enforces-no-source-secrets",
+            "source workflows must not consume repository or environment secrets",
+        ),
+        contains_check(
+            root.join("os/release/PUBLISHER-BOUNDARY.md"),
+            "publisher-boundary-doc-targets-separate-protected-repository",
+            "Joe-Simo/goblins-os-publisher",
+        ),
+        contains_check(
+            root.join("os/release/PUBLISHER-BOUNDARY.md"),
+            "publisher-boundary-doc-does-not-overclaim-bootstrap",
+            "Until all seven steps are completed and evidenced",
+        ),
         contains_check(
             root.join("Cargo.toml"),
             "workspace-agpl-license",
@@ -8376,9 +9353,29 @@ fn secret_hygiene_checks(root: &Path) -> Vec<Check> {
             "sk-proj-",
         ),
         contains_check(
-            root.join("os/hardware-gate/verify-shipping-status.sh"),
+            root.join("os/hardware-gate/secret-scan.sh"),
             "shipping-status-active-secret-assignment-scan",
             "OPENAI_ACCOUNT_CLIENT_SECRET",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/secret-scan.sh"),
+            "shipping-status-active-secret-assignment-scan-azure-openai",
+            "AZURE_OPENAI_API_KEY",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/secret-scan.sh"),
+            "shipping-status-active-secret-assignment-scan-openai-account-access",
+            "OPENAI_ACCOUNT_ACCESS_TOKEN",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/secret-scan.sh"),
+            "shipping-status-active-secret-assignment-scan-openai-account-auth",
+            "OPENAI_ACCOUNT_AUTH_TOKEN",
+        ),
+        contains_check(
+            root.join("os/hardware-gate/secret-scan.sh"),
+            "shipping-status-active-secret-assignment-scan-resident-relay",
+            "GOBLINS_OS_RESIDENT_RELAY_TOKEN",
         ),
         container_package_lockstep_check(root, "source-secret-scan-ripgrep-packaged", "ripgrep"),
         container_contains_check(
@@ -8449,7 +9446,7 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
         .get("schema")
         .and_then(toml::Value::as_integer)
         .ok_or_else(|| "installer branding provenance requires integer schema".to_string())?;
-    let promotion_eligible = match schema {
+    match schema {
         1 => {
             if table.contains_key("workflow_run_attempt")
                 || table.contains_key("anonymous_pull_verified")
@@ -8459,32 +9456,14 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
                         .to_string(),
                 );
             }
-            false
         }
-        2 => {
-            if table
-                .get("workflow_run_attempt")
-                .and_then(toml::Value::as_integer)
-                .is_none_or(|attempt| attempt <= 0)
-            {
-                return Err(
-                    "installer branding schema 2 workflow_run_attempt must be positive".to_string(),
-                );
-            }
-            if table
-                .get("anonymous_pull_verified")
-                .and_then(toml::Value::as_bool)
-                != Some(true)
-            {
-                return Err(
-                    "installer branding schema 2 must record anonymous_pull_verified = true"
-                        .to_string(),
-                );
-            }
-            true
+        _ => {
+            return Err(
+                "installer-branding-tool.toml must remain schema 1 bootstrap/diagnostic history; protected-publisher JSON is the only release authority"
+                    .to_string(),
+            );
         }
-        _ => return Err("installer branding provenance schema must be 1 or 2".to_string()),
-    };
+    }
 
     let image_ref = toml_required_string(table, "image_ref")?;
     if !exact_digest_ref(image_ref, TOOL_REPOSITORY) {
@@ -8573,13 +9552,20 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
                 .to_string(),
         );
     }
-    if !branding_workflow.contains("anonymous_pull_verified: true")
-        || !branding_workflow.contains("docker logout ghcr.io")
-    {
-        return Err(
-            "installer branding workflow must prove anonymous digest access after logout"
-                .to_string(),
-        );
+    for marker in [
+        "schema: \"goblins-os-installer-branding-tool-handoff-v1\"",
+        "schema: \"goblins-os-actions-artifact-envelope-v1\"",
+        "split -n 4 -d -a 2",
+        "source_repository_publish_authority: false",
+        "non_promotional: true",
+        "repository: \"Joe-Simo/goblins-os-publisher\"",
+        "copy_mode: \"preserve-digests\"",
+    ] {
+        if !branding_workflow.contains(marker) {
+            return Err(format!(
+                "installer branding source handoff lacks required protected-publisher marker: {marker}"
+            ));
+        }
     }
 
     let architectures = table
@@ -8620,27 +9606,16 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
         return Err("installer branding aarch64 package count must be positive".to_string());
     }
 
-    let propagation = [
+    for (relative, expected) in [
         (
             "os/iso/build-iso.sh",
-            format!(
-                "INSTALLER_BRANDING_IMAGE=\"${{GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-{image_ref}}}\""
-            ),
+            format!("INSTALLER_BRANDING_IMAGE_OVERRIDE:-{image_ref}"),
         ),
         (
             ".github/workflows/build.yml",
             format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
         ),
-        (
-            ".github/workflows/candidate-artifacts.yml",
-            format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
-        ),
-        (
-            ".github/workflows/aarch64-verification-iso.yml",
-            format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}"),
-        ),
-    ];
-    for (relative, expected) in propagation {
+    ] {
         let content = fs::read_to_string(root.join(relative))
             .map_err(|error| format!("cannot read {relative}: {error}"))?;
         if !content.contains(&expected) {
@@ -8649,14 +9624,38 @@ fn verify_installer_branding_tool_provenance(root: &Path) -> Result<String, Stri
             ));
         }
     }
+    let builder = fs::read_to_string(root.join("os/iso/build-iso.sh"))
+        .map_err(|error| format!("cannot read os/iso/build-iso.sh: {error}"))?;
+    for marker in [
+        "GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE",
+        "goblins-os-installer-branding-tool-publisher-evidence-v1",
+        "schema-1-bootstrap-diagnostic",
+    ] {
+        if !builder.contains(marker) {
+            return Err(format!(
+                "installer branding ISO builder lacks protected-publisher evidence marker: {marker}"
+            ));
+        }
+    }
+    let verification_workflow =
+        fs::read_to_string(root.join(".github/workflows/aarch64-verification-iso.yml")).map_err(
+            |error| format!("cannot read .github/workflows/aarch64-verification-iso.yml: {error}"),
+        )?;
+    for marker in [
+        "GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ${{ inputs.branding_image_ref }}",
+        "branding_publisher_evidence_base64:",
+        "branding_publisher_evidence_sha256:",
+        "GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE=",
+    ] {
+        if !verification_workflow.contains(marker) {
+            return Err(format!(
+                "aarch64 verification workflow lacks protected-publisher evidence marker: {marker}"
+            ));
+        }
+    }
 
-    let eligibility = if promotion_eligible {
-        "schema 2 exact-attempt provenance is promotion eligible"
-    } else {
-        "schema 1 provenance is source/bootstrap-valid but not promotion eligible"
-    };
     Ok(format!(
-        "reviewed native aarch64 installer branding image {image_ref} is hash-bound and propagated; source {source_commit}; run {workflow_run}; {eligibility}"
+        "reviewed native aarch64 installer branding bootstrap image {image_ref} is hash-bound for diagnostics; source {source_commit}; run {workflow_run}; schema 1 is not promotion authority and release media requires protected-publisher JSON evidence"
     ))
 }
 
@@ -8824,6 +9823,69 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
             "installer-branding-tool-provenance-records-workflow-attempt",
             "workflow_run_attempt: $workflow_run_attempt",
         ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-records-source-handoff-schema",
+            "schema: \"goblins-os-installer-branding-tool-handoff-v1\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-records-actions-artifact-envelope",
+            "schema: \"goblins-os-actions-artifact-envelope-v1\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-exports-oci-without-publishing",
+            "outputs: type=oci,dest=${{ runner.temp }}/goblins-os-branding-tool-aarch64.oci.tar",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-build-target-is-linux-arm64",
+            "platforms: linux/arm64",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-rejects-amd64-oci-child",
+            "select(.platform.architecture == \"amd64\")",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-bounds-source-oci-archive",
+            "test \"$archive_size\" -le 34359738368",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-splits-source-oci-archive-four-ways",
+            "split -n 4 -d -a 2",
+        ),
+        fixed_four_part_upload_check(
+            root,
+            ".github/workflows/branding-tool-image.yml",
+            "- name: Upload branding-tool OCI payload part ",
+            "goblins-os-branding-tool-oci-${{ inputs.candidate_commit }}-aarch64-attempt-${{ github.run_attempt }}-part-",
+            "artifacts/manifests/publisher-handoff/branding-tool/aarch64/parts/goblins-os-branding-tool-aarch64.oci.tar.part-",
+            "installer-branding-tool-uploads-four-part-arm64-payload",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-uploads-sealed-arm64-metadata",
+            "goblins-os-branding-tool-oci-${{ inputs.candidate_commit }}-aarch64-attempt-${{ github.run_attempt }}-metadata",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-targets-protected-publisher",
+            "repository: \"Joe-Simo/goblins-os-publisher\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-denies-source-publication-authority",
+            "source_repository_publish_authority: false",
+        ),
+        contains_check(
+            root.join(".github/workflows/branding-tool-image.yml"),
+            "installer-branding-tool-is-non-promotional",
+            "non_promotional: true",
+        ),
         installer_branding_tool_provenance_check(root),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
@@ -8832,13 +9894,18 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-consumes-native-branding-tool-v2-artifact",
-            "goblins-os-installer-branding-tool-v2",
+            "runbook-consumes-protected-publisher-branding-evidence",
+            "GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE",
         ),
         contains_check(
             root.join("os/hardware-gate/runbook.md"),
-            "runbook-downloads-native-branding-tool-artifact",
-            "goblins-os-branding-tool-$TOOL_COMMIT-aarch64",
+            "runbook-authenticates-four-part-branding-handoff",
+            "parts `00` through `03` plus metadata",
+        ),
+        contains_check(
+            root.join("os/release/PUBLISHER-BOUNDARY.md"),
+            "publisher-contract-defines-branding-evidence-schema",
+            "goblins-os-installer-branding-tool-publisher-evidence-v1",
         ),
         contains_check(
             root.join("os/hardware-gate/release-evidence.sh"),
@@ -9435,117 +10502,187 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
             "hardware-capture-runs-visual-secret-scan-before-sealing",
             "--seal \"$RUN_DIR/evidence-bundle.json\"",
         ),
-        contains_check(
-            root.join("os/release/promote-stable.sh"),
-            "stable-promotion-repeats-visual-secret-scan",
-            "--seal \"$display_run/evidence-bundle.json\"",
-        ),
         file_check(root, ".github/workflows/stable-promotion.yml"),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-is-serialized-per-candidate-and-tag",
+            "group: aarch64-publisher-handoff-${{ inputs.candidate_commit }}-${{ inputs.stable_tag }}",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-runs-on-native-aarch64",
+            "runs-on: ubuntu-24.04-arm",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-schema-is-exact",
+            "schema: \"goblins-os-publisher-request-v1\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-targets-protected-publisher",
+            "repository: \"Joe-Simo/goblins-os-publisher\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-denies-source-publication-authority",
+            "source_repository_publish_authority: false",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-is-explicitly-non-promotional",
+            "non_promotional: true",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-authenticates-exact-source-run-attempt",
+            "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/attempts/$attempt",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-successful-dispatch-and-exact-workflow-path",
+            ".conclusion == \"success\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-manual-source-run",
+            ".event == \"workflow_dispatch\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-exact-source-workflow-path",
+            ".path == $path",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-exact-run-attempt",
+            ".run_attempt == $attempt",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-artifact-api-sha256",
+            ".digest | test(\"^sha256:[0-9a-f]{64}$\")",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-binds-five-candidate-artifacts",
+            "(.candidate_workflow.artifacts | length) == 5",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-binds-five-branding-artifacts",
+            "(.branding_workflow.artifacts | length) == 5",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-binds-candidate-workflow-artifact-digests",
+            "goblins-os-source-oci-$CANDIDATE_COMMIT-aarch64-attempt-$CANDIDATE_RUN_ATTEMPT-metadata",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-binds-branding-workflow-artifact-digests",
+            "goblins-os-branding-tool-oci-$BRANDING_COMMIT-aarch64-attempt-$BRANDING_RUN_ATTEMPT-metadata",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-selects-attempt-scoped-candidate-parts",
+            "goblins-os-source-oci-$CANDIDATE_COMMIT-aarch64-attempt-$CANDIDATE_RUN_ATTEMPT-part-$suffix",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-selects-attempt-scoped-branding-parts",
+            "goblins-os-branding-tool-oci-$BRANDING_COMMIT-aarch64-attempt-$BRANDING_RUN_ATTEMPT-part-$suffix",
+        ),
+        contains_check(
+            root.join("os/release/PUBLISHER-BOUNDARY.md"),
+            "publisher-contract-requires-attempt-scoped-source-artifacts",
+            "Every artifact name includes the authenticated workflow run attempt.",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-binds-signed-display-artifact-digest",
+            "display_verification_workflow",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-digest-preserving-publisher-import",
+            "copy-with-preserved-digests",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-publisher-authority2-verification",
+            "verify-authority2-display-proof",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-publisher-shipping-status",
+            "run-shipping-status",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-publisher-release-byte-allowlist",
+            "publish-allowlisted-release-bytes",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-aliases-last",
+            "move-aarch64-and-stable-aliases-last",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-requires-sha256-pinned-zstd-build",
+            "build-pinned-zstd-1.5.7-from-sha256-verified-source",
+        ),
+        contains_check(
+            root.join(".github/workflows/stable-promotion.yml"),
+            "stable-handoff-uploads-only-request-artifact",
+            "name: goblins-os-publisher-request-${{ inputs.candidate_commit }}-${{ inputs.stable_tag }}-attempt-${{ github.run_attempt }}",
+        ),
         file_check(root, "os/release/stable-promotion.py"),
         contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-is-serialized-across-shared-aliases",
-            "group: aarch64-stable-promotion-shared-aliases",
+            root.join("os/release/stable-promotion.py"),
+            "stable-verifier-requires-exact-zstd-version-on-replay",
+            "def require_exact_zstd(zstd: str) -> None:",
         ),
         contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-pins-privileged-buildx-client",
-            "version: v0.34.1",
+            root.join("os/release/stable-promotion.py"),
+            "stable-verifier-rejects-noncanonical-raw-ustar-bytes",
+            "display-proof raw USTAR bytes are not canonical",
         ),
         contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-pins-reviewed-zstd-source",
+            root.join("os/release/stable-promotion.py"),
+            "stable-verifier-rejects-noncanonical-display-zstd-bytes",
+            "display-proof zstd bytes are not canonical",
+        ),
+        contains_check(
+            root.join("os/release/stable-promotion.py"),
+            "stable-verifier-rejects-noncanonical-iso-zstd-bytes",
+            "release ISO zstd bytes are not canonical",
+        ),
+        contains_check(
+            root.join("os/release/stable-promotion.py"),
+            "stable-verifier-self-tests-hidden-ustar-padding",
+            "self-test accepted hidden bytes in raw USTAR padding",
+        ),
+        contains_check(
+            root.join("os/release/stable-promotion.py"),
+            "stable-verifier-self-tests-display-zstd-skippable-frames",
+            "self-test accepted a skippable frame in display-proof zstd bytes",
+        ),
+        contains_check(
+            root.join("os/release/stable-promotion.py"),
+            "stable-verifier-self-tests-iso-zstd-skippable-frames",
+            "self-test accepted a skippable frame in release ISO zstd bytes",
+        ),
+        contains_check(
+            root.join("os/release/promote-stable.sh"),
+            "stable-wrapper-passes-one-resolved-pinned-zstd-path",
+            "--zstd \"$PINNED_ZSTD\"",
+        ),
+        contains_check(
+            root.join("os/release/PUBLISHER-BOUNDARY.md"),
+            "publisher-contract-pins-official-zstd-source-sha256",
             "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-requires-exact-zstd-version",
-            "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-rejects-noncanonical-display-ustar-bytes",
-            "display archive raw USTAR bytes are not the exact canonical encoding",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-rejects-noncanonical-display-zstd-bytes",
-            "display archive compressed bytes are not the exact canonical zstd encoding",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-rejects-noncanonical-iso-zstd-bytes",
-            "stable ISO compressed bytes are not the exact canonical zstd encoding",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-passes-pinned-zstd-to-display-write-check",
-            "python3 - \"$PAYLOAD_DIR\" \"$CANDIDATE_COMMIT\" \"$PINNED_ZSTD\" \"$RUNNER_TEMP\" <<'PY'",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-passes-pinned-zstd-to-iso-write-check",
-            "python3 - \"$PAYLOAD_DIR\" \"$RUNNER_TEMP\" \"$PINNED_ZSTD\" <<'PY'",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-declares-single-package-writer-boundary",
-            "only principal allowed to mutate the :aarch64 and",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-write-stage-downloads-exact-candidate-artifact",
-            "actions/artifacts/$candidate_artifact_id/zip",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-write-stage-downloads-exact-display-artifact",
-            "actions/artifacts/$display_artifact_id/zip",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-rejects-non-arm-rpm-evidence",
-            "RPM evidence contains a non-ARM package architecture",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-recomputes-public-install-metadata",
-            "public install and container metadata is not exactly reproducible",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-replays-original-payload-attempt-on-retry",
-            "PROMOTION_PAYLOAD_RUN_ATTEMPT",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-verifies-latest-release-identity",
-            "releases/latest",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-verifies-arm64-efi-machine",
-            "machine != 0xAA64",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-verifies-candidate-image-revision-label",
-            "selected OCI child revision label does not match candidate",
-        ),
-        contains_check(
-            root.join(".github/workflows/stable-promotion.yml"),
-            "stable-promotion-verifies-arm-only-image-label",
-            "selected OCI child does not declare the ARM-only contract",
-        ),
-        contains_check(
-            root.join("os/release/stable-promotion.py"),
-            "stable-promotion-helper-recomputes-public-metadata",
-            "require_exact_public_metadata",
-        ),
-        contains_check(
-            root.join("os/release/stable-promotion.py"),
-            "stable-promotion-helper-binds-signed-display-iso",
-            "require_signed_display_iso_binding",
         ),
         contains_check(
             root.join("os/hardware-gate/capture-harness/accessibility-adaptivity-proof.sh"),
@@ -14057,9 +15194,19 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
             r#"cargo test --workspace --features "$NATIVE_FEATURES""#,
         ),
         contains_check(
+            root.join(".github/workflows/build.yml"),
+            "ci-openai-key-broker-native-desktop-feature",
+            "goblins-os-openai-key-broker/native-desktop",
+        ),
+        contains_check(
             root.join("os/bootc/gate.Dockerfile"),
             "local-gate-native-desktop-tests",
             "cargo test --workspace --features",
+        ),
+        contains_check(
+            root.join("os/bootc/gate.Dockerfile"),
+            "local-gate-openai-key-broker-native-desktop-feature",
+            "goblins-os-openai-key-broker/native-desktop",
         ),
         contains_check(
             root.join(".github/workflows/build.yml"),
@@ -14094,17 +15241,42 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
             "candidate-workflow-buildkit-gha-cache-scope",
-            "type=gha,scope=goblins-os-bootc-${{ matrix.arch }}",
+            "type=gha,scope=goblins-os-bootc-aarch64",
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
-            "candidate-workflow-uses-buildkit-registry-digest",
+            "candidate-workflow-binds-oci-output-digest",
             "steps.build.outputs.digest",
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
-            "candidate-workflow-binds-bib-to-immutable-image",
-            "GOBLINS_OS_BIB_SOURCE_IMAGE=\"$IMMUTABLE_IMAGE_REF\"",
+            "candidate-workflow-exports-oci-without-publishing",
+            "outputs: type=oci,dest=${{ runner.temp }}/goblins-os-aarch64.oci.tar",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-build-target-is-linux-arm64",
+            "platforms: linux/arm64",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-requires-arm-only-image-label",
+            "org.goblins-os.supported-architectures\"] == \"aarch64\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-rejects-amd64-oci-child",
+            "select(.platform.architecture == \"amd64\")",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-bounds-source-oci-archive",
+            "test \"$archive_size\" -le 34359738368",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-splits-source-oci-archive-four-ways",
+            "split -n 4 -d -a 2",
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
@@ -14122,24 +15294,24 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
             "--target selftest",
         ),
         contains_check(
-            root.join(".github/workflows/candidate-artifacts.yml"),
-            "candidate-workflow-verifies-exact-bib-payload-image",
-            "bib_image_ref\" == \"$IMMUTABLE_IMAGE_REF",
-        ),
-        contains_check(
             root.join("os/iso/manifest-provenance.sh"),
             "bib-manifest-parser-bounds-json-embedded-image-token",
             "JSON-escaped kickstart payload",
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
-            "candidate-workflow-records-image-provenance",
-            "--image-ref \"$IMMUTABLE_IMAGE_REF\"",
+            "candidate-workflow-records-intended-digest-image-provenance",
+            "--image-ref \"$INTENDED_IMAGE_REF\"",
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
-            "candidate-workflow-records-command-sealed-v3-metadata",
-            "schema: \"goblins-os-candidate-image-ref-v3\"",
+            "candidate-workflow-records-source-oci-handoff-schema",
+            "schema: \"goblins-os-source-oci-handoff-v1\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-records-actions-artifact-envelope",
+            "schema: \"goblins-os-actions-artifact-envelope-v1\"",
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
@@ -14149,12 +15321,40 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
             "candidate-workflow-requires-current-main",
-            "is not the current origin/main commit",
+            "is not current origin/main",
+        ),
+        fixed_four_part_upload_check(
+            root,
+            ".github/workflows/candidate-artifacts.yml",
+            "- name: Upload OCI payload part ",
+            "goblins-os-source-oci-${{ steps.candidate.outputs.commit }}-aarch64-attempt-${{ github.run_attempt }}-part-",
+            "artifacts/manifests/publisher-handoff/candidate/aarch64/parts/goblins-os-aarch64.oci.tar.part-",
+            "candidate-workflow-uploads-exact-four-part-arm64-payload",
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
-            "candidate-workflow-uploads-lightweight-digest-metadata",
-            "goblins-os-candidate-ref-${{ steps.candidate.outputs.commit }}-${{ matrix.arch }}",
+            "candidate-workflow-uploads-sealed-arm64-metadata",
+            "goblins-os-source-oci-${{ steps.candidate.outputs.commit }}-aarch64-attempt-${{ github.run_attempt }}-metadata",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-denies-source-publication-authority",
+            "source_repository_publish_authority: false",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-is-non-promotional",
+            "non_promotional: true",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-targets-protected-publisher",
+            "repository: \"Joe-Simo/goblins-os-publisher\"",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-requires-digest-preserving-publisher-copy",
+            "copy_mode: \"preserve-digests\"",
         ),
         absent_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
@@ -14856,7 +16056,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/resident.rs"),
             "hosted-context-route-is-resolved-again-after-approval",
-            "let approved_route = resolve_resident_route()",
+            "let approved_route = resolve_resident_route_for(user_id)",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/resident.rs"),
@@ -15306,12 +16506,12 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/openai_key.rs"),
             "openai-engine-state-default-path-is-core-owned",
-            "const DEFAULT_ENGINE_PATH: &str = \"/var/lib/goblins-os/ai/engine\";",
+            "const DEFAULT_ENGINE_ROOT: &str = \"/var/lib/goblins-os/ai/users\";",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/openai_key.rs"),
             "openai-engine-state-follows-core-ai-state-root",
-            "env::var_os(\"GOBLINS_OS_AI_STATE\").map(|dir| PathBuf::from(dir).join(\"engine\"))",
+            "PathBuf::from(directory).join(\"users\")",
         ),
         ordered_contains_check(
             root.join("crates/goblins-os-core/src/openai_key.rs"),
@@ -15342,9 +16542,9 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "storage: PRIVATE_STORAGE_LABEL",
         ),
         contains_check(
-            root.join("crates/goblins-os-core/src/openai_key.rs"),
-            "openai-byo-key-is-read-only-from-systemd-credential",
-            "openai_credential(\"OPENAI_API_KEY\")",
+            root.join("crates/goblins-os-core/src/openai_key_provisioning.rs"),
+            "openai-byo-key-is-read-only-from-protected-user-credential",
+            "decrypt_user_credential(user_id: u32)",
         ),
         absent_check(
             root.join("crates/goblins-os-core/src/openai_key.rs"),
@@ -15660,10 +16860,10 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "core-secret-reader-uses-systemd-credentials-directory",
             "env::var_os(\"CREDENTIALS_DIRECTORY\")",
         ),
-        contains_check(
+        absent_check(
             root.join("os/etc/goblins-os/openai-secrets.env"),
-            "openai-byo-key-template-is-server-side-only",
-            "#OPENAI_API_KEY=<server-side-only-openai-api-key>",
+            "openai-byo-key-template-is-absent-from-public-image",
+            "OPENAI_API_KEY=",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/auth.rs"),
@@ -16961,7 +18161,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
             "settings-codex-copy-not-included",
-            "Codex · not included",
+            "OpenAI account · Codex CLI not included",
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
@@ -16991,7 +18191,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/codex.rs"),
             "core-codex-copy-not-included",
-            "Codex account support is not included in this build",
+            "OpenAI account access through the bundled Codex CLI is not included in this build",
         ),
         absent_check(
             root.join("crates/goblins-os-core/src/codex.rs"),
@@ -17130,6 +18330,26 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-login/src/main.rs"),
+            "login-hero-uses-goblins-mark",
+            "goblins_os_ui::brand_mark(goblins_os_design::GOBLINS_MARK_LIGHT, 56)",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-login/src/main.rs"),
+            "login-hero-carries-goblins-os-name",
+            "centered_label(\"Goblins OS\", &[\"gos-kicker\"])",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-login/src/main.rs"),
+            "login-openai-sign-in-is-secondary-provider-action",
+            "button(\"Sign in with OpenAI\", &[\"gos-secondary-action\"])",
+        ),
+        absent_check(
+            root.join("crates/goblins-os-login/src/main.rs"),
+            "login-hero-does-not-use-openai-mark",
+            "goblins_os_ui::brand_mark(goblins_os_design::OPENAI_MARK_LIGHT",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-login/src/main.rs"),
             "login-product-copy-goblins-desktop-rejection",
             "Goblins OS desktop unlock was rejected by local OS services.",
         ),
@@ -17181,7 +18401,7 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-open/src/main.rs"),
             "open-service-copy-goblins-policy-block",
-            "Goblins OS service {service_id} is blocked by the active Goblins OS policy",
+            "Goblins OS service {service_id} is not allowed by the active policy or permission state",
         ),
         absent_check(
             root.join("crates/goblins-os-open/src/main.rs"),
@@ -22887,14 +24107,14 @@ fn stable_id(value: &str) -> String {
 mod tests {
     use super::{
         candidate_commit_is_valid, capability_groupadd_targets, cargo_lock_packages,
-        client_path_binding_inventory, contains_realish_openai_key,
-        core_service_writable_paths_are_exact, deprecated_github_action_pins_absent_check,
-        desktop_field, first_executable_initialization, image_ref_is_digest_pinned,
-        image_ref_is_valid, imports_shared_core_initializer, install_files,
-        is_allowed_dummy_secret, is_suspicious_secret_line, native_design_system_checks,
-        ordered_contains_check, permission_inventory, release_evidence_manifest,
-        reviewed_github_action_pins_check, rg_secret_scan_hit, sha256_path,
-        should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
+        chatgpt_rpm_distribution_marker, client_path_binding_inventory,
+        contains_realish_openai_key, core_service_writable_paths_are_exact,
+        deprecated_github_action_pins_absent_check, desktop_field, first_executable_initialization,
+        image_ref_is_digest_pinned, image_ref_is_valid, imports_shared_core_initializer,
+        install_files, is_allowed_dummy_secret, is_suspicious_secret_line,
+        native_design_system_checks, ordered_contains_check, permission_inventory,
+        release_evidence_manifest, reviewed_github_action_pins_check, rg_secret_scan_hit,
+        sha256_path, should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
         tmpfiles_capability_entries, verify_installer_branding_tool_provenance,
         write_release_evidence, CheckState, ForbiddenClientTokenVisitor, ReleaseEvidenceDigests,
         APPLICATIONS, AUTOSTART, BINARIES, CORE_SERVICE_READ_WRITE_PATHS, DCONF_FILES,
@@ -22916,6 +24136,220 @@ mod tests {
             desktop_field("[Desktop Entry]\nName=ChatGPT\nExec=/usr/libexec/goblins-os/goblins-os-open chatgpt\n", "Exec"),
             Some("/usr/libexec/goblins-os/goblins-os-open chatgpt")
         );
+    }
+
+    #[test]
+    fn chatgpt_rpm_distribution_markers_cover_fetch_install_and_publish_paths() {
+        assert!(chatgpt_rpm_distribution_marker(
+            "RUN curl --fail https://persistent.oaistatic.com/codex-app-prod/linux/rpm/aarch64/chatgpt-1.aarch64.rpm"
+        ));
+        assert!(chatgpt_rpm_distribution_marker(
+            "RUN dnf install -y chatgpt"
+        ));
+        assert!(chatgpt_rpm_distribution_marker(
+            "- uses: actions/upload-artifact\n  with:\n    name: chatgpt-rpm"
+        ));
+        assert!(!chatgpt_rpm_distribution_marker(
+            "Goblins OS opens a compatible installed Codex app through its policy wrapper."
+        ));
+    }
+
+    #[test]
+    fn chatgpt_rpm_guard_finds_artifacts_anywhere_outside_build_state() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-chatgpt-rpm-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("nested/assets")).unwrap();
+        fs::create_dir_all(root.join("target/release")).unwrap();
+        fs::write(root.join("nested/assets/chatgpt-1.aarch64.rpm"), b"rpm").unwrap();
+        fs::write(root.join("target/release/chatgpt-ignored.rpm"), b"rpm").unwrap();
+
+        let check = super::official_openai_rpm_not_redistributed_check(&root);
+        assert_eq!(check.state, CheckState::Blocked);
+        assert!(check.detail.contains("nested/assets/chatgpt-1.aarch64.rpm"));
+        assert!(!check.detail.contains("target/release/chatgpt-ignored.rpm"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn chatgpt_rpm_guard_scans_non_markdown_production_source_but_skips_self_source() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-chatgpt-rpm-source-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join("crates/goblins-os-verify/src")).unwrap();
+        fs::write(
+            root.join("scripts/fetch.sh"),
+            "curl https://example.invalid/chatgpt.aarch64.rpm\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("docs/boundary.md"),
+            "Never redistribute chatgpt.aarch64.rpm.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/goblins-os-verify/src/main.rs"),
+            "const FORBIDDEN: &str = \"chatgpt.aarch64.rpm\";\n",
+        )
+        .unwrap();
+
+        let check = super::official_openai_rpm_not_redistributed_check(&root);
+        assert_eq!(check.state, CheckState::Blocked);
+        assert!(check.detail.contains("scripts/fetch.sh"));
+        assert!(!check.detail.contains("docs/boundary.md"));
+        assert!(!check
+            .detail
+            .contains("crates/goblins-os-verify/src/main.rs"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn chatgpt_rpm_guard_detects_rpm_magic_under_an_innocent_filename() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-chatgpt-rpm-magic-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::write(
+            root.join("assets/payload.bin"),
+            [0xed_u8, 0xab, 0xee, 0xdb, 0, 0, 0, 0],
+        )
+        .unwrap();
+
+        let check = super::official_openai_rpm_not_redistributed_check(&root);
+        assert_eq!(check.state, CheckState::Blocked);
+        assert!(check.detail.contains("RPM lead magic"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chatgpt_rpm_content_guard_rejects_symlinked_release_inputs() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-chatgpt-rpm-symlink-{}",
+            std::process::id()
+        ));
+        let outside = root.with_extension("outside");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&outside);
+        fs::create_dir_all(root.join(".github/workflows")).unwrap();
+        fs::create_dir_all(root.join("os/bootc")).unwrap();
+        fs::create_dir_all(root.join("os/release")).unwrap();
+        fs::write(
+            root.join(".github/workflows/build.yml"),
+            "permissions:\n  contents: read\n",
+        )
+        .unwrap();
+        fs::write(root.join("os/bootc/Containerfile"), "FROM scratch\n").unwrap();
+        fs::write(&outside, "external release input\n").unwrap();
+        symlink(&outside, root.join("os/release/external.txt")).unwrap();
+
+        let check = super::official_openai_rpm_not_redistributed_check(&root);
+        assert_eq!(check.state, CheckState::Blocked);
+        assert!(check
+            .detail
+            .contains("must not be a symlink in production source"));
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn source_publisher_boundary_requires_read_only_writer_free_workflows() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-publisher-boundary-{}",
+            std::process::id()
+        ));
+        let workflows = root.join(".github/workflows");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&workflows).unwrap();
+        fs::write(
+            workflows.join("good.yml"),
+            "permissions:\n  actions: read\n  contents: read\njobs: {}\n",
+        )
+        .unwrap();
+        assert!(super::source_workflow_publisher_boundary_problems(&root).is_empty());
+
+        fs::write(
+            workflows.join("writer.yml"),
+            "permissions:\n  packages: write\njobs:\n  publish:\n    steps:\n      - run: docker push example.invalid/image\n",
+        )
+        .unwrap();
+        let problems = super::source_workflow_publisher_boundary_problems(&root);
+        assert!(problems
+            .iter()
+            .any(|problem| problem.contains("packages: write")));
+        assert!(problems
+            .iter()
+            .any(|problem| problem.contains("docker push")));
+        assert!(problems
+            .iter()
+            .any(|problem| problem.contains("read-only top-level permissions")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn publisher_oci_handoffs_require_exactly_four_ordered_parts() {
+        let root = std::env::temp_dir().join(format!(
+            "goblins-os-verify-publisher-parts-{}",
+            std::process::id()
+        ));
+        let workflows = root.join(".github/workflows");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&workflows).unwrap();
+        let good_parts = ["00", "01", "02", "03"]
+            .iter()
+            .map(|suffix| {
+                format!(
+                    "      - name: Upload OCI payload part {suffix}\n        with:\n          name: artifact-{suffix}\n          path: payload-{suffix}\n          if-no-files-found: error\n          compression-level: 0\n"
+                )
+            })
+            .collect::<String>();
+        fs::write(workflows.join("good.yml"), good_parts).unwrap();
+        fs::write(
+            workflows.join("bad.yml"),
+            "      - name: Upload OCI payload part 00\n      - name: Upload OCI payload part 01\n      - name: Upload OCI payload part 03\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            super::fixed_four_part_upload_check(
+                &root,
+                ".github/workflows/good.yml",
+                "- name: Upload OCI payload part ",
+                "artifact-",
+                "payload-",
+                "test",
+            )
+            .state,
+            CheckState::Ready
+        );
+        assert_eq!(
+            super::fixed_four_part_upload_check(
+                &root,
+                ".github/workflows/bad.yml",
+                "- name: Upload OCI payload part ",
+                "artifact-",
+                "payload-",
+                "test",
+            )
+            .state,
+            CheckState::Blocked
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -23267,12 +24701,10 @@ paths = [
         let containerfile_sha = sha256_path(&containerfile_path).unwrap();
         let provenance = format!(
             concat!(
-                "schema = 2\n",
+                "schema = 1\n",
                 "image_ref = \"{}\"\n",
                 "source_commit = \"{}\"\n",
                 "workflow_run = \"https://github.com/Joe-Simo/goblins-os/actions/runs/123\"\n",
-                "workflow_run_attempt = 1\n",
-                "anonymous_pull_verified = true\n",
                 "base_image = \"{}\"\n",
                 "containerfile_sha256 = \"{}\"\n",
                 "public_pull_verified_on = \"2026-07-19\"\n",
@@ -23293,7 +24725,13 @@ paths = [
         write_fixture(
             "os/iso/build-iso.sh",
             &format!(
-                "INSTALLER_BRANDING_IMAGE=\"${{GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-{image_ref}}}\"\n"
+                concat!(
+                    "INSTALLER_BRANDING_IMAGE=\"${{INSTALLER_BRANDING_IMAGE_OVERRIDE:-{}}}\"\n",
+                    "GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE\n",
+                    "goblins-os-installer-branding-tool-publisher-evidence-v1\n",
+                    "schema-1-bootstrap-diagnostic\n"
+                ),
+                image_ref
             ),
         );
         write_fixture(
@@ -23301,59 +24739,82 @@ paths = [
             concat!(
                 "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs ",
                 "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done\n",
-                "docker logout ghcr.io\n",
-                "anonymous_pull_verified: true\n"
+                "schema: \"goblins-os-installer-branding-tool-handoff-v1\"\n",
+                "schema: \"goblins-os-actions-artifact-envelope-v1\"\n",
+                "split -n 4 -d -a 2\n",
+                "source_repository_publish_authority: false\n",
+                "non_promotional: true\n",
+                "repository: \"Joe-Simo/goblins-os-publisher\"\n",
+                "copy_mode: \"preserve-digests\"\n"
             ),
         );
-        for workflow in [
+        write_fixture(
             ".github/workflows/build.yml",
-            ".github/workflows/candidate-artifacts.yml",
+            &format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}\n"),
+        );
+        write_fixture(
             ".github/workflows/aarch64-verification-iso.yml",
-        ] {
-            write_fixture(
-                workflow,
-                &format!("GOBLINS_OS_INSTALLER_BRANDING_IMAGE: {image_ref}\n"),
-            );
-        }
+            concat!(
+                "GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ${{ inputs.branding_image_ref }}\n",
+                "branding_publisher_evidence_base64:\n",
+                "branding_publisher_evidence_sha256:\n",
+                "GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE=\n"
+            ),
+        );
 
-        let v2_detail = verify_installer_branding_tool_provenance(&root).unwrap();
-        assert!(v2_detail.contains("schema 2 exact-attempt provenance is promotion eligible"));
-
-        let provenance_v1 = provenance
-            .replacen("schema = 2", "schema = 1", 1)
-            .replace("workflow_run_attempt = 1\n", "")
-            .replace("anonymous_pull_verified = true\n", "");
-        write_fixture("os/release/installer-branding-tool.toml", &provenance_v1);
         let v1_detail = verify_installer_branding_tool_provenance(&root).unwrap();
-        assert!(v1_detail
-            .contains("schema 1 provenance is source/bootstrap-valid but not promotion eligible"));
+        assert!(v1_detail.contains("schema 1 is not promotion authority"));
 
         write_fixture(
             "os/release/installer-branding-tool.toml",
-            &provenance.replacen("schema = 2", "schema = 1", 1),
+            &provenance.replacen("schema = 1", "schema = 2", 1),
+        );
+        assert!(verify_installer_branding_tool_provenance(&root)
+            .unwrap_err()
+            .contains("must remain schema 1 bootstrap/diagnostic history"));
+
+        write_fixture(
+            "os/release/installer-branding-tool.toml",
+            &provenance.replace(
+                "workflow_run =",
+                "workflow_run_attempt = 1\nanonymous_pull_verified = true\nworkflow_run =",
+            ),
         );
         assert!(verify_installer_branding_tool_provenance(&root)
             .unwrap_err()
             .contains("schema 1 must not claim exact-attempt or anonymous-pull verification"));
 
+        write_fixture("os/release/installer-branding-tool.toml", &provenance);
         write_fixture(
-            "os/release/installer-branding-tool.toml",
-            &provenance.replace(
-                "anonymous_pull_verified = true",
-                "anonymous_pull_verified = false",
+            ".github/workflows/branding-tool-image.yml",
+            concat!(
+                "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs ",
+                "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done\n",
+                "schema: \"goblins-os-installer-branding-tool-handoff-v1\"\n",
+                "schema: \"goblins-os-actions-artifact-envelope-v1\"\n",
+                "source_repository_publish_authority: false\n",
+                "non_promotional: true\n",
+                "repository: \"Joe-Simo/goblins-os-publisher\"\n",
+                "copy_mode: \"preserve-digests\"\n"
             ),
         );
         assert!(verify_installer_branding_tool_provenance(&root)
             .unwrap_err()
-            .contains("must record anonymous_pull_verified = true"));
-
+            .contains("lacks required protected-publisher marker: split -n 4 -d -a 2"));
         write_fixture(
-            "os/release/installer-branding-tool.toml",
-            &provenance.replace("workflow_run_attempt = 1", "workflow_run_attempt = 0"),
+            ".github/workflows/branding-tool-image.yml",
+            concat!(
+                "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs ",
+                "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done\n",
+                "schema: \"goblins-os-installer-branding-tool-handoff-v1\"\n",
+                "schema: \"goblins-os-actions-artifact-envelope-v1\"\n",
+                "split -n 4 -d -a 2\n",
+                "source_repository_publish_authority: false\n",
+                "non_promotional: true\n",
+                "repository: \"Joe-Simo/goblins-os-publisher\"\n",
+                "copy_mode: \"preserve-digests\"\n"
+            ),
         );
-        assert!(verify_installer_branding_tool_provenance(&root)
-            .unwrap_err()
-            .contains("schema 2 workflow_run_attempt must be positive"));
 
         let other_image_ref = format!("{repository}@sha256:{}", "8".repeat(64));
         write_fixture(
@@ -23392,7 +24853,14 @@ paths = [
             ".github/workflows/branding-tool-image.yml",
             concat!(
                 "for required_tool in checkisomd5 cmp implantisomd5 magick mksquashfs ",
-                "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done\n"
+                "osirrox unsquashfs xorriso; do command -v \"$required_tool\" >/dev/null; done\n",
+                "schema: \"goblins-os-installer-branding-tool-handoff-v1\"\n",
+                "schema: \"goblins-os-actions-artifact-envelope-v1\"\n",
+                "split -n 4 -d -a 2\n",
+                "source_repository_publish_authority: false\n",
+                "non_promotional: true\n",
+                "repository: \"Joe-Simo/goblins-os-publisher\"\n",
+                "copy_mode: \"preserve-digests\"\n"
             ),
         );
 
@@ -23972,9 +25440,20 @@ checksum = "abc123"
     #[test]
     fn suspicious_secret_line_flags_generic_key_secret_token_assignments() {
         // Generic *_KEY/_SECRET/_TOKEN assignments are now flagged when populated.
-        assert!(is_suspicious_secret_line(
-            "GOBLINS_OS_RESIDENT_RELAY_TOKEN=actual-bearer-value"
-        ));
+        for variable in [
+            "OPENAI_API_KEY",
+            "AI_GATEWAY_API_KEY",
+            "AZURE_OPENAI_API_KEY",
+            "OPENAI_ACCOUNT_CLIENT_SECRET",
+            "OPENAI_ACCOUNT_ACCESS_TOKEN",
+            "OPENAI_ACCOUNT_AUTH_TOKEN",
+            "GOBLINS_OS_RESIDENT_RELAY_TOKEN",
+        ] {
+            assert!(
+                is_suspicious_secret_line(&format!("{variable}=actual-secret-value")),
+                "{variable}"
+            );
+        }
         assert!(is_suspicious_secret_line(
             "export SOME_CLIENT_SECRET=real-value"
         ));

@@ -780,6 +780,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "writeable",
+ "zeroize",
 ]
 
 [[package]]
@@ -858,6 +859,19 @@ dependencies = [
  "goblins-os-core-client",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "goblins-os-openai-key-broker"
+version = "0.1.0"
+dependencies = [
+ "goblins-os-core-client",
+ "goblins-os-ui",
+ "gtk4",
+ "libc",
+ "serde",
+ "serde_json",
+ "zeroize",
 ]
 
 [[package]]

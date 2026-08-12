@@ -42,12 +42,13 @@ RUN codex_archive="/tmp/codex-aarch64-unknown-linux-musl.tar.gz" \
     && rm -f "${codex_archive}" "${codex_license}" "${codex_notice}" /tmp/codex-aarch64-unknown-linux-musl
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-consent-broker/native-desktop goblins-os-markup/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop goblins-os-today/native-desktop"
+RUN cargo build --release --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-consent-broker/native-desktop goblins-os-openai-key-broker/native-desktop goblins-os-markup/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop goblins-os-today/native-desktop"
 RUN install -d /out/usr/libexec/goblins-os \
     && for binary in \
       goblins-os-color-picker \
       goblins-os-control-center \
       goblins-os-consent-broker \
+      goblins-os-openai-key-broker \
       goblins-os-core \
       goblins-os-dictate \
       goblins-os-file-builder \
@@ -88,6 +89,7 @@ COPY os/systemd/goblins-os-model-cache.service /usr/lib/systemd/system/goblins-o
 COPY os/systemd-system/ /usr/lib/systemd/system/
 COPY --chmod=0755 os/bootc/goblins-os-firewall /usr/libexec/goblins-os/goblins-os-firewall
 COPY os/bootc/60-goblins-os-firewall.rules /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules
+COPY os/bootc/60-goblins-os-systemd-credentials.rules /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules
 COPY --chmod=0755 os/bootc/generate-preview-proof-fixtures.py /usr/libexec/goblins-os/generate-preview-proof-fixtures.py
 COPY os/session/goblins-os-session /usr/libexec/goblins-os/goblins-os-session
 COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.desktop
@@ -99,9 +101,11 @@ COPY --chmod=0755 os/input/goblins-os-input-source-seed /usr/libexec/goblins-os/
 COPY --chmod=0755 os/sound-recognition/goblins-os-sound-listener /usr/libexec/goblins-os/goblins-os-sound-listener
 COPY os/systemd-user/ /usr/lib/systemd/user/
 COPY os/applications/ /usr/share/applications/
+COPY os/application-overrides/ /usr/lib/goblins-os/application-overrides/
 COPY os/glib-schemas/ /usr/share/glib-2.0/schemas/
 COPY os/tmpfiles/goblins-os-session.conf /usr/lib/tmpfiles.d/goblins-os-session.conf
 COPY os/tmpfiles/goblins-os-core.conf /usr/lib/tmpfiles.d/goblins-os-core.conf
+COPY os/tmpfiles/goblins-os-application-overrides.conf /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf
 COPY os/brand/ /usr/share/goblins-os/brand/
 COPY os/themes/ /usr/share/themes/
 COPY os/gnome-shell-extensions/ /usr/share/gnome-shell/extensions/
@@ -227,6 +231,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       evtest \
       usbutils \
       xdg-utils \
+      libnotify \
       switcheroo-control \
       tuned-ppd \
       orca \
@@ -313,6 +318,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       evtest \
       usbutils \
       xdg-utils \
+      libnotify \
       rsms-inter-fonts \
       google-noto-sans-fonts \
     && command -v vulkaninfo \
@@ -384,7 +390,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && dnf clean all
 
 RUN for client in \
-      control-center consent-broker dictate file-builder focus-tick installer launcher login markup open release-proof resident \
+      control-center consent-broker openai-key-broker dictate file-builder focus-tick installer launcher login markup open release-proof resident \
       screenshot-context settings shell today visual-lookup voice-control; do \
       groupadd --system "goblins-core-${client}"; \
     done \
@@ -435,6 +441,7 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && for binding in \
       control-center:goblins-os-control-center \
       consent-broker:goblins-os-consent-broker \
+      openai-key-broker:goblins-os-openai-key-broker \
       dictate:goblins-os-dictate \
       file-builder:goblins-os-file-builder \
       focus-tick:goblins-os-focus-tick \
@@ -464,6 +471,7 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && test -f /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /run/goblins-os-core/settings 2750 goblins-os goblins-core-settings -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /run/goblins-os-core/consent-broker 2750 goblins-os goblins-core-consent-broker -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
+    && grep -Fq 'd /run/goblins-os-core/openai-key-broker 2750 goblins-os goblins-core-openai-key-broker -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /run/goblins-os-core/release-proof 2750 goblins-os goblins-core-release-proof -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /var/lib/goblins-os/voice/work 0700 goblins-os goblins-os -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && test -x /usr/libexec/goblins-os/goblins-os-full-installer \
@@ -493,6 +501,23 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && test "$(codex --version)" = "codex-cli 0.144.4" \
     && test -r /usr/share/licenses/openai-codex/LICENSE \
     && test -r /usr/share/licenses/openai-codex/NOTICE \
+    && test ! -e /usr/bin/chatgpt && test ! -L /usr/bin/chatgpt \
+    && test ! -e /usr/lib/chatgpt && test ! -L /usr/lib/chatgpt \
+    && test ! -e /usr/share/applications/chatgpt.desktop && test ! -L /usr/share/applications/chatgpt.desktop \
+    && ! rpm -q chatgpt \
+    && command -v notify-send \
+    && test -L /usr/local && test "$(readlink -f /usr/local)" = "/var/usrlocal" \
+    && ! grep -q '^CODEX_HOME=' /etc/goblins-os/environment \
+    && grep -Fxq 'Environment=CODEX_HOME=/var/lib/goblins-os/codex' /usr/lib/systemd/system/goblins-os-core.service \
+    && desktop-file-validate /usr/lib/goblins-os/application-overrides/chatgpt.desktop \
+    && grep -Fxq 'Exec=/usr/libexec/goblins-os/goblins-os-open codex' /usr/lib/goblins-os/application-overrides/chatgpt.desktop \
+    && grep -Fxq 'NoDisplay=true' /usr/lib/goblins-os/application-overrides/chatgpt.desktop \
+    && grep -Fxq 'MimeType=x-scheme-handler/codex;' /usr/lib/goblins-os/application-overrides/chatgpt.desktop \
+    && grep -Fxq 'x-scheme-handler/codex=chatgpt.desktop' /usr/share/applications/mimeapps.list \
+    && grep -Fxq 'x-scheme-handler/codex=chatgpt.desktop;' /usr/share/applications/mimeapps.list \
+    && grep -Fxq 'd /var/usrlocal/share 0755 root root -' /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf \
+    && grep -Fxq 'd /var/usrlocal/share/applications 0755 root root -' /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf \
+    && grep -Fxq 'L+ /var/usrlocal/share/applications/chatgpt.desktop - - - - /usr/lib/goblins-os/application-overrides/chatgpt.desktop' /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.VisualLookup.desktop \
@@ -729,6 +754,12 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && test -f /usr/lib/systemd/system/goblins-os-firewall@.service \
     && test -f /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules \
     && grep -Fq 'unit.match(/^goblins-os-firewall@(enable|disable)\.service$/)' /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules \
+    && test -x /usr/bin/systemd-creds \
+    && test -f /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
+    && grep -Fq 'action.id !== "io.systemd.credentials.decrypt"' /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
+    && grep -Fq 'subject.system_unit === "goblins-os-core.service"' /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
+    && grep -Fq 'subject.no_new_privileges === true' /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
+    && grep -Fq 'return polkit.Result.NO;' /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
     && install -d -o goblin -g goblin /var/home/goblin/.local/share/nautilus/scripts \
     && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Build an app to open this" "/var/home/goblin/.local/share/nautilus/scripts/Build an app to open this" \
     && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Ask Goblin about this" "/var/home/goblin/.local/share/nautilus/scripts/Ask Goblin about this" \

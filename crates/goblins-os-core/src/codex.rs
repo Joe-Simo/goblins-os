@@ -1,9 +1,9 @@
 //! The user's OpenAI account, via Codex CLI.
 //!
 //! Codex is OpenAI's own open-source coding agent (Rust, runs locally). Signing
-//! in with a ChatGPT account uses that plan's included Codex usage, so this is the
-//! honest way to put a user's OpenAI *account* — not just an API key — behind
-//! Goblins OS. The OS detects the Codex CLI and its sign-in, drives it
+//! in with an OpenAI account through Codex uses that plan's included Codex usage,
+//! so this is the honest way to put a user's OpenAI *account* — not just an API
+//! key — behind Goblins OS. The OS detects the Codex CLI and its sign-in, drives it
 //! non-interactively (`codex exec`) as a resident engine, and never stores the
 //! account credentials itself — Codex owns them under an OS-set `CODEX_HOME`.
 
@@ -253,18 +253,18 @@ fn build_status() -> CodexStatus {
 
 fn status_detail(installed: bool, authentication: CodexAuthentication) -> String {
     if !installed {
-        "Codex account support is not included in this build. Start from the full Goblins OS image to use your OpenAI account through Codex.".to_string()
+        "OpenAI account access through the bundled Codex CLI is not included in this build. Start from the full Goblins OS image to use your OpenAI account through Codex.".to_string()
     } else {
         match authentication {
             CodexAuthentication::Authenticated => {
-                "Signed in to Codex with your OpenAI account.".to_string()
+                "Your OpenAI account is signed in through the bundled Codex CLI.".to_string()
             }
             CodexAuthentication::SignedOut => {
-                "Codex account support is ready. Sign in with your OpenAI account to use it."
+                "The bundled Codex CLI is ready. Sign in with your OpenAI account to use it."
                     .to_string()
             }
             CodexAuthentication::Unavailable => {
-                "Goblins OS could not check Codex account status. Try again before selecting Codex."
+                "Goblins OS could not check your OpenAI account status through the bundled Codex CLI. Try again before selecting Codex."
                     .to_string()
             }
         }
@@ -293,10 +293,12 @@ fn codex_authentication_with(binary: &str, home: &Path) -> CodexAuthentication {
 /// sign-in; Goblins OS never sees the credentials, only the answer.
 pub(crate) fn run_codex(prompt: &str) -> Result<String, &'static str> {
     if !codex_installed() {
-        return Err("Codex account support is not included in this build");
+        return Err(
+            "OpenAI account access through the bundled Codex CLI is not included in this build",
+        );
     }
     if !codex_authenticated() {
-        return Err("Codex is not signed in to an OpenAI account");
+        return Err("Your OpenAI account is not signed in through Codex");
     }
     if !crate::resident::hosted_execution_allowed() {
         return Err("Codex is blocked by Private mode or the active OS policy");
@@ -492,10 +494,16 @@ pub(crate) fn run_codex_in(
     prompt: &str,
 ) -> Result<String, String> {
     if !codex_installed() {
-        return Err("Codex account support is not included in this build.".to_string());
+        return Err(
+            "OpenAI account access through the bundled Codex CLI is not included in this build."
+                .to_string(),
+        );
     }
     if !codex_authenticated() {
-        return Err("Codex is not signed in. Sign in with your OpenAI account first.".to_string());
+        return Err(
+            "Your OpenAI account is not signed in through Codex. Sign in with your OpenAI account first."
+                .to_string(),
+        );
     }
     if !crate::resident::hosted_execution_allowed() {
         return Err("Codex is blocked by Private mode or the active OS policy.".to_string());
@@ -911,7 +919,7 @@ fn start_login() -> (StatusCode, CodexLoginStart) {
     if !codex_installed() {
         return login_start(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Codex account support is not included in this build.",
+            "OpenAI account access through the bundled Codex CLI is not included in this build.",
             false,
             false,
             false,
@@ -921,7 +929,7 @@ fn start_login() -> (StatusCode, CodexLoginStart) {
         CodexAuthentication::Authenticated => {
             return login_start(
                 StatusCode::OK,
-                "Already signed in to Codex with your OpenAI account.",
+                "Your OpenAI account is already signed in through the bundled Codex CLI.",
                 false,
                 true,
                 false,
@@ -930,7 +938,7 @@ fn start_login() -> (StatusCode, CodexLoginStart) {
         CodexAuthentication::Unavailable => {
             return login_start(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "Goblins OS could not check Codex account status.",
+                "Goblins OS could not check your OpenAI account status through the bundled Codex CLI.",
                 false,
                 false,
                 false,
@@ -1095,7 +1103,7 @@ fn perform_logout() -> (StatusCode, CodexLogout) {
             StatusCode::SERVICE_UNAVAILABLE,
             false,
             None,
-            "Codex account support is not included in this build.",
+            "OpenAI account access through the bundled Codex CLI is not included in this build.",
         );
     }
     if !run_codex_logout(&codex_bin(), &codex_home()) {
@@ -1103,14 +1111,14 @@ fn perform_logout() -> (StatusCode, CodexLogout) {
             StatusCode::SERVICE_UNAVAILABLE,
             false,
             known_authentication(),
-            "Codex could not disconnect the OpenAI account.",
+            "The bundled Codex CLI could not disconnect your OpenAI account.",
         );
     }
     logout_outcome(
         StatusCode::OK,
         true,
         Some(false),
-        "Codex is signed out on this device.",
+        "Your OpenAI account is signed out of Codex on this device.",
     )
 }
 
@@ -1170,7 +1178,7 @@ fn read_login_url() -> CodexLoginUrl {
         return CodexLoginUrl {
             authenticated: true,
             auth_url: None,
-            detail: "Signed in to Codex with your OpenAI account.".to_string(),
+            detail: "Your OpenAI account is signed in through the bundled Codex CLI.".to_string(),
         };
     }
     let log = fs::read_to_string(login_log_path()).unwrap_or_default();
@@ -1248,10 +1256,21 @@ mod tests {
 
     #[test]
     fn detail_tracks_install_and_sign_in_state() {
-        assert!(status_detail(false, CodexAuthentication::Unavailable).contains("not included"));
-        assert!(status_detail(true, CodexAuthentication::SignedOut).contains("Sign in"));
-        assert!(status_detail(true, CodexAuthentication::Authenticated).contains("Signed in"));
-        assert!(status_detail(true, CodexAuthentication::Unavailable).contains("could not check"));
+        let not_included = status_detail(false, CodexAuthentication::Unavailable);
+        assert!(not_included.contains("OpenAI account access"));
+        assert!(not_included.contains("bundled Codex CLI"));
+
+        let signed_out = status_detail(true, CodexAuthentication::SignedOut);
+        assert!(signed_out.contains("bundled Codex CLI"));
+        assert!(signed_out.contains("OpenAI account"));
+
+        let authenticated = status_detail(true, CodexAuthentication::Authenticated);
+        assert!(authenticated.contains("Your OpenAI account"));
+        assert!(authenticated.contains("bundled Codex CLI"));
+
+        let unavailable = status_detail(true, CodexAuthentication::Unavailable);
+        assert!(unavailable.contains("OpenAI account status"));
+        assert!(unavailable.contains("bundled Codex CLI"));
     }
 
     #[test]

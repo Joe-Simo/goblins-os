@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Codex link handler
+Comment=Route desktop Codex links through Goblins OS safeguards
+Exec=/usr/libexec/goblins-os/goblins-os-open codex
+TryExec=/usr/libexec/goblins-os/goblins-os-open
+Icon=/usr/share/goblins-os/brand/icons/codex.svg
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/codex;
+Categories=Development;

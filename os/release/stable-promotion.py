@@ -1062,8 +1062,12 @@ def zstd_version(zstd: str) -> str:
     return version
 
 
-def compress_deterministically(zstd: str, source: Path, destination: Path) -> None:
-    duplicate = destination.with_name(destination.name + ".determinism-check")
+def require_exact_zstd(zstd: str) -> None:
+    if zstd_version(zstd) != ZSTD_VERSION:
+        fail(f"stable assets require the exact reviewed compressor: {ZSTD_VERSION}")
+
+
+def compress_once(zstd: str, source: Path, destination: Path) -> None:
     command = [
         zstd,
         "--ultra",
@@ -1074,10 +1078,137 @@ def compress_deterministically(zstd: str, source: Path, destination: Path) -> No
         "--force",
     ]
     subprocess.run(command + ["-o", str(destination), str(source)], check=True)
-    subprocess.run(command + ["-o", str(duplicate), str(source)], check=True)
+
+
+def compress_deterministically(zstd: str, source: Path, destination: Path) -> None:
+    duplicate = destination.with_name(destination.name + ".determinism-check")
+    compress_once(zstd, source, destination)
+    compress_once(zstd, source, duplicate)
     if sha256_path(destination) != sha256_path(duplicate):
         fail(f"zstd did not reproduce identical bytes for {source.name}")
     duplicate.unlink()
+
+
+def regular_files_are_identical(
+    left: Path,
+    right: Path,
+    *,
+    maximum: int,
+    label: str,
+) -> None:
+    with ExitStack() as stack:
+        left_input = stack.enter_context(
+            pin_regular_input(left, maximum=maximum, label=f"{label} left input")
+        )
+        right_input = stack.enter_context(
+            pin_regular_input(right, maximum=maximum, label=f"{label} right input")
+        )
+        if left_input.size_bytes != right_input.size_bytes:
+            fail(label)
+        left_descriptor = os.dup(left_input.descriptor)
+        right_descriptor = os.dup(right_input.descriptor)
+        try:
+            os.lseek(left_descriptor, 0, os.SEEK_SET)
+            os.lseek(right_descriptor, 0, os.SEEK_SET)
+            while True:
+                left_chunk = os.read(left_descriptor, 1024 * 1024)
+                right_chunk = os.read(right_descriptor, 1024 * 1024)
+                if left_chunk != right_chunk:
+                    fail(label)
+                if not left_chunk:
+                    break
+        finally:
+            os.close(left_descriptor)
+            os.close(right_descriptor)
+
+
+def canonical_file_matches_parts(
+    canonical: Path,
+    parts: list[Path],
+    *,
+    label: str,
+) -> None:
+    if not parts:
+        fail(label)
+    with ExitStack() as stack:
+        canonical_input = stack.enter_context(
+            pin_regular_input(
+                canonical,
+                maximum=MAX_COMPRESSED_ISO_BYTES,
+                label=f"{label} canonical input",
+            )
+        )
+        pinned_parts = [
+            stack.enter_context(
+                pin_regular_input(
+                    part,
+                    maximum=MAX_COMPRESSED_ISO_BYTES,
+                    label=f"{label} compressed part {part.name}",
+                )
+            )
+            for part in parts
+        ]
+        if sum(part.size_bytes for part in pinned_parts) != canonical_input.size_bytes:
+            fail(label)
+        canonical_descriptor = os.dup(canonical_input.descriptor)
+        try:
+            os.lseek(canonical_descriptor, 0, os.SEEK_SET)
+            for part in pinned_parts:
+                part_descriptor = os.dup(part.descriptor)
+                try:
+                    os.lseek(part_descriptor, 0, os.SEEK_SET)
+                    while True:
+                        part_chunk = os.read(part_descriptor, 1024 * 1024)
+                        if not part_chunk:
+                            break
+                        canonical_chunk = bytearray()
+                        while len(canonical_chunk) < len(part_chunk):
+                            chunk = os.read(
+                                canonical_descriptor,
+                                len(part_chunk) - len(canonical_chunk),
+                            )
+                            if not chunk:
+                                fail(label)
+                            canonical_chunk.extend(chunk)
+                        if bytes(canonical_chunk) != part_chunk:
+                            fail(label)
+                finally:
+                    os.close(part_descriptor)
+            if os.read(canonical_descriptor, 1):
+                fail(label)
+        finally:
+            os.close(canonical_descriptor)
+
+
+def require_canonical_zstd_file(
+    zstd: str,
+    source: Path,
+    observed: Path,
+    *,
+    label: str,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="goblins-canonical-zstd-") as temporary:
+        canonical = Path(temporary) / "canonical.zst"
+        compress_once(zstd, source, canonical)
+        regular_files_are_identical(
+            canonical,
+            observed,
+            maximum=MAX_COMPRESSED_ISO_BYTES,
+            label=label,
+        )
+
+
+def require_canonical_zstd_parts(
+    zstd: str,
+    source: Path,
+    parts: list[Path],
+    *,
+    label: str,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="goblins-canonical-zstd-parts-") as temporary:
+        canonical = Path(temporary) / "canonical.zst"
+        compress_once(zstd, source, canonical)
+        canonical_file_matches_parts(canonical, parts, label=label)
 
 
 def create_display_tar(source: Path, destination: Path, source_epoch: int) -> None:
@@ -1480,9 +1611,7 @@ def build_assets(args: argparse.Namespace) -> int:
     output = Path(args.output)
     if output.exists() or output.is_symlink():
         fail(f"promotion output must not already exist: {output}")
-    tool_version = zstd_version(args.zstd)
-    if tool_version != ZSTD_VERSION:
-        fail(f"stable assets require the exact reviewed compressor: {ZSTD_VERSION}")
+    require_exact_zstd(args.zstd)
     validate_timestamp(args.promotion_timestamp)
     remote = load_json(Path(args.remote_inputs), label="remote promotion inputs")
     if remote.get("candidate_commit") != args.candidate_commit or remote.get("stable_tag") != args.stable_tag:
@@ -1956,27 +2085,35 @@ def stream_decompressed_record(
         )
 
 
-def decompress_zstd_file_bounded(
+def decompress_zstd_inputs_bounded(
     zstd: str,
-    source: Path,
+    sources: list[Path],
     destination: Path,
     *,
     maximum: int,
     label: str,
 ) -> int:
-    if maximum <= 0 or destination.exists() or destination.is_symlink():
+    if not sources or maximum <= 0 or destination.exists() or destination.is_symlink():
         fail(f"{label} has no safe bounded decompression destination")
-    with pin_regular_input(
-        source,
-        maximum=MAX_COMPRESSED_ISO_BYTES,
-        label=f"{label} compressed input",
-    ) as pinned:
+    with ExitStack() as stack:
+        pinned_inputs = [
+            stack.enter_context(
+                pin_regular_input(
+                    source,
+                    maximum=MAX_COMPRESSED_ISO_BYTES,
+                    label=f"{label} compressed input {source.name}",
+                )
+            )
+            for source in sources
+        ]
+        if sum(item.size_bytes for item in pinned_inputs) > MAX_COMPRESSED_ISO_BYTES:
+            fail(f"{label} compressed inputs exceed their total byte limit")
         descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         completed = False
         try:
             _, total = pump_zstd_decompression(
                 zstd,
-                [pinned],
+                pinned_inputs,
                 maximum=maximum,
                 label=label,
                 destination_descriptor=descriptor,
@@ -1990,7 +2127,32 @@ def decompress_zstd_file_bounded(
                 destination.unlink(missing_ok=True)
 
 
-def extract_display_proof_archive(zstd: str, archive: Path, destination: Path) -> Path:
+def decompress_zstd_file_bounded(
+    zstd: str,
+    source: Path,
+    destination: Path,
+    *,
+    maximum: int,
+    label: str,
+) -> int:
+    return decompress_zstd_inputs_bounded(
+        zstd,
+        [source],
+        destination,
+        maximum=maximum,
+        label=label,
+    )
+
+
+def extract_display_proof_archive(
+    zstd: str,
+    archive: Path,
+    destination: Path,
+    *,
+    source_epoch: int,
+) -> Path:
+    if source_epoch <= 0:
+        fail("display-proof raw USTAR source epoch is not positive")
     if destination.exists() or destination.is_symlink():
         fail(f"display-proof replay destination already exists: {destination}")
     destination.mkdir(mode=0o700, parents=True)
@@ -2055,12 +2217,27 @@ def extract_display_proof_archive(zstd: str, archive: Path, destination: Path) -
                 os.close(descriptor)
                 source.close()
             seen.add(pure.name)
-    tar_path.unlink()
     if not root_seen:
         fail("display-proof archive has no canonical root directory")
     required = set(DISPLAY_FILES) | {"signoff-row.md"}
     if not required.issubset(seen):
         fail(f"display-proof archive is incomplete: {sorted(required - seen)}")
+    canonical_tar = destination / "canonical-display-proof.tar"
+    create_display_tar(run_dir, canonical_tar, source_epoch)
+    regular_files_are_identical(
+        tar_path,
+        canonical_tar,
+        maximum=MAX_DISPLAY_TAR_BYTES,
+        label="display-proof raw USTAR bytes are not canonical",
+    )
+    require_canonical_zstd_file(
+        zstd,
+        canonical_tar,
+        archive,
+        label="display-proof zstd bytes are not canonical",
+    )
+    tar_path.unlink()
+    canonical_tar.unlink()
     return run_dir
 
 
@@ -2189,6 +2366,7 @@ def replay_and_verify_display_proof(
     *,
     zstd: str,
     repository: Path,
+    source_epoch: int,
     candidate_commit: str,
     image_ref: str,
     run_date: str,
@@ -2200,6 +2378,7 @@ def replay_and_verify_display_proof(
             zstd,
             payload / "goblins-os-aarch64-display-proof.tar.zst",
             replay_root / "expanded",
+            source_epoch=source_epoch,
         )
         seal = validate_members_against_signed_seal(replay_run, standalone_root=payload)
         sealed_run_date = seal.get("run_date")
@@ -2487,14 +2666,28 @@ def verify_payload_directory(
     expected_release_iso_sha = parse_single_checksum(
         payload / "goblins-os-aarch64.iso.sha256", "goblins-os-aarch64.iso"
     )
-    actual_release_iso_sha, actual_release_iso_size = stream_decompressed_record(
-        zstd,
-        [payload / name for name in part_names],
-        maximum=MAX_ZIP_MEMBER_BYTES,
-        label="release ISO parts",
-    )
-    if actual_release_iso_sha != expected_release_iso_sha:
-        fail("decompressed ISO parts do not match the exact candidate ISO checksum")
+    release_iso_parts = [payload / name for name in part_names]
+    with tempfile.TemporaryDirectory(prefix="goblins-release-iso-replay-") as temporary:
+        replayed_iso = Path(temporary) / "goblins-os-aarch64.iso"
+        actual_release_iso_size = decompress_zstd_inputs_bounded(
+            zstd,
+            release_iso_parts,
+            replayed_iso,
+            maximum=MAX_ZIP_MEMBER_BYTES,
+            label="release ISO parts",
+        )
+        actual_release_iso_sha = sha256_path(
+            replayed_iso,
+            maximum=MAX_ZIP_MEMBER_BYTES,
+        )
+        if actual_release_iso_sha != expected_release_iso_sha:
+            fail("decompressed ISO parts do not match the exact candidate ISO checksum")
+        require_canonical_zstd_parts(
+            zstd,
+            replayed_iso,
+            release_iso_parts,
+            label="release ISO zstd bytes are not canonical",
+        )
 
     display_proof = manifest.get("display_proof")
     if type(display_proof) is not dict or set(display_proof) != {
@@ -2800,6 +2993,7 @@ def verify_payload_directory(
         payload,
         zstd=zstd,
         repository=repository,
+        source_epoch=source_date_epoch,
         candidate_commit=candidate_commit,
         image_ref=image_ref,
         run_date=run_date,
@@ -2810,6 +3004,7 @@ def verify_payload_directory(
 
 
 def verify_payload(args: argparse.Namespace) -> int:
+    require_exact_zstd(args.zstd)
     verify_payload_directory(
         Path(args.payload).resolve(strict=True),
         candidate_commit=args.candidate_commit,
@@ -2853,6 +3048,7 @@ def extract_payload(args: argparse.Namespace) -> int:
 
 
 def self_test(args: argparse.Namespace) -> int:
+    require_exact_zstd(args.zstd)
     with tempfile.TemporaryDirectory(prefix="goblins-stable-promotion-self-test-") as temporary:
         root = Path(temporary)
         run = root / "aarch64/2099-01-02"
@@ -3214,11 +3410,59 @@ def self_test(args: argparse.Namespace) -> int:
         archive = root / "proof.tar.zst"
         create_display_tar(run, tar_path, 1_700_000_000)
         compress_deterministically(args.zstd, tar_path, archive)
-        replay = extract_display_proof_archive(args.zstd, archive, root / "valid-replay")
+        replay = extract_display_proof_archive(
+            args.zstd,
+            archive,
+            root / "valid-replay",
+            source_epoch=1_700_000_000,
+        )
         validate_members_against_signed_seal(replay, standalone_root=run)
         replay_records = [artifact_record(path) for path in scan_flat_display_source(replay)]
         declared_records = [dict(item) for item in replay_records]
         require_exact_display_member_records(replay_records, declared_records)
+
+        hidden_ustar = root / "hidden-padding.tar"
+        hidden_ustar_data = bytearray(tar_path.read_bytes())
+        if not hidden_ustar_data or hidden_ustar_data[-1] != 0:
+            fail("self-test canonical USTAR fixture has no terminal zero padding")
+        hidden_ustar_data[-1] = 1
+        hidden_ustar.write_bytes(hidden_ustar_data)
+        hidden_ustar_archive = root / "hidden-padding.tar.zst"
+        compress_deterministically(args.zstd, hidden_ustar, hidden_ustar_archive)
+        try:
+            extract_display_proof_archive(
+                args.zstd,
+                hidden_ustar_archive,
+                root / "hidden-padding-replay",
+                source_epoch=1_700_000_000,
+            )
+        except PromotionError as error:
+            if str(error) != "display-proof raw USTAR bytes are not canonical":
+                raise
+        else:
+            fail("self-test accepted hidden bytes in raw USTAR padding")
+
+        skippable_payload = b"forbidden hidden release metadata"
+        skippable_frame = (
+            b"\x50\x2a\x4d\x18"
+            + len(skippable_payload).to_bytes(4, "little")
+            + skippable_payload
+        )
+        hidden_zstd_archive = root / "hidden-frame.tar.zst"
+        hidden_zstd_archive.write_bytes(archive.read_bytes() + skippable_frame)
+        try:
+            extract_display_proof_archive(
+                args.zstd,
+                hidden_zstd_archive,
+                root / "hidden-frame-replay",
+                source_epoch=1_700_000_000,
+            )
+        except PromotionError as error:
+            if str(error) != "display-proof zstd bytes are not canonical":
+                raise
+        else:
+            fail("self-test accepted a skippable frame in display-proof zstd bytes")
+
         declared_records[0]["sha256"] = "0" * 64
         try:
             require_exact_display_member_records(replay_records, declared_records)
@@ -3233,7 +3477,10 @@ def self_test(args: argparse.Namespace) -> int:
         create_display_tar(run, mutated_tar, 1_700_000_000)
         compress_deterministically(args.zstd, mutated_tar, mutated_archive)
         mutated_replay = extract_display_proof_archive(
-            args.zstd, mutated_archive, root / "mutated-replay"
+            args.zstd,
+            mutated_archive,
+            root / "mutated-replay",
+            source_epoch=1_700_000_000,
         )
         try:
             validate_members_against_signed_seal(mutated_replay)
@@ -3363,6 +3610,35 @@ def self_test(args: argparse.Namespace) -> int:
             fail("self-test accepted zstd file output beyond its limit")
         if overflowing_zstd_output.exists():
             fail("self-test left a partial file after bounded zstd rejection")
+
+        canonical_iso_zstd = root / "canonical-iso.zst"
+        compress_once(args.zstd, zstd_source, canonical_iso_zstd)
+        require_canonical_zstd_parts(
+            args.zstd,
+            zstd_source,
+            [canonical_iso_zstd],
+            label="release ISO zstd bytes are not canonical",
+        )
+        hidden_iso_zstd = root / "hidden-iso-frame.zst"
+        hidden_iso_payload = b"forbidden hidden ISO metadata"
+        hidden_iso_frame = (
+            b"\x50\x2a\x4d\x18"
+            + len(hidden_iso_payload).to_bytes(4, "little")
+            + hidden_iso_payload
+        )
+        hidden_iso_zstd.write_bytes(canonical_iso_zstd.read_bytes() + hidden_iso_frame)
+        try:
+            require_canonical_zstd_parts(
+                args.zstd,
+                zstd_source,
+                [hidden_iso_zstd],
+                label="release ISO zstd bytes are not canonical",
+            )
+        except PromotionError as error:
+            if str(error) != "release ISO zstd bytes are not canonical":
+                raise
+        else:
+            fail("self-test accepted a skippable frame in release ISO zstd bytes")
 
         zstd_replace_target = root / "replace-target.zst"
         zstd_replacement = root / "replacement.zst"

@@ -115,7 +115,7 @@ echo "  verification first boot -> privacy=$firstboot_privacy_code installer=$fi
   && [ "$persisted_session_mode" = "local-gpt-oss" ] \
   || fail=1
 engine_response=/tmp/goblins-os-engine-selection.json
-engine_file="$GOBLINS_OS_AI_STATE/engine"
+engine_file="$GOBLINS_OS_AI_STATE/users/0/engine"
 engine_code=$(core_proof_curl -s -o "$engine_response" -w '%{http_code}' \
   -X POST -H 'Content-Type: application/json' \
   -d '{"engine":"local-gpt-oss"}' \

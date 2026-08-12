@@ -33,6 +33,7 @@ mod network;
 mod notifications;
 mod ocr;
 mod openai_key;
+mod openai_key_provisioning;
 mod policy;
 mod preview;
 mod privacy;
@@ -108,6 +109,11 @@ use crate::{
     network::{network_status, set_proxy_mode, wifi_connect, wifi_scan},
     notifications::{notifications_status, set_notification_preference},
     openai_key::{openai_key_status, set_resident_engine},
+    openai_key_provisioning::{
+        broker_claim as openai_key_broker_claim, broker_commit as openai_key_broker_commit,
+        broker_decision as openai_key_broker_decision,
+        request_management as request_openai_key_management,
+    },
     policy::{configure_policy, grant_permission, policy_status},
     preview::{open_preview, preview_status},
     privacy::{privacy_status, set_desktop_privacy, set_privacy},
@@ -129,9 +135,48 @@ use crate::{
 };
 
 const TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES: usize = 64 * 1024;
+const OPENAI_KEY_ACTION_REQUEST_LIMIT_BYTES: usize = 1024;
+const OPENAI_KEY_BROKER_REQUEST_LIMIT_BYTES: usize = 160 * 1024;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // This is deliberately the first runtime action, before Tokio creates
+    // worker threads and before configuration, credentials, or logs are read.
+    disable_core_dumpability()?;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
+
+#[cfg(target_os = "linux")]
+fn disable_core_dumpability() -> std::io::Result<()> {
+    let no_core = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: setrlimit receives a valid local rlimit pointer, and prctl uses
+    // integer-only operations with the required zero padding.
+    if unsafe { libc::setrlimit(libc::RLIMIT_CORE, &no_core) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "core process dumpability could not be disabled",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn disable_core_dumpability() -> std::io::Result<()> {
+    Ok(())
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -397,6 +442,26 @@ fn private_router() -> Router {
         )
         .route("/v1/codex/login/url", get(codex_login_url))
         .route("/v1/models/openai-key", get(openai_key_status))
+        .route(
+            "/v1/models/openai-key/manage",
+            post(request_openai_key_management)
+                .layer(DefaultBodyLimit::max(OPENAI_KEY_ACTION_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/openai-key-broker/claim",
+            post(openai_key_broker_claim)
+                .layer(DefaultBodyLimit::max(OPENAI_KEY_ACTION_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/openai-key-broker/commit",
+            post(openai_key_broker_commit)
+                .layer(DefaultBodyLimit::max(OPENAI_KEY_BROKER_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/openai-key-broker/decision",
+            post(openai_key_broker_decision)
+                .layer(DefaultBodyLimit::max(OPENAI_KEY_ACTION_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/models/engine", post(set_resident_engine))
         .route("/v1/policy/status", get(policy_status))
         .route("/v1/policy/configure", post(configure_policy))
@@ -459,6 +524,35 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{private_router, TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES};
+
+    #[test]
+    fn core_disables_dumps_before_constructing_the_async_runtime() {
+        let source = include_str!("main.rs");
+        let hardening = source
+            .find("disable_core_dumpability()?;")
+            .expect("core startup hardening");
+        let runtime = source
+            .find("tokio::runtime::Builder::new_multi_thread()")
+            .expect("Tokio runtime construction");
+        assert!(hardening < runtime);
+        assert!(source.contains("libc::PR_SET_DUMPABLE, 0"));
+        assert!(source.contains("libc::RLIMIT_CORE"));
+    }
+
+    #[test]
+    fn system_services_keep_core_nondumpable_and_model_cache_out_of_secrets() {
+        let core = include_str!("../../../os/systemd/goblins-os-core.service");
+        assert_eq!(
+            core.lines().filter(|line| *line == "LimitCORE=0").count(),
+            1
+        );
+        assert!(core.lines().any(|line| line == "NoNewPrivileges=yes"));
+        assert!(core.lines().any(|line| line == "ProtectSystem=strict"));
+
+        let cache = include_str!("../../../os/systemd/goblins-os-model-cache.service");
+        assert!(!cache.contains("goblins-os/secrets"));
+        assert!(!cache.contains("/var/lib/goblins-os/secrets"));
+    }
 
     #[tokio::test]
     async fn text_shortcuts_route_rejects_bodies_above_its_private_table_envelope() {

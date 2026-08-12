@@ -19,6 +19,8 @@ const DEFAULT_CORE_WAIT_SECS: u64 = 60;
 // App builds may wait on a local model for 3600 seconds. This fixed ceiling
 // leaves bounded finalization time and matches the capability-client maximum.
 const LONG_CORE_JOB_TIMEOUT: Duration = Duration::from_secs(65 * 60);
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+const OPENAI_KEY_SETUP_TIMEOUT: Duration = Duration::from_secs(5 * 60 + 5);
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
 const INSTALLER_TRANSITION_MS: u32 = 220;
 
@@ -49,6 +51,7 @@ struct InstallerState {
     boot: BootState,
     auth: Option<AuthStatus>,
     codex: Option<CodexStatus>,
+    openai_key: Option<OpenAiKeyStatus>,
     policy: Option<PolicyStatus>,
     network: Option<NetworkStatus>,
     readiness: Option<InstallerReadiness>,
@@ -71,6 +74,22 @@ struct CodexStatus {
     installed: bool,
     authenticated: bool,
     detail: String,
+}
+
+/// Requester-scoped readiness only. The API never returns key material or a
+/// recognizable fragment of it to the installer.
+#[derive(Clone, Deserialize)]
+struct OpenAiKeyStatus {
+    configured: bool,
+    key_change_pending: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenAiKeySetupOutcome {
+    Ready,
+    Cancelled,
+    TimedOut,
 }
 
 #[derive(Clone, Deserialize)]
@@ -617,6 +636,7 @@ fn load_installer_state(config: &InstallerConfig, boot: BootState) -> InstallerS
             boot,
             auth: None,
             codex: None,
+            openai_key: None,
             policy: None,
             network: None,
             readiness: None,
@@ -628,6 +648,7 @@ fn load_installer_state(config: &InstallerConfig, boot: BootState) -> InstallerS
 
     let auth = get_core_json::<AuthStatus>(&config.core, "/v1/auth/openai/status").ok();
     let codex = get_core_json::<CodexStatus>(&config.core, "/v1/codex/status").ok();
+    let openai_key = get_core_json::<OpenAiKeyStatus>(&config.core, "/v1/models/openai-key").ok();
     let policy = get_core_json::<PolicyStatus>(&config.core, "/v1/policy/status").ok();
     let network = get_core_json::<NetworkStatus>(&config.core, "/v1/network/status").ok();
     let readiness =
@@ -643,6 +664,7 @@ fn load_installer_state(config: &InstallerConfig, boot: BootState) -> InstallerS
         boot,
         auth,
         codex,
+        openai_key,
         policy,
         network,
         readiness,
@@ -680,6 +702,17 @@ fn installer_state_summary(state: &InstallerState) -> String {
             format!(
                 "installed={} authenticated={} detail={}",
                 status.installed, status.authenticated, status.detail
+            )
+        })
+        .unwrap_or_else(|| "unavailable".to_string());
+
+    let openai_key = state
+        .openai_key
+        .as_ref()
+        .map(|status| {
+            format!(
+                "configured={} change-pending={}",
+                status.configured, status.key_change_pending
             )
         })
         .unwrap_or_else(|| "unavailable".to_string());
@@ -849,7 +882,7 @@ fn installer_state_summary(state: &InstallerState) -> String {
         .unwrap_or_else(|| "unavailable".to_string());
 
     format!(
-        "installer_state=core:{} auth=[{}] codex=[{}] policy=[{}] network=[{}] readiness=[{}] install_targets=[{}] local_models=[{}] services={} first_service=[{}]",
+        "installer_state=core:{} auth=[{}] codex=[{}] openai-key=[{}] policy=[{}] network=[{}] readiness=[{}] install_targets=[{}] local_models=[{}] services={} first_service=[{}]",
         if state.boot.core_ready {
             "ready"
         } else {
@@ -857,6 +890,7 @@ fn installer_state_summary(state: &InstallerState) -> String {
         },
         auth,
         codex,
+        openai_key,
         policy,
         network,
         readiness,
@@ -1490,7 +1524,7 @@ fn build_welcome_page(
         false,
     ));
     column.append(&centered_label(
-        "Build what you need with GPT-OSS on this device or your OpenAI account through Codex. You can switch engines later in Settings.",
+        "Build what you need with GPT-OSS on this device, your OpenAI account through Codex, or your own OpenAI API key. You can switch engines later in Settings.",
         "gos-onboarding-subtitle",
         true,
     ));
@@ -1550,7 +1584,7 @@ fn build_welcome_page(
         .codex
         .as_ref()
         .map(|codex| codex.detail.as_str())
-        .unwrap_or("Codex account status is not available yet.");
+        .unwrap_or("OpenAI account status through Codex is not available yet.");
     let online = state.network.as_ref().is_some_and(|network| network.online);
     if codex_installed {
         if !online && !codex_authenticated {
@@ -1654,6 +1688,118 @@ fn build_welcome_page(
         }
         column.append(&codex);
     }
+
+    let openai_key_configured = state
+        .openai_key
+        .as_ref()
+        .is_some_and(|status| status.configured);
+    let openai_key_status_ready = state.openai_key.is_some();
+    let openai_key_change_pending = state
+        .openai_key
+        .as_ref()
+        .is_some_and(|status| status.key_change_pending);
+    let cloud_policy_allowed = state.policy.as_ref().is_some_and(|policy| {
+        policy
+            .controls
+            .iter()
+            .find(|control| control.id == "cloud-openai")
+            .is_some_and(|control| control.state == "allowed")
+    });
+    let openai_key_available =
+        online && cloud_policy_allowed && openai_key_status_ready && !openai_key_change_pending;
+    let openai_key = button(
+        if openai_key_configured {
+            "Continue with your OpenAI API key"
+        } else {
+            "Add your OpenAI API key…"
+        },
+        &["gos-onboarding-secondary"],
+    );
+    openai_key.set_halign(gtk::Align::Center);
+    openai_key.set_sensitive(openai_key_available);
+    let openai_key_unavailable_detail = if !openai_key_status_ready {
+        "Protected key storage is not ready yet. Continue with GPT-OSS and add your key later in Settings."
+    } else if openai_key_change_pending {
+        "Finish or cancel the current protected key change before selecting this engine."
+    } else if !online {
+        "Connect to the internet before selecting an OpenAI API key as the active engine."
+    } else if !cloud_policy_allowed {
+        "OpenAI cloud services are blocked by the active Goblins OS policy."
+    } else {
+        "Enter your key in a separate protected system window. The installer never receives it."
+    };
+    openai_key.set_tooltip_text(Some(openai_key_unavailable_detail));
+    openai_key.update_property(&[
+        gtk::accessible::Property::Label(if openai_key_configured {
+            "Use your stored OpenAI API key"
+        } else {
+            "Add your OpenAI API key in a protected window"
+        }),
+        gtk::accessible::Property::Description(if openai_key_available {
+            "Use your own key for OpenAI cloud requests. The key is entered only in a protected system window; requests leave this device for OpenAI."
+        } else {
+            openai_key_unavailable_detail
+        }),
+    ]);
+    register_pending_control(&route_controls, &openai_key);
+    {
+        let stack = stack.clone();
+        let feedback = route_feedback.clone();
+        let core = config.core.clone();
+        let controls = route_controls.clone();
+        openai_key.connect_clicked(move |_| {
+            set_pending_controls(&controls, true);
+            feedback.set_text(if openai_key_configured {
+                "Selecting your OpenAI API key for Goblins AI…"
+            } else {
+                "A protected key window is opening. Finish there to continue setup…"
+            });
+
+            let request_url = core.clone();
+            let stack = stack.clone();
+            let feedback = feedback.clone();
+            let controls = controls.clone();
+            run_installer_core_action(
+                move || {
+                    let outcome = if openai_key_configured {
+                        OpenAiKeySetupOutcome::Ready
+                    } else {
+                        begin_openai_key_setup(&request_url)?
+                    };
+                    if outcome == OpenAiKeySetupOutcome::Ready {
+                        set_engine(&request_url, "openai-api")?;
+                    }
+                    Ok(outcome)
+                },
+                move |result| match result {
+                    Ok(OpenAiKeySetupOutcome::Ready) => {
+                        set_pending_controls(&controls, false);
+                        stack.set_visible_child_name("appearance");
+                    }
+                    Ok(OpenAiKeySetupOutcome::Cancelled) => {
+                        feedback.set_text(
+                            "No key was added. Choose another engine, or open the protected key window again.",
+                        );
+                        set_pending_controls(&controls, false);
+                    }
+                    Ok(OpenAiKeySetupOutcome::TimedOut) => {
+                        feedback.set_text(
+                            "Goblins OS could not confirm the protected key change in time. Check Settings before trying again.",
+                        );
+                        set_pending_controls(&controls, false);
+                    }
+                    Err(error) => {
+                        feedback.set_text(
+                            "Goblins OS could not finish API key setup or select it. Your key was never shown to the installer. Check the connection and policy, then try again.",
+                        );
+                        eprintln!("installer_openai_key_setup_error={error}");
+                        set_pending_controls(&controls, false);
+                    }
+                },
+            );
+        });
+    }
+    column.append(&openai_key);
 
     // Privacy-first path: enter the OS in offline / private mode. GPT-OSS runs the
     // same on-device, but the AI is held to this machine — no internet egress.
@@ -1767,7 +1913,7 @@ fn build_welcome_page(
     }
 
     column.append(&centered_label(
-        "Want OpenAI's hosted models? Sign in through Codex, or ask an administrator to provision access.",
+        "Your API key is entered only in a protected system window. It is never included in Goblins OS, this public repository, logs, screenshots, or status screens.",
         "gos-onboarding-footnote",
         true,
     ));
@@ -5900,6 +6046,34 @@ fn begin_codex_setup(core: &CoreClient) -> Result<CodexSetupOutcome, CoreFetchEr
     Ok(start)
 }
 
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn begin_openai_key_setup(core: &CoreClient) -> Result<OpenAiKeySetupOutcome, CoreFetchError> {
+    let body = serde_json::json!({ "action": "add" }).to_string();
+    let response = http_request(
+        core,
+        Method::Post,
+        "/v1/models/openai-key/manage",
+        Some(body.as_bytes()),
+    )?;
+    if !(200..=299).contains(&response.status) {
+        return Err(CoreFetchError::Status(response.status));
+    }
+
+    let deadline = Instant::now() + OPENAI_KEY_SETUP_TIMEOUT;
+    while Instant::now() < deadline {
+        let status = get_core_json::<OpenAiKeyStatus>(core, "/v1/models/openai-key")?;
+        if status.configured {
+            return Ok(OpenAiKeySetupOutcome::Ready);
+        }
+        if !status.key_change_pending {
+            return Ok(OpenAiKeySetupOutcome::Cancelled);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    Ok(OpenAiKeySetupOutcome::TimedOut)
+}
+
 #[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
 fn codex_setup_outcome_from_response(
     response: &HttpResponse,
@@ -6481,8 +6655,14 @@ mod tests {
         for required in [
             "Start with GPT-OSS on this device",
             "Connect OpenAI account · Codex…",
+            "OpenAI account status through Codex is not available yet.",
+            "Add your OpenAI API key…",
+            "Continue with your OpenAI API key",
             "Requests leave this device for OpenAI",
-            "Sign in through Codex, or ask an administrator to provision access.",
+            "Your API key is entered only in a protected system window.",
+            "this public repository, logs, screenshots, or status screens",
+            "/v1/models/openai-key/manage",
+            "serde_json::json!({ \"action\": \"add\" })",
             "Desktop sign-in is optional and separate from Goblins AI",
             "This does not change the Goblins AI engine",
             "Allow and build first app",
@@ -6496,8 +6676,13 @@ mod tests {
         }
         let generic_openai_identity_cta = ["Sign in with ", "OpenAI", "\""].concat();
         assert!(!source.contains(&generic_openai_identity_cta));
-        let client_side_key_cta = ["Add your own OpenAI ", "API key"].concat();
-        assert!(!source.contains(&client_side_key_cta));
+        let welcome_source = source
+            .split("fn build_welcome_page")
+            .nth(1)
+            .and_then(|rest| rest.split("const ONBOARDING_STEP_HEADER_TOP").next())
+            .expect("welcome source boundary");
+        assert!(!welcome_source.contains("PasswordEntry"));
+        assert!(!welcome_source.contains("OPENAI_API_KEY"));
         assert!(!source.contains(&["complete_cloud_", "error"].concat()));
         assert!(!source.contains(&["let intent = if intent.", "is_empty()"].concat()));
     }

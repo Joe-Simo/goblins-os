@@ -28,6 +28,7 @@ const VOICE_STATUS_TIMEOUT: Duration = Duration::from_secs(8);
 const VOICE_CAPTURE_TIMEOUT: Duration = Duration::from_secs(35);
 const VOICE_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(130);
 const HOSTED_CONSENT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(8);
+const OPENAI_KEY_BROKER_LAUNCH_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_CAPTURE_WAV_BYTES: usize = 512 * 1024;
 const MAX_PLAYBACK_WAV_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CAPTURE_DURATION_SECONDS: u64 = 7;
@@ -156,6 +157,7 @@ enum BridgeRequest<'a> {
         wav_base64: String,
     },
     LaunchHostedConsentBroker,
+    LaunchOpenAiKeyBroker,
     PermissionStoreDelete {
         table: &'a str,
         id: &'a str,
@@ -295,6 +297,14 @@ pub(crate) fn voice_playback(wav: &[u8]) -> VoiceBridgeResult<()> {
 /// launch.
 pub(crate) fn launch_hosted_consent_broker() -> SessionBridgeResult {
     call_bridge(&BridgeRequest::LaunchHostedConsentBroker)
+}
+
+/// Ask the authenticated desktop session to launch the fixed credential-entry
+/// broker. No user ID, operation, lease, key, ciphertext, or other authority
+/// crosses the user-owned bridge. The broker claims the core's sole pending
+/// operation for its kernel-authenticated desktop UID after launch.
+pub(crate) fn launch_openai_key_broker() -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::LaunchOpenAiKeyBroker)
 }
 
 fn valid_pcm_wave(
@@ -456,6 +466,7 @@ fn call_bridge_detailed(request: &BridgeRequest<'_>) -> DetailedBridgeResult {
         BridgeRequest::VoiceCapture => VOICE_CAPTURE_TIMEOUT,
         BridgeRequest::VoicePlayback { .. } => VOICE_PLAYBACK_TIMEOUT,
         BridgeRequest::LaunchHostedConsentBroker => HOSTED_CONSENT_LAUNCH_TIMEOUT,
+        BridgeRequest::LaunchOpenAiKeyBroker => OPENAI_KEY_BROKER_LAUNCH_TIMEOUT,
         _ => BRIDGE_IO_TIMEOUT,
     };
     let request = match serde_json::to_vec(request) {
@@ -825,6 +836,24 @@ mod tests {
             serde_json::json!({"op": "launch-hosted-consent-broker"})
         );
         for forbidden in ["review_id", "lease_id", "ticket", "content"] {
+            assert!(launch.get(forbidden).is_none());
+        }
+    }
+
+    #[test]
+    fn key_broker_launch_request_exposes_no_credential_capability() {
+        let launch = serde_json::to_value(BridgeRequest::LaunchOpenAiKeyBroker).unwrap();
+        assert_eq!(
+            launch,
+            serde_json::json!({"op": "launch-open-ai-key-broker"})
+        );
+        for forbidden in [
+            "user_id",
+            "operation",
+            "lease_id",
+            "credential",
+            "encrypted_credential",
+        ] {
             assert!(launch.get(forbidden).is_none());
         }
     }

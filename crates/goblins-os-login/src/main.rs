@@ -274,9 +274,9 @@ fn build_login(
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("gos-login-root");
 
-    // No top chrome bar: just the centered identity card over the blurred
-    // wallpaper. Brand identity lives in the card
-    // (the OpenAI mark + "OPENAI ACCOUNT" kicker), not a redundant titlebar.
+    // No top chrome bar: just the centered Goblins OS identity card over the
+    // blurred wallpaper. OpenAI appears only where the provider-specific
+    // sign-in action or account state needs truthful attribution.
 
     // A single centered identity column over the canvas, not a two-column
     // dashboard. The night-gradient identity card is the hero;
@@ -287,17 +287,17 @@ fn build_login(
     identity.set_halign(gtk::Align::Center);
     // The identity hero keeps the white mark in both schemes (its card is the
     // night gradient regardless of theme), centered above the hero copy.
-    let hero_mark = goblins_os_ui::brand_mark(goblins_os_design::OPENAI_MARK_LIGHT, 56);
+    let hero_mark = goblins_os_ui::brand_mark(goblins_os_design::GOBLINS_MARK_LIGHT, 56);
     hero_mark.set_halign(gtk::Align::Center);
     identity.append(&hero_mark);
-    identity.append(&centered_label("OpenAI account", &["gos-kicker"]));
+    identity.append(&centered_label("Goblins OS", &["gos-kicker"]));
     identity.append(&centered_label(
         if auth_authenticated {
-            "Ready"
-        } else if auth_configured {
-            "Sign in"
+            "Ready to unlock"
+        } else if local_available {
+            "Welcome back"
         } else {
-            "Locked"
+            "Desktop locked"
         },
         &["gos-hero-title"],
     ));
@@ -322,8 +322,8 @@ fn build_login(
     // A state ("OpenAI sign-in isn't set up yet" / "OpenAI account ready") is a status line,
     // never button chrome — only a real action gets a button.
     let sign_in_built = auth_configured && !auth_authenticated;
-    if sign_in_built {
-        let sign_in = button("Sign in with OpenAI", &["gos-primary-action"]);
+    let openai_sign_in = if sign_in_built {
+        let sign_in = button("Sign in with OpenAI", &["gos-secondary-action"]);
         let core = config.core.clone();
         let feedback = feedback.clone();
         sign_in.connect_clicked(move |_| match openai_login_destination(&core) {
@@ -342,7 +342,7 @@ fn build_login(
                 eprintln!("login_openai_start_error={error}");
             }
         });
-        identity.append(&sign_in);
+        Some(sign_in)
     } else if auth_authenticated {
         // Authenticated: a calm ready status. The not-configured case needs no
         // note here — the hero copy already states the situation and the
@@ -352,7 +352,10 @@ fn build_login(
             "OpenAI account ready.",
             &["gos-identity-note"],
         ));
-    }
+        None
+    } else {
+        None
+    };
 
     // The brightest, top-most control must be the usable one: reading order has
     // to match action priority. When the OpenAI account is authenticated the
@@ -415,9 +418,13 @@ fn build_login(
         identity.append(&unlock_local);
     } else {
         // No OpenAI account yet: the live local-only unlock is the primary and
-        // leads. The OpenAI unlock stays inert, so it is demoted below it as a
-        // dimmed ghost — present for discoverability, unmistakably not yet usable.
+        // leads. Provider sign-in follows as a secondary action, then the OpenAI
+        // unlock stays inert as a dimmed ghost — present for discoverability,
+        // unmistakably not yet usable.
         identity.append(&unlock_local);
+        if let Some(sign_in) = &openai_sign_in {
+            identity.append(sign_in);
+        }
         identity.append(&unlock_openai);
     }
 
@@ -798,6 +805,23 @@ mod tests {
                 "login UI copy must not expose backend wording: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn login_hero_keeps_goblins_identity_and_openai_provider_secondary() {
+        let source = include_str!("main.rs");
+
+        assert!(
+            source.contains("goblins_os_ui::brand_mark(goblins_os_design::GOBLINS_MARK_LIGHT, 56)")
+        );
+        assert!(source.contains("centered_label(\"Goblins OS\", &[\"gos-kicker\"])"));
+        assert!(source.contains("button(\"Sign in with OpenAI\", &[\"gos-secondary-action\"])"));
+        let openai_hero_mark = [
+            "goblins_os_ui::brand_mark(goblins_os_design::",
+            "OPENAI_MARK_LIGHT",
+        ]
+        .concat();
+        assert!(!source.contains(&openai_hero_mark));
     }
 
     fn login_state_with_gate(

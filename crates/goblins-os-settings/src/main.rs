@@ -1690,15 +1690,127 @@ struct DesktopPrivacyStatus {
     detail: String,
 }
 
-/// Status of the optional administrator-installed OpenAI API credential. The key
-/// itself is never returned — Settings only mirrors readiness and selected model.
+/// Non-secret readiness for this user's optional OpenAI API key. The key itself
+/// is never returned — Settings only mirrors readiness and the selected engine.
 #[derive(Clone, Deserialize)]
 struct OpenAiKeyStatus {
     configured: bool,
     model: String,
     engine_selected: bool,
     engine: String,
+    #[serde(default)]
+    key_change_pending: bool,
+    #[allow(dead_code)]
     storage: String,
+}
+
+/// The complete, fixed vocabulary accepted by the protected API-key broker
+/// launcher. Ordinary Settings sends only one of these action identifiers.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenAiKeyManagementAction {
+    Add,
+    Rotate,
+    Remove,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+impl OpenAiKeyManagementAction {
+    #[cfg(test)]
+    const ALL: [Self; 3] = [Self::Add, Self::Rotate, Self::Remove];
+
+    const fn as_id(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Rotate => "rotate",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn openai_key_management_body(action: OpenAiKeyManagementAction) -> String {
+    serde_json::json!({ "action": action.as_id() }).to_string()
+}
+
+fn openai_key_status_title(status: &OpenAiKeyStatus) -> &'static str {
+    if status.key_change_pending {
+        "OpenAI API key · protected change open"
+    } else if status.configured {
+        "OpenAI API key · ready"
+    } else {
+        "OpenAI API key · not added"
+    }
+}
+
+fn openai_key_status_detail(status: &OpenAiKeyStatus) -> String {
+    if status.key_change_pending {
+        return "Finish or cancel the change in the separate protected Goblins OS window. Settings cannot see anything entered there."
+            .to_string();
+    }
+    if status.configured {
+        let model = if status.model.trim().is_empty() {
+            "OpenAI hosted models"
+        } else {
+            status.model.trim()
+        };
+        let selection = if status.engine_selected {
+            "It is the active Goblins AI engine."
+        } else {
+            "Choose Use OpenAI API key above when you want to use it."
+        };
+        format!(
+            "{model} is ready for this account. {selection} The key never enters Settings; it is entered only in a separate protected Goblins OS window."
+        )
+    } else {
+        "Add your own OpenAI API key in a separate protected Goblins OS window. The key never enters Settings, and GPT-OSS remains available on this device."
+            .to_string()
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn openai_key_management_started_copy(action: OpenAiKeyManagementAction) -> &'static str {
+    match action {
+        OpenAiKeyManagementAction::Add => {
+            "The protected API key window opened. Finish or cancel there."
+        }
+        OpenAiKeyManagementAction::Rotate => {
+            "The protected replacement window opened. Finish or cancel there."
+        }
+        OpenAiKeyManagementAction::Remove => {
+            "The protected removal window opened. Confirm or cancel there."
+        }
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn openai_key_management_finished_copy(
+    action: OpenAiKeyManagementAction,
+    status: &OpenAiKeyStatus,
+) -> &'static str {
+    if status.key_change_pending {
+        return "The protected API key window is still open. Finish or cancel there, then choose Refresh status.";
+    }
+    match action {
+        OpenAiKeyManagementAction::Add if status.configured => {
+            "API key added. OpenAI hosted models are ready to select."
+        }
+        OpenAiKeyManagementAction::Add => {
+            "The protected window closed without adding an API key. Nothing changed."
+        }
+        OpenAiKeyManagementAction::Rotate if status.configured => {
+            "The protected replacement window closed. Your API key remains ready; Settings cannot see whether its private value changed."
+        }
+        OpenAiKeyManagementAction::Rotate => {
+            "The protected replacement window closed and no API key is now available. Add a key to use OpenAI hosted models."
+        }
+        OpenAiKeyManagementAction::Remove if !status.configured => {
+            "API key removed. It is no longer available to OpenAI hosted models."
+        }
+        OpenAiKeyManagementAction::Remove => {
+            "The protected window closed without removing the API key. Nothing changed."
+        }
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -2158,7 +2270,7 @@ const SETTINGS_SEARCH_ITEMS: &[SettingsSearchItem] = &[
     },
     SettingsSearchItem {
         panel: SettingsPanel::UsersAccounts,
-        title: "Codex account",
+        title: "OpenAI account through Codex",
         terms: &["codex", "login", "authenticated"],
     },
     SettingsSearchItem {
@@ -2310,7 +2422,7 @@ const SETTINGS_SEARCH_ITEMS: &[SettingsSearchItem] = &[
     },
     SettingsSearchItem {
         panel: SettingsPanel::Storage,
-        title: "Model cache",
+        title: "Local model storage",
         terms: &["storage", "models", "cache", "disk usage"],
     },
     SettingsSearchItem {
@@ -2666,7 +2778,7 @@ impl ResidentEngineSelection {
         match self {
             Self::LocalGptOss => "GPT-OSS",
             Self::Codex => "your OpenAI account through Codex",
-            Self::OpenAiApi => "OpenAI hosted models with a protected service credential",
+            Self::OpenAiApi => "OpenAI hosted models with your protected API key",
             Self::ManagedCloud => "managed OpenAI cloud",
         }
     }
@@ -3420,7 +3532,9 @@ impl SettingsPanel {
                 "Goblin actions, GPT-OSS, Codex, OpenAI API key, local models, vision, and voice engines."
             }
             Self::Policy => "Consumer/business/enterprise policy profile and permission grants.",
-            Self::Storage => "Model cache, OS state directories, mounted storage, and free space.",
+            Self::Storage => {
+                "Local model storage, private OS data, mounted storage, and free space."
+            }
             Self::UpdatesAbout => "OS image, tooling, identity, and update readiness.",
             Self::Recovery => "Service health, recovery checks, and repair readiness.",
             Self::Developer => "Local diagnostics, logs, service health, and device details.",
@@ -5530,7 +5644,7 @@ fn build_overview(panel: &gtk4::Box, state: &SettingsState) {
                     ),
                     system_row(
                         "Local model storage",
-                        "Model cache and private credential storage are managed by Goblins OS.",
+                        "Local model storage and private credential storage are managed by Goblins OS.",
                     ),
                     system_row(
                         "Session readiness",
@@ -8752,7 +8866,12 @@ fn build_users_accounts(panel: &gtk4::Box, state: &SettingsState) {
         "Manage local users, device identity, OpenAI account state, and Codex sign-in without showing secrets.",
     );
     append_users_accounts_summary(panel, state);
-    let feedback = label("", &["gos-row-copy"]);
+    let feedback = gtk4::Label::builder()
+        .accessible_role(gtk4::AccessibleRole::Status)
+        .build();
+    feedback.set_xalign(0.0);
+    feedback.set_wrap(true);
+    feedback.add_css_class("gos-row-copy");
     let has_openai_action = append_openai_account_settings(panel, state, &feedback);
     panel.append(&label("Codex", &["gos-subsection-title"]));
     let has_codex_action = append_codex_settings(panel, state, &feedback, None);
@@ -9290,12 +9409,12 @@ fn build_storage(panel: &gtk4::Box, state: &SettingsState) {
     let model_rows = vec![match (&state.local_models, &state.system) {
         (Some(catalog), _) => model_cache_capacity_row(catalog),
         (None, Some(_system)) => system_row(
-            "Model cache",
-            "Waiting for model-cache capacity from Goblins OS.",
+            "Local model storage",
+            "Waiting for local model storage from Goblins OS.",
         ),
-        (None, None) => system_row("Model cache", "Waiting for model-cache capacity."),
+        (None, None) => system_row("Local model storage", "Waiting for local model storage."),
     }];
-    append_preference_group(panel, "Model cache", model_rows);
+    append_preference_group(panel, "Local model storage", model_rows);
 
     append_preference_group(
         panel,
@@ -9553,7 +9672,7 @@ fn append_native_storage_handoffs(panel: &gtk4::Box) {
 fn model_cache_capacity_row(catalog: &LocalModelCatalog) -> gtk4::Box {
     let detail = model_cache_capacity_detail(catalog);
     health_row(
-        "Model cache",
+        "Local model storage",
         model_cache_capacity_label(catalog.hardware.model_dir_available_gb),
         model_cache_capacity_ready(catalog.hardware.model_dir_available_gb),
         &detail,
@@ -9629,23 +9748,23 @@ fn model_cache_summary_spec(
 ) -> StorageSummarySpec {
     match catalog {
         Some(catalog) => StorageSummarySpec {
-            title: "Model cache",
+            title: "Local model storage",
             state: model_cache_capacity_label(catalog.hardware.model_dir_available_gb),
             ready: model_cache_capacity_ready(catalog.hardware.model_dir_available_gb),
             detail: model_cache_capacity_detail(catalog),
         },
         None => match system {
             Some(_system) => StorageSummarySpec {
-                title: "Model cache",
+                title: "Local model storage",
                 state: "waiting",
                 ready: false,
-                detail: "Waiting for model-cache capacity from Goblins OS.".to_string(),
+                detail: "Waiting for local model storage from Goblins OS.".to_string(),
             },
             None => StorageSummarySpec {
-                title: "Model cache",
+                title: "Local model storage",
                 state: "waiting",
                 ready: false,
-                detail: "Waiting for model-cache capacity.".to_string(),
+                detail: "Waiting for local model storage.".to_string(),
             },
         },
     }
@@ -10681,8 +10800,9 @@ fn local_model_row(core: &CoreClient, model: &LocalModelOption) -> gtk4::Box {
     row
 }
 
-/// Hosted OpenAI readiness for an administrator-installed protected service
-/// credential. Settings never accepts, stores, or receives the API key itself.
+/// Hosted OpenAI readiness and secret-blind management for this user's protected
+/// key. Settings can launch the trusted broker but never accepts or receives key
+/// material itself.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
@@ -10695,8 +10815,8 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     let core = config_core(state);
 
     // Engine selector — three honest engines: GPT-OSS on this device, the user's
-    // OpenAI account via Codex CLI, or an administrator-installed service
-    // credential. Each option is selectable only when it can be honored.
+    // OpenAI account via Codex CLI, or their protected API key. Each option is
+    // selectable only when it can be honored.
     let _ = engine_selected;
     let active_engine = status.map(|status| status.engine.as_str());
     let codex_ready = state
@@ -10713,9 +10833,10 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         .as_ref()
         .map(|resident| resident.engine.local_detail.as_str())
         .unwrap_or("Waiting for authoritative GPT-OSS readiness from Goblins OS.");
-    let local_available = Rc::new(Cell::new(engine_status_available && local_ready));
-    let codex_available = Rc::new(Cell::new(engine_status_available && codex_ready));
-    let hosted_available = Rc::new(Cell::new(engine_status_available && configured));
+    let engine_status_available_flag = Rc::new(Cell::new(engine_status_available));
+    let local_available = Rc::new(Cell::new(local_ready));
+    let codex_available = Rc::new(Cell::new(codex_ready));
+    let hosted_available = Rc::new(Cell::new(configured));
     let engine_pending = Rc::new(Cell::new(false));
 
     panel.append(&label("Engine", &["gos-kicker"]));
@@ -10723,12 +10844,12 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     choice.add_css_class("gos-engine-choice");
 
     // Two primary paths: build on-device with GPT-OSS (keyless, private, the
-    // default), or with your OpenAI account through Codex. An administrator-
-    // installed API credential is an advanced option below.
+    // default), or with your OpenAI account through Codex. A user-supplied key
+    // remains available below without ever passing through this process.
     let gpt_btn = button("On-device · GPT-OSS", &["gos-engine-option"]);
     let codex_btn = button("OpenAI account · Codex", &["gos-engine-option"]);
     let hosted_btn = button(
-        "Use administrator OpenAI key",
+        "Use OpenAI API key",
         &["gos-engine-option", "gos-engine-advanced"],
     );
     set_accessible_label_description(
@@ -10739,12 +10860,12 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     set_accessible_label_description(
         &codex_btn,
         "Use OpenAI account through Codex",
-        "Select Codex account mode when Codex is ready and signed in.",
+        "Select your OpenAI account through the bundled Codex CLI when it is ready and signed in.",
     );
     set_accessible_label_description(
         &hosted_btn,
-        "Use an administrator-installed OpenAI API key",
-        "Select hosted OpenAI models when a protected service credential is ready.",
+        "Use your OpenAI API key",
+        "Select OpenAI hosted models when your key is ready in protected Goblins OS storage.",
     );
     // The two primary segments share the column width, flush with the cards' margin.
     gpt_btn.set_hexpand(true);
@@ -10755,10 +10876,10 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         Some("local-gpt-oss") => gpt_btn.add_css_class("gos-engine-active"),
         _ => {}
     }
-    gpt_btn.set_sensitive(local_available.get());
+    gpt_btn.set_sensitive(engine_status_available && local_available.get());
     gpt_btn.set_tooltip_text(Some(local_detail));
-    codex_btn.set_sensitive(codex_available.get());
-    hosted_btn.set_sensitive(hosted_available.get());
+    codex_btn.set_sensitive(engine_status_available && codex_available.get());
+    hosted_btn.set_sensitive(engine_status_available && hosted_available.get());
     choice.append(&gpt_btn);
     choice.append(&codex_btn);
     panel.append(&choice);
@@ -10786,6 +10907,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let gpt = gpt_btn.clone();
         let feedback = local_readiness.clone();
         let local_available = local_available.clone();
+        let status_available = engine_status_available_flag.clone();
         retry_local.connect_clicked(move |retry| {
             retry.set_sensitive(false);
             retry.set_label("Checking…");
@@ -10794,6 +10916,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             let gpt = gpt.clone();
             let feedback = feedback.clone();
             let local_available = local_available.clone();
+            let status_available = status_available.clone();
             let retry = retry.clone();
             run_settings_action(
                 move || get_core_json::<ResidentStatus>(&core, "/v1/ai/runtime"),
@@ -10803,7 +10926,9 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
                     match outcome {
                         Ok(resident) => {
                             local_available.set(resident.engine.local_ready);
-                            gpt.set_sensitive(resident.engine.local_ready);
+                            gpt.set_sensitive(
+                                status_available.get() && resident.engine.local_ready,
+                            );
                             feedback.set_text(&if resident.engine.local_ready {
                                 resident.engine.local_detail
                             } else {
@@ -10929,7 +11054,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
                         }
                         Err(error) => {
                             feedback.set_text(&format!(
-                                "Goblins OS could not switch to Codex: {error}. Confirm that Codex is signed in and try again."
+                                "Goblins OS could not switch to Codex: {error}. Confirm that your OpenAI account is signed in through Codex and try again."
                             ));
                             eprintln!("settings_engine_error={error}");
                         }
@@ -10959,7 +11084,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             codex.set_sensitive(false);
             hosted.set_sensitive(false);
             feedback.set_text(
-                "Switching Goblins AI to OpenAI hosted models using the protected service credential.",
+                "Switching Goblins AI to OpenAI hosted models using your protected API key.",
             );
 
             let gpt = gpt.clone();
@@ -10975,7 +11100,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
                 move || set_engine(&core, "openai-api"),
                 move |outcome| {
                     engine_pending.set(false);
-                    hosted.set_label("Use administrator OpenAI key");
+                    hosted.set_label("Use OpenAI API key");
                     gpt.set_sensitive(local_available.get());
                     codex.set_sensitive(codex_available.get());
                     hosted.set_sensitive(hosted_available.get());
@@ -11000,54 +11125,30 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
 
     // Codex sign-in: the honest way to use a real OpenAI account. The OS triggers
     // `codex login` (browser) and never sees the credentials — Codex owns them.
+    let engine_controls = SettingsEngineControls {
+        gpt: gpt_btn.clone(),
+        codex: codex_btn.clone(),
+        hosted: hosted_btn.clone(),
+        status_available: engine_status_available_flag,
+        local_available: local_available.clone(),
+        codex_available: codex_available.clone(),
+        hosted_available: hosted_available.clone(),
+        engine_pending: engine_pending.clone(),
+    };
     append_codex_settings(
         panel,
         state,
         &engine_feedback,
-        Some(SettingsEngineControls {
-            gpt: gpt_btn.clone(),
-            codex: codex_btn.clone(),
-            hosted: hosted_btn.clone(),
-            status_available: engine_status_available,
-            local_available: local_available.clone(),
-            codex_available: codex_available.clone(),
-            hosted_available: hosted_available.clone(),
-            engine_pending: engine_pending.clone(),
-        }),
+        Some(engine_controls.clone()),
     );
 
-    // Advanced: an administrator-provisioned OpenAI API key. The desktop only
-    // receives readiness; the credential itself is accepted and read solely by
-    // the protected core service.
-    panel.append(&label(
-        "Advanced · OpenAI API key",
-        &["gos-subsection-title"],
-    ));
+    // Settings owns only the ordinary, non-secret management surface. Every key
+    // value is entered in the separate trusted broker launched by the core.
+    panel.append(&label("OpenAI API key", &["gos-subsection-title"]));
     hosted_btn.set_hexpand(false);
     hosted_btn.set_halign(gtk4::Align::Start);
     panel.append(&hosted_btn);
-
-    match status {
-        Some(status) => panel.append(&system_row(
-            if status.configured {
-                "OpenAI API key · ready"
-            } else {
-                "OpenAI API key · not installed"
-            },
-            &if status.configured {
-                format!(
-                    "Hosted model {} · loaded only by the core from a {}",
-                    status.model, status.storage
-                )
-            } else {
-                "A device administrator can install an OpenAI API key in Goblins OS protected service credentials. The key never enters Settings; Goblins OS stays on GPT-OSS until one is ready.".to_string()
-            },
-        )),
-        None => panel.append(&system_row(
-            "OpenAI API key",
-            "Waiting for protected credential readiness.",
-        )),
-    }
+    append_openai_key_management_controls(panel, status, &core, &engine_controls, &engine_feedback);
 }
 
 /// The Models panel: the focused home for the engine that powers Goblins OS.
@@ -11061,7 +11162,7 @@ fn build_models(panel: &gtk4::Box, state: &SettingsState) {
         panel,
         "Goblin & Models",
         "Choose where Goblins AI works: GPT-OSS on this device, your OpenAI account through \
-         Codex, or OpenAI models with an administrator-installed protected service credential. The active choice applies across Goblins \
+         Codex, or OpenAI models with your protected API key. The active choice applies across Goblins \
          OS, and Private mode always keeps requests on this device.",
     );
 
@@ -11109,10 +11210,10 @@ fn append_goblins_ai_settings(panel: &gtk4::Box, state: &SettingsState) {
                 &catalog.permission_model,
             ),
             health_row(
-                "Entry points",
+                "Where Goblin appears",
                 "system-wide",
                 true,
-                &format!("Available from {entrypoints}."),
+                &format!("Open Goblin from {entrypoints}."),
             ),
         ],
     );
@@ -12858,8 +12959,8 @@ fn overview_storage_detail(
             .map(|gb| format!(" Models: {gb}GB free."))
             .unwrap_or_else(|| " Models: free space unknown.".to_string()),
         None => match system {
-            Some(_system) => " Model cache capacity is waiting for Goblins OS.".to_string(),
-            None => " Model cache capacity is waiting.".to_string(),
+            Some(_system) => " Local model storage is waiting for Goblins OS.".to_string(),
+            None => " Local model storage is waiting.".to_string(),
         },
     };
 
@@ -13064,7 +13165,7 @@ fn append_desktop_privacy_bool_row(
 fn engine_selection_success_copy(engine: &str) -> &'static str {
     match engine {
         "openai-api" => {
-            "Active engine: OpenAI hosted models. Answers use the administrator-installed protected service credential."
+            "Active engine: OpenAI hosted models. Answers use your API key from protected Goblins OS storage."
         }
         "codex" => {
             "Active engine: your OpenAI account via Codex. Goblins OS works through OpenAI's own coding agent."
@@ -17525,13 +17626,13 @@ fn storage_overall_pressure_detail(
                 .model_dir_available_gb
                 .map(|gb| format!("{gb}GB free"))
                 .unwrap_or_else(|| "free space unknown".to_string());
-            parts.push(format!("Model cache has {capacity}."));
+            parts.push(format!("Local model storage has {capacity}."));
         }
         None => match system {
             Some(_system) => {
-                parts.push("Model-cache capacity is waiting for Goblins OS.".to_string())
+                parts.push("Local model storage is waiting for Goblins OS.".to_string())
             }
-            None => parts.push("Model-cache capacity is waiting for Goblins OS.".to_string()),
+            None => parts.push("Local model storage is waiting for Goblins OS.".to_string()),
         },
     }
 
@@ -17549,7 +17650,7 @@ fn storage_pressure_plan_detail(
         "critical" => "Free space now before downloads, updates, installs, or large file work.",
         "low space" => "Review storage before starting downloads, updates, installs, or local model work.",
         "available" => "No storage pressure is reported. Keep the review tools available for large downloads and disk changes.",
-        _ => "Waiting for capacity data. Keep storage changes paused until Goblins OS reports mounted-volume and model-cache space.",
+        _ => "Waiting for capacity data. Keep storage changes paused until Goblins OS reports mounted volumes and local model storage.",
     };
     let disk_usage = if disk_usage_available {
         "Open Disk Usage Analyzer to inspect folders, mounted volumes, and where space is used."
@@ -17567,9 +17668,9 @@ fn storage_pressure_plan_detail(
         "Automatic Trash and temporary-file cleanup controls are not available in this session."
     };
     let cache = if model_cache_reported {
-        "Review model-cache capacity before starting local model downloads."
+        "Review local model storage before starting downloads."
     } else {
-        "Model-cache capacity is still waiting for Goblins OS."
+        "Local model storage is still waiting for Goblins OS."
     };
 
     format!("{lead} {disk_usage} {cleanup} {cache} {disks}")
@@ -17671,7 +17772,7 @@ fn storage_volume_title(volume: &StorageVolume) -> String {
     if volume.mount_point == "/" {
         "System volume".to_string()
     } else if volume.mount_point.contains("/models") || volume.id.contains("model") {
-        "Model cache volume".to_string()
+        "Local model storage".to_string()
     } else {
         "Mounted volume".to_string()
     }
@@ -18028,7 +18129,7 @@ fn codex_account_summary_spec(codex: Option<&CodexStatus>) -> AccountSummarySpec
             "Codex",
             "signed in",
             true,
-            "OpenAI account access is owned by Codex; Settings never receives credentials.",
+            "OpenAI account access is handled by the bundled Codex CLI; Settings never receives credentials.",
         ),
         Some(codex) if codex.installed => {
             account_summary_spec("Codex", "sign in", false, &codex.detail)
@@ -18038,7 +18139,7 @@ fn codex_account_summary_spec(codex: Option<&CodexStatus>) -> AccountSummarySpec
             "Codex",
             "waiting",
             false,
-            "Waiting for Codex account status.",
+            "Waiting for OpenAI account status through Codex.",
         ),
     }
 }
@@ -20325,6 +20426,56 @@ fn forget_openai_account_session(core: &CoreClient) -> Result<(), CoreFetchError
     }
 }
 
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn openai_key_management_error_copy(error: &CoreFetchError) -> &'static str {
+    match error {
+        CoreFetchError::Status(409) => {
+            "The API key status changed, or another protected change is already open. Finish or cancel any open window, refresh the status, and try again."
+        }
+        CoreFetchError::Status(503) => {
+            "The protected API key window could not open. Nothing changed. Try again."
+        }
+        CoreFetchError::Transport => {
+            "Settings could not reach Goblins OS. Reconnect to local OS services and try again."
+        }
+        CoreFetchError::Decode | CoreFetchError::Malformed => {
+            "Settings could not confirm the protected key-window handoff. Nothing was shown as changed; refresh the status before trying again."
+        }
+        CoreFetchError::Status(_) => {
+            "Goblins OS could not open the protected API key window. Nothing was shown as changed; refresh the status and try again."
+        }
+    }
+}
+
+/// Ask the core to launch its trusted broker, then immediately refetch the
+/// non-secret per-user readiness status. The request body can never carry key
+/// material, and the ordinary Settings process never receives any.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn request_openai_key_management(
+    core: &CoreClient,
+    action: OpenAiKeyManagementAction,
+) -> Result<Option<OpenAiKeyStatus>, String> {
+    let body = openai_key_management_body(action);
+    let response = http_post_json_response(core, "/v1/models/openai-key/manage", &body)
+        .map_err(|error| openai_key_management_error_copy(&error).to_string())?;
+    if !(200..=299).contains(&response.status) {
+        let error = CoreFetchError::Status(response.status);
+        return Err(openai_key_management_error_copy(&error).to_string());
+    }
+
+    let mut status = get_core_json(core, "/v1/models/openai-key").ok();
+    let deadline = Instant::now() + Duration::from_secs(305);
+    while status
+        .as_ref()
+        .is_some_and(|status: &OpenAiKeyStatus| status.key_change_pending)
+        && Instant::now() < deadline
+    {
+        thread::sleep(Duration::from_millis(500));
+        status = get_core_json(core, "/v1/models/openai-key").ok();
+    }
+    Ok(status)
+}
+
 /// Select which engine powers the Goblins AI runtime: the on-device GPT-OSS heart, or the
 /// user's hosted OpenAI models. The core persists the choice in OS-owned state
 /// and rejects the hosted engine when no key is stored, so the GUI never honors
@@ -21096,7 +21247,7 @@ fn engine_active_copy(engine: &str) -> &'static str {
             "Active engine: managed OpenAI cloud — requests leave this device through your organization's protected service."
         }
         "openai-api" => {
-            "Active engine: OpenAI hosted models — answers use the administrator-installed protected service credential."
+            "Active engine: OpenAI hosted models — answers use your API key from protected Goblins OS storage."
         }
         "codex" => {
             "Active engine: your OpenAI account via Codex — Goblins OS works through OpenAI's own coding agent."
@@ -21114,7 +21265,7 @@ struct SettingsEngineControls {
     gpt: gtk4::Button,
     codex: gtk4::Button,
     hosted: gtk4::Button,
-    status_available: bool,
+    status_available: Rc<Cell<bool>>,
     local_available: Rc<Cell<bool>>,
     codex_available: Rc<Cell<bool>>,
     hosted_available: Rc<Cell<bool>>,
@@ -21136,15 +21287,17 @@ impl SettingsEngineControls {
 
     fn finish_account_action(&self) {
         self.engine_pending.set(false);
-        self.gpt.set_sensitive(self.local_available.get());
+        self.gpt
+            .set_sensitive(self.local_available.get() && self.status_available.get());
         self.codex
-            .set_sensitive(self.codex_available.get() && self.status_available);
+            .set_sensitive(self.codex_available.get() && self.status_available.get());
         self.hosted
-            .set_sensitive(self.hosted_available.get() && self.status_available);
+            .set_sensitive(self.hosted_available.get() && self.status_available.get());
     }
 
     fn set_codex_available(&self, available: bool) {
-        self.codex_available.set(self.status_available && available);
+        self.codex_available
+            .set(self.status_available.get() && available);
     }
 
     fn show_local_active(&self) {
@@ -21152,6 +21305,405 @@ impl SettingsEngineControls {
         self.codex.remove_css_class("gos-engine-active");
         self.hosted.remove_css_class("gos-engine-active");
     }
+
+    fn apply_openai_key_status(&self, status: &OpenAiKeyStatus) {
+        self.status_available.set(true);
+        self.hosted_available
+            .set(status.configured && !status.key_change_pending);
+        match status.engine.as_str() {
+            "openai-api" if status.configured => {
+                self.hosted.add_css_class("gos-engine-active");
+                self.gpt.remove_css_class("gos-engine-active");
+                self.codex.remove_css_class("gos-engine-active");
+            }
+            "codex" => {
+                self.codex.add_css_class("gos-engine-active");
+                self.gpt.remove_css_class("gos-engine-active");
+                self.hosted.remove_css_class("gos-engine-active");
+            }
+            "local-gpt-oss" => self.show_local_active(),
+            _ => {
+                self.gpt.remove_css_class("gos-engine-active");
+                self.codex.remove_css_class("gos-engine-active");
+                self.hosted.remove_css_class("gos-engine-active");
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone)]
+struct OpenAiKeyManagementControls {
+    status_title: gtk4::Label,
+    status_detail: gtk4::Label,
+    manage: gtk4::Button,
+    remove: gtk4::Button,
+    refresh: gtk4::Button,
+    feedback: gtk4::Label,
+    confirmation: gtk4::Box,
+    cancel_remove: gtk4::Button,
+    confirm_remove: gtk4::Button,
+    configured: Rc<Cell<bool>>,
+    pending: Rc<Cell<bool>>,
+    known: Rc<Cell<bool>>,
+    busy: Rc<Cell<bool>>,
+    confirming: Rc<Cell<bool>>,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+impl OpenAiKeyManagementControls {
+    fn set_feedback(&self, text: &str) {
+        self.feedback.set_text(text);
+        set_accessible_label_description(&self.feedback, "OpenAI API key status", text);
+    }
+
+    fn sync_actions(&self) {
+        let idle = !self.busy.get();
+        let available = self.known.get() && !self.pending.get();
+        let configured = self.configured.get();
+        let confirming = self.confirming.get();
+        self.manage.set_label(if configured {
+            "Replace…"
+        } else {
+            "Add API key…"
+        });
+        set_accessible_label_description(
+            &self.manage,
+            if configured {
+                "Replace your OpenAI API key"
+            } else {
+                "Add your OpenAI API key"
+            },
+            "Opens a separate protected Goblins OS window. Settings never receives or displays the key.",
+        );
+        self.manage.set_sensitive(idle && available && !confirming);
+        self.remove.set_visible(self.known.get() && configured);
+        self.remove
+            .set_sensitive(idle && available && configured && !confirming);
+        self.refresh.set_sensitive(idle && !confirming);
+        self.cancel_remove.set_sensitive(idle && confirming);
+        self.confirm_remove.set_label("Remove");
+        self.confirm_remove.set_sensitive(idle && confirming);
+    }
+
+    fn set_busy(&self, busy: bool) {
+        self.busy.set(busy);
+        self.sync_actions();
+    }
+
+    fn set_confirming(&self, confirming: bool) {
+        self.confirming.set(confirming);
+        self.confirmation.set_visible(confirming);
+        self.sync_actions();
+    }
+
+    fn apply_status(&self, status: &OpenAiKeyStatus, engines: &SettingsEngineControls) {
+        self.known.set(true);
+        self.configured.set(status.configured);
+        self.pending.set(status.key_change_pending);
+        self.status_title.set_text(openai_key_status_title(status));
+        self.status_detail
+            .set_text(&openai_key_status_detail(status));
+        set_accessible_label_description(
+            &self.status_title,
+            openai_key_status_title(status),
+            &openai_key_status_detail(status),
+        );
+        engines.apply_openai_key_status(status);
+        self.sync_actions();
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn run_openai_key_management(
+    action: OpenAiKeyManagementAction,
+    core: CoreClient,
+    controls: OpenAiKeyManagementControls,
+    engines: SettingsEngineControls,
+    engine_feedback: gtk4::Label,
+    error_focus: gtk4::Button,
+) {
+    use gtk4::prelude::*;
+
+    if !engines.begin_account_action() {
+        controls.set_feedback("Wait for the current AI engine action to finish, then try again.");
+        error_focus.grab_focus();
+        return;
+    }
+    controls.set_busy(true);
+    match action {
+        OpenAiKeyManagementAction::Add | OpenAiKeyManagementAction::Rotate => {
+            controls.manage.set_label("Opening…");
+        }
+        OpenAiKeyManagementAction::Remove => controls.confirm_remove.set_label("Opening…"),
+    }
+    controls.set_feedback("Opening the separate protected Goblins OS window…");
+
+    let controls_after = controls.clone();
+    let engines_after = engines.clone();
+    run_settings_action(
+        move || request_openai_key_management(&core, action),
+        move |outcome| {
+            controls_after.set_busy(false);
+            match outcome {
+                Ok(Some(status)) => {
+                    controls_after.set_confirming(false);
+                    controls_after.apply_status(&status, &engines_after);
+                    engines_after.finish_account_action();
+                    controls_after
+                        .set_feedback(openai_key_management_finished_copy(action, &status));
+                    if status.key_change_pending {
+                        controls_after.refresh.grab_focus();
+                    } else {
+                        controls_after.manage.grab_focus();
+                    }
+                    engine_feedback.set_text(engine_active_copy(&status.engine));
+                }
+                Ok(None) => {
+                    engines_after.finish_account_action();
+                    controls_after.set_confirming(false);
+                    controls_after.set_feedback(&format!(
+                        "{} Settings could not refresh the non-secret status; choose Refresh status.",
+                        openai_key_management_started_copy(action)
+                    ));
+                    controls_after.refresh.grab_focus();
+                }
+                Err(error) => {
+                    engines_after.finish_account_action();
+                    controls_after.set_feedback(&error);
+                    error_focus.grab_focus();
+                }
+            }
+        },
+    );
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_openai_key_management_controls(
+    panel: &gtk4::Box,
+    status: Option<&OpenAiKeyStatus>,
+    core: &CoreClient,
+    engines: &SettingsEngineControls,
+    engine_feedback: &gtk4::Label,
+) {
+    use gtk4::prelude::*;
+
+    let card = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    card.add_css_class("gos-row");
+    let status_title = label(
+        status
+            .map(openai_key_status_title)
+            .unwrap_or("OpenAI API key · status unavailable"),
+        &["gos-row-title"],
+    );
+    let initial_detail = status
+        .map(openai_key_status_detail)
+        .unwrap_or_else(|| {
+            "Settings could not refresh API key readiness. Reconnect to Goblins OS and choose Refresh status. No key value is available to Settings."
+                .to_string()
+        });
+    let status_detail = label(&initial_detail, &["gos-row-copy"]);
+    card.append(&status_title);
+    card.append(&status_detail);
+
+    let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let configured = status.is_some_and(|status| status.configured);
+    let pending = status.is_some_and(|status| status.key_change_pending);
+    let manage = button(
+        if configured {
+            "Replace…"
+        } else {
+            "Add API key…"
+        },
+        &["gos-permission-action"],
+    );
+    let remove = button("Remove…", &["gos-destructive-action"]);
+    let refresh = button("Refresh status", &["gos-permission-action"]);
+    set_accessible_label_description(
+        &manage,
+        if configured {
+            "Replace your OpenAI API key"
+        } else {
+            "Add your OpenAI API key"
+        },
+        "Opens a separate protected Goblins OS window. Settings never receives or displays the key.",
+    );
+    set_accessible_label_description(
+        &remove,
+        "Remove your OpenAI API key",
+        "Opens a confirmation before launching the separate protected removal window.",
+    );
+    set_accessible_label_description(
+        &refresh,
+        "Refresh OpenAI API key status",
+        "Reads only whether a key is available for this account and which engine is selected.",
+    );
+    actions.append(&manage);
+    actions.append(&remove);
+    actions.append(&refresh);
+    card.append(&actions);
+
+    let feedback = label("", &["gos-row-copy"]);
+    feedback.set_visible(true);
+    card.append(&feedback);
+
+    let confirmation = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    confirmation.set_visible(false);
+    confirmation.append(&label(
+        "Remove this API key from your account on this device? If it is active, Goblins OS will select on-device GPT-OSS before removal.",
+        &["gos-row-copy"],
+    ));
+    let confirmation_actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let cancel_remove = button("Cancel", &["gos-permission-action"]);
+    let confirm_remove = button("Remove", &["gos-destructive-action"]);
+    set_accessible_label_description(
+        &cancel_remove,
+        "Cancel removing the OpenAI API key",
+        "Closes this confirmation without changing anything.",
+    );
+    set_accessible_label_description(
+        &confirm_remove,
+        "Continue removing the OpenAI API key",
+        "Opens a separate protected Goblins OS window where removal must be confirmed.",
+    );
+    confirmation_actions.append(&cancel_remove);
+    confirmation_actions.append(&confirm_remove);
+    confirmation.append(&confirmation_actions);
+    card.append(&confirmation);
+
+    let controls = OpenAiKeyManagementControls {
+        status_title,
+        status_detail,
+        manage,
+        remove,
+        refresh,
+        feedback,
+        confirmation,
+        cancel_remove,
+        confirm_remove,
+        configured: Rc::new(Cell::new(configured)),
+        pending: Rc::new(Cell::new(pending)),
+        known: Rc::new(Cell::new(status.is_some())),
+        busy: Rc::new(Cell::new(false)),
+        confirming: Rc::new(Cell::new(false)),
+    };
+    if let Some(status) = status {
+        controls.apply_status(status, engines);
+    } else {
+        controls.sync_actions();
+    }
+
+    {
+        let controls = controls.clone();
+        let core = core.clone();
+        let engines = engines.clone();
+        let engine_feedback = engine_feedback.clone();
+        let manage = controls.manage.clone();
+        manage.connect_clicked(move |manage| {
+            let action = if controls.configured.get() {
+                OpenAiKeyManagementAction::Rotate
+            } else {
+                OpenAiKeyManagementAction::Add
+            };
+            run_openai_key_management(
+                action,
+                core.clone(),
+                controls.clone(),
+                engines.clone(),
+                engine_feedback.clone(),
+                manage.clone(),
+            );
+        });
+    }
+    {
+        let controls = controls.clone();
+        let remove = controls.remove.clone();
+        remove.connect_clicked(move |_| {
+            controls.set_confirming(true);
+            controls.cancel_remove.grab_focus();
+        });
+    }
+    {
+        let controls = controls.clone();
+        let cancel_remove = controls.cancel_remove.clone();
+        cancel_remove.connect_clicked(move |_| {
+            controls.set_confirming(false);
+            controls.remove.grab_focus();
+        });
+    }
+    {
+        let controls = controls.clone();
+        let core = core.clone();
+        let engines = engines.clone();
+        let engine_feedback = engine_feedback.clone();
+        let confirm_remove = controls.confirm_remove.clone();
+        confirm_remove.connect_clicked(move |confirm| {
+            run_openai_key_management(
+                OpenAiKeyManagementAction::Remove,
+                core.clone(),
+                controls.clone(),
+                engines.clone(),
+                engine_feedback.clone(),
+                confirm.clone(),
+            );
+        });
+    }
+    {
+        let controls = controls.clone();
+        let core = core.clone();
+        let engines = engines.clone();
+        let engine_feedback = engine_feedback.clone();
+        let refresh = controls.refresh.clone();
+        refresh.connect_clicked(move |refresh| {
+            if !engines.begin_account_action() {
+                controls
+                    .set_feedback("Wait for the current AI engine action to finish, then refresh.");
+                refresh.grab_focus();
+                return;
+            }
+            controls.set_busy(true);
+            controls.set_feedback("Refreshing the non-secret API key status…");
+            let controls_after = controls.clone();
+            let engines_after = engines.clone();
+            let engine_feedback = engine_feedback.clone();
+            let refresh = refresh.clone();
+            let core = core.clone();
+            run_settings_action(
+                move || get_core_json::<OpenAiKeyStatus>(&core, "/v1/models/openai-key"),
+                move |outcome| {
+                    controls_after.set_busy(false);
+                    match outcome {
+                        Ok(status) => {
+                            controls_after.apply_status(&status, &engines_after);
+                            engines_after.finish_account_action();
+                            controls_after.set_feedback(if status.key_change_pending {
+                                "A protected API key window is still open. Finish or cancel there, then refresh again."
+                            } else {
+                                "API key status refreshed."
+                            });
+                            engine_feedback.set_text(engine_active_copy(&status.engine));
+                        }
+                        Err(error) => {
+                            engines_after.finish_account_action();
+                            controls_after.set_feedback(&format!(
+                                "Settings could not refresh API key status: {error}. Reconnect to Goblins OS and try again."
+                            ));
+                        }
+                    }
+                    refresh.grab_focus();
+                },
+            );
+        });
+    }
+
+    set_accessible_label_description(
+        &card,
+        status
+            .map(openai_key_status_title)
+            .unwrap_or("OpenAI API key status unavailable"),
+        &initial_detail,
+    );
+    panel.append(&card);
 }
 
 /// The Codex sign-in row beneath the engine selector. When Codex is ready but
@@ -21167,7 +21719,10 @@ fn append_codex_settings(
 
     match &state.codex {
         Some(codex) if codex.authenticated => {
-            panel.append(&system_row("Codex · signed in", &codex.detail));
+            panel.append(&system_row(
+                "OpenAI account · signed in through Codex",
+                &codex.detail,
+            ));
             let signout = button("Sign out of Codex…", &["gos-destructive-action"]);
             set_accessible_label_description(
                 &signout,
@@ -21177,7 +21732,7 @@ fn append_codex_settings(
             let confirmation = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
             confirmation.set_visible(false);
             confirmation.append(&label(
-                "Sign out of Codex on this device? Goblins OS will switch to on-device GPT-OSS before Codex removes its account credentials.",
+                "Sign out of Codex on this device? Goblins OS will switch to on-device GPT-OSS before the bundled Codex CLI removes the local OpenAI sign-in.",
                 &["gos-row-copy"],
             ));
             let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
@@ -21221,7 +21776,7 @@ fn append_codex_settings(
                     confirm.set_label("Signing out…");
                     cancel.set_sensitive(false);
                     feedback.set_text(
-                        "Signing out of Codex and returning Goblins AI to on-device GPT-OSS.",
+                        "Signing your OpenAI account out of Codex and returning Goblins AI to on-device GPT-OSS.",
                     );
 
                     let signout = signout.clone();
@@ -21246,7 +21801,7 @@ fn append_codex_settings(
                                     confirmation.set_visible(false);
                                     signout.set_visible(false);
                                     feedback.set_text(
-                                        "Signed out of Codex. Goblins AI is using on-device GPT-OSS; reopen Settings to refresh account controls.",
+                                        "Your OpenAI account is signed out of Codex. Goblins AI is using on-device GPT-OSS; reopen Settings to refresh account controls.",
                                     );
                                 }
                                 Err(error) => {
@@ -21268,15 +21823,18 @@ fn append_codex_settings(
             true
         }
         Some(codex) if codex.installed => {
-            panel.append(&system_row("Codex · sign in", &codex.detail));
+            panel.append(&system_row(
+                "OpenAI account · sign in through Codex",
+                &codex.detail,
+            ));
             let signin = button(
                 "Sign in with your OpenAI account",
                 &["gos-permission-action"],
             );
             set_accessible_label_description(
                 &signin,
-                "Sign in to Codex with your OpenAI account",
-                "Asks Goblins OS to start codex login and opens the browser. The credential stays with the OS service, never the session.",
+                "Sign in with your OpenAI account through Codex",
+                "Asks Goblins OS to start the bundled Codex CLI sign-in and opens the browser. The credential stays with the OS service, never the session.",
             );
             let feedback = feedback.clone();
             let core = config_core(state);
@@ -21291,7 +21849,9 @@ fn append_codex_settings(
                 }
                 signin.set_sensitive(false);
                 signin.set_label("Starting sign-in…");
-                feedback.set_text("Starting Codex sign-in through OS-owned private storage.");
+                feedback.set_text(
+                    "Starting OpenAI sign-in through the bundled Codex CLI and OS-owned private storage.",
+                );
 
                 let signin = signin.clone();
                 let feedback = feedback.clone();
@@ -21340,7 +21900,9 @@ fn append_codex_settings(
                             }
                             Ok(CodexLoginOutcome::Ready) => {
                                 signin.set_label("Signed in");
-                                feedback.set_text("Codex is already signed in and ready.");
+                                feedback.set_text(
+                                    "Your OpenAI account is already signed in through Codex.",
+                                );
                             }
                             Err(error) => {
                                 signin.set_label("Sign in with your OpenAI account");
@@ -21358,7 +21920,10 @@ fn append_codex_settings(
             true
         }
         Some(codex) => {
-            panel.append(&system_row("Codex · not included", &codex.detail));
+            panel.append(&system_row(
+                "OpenAI account · Codex CLI not included",
+                &codex.detail,
+            ));
             false
         }
         None => false,
@@ -22520,6 +23085,7 @@ fn test_openai_key_status(configured: bool, engine: &str) -> OpenAiKeyStatus {
         model: "gpt-5.6".to_string(),
         engine_selected: engine == "openai-api",
         engine: engine.to_string(),
+        key_change_pending: false,
         storage: "OS-owned private storage".to_string(),
     }
 }
@@ -22530,11 +23096,12 @@ fn test_codex_status(installed: bool, authenticated: bool) -> CodexStatus {
         installed,
         authenticated,
         detail: if !installed {
-            "Codex account support is not included in this build.".to_string()
+            "OpenAI account access through the bundled Codex CLI is not included in this build."
+                .to_string()
         } else if authenticated {
-            "Codex is signed in and ready.".to_string()
+            "Your OpenAI account is signed in through the bundled Codex CLI.".to_string()
         } else {
-            "Codex account support is ready but not signed in.".to_string()
+            "The bundled Codex CLI is ready for your OpenAI account sign-in.".to_string()
         },
     }
 }
@@ -24937,12 +25504,12 @@ mod tests {
         let codex = super::codex_account_summary_spec(Some(&super::CodexStatus {
             installed: true,
             authenticated: false,
-            detail: "Codex account support is ready but not signed in.".to_string(),
+            detail: "The bundled Codex CLI is ready for your OpenAI account sign-in.".to_string(),
         }));
         assert_eq!(codex.title, "Codex");
         assert_eq!(codex.state, "sign in");
         assert!(!codex.ready);
-        assert!(codex.detail.contains("not signed in"));
+        assert!(codex.detail.contains("OpenAI account sign-in"));
     }
 
     #[test]
@@ -26834,7 +27401,7 @@ mod tests {
         assert!(!detail.contains("system-root"));
         assert!(!detail.contains("mounted at /"));
         assert!(detail.contains("90% used"));
-        assert!(detail.contains("Model cache has 24GB free"));
+        assert!(detail.contains("Local model storage has 24GB free"));
         assert!(!detail.contains("/var/lib/goblins-os/models"));
         assert!(!detail.contains("clean"));
     }
@@ -26846,7 +27413,7 @@ mod tests {
         let system = super::test_settings_system("localhost/goblins-os:test", true, true, true);
         let detail = super::storage_overall_pressure_detail(None, None, Some(&system));
         assert!(detail.contains("Mounted-volume capacity is waiting"));
-        assert!(detail.contains("Model-cache capacity is waiting"));
+        assert!(detail.contains("Local model storage is waiting"));
     }
 
     #[test]
@@ -26859,7 +27426,7 @@ mod tests {
         assert!(ready.contains(&open_disk_usage));
         assert!(ready.contains("automatic Trash and temporary-file cleanup controls"));
         assert!(!ready.contains("old Trash"));
-        assert!(ready.contains("Review model-cache capacity"));
+        assert!(ready.contains("Review local model storage"));
         assert!(ready.contains(&open_disks));
 
         let waiting = super::storage_pressure_plan_detail("unknown", false, false, false, false);
@@ -26867,7 +27434,7 @@ mod tests {
         assert!(waiting
             .contains("Automatic Trash and temporary-file cleanup controls are not available"));
         assert!(!waiting.contains("old Trash"));
-        assert!(waiting.contains("Model-cache capacity is still waiting"));
+        assert!(waiting.contains("Local model storage is still waiting"));
 
         let forbidden_desktop_copy = ["needs", "GNOME"].join(" ");
         assert!(!ready.contains(&forbidden_desktop_copy));
@@ -26910,10 +27477,10 @@ mod tests {
         assert!(pressure.detail.contains("System volume"));
         assert!(!pressure.detail.contains("system-root"));
         assert!(!pressure.detail.contains("/var/lib/goblins-os/models"));
-        assert!(pressure.detail.contains("Model cache has"));
+        assert!(pressure.detail.contains("Local model storage has"));
 
         let cache = super::model_cache_summary_spec(Some(&catalog), Some(&system));
-        assert_eq!(cache.title, "Model cache");
+        assert_eq!(cache.title, "Local model storage");
         assert_eq!(cache.state, "available");
         assert!(cache.ready);
         assert!(cache.detail.contains("24GB free"));
@@ -27094,7 +27661,7 @@ mod tests {
         let access = super::openai_access_summary_spec(Some(&key), Some(&codex));
         assert_eq!(access.state, "sign in");
         assert!(!access.ready);
-        assert!(access.detail.contains("not signed in"));
+        assert!(access.detail.contains("OpenAI account sign-in"));
 
         let vision = super::vision_model_summary_spec(Some(&vision));
         assert_eq!(vision.state, "add model");
@@ -28152,6 +28719,73 @@ mod tests {
         assert!(engine_selection_success_copy("codex").contains("Codex"));
         assert!(engine_selection_success_copy("openai-api").contains("hosted models"));
         assert!(super::engine_active_copy("cloud-openai").contains("leave this device"));
+    }
+
+    #[test]
+    fn openai_key_management_request_contains_only_the_fixed_action() {
+        let expected = ["add", "rotate", "remove"];
+        for (action, expected_action) in super::OpenAiKeyManagementAction::ALL
+            .into_iter()
+            .zip(expected)
+        {
+            let body: serde_json::Value =
+                serde_json::from_str(&super::openai_key_management_body(action))
+                    .expect("management request JSON");
+            let object = body.as_object().expect("management request object");
+            assert_eq!(object.len(), 1);
+            assert_eq!(
+                object.get("action").and_then(serde_json::Value::as_str),
+                Some(expected_action)
+            );
+        }
+    }
+
+    #[test]
+    fn openai_key_status_copy_is_secret_blind_and_tracks_pending_state() {
+        let mut status = super::test_openai_key_status(true, "openai-api");
+        status.storage = "do-not-render-this-private-location".to_string();
+        let detail = super::openai_key_status_detail(&status);
+        assert!(detail.contains("key never enters Settings"));
+        assert!(!detail.contains(&status.storage));
+        assert!(super::openai_key_status_title(&status).contains("ready"));
+
+        status.key_change_pending = true;
+        assert!(super::openai_key_status_title(&status).contains("change open"));
+        assert!(super::openai_key_status_detail(&status).contains("separate protected"));
+        assert!(super::openai_key_management_finished_copy(
+            super::OpenAiKeyManagementAction::Rotate,
+            &status,
+        )
+        .contains("still open"));
+    }
+
+    #[test]
+    fn openai_key_management_uses_only_secret_blind_core_routes() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn request_openai_key_management(")
+            .expect("API key management helper");
+        let remainder = &source[start..];
+        let end = remainder
+            .find("/// Select which engine powers")
+            .expect("API key management helper end");
+        let helper = &remainder[..end];
+
+        assert!(helper.contains("/v1/models/openai-key/manage"));
+        assert!(helper.contains("/v1/models/openai-key"));
+        assert!(helper.contains("openai_key_management_body(action)"));
+        for forbidden in [
+            "PasswordEntry",
+            "api_key",
+            "key_prefix",
+            "key_suffix",
+            "fingerprint",
+        ] {
+            assert!(
+                !helper.contains(forbidden),
+                "forbidden key data in Settings helper: {forbidden}"
+            );
+        }
     }
 
     #[test]

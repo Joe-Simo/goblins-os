@@ -74,9 +74,14 @@ pub struct AppList {
     apps: Vec<BuiltApp>,
 }
 
-pub async fn app_builder_catalog() -> Json<AppBuilderCatalog> {
+pub async fn app_builder_catalog(
+    Extension(client): Extension<crate::control_plane::RequestClient>,
+) -> Json<AppBuilderCatalog> {
     let policy = policy_state_for_control("app-builder");
-    let builder = builder_status_for_policy(policy, crate::resident::active_engine_locality());
+    let builder = builder_status_for_policy(
+        policy,
+        crate::resident::active_engine_locality(Some(client.user_id())),
+    );
 
     Json(AppBuilderCatalog {
         model: "gpt-oss-builds-apps-not-installs",

@@ -1,7 +1,7 @@
 # Hardware-gate display-backed-VM capture harness
 
 `os/hardware-gate/run-external-gate.sh` boots a display-backed VM but leaves the
-40-shot screenshot capture as a **manual operator checklist** (see its "Next
+42-shot screenshot capture as a **manual operator checklist** (see its "Next
 manual closure steps"). This harness automates that capture so the gate's
 `os/screenshots/hardware-gate/aarch64/<date>/{01..42}.png` run can be produced
 without a human clicking through every surface.

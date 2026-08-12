@@ -34,7 +34,7 @@ export const screenshots = [
     description: "Window switching, workspaces, and the adaptive desktop shell.",
     width: 1400,
     height: 875,
-    bytes: 360000,
+    bytes: 357392,
   },
   {
     src: "/screenshots/installer-disk.png",

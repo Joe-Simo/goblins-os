@@ -64,8 +64,9 @@ const features = [
     icon: TerminalSquareIcon,
   },
   {
-    title: "Server-side secrets only",
-    description: "The image ships without credentials; provider keys stay outside the desktop session.",
+    title: "AI choices in the current source",
+    description:
+      "Choose on-device GPT-OSS, an OpenAI account through the bundled Codex CLI, or your own API key through a protected per-user window. The linked July alpha predates this flow.",
     icon: LockKeyholeIcon,
   },
   {
@@ -103,6 +104,46 @@ const installSteps = [
 export default function Home() {
   const totalMedia = formatBytes(assetBudget.screenshotBytes);
   const demoMedia = formatBytes(assetBudget.demoVideoBytes);
+  const currentArmRelease = releaseArtifacts.find(({ arch }) => arch === "aarch64");
+  if (!currentArmRelease) {
+    throw new Error("The current Arm release manifest is missing.");
+  }
+  const macLinuxVerificationCommand = [
+    "(",
+    "set -eu",
+    "if command -v sha256sum >/dev/null 2>&1; then",
+    "  verify_sha256() { sha256sum -c -; }",
+    "elif command -v shasum >/dev/null 2>&1; then",
+    "  verify_sha256() { shasum -a 256 -c -; }",
+    "else",
+    "  echo 'Install sha256sum or shasum before continuing.' >&2; exit 1",
+    "fi",
+    ...currentArmRelease.downloadParts.map(
+      (part) =>
+        `printf '%s  %s\\n' '${part.sha256}' '${part.filename}' | verify_sha256`,
+    ),
+    `cat ${currentArmRelease.downloadParts.map(({ filename }) => `'${filename}'`).join(" ")} > '${currentArmRelease.compressedName}'`,
+    `printf '%s  %s\\n' '${currentArmRelease.compressedSha256}' '${currentArmRelease.compressedName}' | verify_sha256`,
+    `zstd -d --long=31 --force '${currentArmRelease.compressedName}'`,
+    `printf '%s  %s\\n' '${currentArmRelease.sha256}' '${currentArmRelease.isoName}' | verify_sha256`,
+    ")",
+  ].join("\n");
+  const windowsVerificationCommand = [
+    "& {",
+    "  $ErrorActionPreference = 'Stop'",
+    "  Set-StrictMode -Version Latest",
+    ...currentArmRelease.downloadParts.map(
+      (part) =>
+        `  if ((Get-FileHash '.\\${part.filename}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${part.sha256}') { throw 'Checksum mismatch: ${part.filename}' }`,
+    ),
+    `  cmd /c copy /b /y ${currentArmRelease.downloadParts.map(({ filename }) => filename).join("+")} ${currentArmRelease.compressedName}`,
+    "  if ($LASTEXITCODE -ne 0) { throw 'Could not reassemble the compressed ISO.' }",
+    `  if ((Get-FileHash '.\\${currentArmRelease.compressedName}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${currentArmRelease.compressedSha256}') { throw 'Checksum mismatch: ${currentArmRelease.compressedName}' }`,
+    `  zstd -d --long=31 --force '.\\${currentArmRelease.compressedName}'`,
+    "  if ($LASTEXITCODE -ne 0) { throw 'Could not decompress the ISO.' }",
+    `  if ((Get-FileHash '.\\${currentArmRelease.isoName}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${currentArmRelease.sha256}') { throw 'Checksum mismatch: ${currentArmRelease.isoName}' }`,
+    "}",
+  ].join("\n");
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -142,7 +183,7 @@ export default function Home() {
             <div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
               <ProofPoint>Fedora bootc base</ProofPoint>
               <ProofPoint>Local app builds</ProofPoint>
-              <ProofPoint>Server-side secrets</ProofPoint>
+              <ProofPoint>No bundled API key</ProofPoint>
             </div>
           </div>
 
@@ -169,7 +210,7 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
           <SectionHeading
             title="Built for creativity and control"
-            description="A native Linux desktop for local software creation, with verified Arm release artifacts and a clean credential boundary."
+            description="A native Linux desktop for local software creation, with published Arm release artifacts and source-enforced credential boundaries."
           />
           <div className="grid gap-x-8 gap-y-0 md:grid-cols-2 lg:grid-cols-3">
             {features.map((feature) => (
@@ -188,6 +229,18 @@ export default function Home() {
               </div>
             ))}
           </div>
+          <Alert role="note" data-gsap="reveal">
+            <ShieldCheckIcon aria-hidden="true" />
+            <AlertTitle>OpenAI is a provider, not the OS identity</AlertTitle>
+            <AlertDescription>
+              The public image ships no maintainer API key and no proprietary OpenAI desktop app.
+              In the current source, Goblins AI uses the bundled verified Codex CLI for an OpenAI
+              account. The separate Codex shortcut opens a user-installed compatible app or the
+              official web, while ChatGPT remains on the official web. The linked July alpha
+              predates the protected per-user key flow and compatible-app routing; do not treat it
+              as proof of these candidate capabilities.
+            </AlertDescription>
+          </Alert>
         </div>
       </section>
 
@@ -453,7 +506,7 @@ export default function Home() {
             ))}
           </div>
 
-          <Alert data-gsap="reveal">
+          <Alert role="note" data-gsap="reveal">
             <BoxIcon aria-hidden="true" />
             <AlertTitle>Containers are not a desktop VM</AlertTitle>
             <AlertDescription>
@@ -486,12 +539,12 @@ export default function Home() {
             </div>
           </div>
 
-          <Alert className="h-fit" data-gsap="reveal">
+          <Alert role="note" className="h-fit" data-gsap="reveal">
             <ShieldCheckIcon aria-hidden="true" />
             <AlertTitle>Install guardrails</AlertTitle>
             <AlertDescription>
               <ul className="flex flex-col gap-2">
-                <li>The current verified install target is a UEFI aarch64 virtual machine.</li>
+                <li>The current published install target is a UEFI aarch64 virtual machine.</li>
                 <li>Apple Silicon is an HVF proof host, not a bare-metal install target.</li>
                 <li>Bare-metal Arm devices need explicit model-specific proof before support is claimed.</li>
                 <li>Intel and AMD systems are not supported.</li>
@@ -526,13 +579,15 @@ export default function Home() {
                   </CardHeader>
                   <CardContent className="min-w-0">
                     <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-4 text-sm leading-6">
-                      <code>{`shasum -a 256 -c goblins-os-aarch64.iso.zst.parts.sha256
-cat goblins-os-aarch64.iso.zst.part-* > goblins-os-aarch64.iso.zst
-shasum -a 256 -c goblins-os-aarch64.iso.zst.sha256
-zstd -d --long=31 goblins-os-aarch64.iso.zst
-shasum -a 256 -c goblins-os-aarch64.iso.sha256`}</code>
+                      <code>{macLinuxVerificationCommand}</code>
                     </pre>
                   </CardContent>
+                  <CardFooter>
+                    <CopyButton
+                      value={macLinuxVerificationCommand}
+                      label="Copy macOS and Linux verification commands"
+                    />
+                  </CardFooter>
                 </Card>
               </TabsContent>
               <TabsContent value="windows" className="min-w-0">
@@ -540,19 +595,21 @@ shasum -a 256 -c goblins-os-aarch64.iso.sha256`}</code>
                   <CardHeader>
                     <CardTitle>PowerShell checks</CardTitle>
                     <CardDescription>
-                      Compare each hash with the published <code>.sha256</code> files before flashing.
+                      Each command stops with an error if a downloaded or reassembled file differs
+                      from the exact published Arm release hash.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="min-w-0">
                     <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-4 text-sm leading-6">
-                      <code>{`Get-FileHash .\\goblins-os-aarch64.iso.zst.part-00 -Algorithm SHA256
-Get-FileHash .\\goblins-os-aarch64.iso.zst.part-01 -Algorithm SHA256
-copy /b goblins-os-aarch64.iso.zst.part-00+goblins-os-aarch64.iso.zst.part-01 goblins-os-aarch64.iso.zst
-Get-FileHash .\\goblins-os-aarch64.iso.zst -Algorithm SHA256
-zstd -d --long=31 .\\goblins-os-aarch64.iso.zst
-Get-FileHash .\\goblins-os-aarch64.iso -Algorithm SHA256`}</code>
+                      <code>{windowsVerificationCommand}</code>
                     </pre>
                   </CardContent>
+                  <CardFooter>
+                    <CopyButton
+                      value={windowsVerificationCommand}
+                      label="Copy Windows verification commands"
+                    />
+                  </CardFooter>
                 </Card>
               </TabsContent>
             </Tabs>

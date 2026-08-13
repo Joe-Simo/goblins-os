@@ -306,7 +306,7 @@ fn outcome(
 
 fn build_prompt(intent: &str) -> String {
     format!(
-        "You are the app builder for Goblins OS, a Fedora bootc Linux OS whose apps are \
+        "You are the app builder for Goblins OS, an image-based Linux OS whose apps are \
          generated from intent rather than installed. Design a single, focused application for \
          this user intent. Reply with a short, concrete plan: the app name on the first line, \
          then what it does, its main screens and actions, and how the active Goblins AI runtime \
@@ -609,7 +609,7 @@ mod tests {
     fn build_prompt_keeps_goblins_product_framing() {
         let prompt = build_prompt("a reminders app");
         assert!(prompt.contains("Goblins OS"));
-        assert!(prompt.contains("Fedora bootc Linux OS"));
+        assert!(prompt.contains("image-based Linux OS"));
         let old_product_frame = ["OpenAI-centered", "Linux OS"].join(" ");
         assert!(!prompt.contains(&old_product_frame));
     }

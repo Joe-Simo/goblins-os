@@ -947,7 +947,7 @@ fn secure_boot_status(efi_available: bool) -> SecureBootStatus {
         Ok(bytes) if bytes.get(4).copied() == Some(1) => SecureBootStatus {
             state: "enabled",
             detail:
-                "Secure Boot is enabled. Use the signed Fedora/Goblins OS boot path provided by the installer image."
+                "Secure Boot is enabled. Use the signed Goblins OS boot path provided by the installer image."
                     .to_string(),
         },
         Ok(bytes) if bytes.get(4).copied() == Some(0) => SecureBootStatus {

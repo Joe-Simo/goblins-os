@@ -52,6 +52,7 @@ RUN install -d /out/usr/libexec/goblins-os \
       goblins-os-core \
       goblins-os-dictate \
       goblins-os-file-builder \
+      goblins-os-firmware-label \
       goblins-os-focus-tick \
       goblins-os-full-installer \
       goblins-os-install-game-launcher \
@@ -119,6 +120,7 @@ COPY os/codex/config.toml /usr/share/goblins-os/codex/config.toml
 COPY os/tmpfiles/goblins-os-codex.conf /usr/lib/tmpfiles.d/goblins-os-codex.conf
 COPY os/plymouth/goblins-os/ /usr/share/plymouth/themes/goblins-os/
 COPY os/icons/ /usr/share/icons/
+COPY os/brand/icons/goblins.svg /usr/share/icons/GoblinsOS/scalable/apps/goblins-os.svg
 COPY os/sounds/GoblinsOS/index.theme /usr/share/sounds/GoblinsOS/index.theme
 COPY os/brand/anaconda/sidebar-bg.png /usr/share/anaconda/pixmaps/sidebar-bg.png
 COPY os/brand/anaconda/sidebar-logo.png /usr/share/anaconda/pixmaps/sidebar-logo.png
@@ -129,15 +131,19 @@ COPY os/etc/goblins-os/openai-secrets.env /etc/goblins-os/openai-secrets.env
 COPY os/dconf/ /etc/dconf/
 COPY os/gdm/custom.conf /etc/gdm/custom.conf
 COPY os/accountsservice/goblin /var/lib/AccountsService/users/goblin
+COPY os/etc/issue /etc/issue
+COPY os/etc/issue.net /etc/issue.net
+COPY os/etc/system-release /etc/system-release
 
 FROM quay.io/fedora/fedora-bootc:44 AS goblins-os
 
 LABEL org.opencontainers.image.title="Goblins OS" \
-    org.opencontainers.image.description="Open AI-native desktop operating system for building local software on Fedora bootc" \
+    org.opencontainers.image.description="Goblins OS — an open AI-native Linux desktop for building local software" \
     org.opencontainers.image.source="https://github.com/Joe-Simo/goblins-os" \
     org.opencontainers.image.url="https://goblinsos.com" \
     org.opencontainers.image.documentation="https://github.com/Joe-Simo/goblins-os/blob/main/SHIP.md" \
     org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+    org.goblins-os.base="Fedora bootc 44" \
     org.goblins-os.supported-architectures="aarch64"
 
 RUN image_arch="$(rpm --eval '%{_arch}')" \
@@ -207,6 +213,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       NetworkManager-wifi \
       nm-connection-editor \
       dnsmasq \
+      efibootmgr \
+      efivar \
       ntfs-3g \
       exfatprogs \
       udisks2 \
@@ -266,6 +274,11 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       tesseract-langpack-eng \
       leptonica \
       wl-clipboard \
+    && dnf -y --setopt=retries=20 --setopt=timeout=600 --setopt=minrate=1 swap \
+      fedora-logos \
+      generic-logos \
+    && rpm -q generic-logos \
+    && ! rpm -q fedora-logos >/dev/null 2>&1 \
     && rpm -q \
       bubblewrap \
       glibc-langpack-de \
@@ -357,6 +370,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v orca \
     && command -v firewall-cmd \
     && command -v dnsmasq \
+    && test -x /usr/sbin/efibootmgr \
+    && test -x /usr/bin/efivar \
     && command -v ntfs-3g \
     && command -v mount.ntfs-3g \
     && command -v fsck.exfat \
@@ -593,15 +608,39 @@ RUN grep -Fxq 'AutomaticLoginEnable=True' /etc/gdm/custom.conf \
     && grep -Fxq 'TimedLogin=goblin' /etc/gdm/custom.conf \
     && grep -Fxq 'TimedLoginDelay=0' /etc/gdm/custom.conf
 
-# Product identity: this is Goblins OS, not Fedora. Rebrand os-release (NAME /
-# PRETTY_NAME / VARIANT) while keeping ID=fedora + the version intact so dnf and
-# bootc still resolve the platform correctly.
-RUN sed -i \
-      -e 's/^NAME=.*/NAME="Goblins OS"/' \
-      -e 's/^PRETTY_NAME=.*/PRETTY_NAME="Goblins OS"/' \
-      -e '/^VARIANT=/d' -e '/^VARIANT_ID=/d' \
+# Product identity: user-facing OS metadata is exclusively Goblins OS. Keep the
+# compatibility identity (ID=fedora, VERSION_ID, PLATFORM_ID, and CPE_NAME) so
+# RPM, dnf, and bootc continue resolving the real base correctly; publish that
+# base separately in OCI metadata instead of presenting it as the product.
+RUN sed -i -E \
+      '/^(NAME|VERSION|PRETTY_NAME|VARIANT|VARIANT_ID|LOGO|ANSI_COLOR|DEFAULT_HOSTNAME|HOME_URL|DOCUMENTATION_URL|SUPPORT_URL|BUG_REPORT_URL|PRIVACY_POLICY_URL|IMAGE_ID|IMAGE_VERSION|REDHAT_BUGZILLA_PRODUCT|REDHAT_BUGZILLA_PRODUCT_VERSION|REDHAT_SUPPORT_PRODUCT|REDHAT_SUPPORT_PRODUCT_VERSION)=/d' \
       /usr/lib/os-release \
-    && printf 'VARIANT="Goblins OS"\nVARIANT_ID=goblins-os\n' >> /usr/lib/os-release
+    && printf '%s\n' \
+      'NAME="Goblins OS"' \
+      'VERSION="44"' \
+      'PRETTY_NAME="Goblins OS 44"' \
+      'VARIANT="Goblins OS"' \
+      'VARIANT_ID=goblins-os' \
+      'LOGO=goblins-os' \
+      'ANSI_COLOR="0;38;2;44;44;48"' \
+      'DEFAULT_HOSTNAME=goblins' \
+      'HOME_URL="https://goblinsos.com/"' \
+      'DOCUMENTATION_URL="https://github.com/Joe-Simo/goblins-os/blob/main/SHIP.md"' \
+      'SUPPORT_URL="https://github.com/Joe-Simo/goblins-os/issues"' \
+      'BUG_REPORT_URL="https://github.com/Joe-Simo/goblins-os/issues"' \
+      'IMAGE_ID=goblins-os' \
+      'IMAGE_VERSION=44' \
+      >> /usr/lib/os-release \
+    && grep -Fxq 'ID=fedora' /usr/lib/os-release \
+    && grep -Fxq 'PRETTY_NAME="Goblins OS 44"' /usr/lib/os-release \
+    && grep -Fxq 'LOGO=goblins-os' /usr/lib/os-release \
+    && ! grep -Eq '^(NAME|PRETTY_NAME|VARIANT|LOGO|DEFAULT_HOSTNAME|HOME_URL|DOCUMENTATION_URL|SUPPORT_URL|BUG_REPORT_URL)=.*(Fedora|fedoraproject|redhat)' /usr/lib/os-release \
+    && grep -Fxq 'Goblins OS 44 \n \l' /etc/issue \
+    && grep -Fxq 'Goblins OS 44' /etc/issue.net \
+    && grep -Fxq 'Goblins OS release 44' /etc/system-release \
+    && rpm -q generic-logos \
+    && ! rpm -q fedora-logos >/dev/null 2>&1 \
+    && test ! -e /usr/share/pixmaps/fedora-gdm-logo.png
 
 # Boot identity: the Goblins OS Plymouth splash replaces Fedora's. The mark is
 # the shipped Goblins mark; setting the default theme writes plymouthd.conf (the
@@ -796,6 +835,13 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && grep -Fxq 'OnActiveSec=5s' /usr/lib/systemd/system/goblins-os-system-reboot.timer \
     && grep -Fq 'ExecStart=/usr/libexec/goblins-os/goblins-os-system-update %i' /usr/lib/systemd/system/goblins-os-system-update@.service \
     && grep -Fq 'goblins-os-system-update@(check|download|apply|apply-downloaded|reboot|rollback)' /usr/share/polkit-1/rules.d/60-goblins-os-system-update.rules \
+    && test -x /usr/libexec/goblins-os/goblins-os-firmware-label \
+    && test -f /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'ExecStart=/usr/libexec/goblins-os/goblins-os-firmware-label' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'ConditionArchitecture=arm64' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'ReadWritePaths=/sys/firmware/efi/efivars' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'InaccessiblePaths=/boot /efi' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'ProtectKernelTunables=yes' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
     && test -x /usr/libexec/goblins-os/goblins-os-snapshots-setup \
     && test -f /usr/lib/systemd/system/goblins-os-snapshots-setup.service \
     && test -f /usr/lib/systemd/system/gdm.service.d/10-goblins-os-snapshots.conf \
@@ -869,11 +915,13 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && readlink /etc/systemd/system/display-manager.service | grep -Fq gdm.service \
     && systemctl enable goblins-os-model-cache.service \
     && systemctl enable goblins-os-core.service \
+    && systemctl enable goblins-os-firmware-label-migration.service \
     && systemctl enable goblins-os-snapshots-setup.service \
     && systemctl enable goblins-os-snapshot-broker.service \
     && systemctl enable snapper-timeline.timer \
     && systemctl enable snapper-cleanup.timer \
     && test "$(systemctl is-enabled goblins-os-snapshots-setup.service)" = enabled \
+    && test "$(systemctl is-enabled goblins-os-firmware-label-migration.service)" = enabled \
     && test "$(systemctl is-enabled goblins-os-snapshot-broker.service)" = enabled \
     && test "$(systemctl is-enabled snapper-timeline.timer)" = enabled \
     && test "$(systemctl is-enabled snapper-cleanup.timer)" = enabled \

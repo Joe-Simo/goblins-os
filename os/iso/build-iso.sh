@@ -750,7 +750,8 @@ brand_installer() {
   echo "==> Branding the Anaconda installer (Goblins sidebar/logo/accent)"
   docker run --rm --pull=missing \
     --platform "$DOCKER_PLATFORM" \
-    -v "$REPO_ROOT/os/brand/anaconda":/brand:ro \
+    -v "$REPO_ROOT/os/brand":/brand:ro \
+    -v "$REPO_ROOT/os/icons/GoblinsOS/scalable/apps":/installer-icons:ro \
     -v "$REPO_ROOT/os/iso":/scripts:ro \
     -v "$dir":/iso:ro \
     -v "$dir":/work \

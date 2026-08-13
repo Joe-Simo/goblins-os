@@ -53,7 +53,7 @@ const sourceUrl = "https://github.com/Joe-Simo/goblins-os";
 
 const features = [
   {
-    title: "Immutable Fedora bootc base",
+    title: "Image-based Goblins OS foundation",
     description: "Image-based updates, rollback, and native Linux packaging.",
     icon: BoxIcon,
   },
@@ -89,7 +89,7 @@ const features = [
 const installSteps = [
   {
     title: "Choose the right ISO",
-    body: "Use the current installer with a UEFI aarch64 virtual machine. Bare-metal boards need explicit model-specific proof.",
+    body: "A current Goblins OS installer is not published yet. The July alpha is retained only as a historical record.",
   },
   {
     title: "Verify the download",
@@ -155,15 +155,15 @@ export default function Home() {
           <div className="flex max-w-2xl flex-col gap-6" data-gsap="reveal">
             <div className="flex flex-col gap-4">
               <Badge variant="secondary" className="w-fit">
-                Fedora bootc · native desktop · local builds
+                Goblins OS · native Linux desktop · local builds
               </Badge>
               <h1 className="text-5xl font-semibold leading-[0.95] tracking-normal text-balance sm:text-6xl lg:text-7xl">
                 Goblins OS
               </h1>
               <p className="max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
-                An open AI-native desktop for building local software on a
-                Fedora bootc base. Verify the native Arm release media and keep
-                your system under your control.
+                An open AI-native Linux desktop for building local software.
+                Verify the native Arm release media and keep your system under
+                your control.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
@@ -181,7 +181,7 @@ export default function Home() {
               </Button>
             </div>
             <div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-              <ProofPoint>Fedora bootc base</ProofPoint>
+              <ProofPoint>Goblins OS system image</ProofPoint>
               <ProofPoint>Local app builds</ProofPoint>
               <ProofPoint>No bundled API key</ProofPoint>
             </div>
@@ -304,8 +304,8 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
             <SectionHeading
-              title="Download for Arm"
-              description="The current installer targets aarch64 UEFI virtual machines. Bare-metal Arm models are not supported without explicit hardware proof, and Intel or AMD systems are incompatible."
+              title="Historical Arm installer"
+              description="The July aarch64 alpha predates the current Goblins OS identity and experience updates. It remains available only as a verifiable historical record; a current installer will be published after its release gates pass."
             />
             <div className="flex flex-wrap items-center gap-2">
               <Button asChild variant="ghost">
@@ -371,7 +371,7 @@ export default function Home() {
                       <TableCell className="min-w-[260px] whitespace-normal">
                         <div className="flex flex-col gap-2">
                           <Badge variant="secondary" className="w-fit">
-                            Download ready
+                            Historical · not current
                           </Badge>
                           <ul className="flex flex-col gap-1 text-xs leading-5 text-muted-foreground">
                             {artifact.notes.map((note) => (
@@ -424,7 +424,7 @@ export default function Home() {
               </Table>
             </CardContent>
             <CardFooter className="flex flex-col items-start gap-3 border-t text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <span>Large OS media is served from GitHub release assets.</span>
+              <span>Historical OS media is preserved on GitHub for provenance.</span>
               <a
                 className="font-medium text-foreground underline-offset-4 hover:underline"
                 href={releaseEvidence.releaseRunUrl}
@@ -490,7 +490,7 @@ export default function Home() {
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
             <SectionHeading
               title="Arm container image"
-              description="Use the current aarch64 bootc image to inspect, verify, or build from Goblins OS without writing installer media to hardware."
+              description="Use the public aarch64 Goblins OS channel to inspect or verify the currently published system image. The pending identity update is not live until its channel promotion completes."
             />
             <Button asChild variant="ghost">
               <a href={releaseEvidence.releaseRunUrl} rel="noreferrer" target="_blank">
@@ -511,7 +511,7 @@ export default function Home() {
             <AlertTitle>Containers are not a desktop VM</AlertTitle>
             <AlertDescription>
               Container images are for inspection, automation, and derived
-              builds. Use the ISO when you need the graphical desktop installer.
+              builds. There is no current graphical installer release yet.
             </AlertDescription>
           </Alert>
         </div>
@@ -522,7 +522,7 @@ export default function Home() {
           <div className="flex flex-col gap-8">
             <SectionHeading
               title="Install Goblins OS"
-              description="The installer writes an operating system. Back up first, use a verified UEFI aarch64 VM configuration, and verify the media."
+              description="Wait for the next current installer release. The preserved July alpha is not the current branded product and should not be used for a new installation."
             />
             <div className="grid gap-4 md:grid-cols-3">
               {installSteps.map((step, index) => (
@@ -544,7 +544,8 @@ export default function Home() {
             <AlertTitle>Install guardrails</AlertTitle>
             <AlertDescription>
               <ul className="flex flex-col gap-2">
-                <li>The current published install target is a UEFI aarch64 virtual machine.</li>
+                <li>No current Goblins OS installer is published.</li>
+                <li>The next install target is a UEFI aarch64 virtual machine.</li>
                 <li>Apple Silicon is an HVF proof host, not a bare-metal install target.</li>
                 <li>Bare-metal Arm devices need explicit model-specific proof before support is claimed.</li>
                 <li>Intel and AMD systems are not supported.</li>
@@ -560,8 +561,8 @@ export default function Home() {
         <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.72fr_0.28fr] lg:px-8">
           <div className="flex min-w-0 flex-col gap-6">
             <SectionHeading
-              title="Verify your download"
-              description="Download both Arm parts, verify the split files, reassemble the compressed ISO, decompress it, and verify the final ISO."
+              title="Verify the historical media"
+              description="If you need to audit the preserved July alpha, verify both parts, reassemble the compressed ISO, decompress it, and verify the final ISO. Do not use it for a new installation."
             />
             <Tabs defaultValue="macos-linux" className="w-full min-w-0">
               <TabsList className="w-full justify-start overflow-x-auto sm:w-fit">
@@ -573,7 +574,7 @@ export default function Home() {
                   <CardHeader>
                     <CardTitle>Reassemble and verify</CardTitle>
                     <CardDescription>
-                      Commands for the current <code>aarch64</code> release. Requires{" "}
+                      Commands for the historical <code>aarch64</code> alpha. Requires{" "}
                       <code>zstd</code>.
                     </CardDescription>
                   </CardHeader>
@@ -746,7 +747,7 @@ function DownloadArtifactCard({ artifact }: { artifact: (typeof releaseArtifacts
             <CardDescription>{artifact.cpu}</CardDescription>
           </div>
           <Badge variant="secondary" className="shrink-0">
-            Download ready
+            Historical · not current
           </Badge>
         </div>
       </CardHeader>
@@ -877,9 +878,7 @@ function SiteHeader() {
     <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur">
       <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <a href="#" className="flex items-center gap-3 font-semibold" aria-label="Goblins OS home">
-          <span className="flex size-8 items-center justify-center rounded-md bg-foreground text-sm text-background">
-            G
-          </span>
+          <Image src="/favicon.svg" alt="" aria-hidden width={32} height={32} priority />
           <span>Goblins OS</span>
         </a>
         <nav className="hidden items-center gap-5 text-sm text-muted-foreground xl:flex">

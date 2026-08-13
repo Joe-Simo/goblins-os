@@ -50,8 +50,8 @@ equalStringSets(
 for (const artifact of releaseArtifacts) {
   const releaseBaseUrl = `https://github.com/Joe-Simo/goblins-os/releases/download/${releaseEvidence.releaseTag}`;
   assert(
-    artifact.status === "available",
-    `Current ${artifact.arch} media is not available`,
+    artifact.status === "historical",
+    `Preserved ${artifact.arch} media must remain explicitly historical`,
   );
   assert(
     Number.isSafeInteger(artifact.rawSizeBytes) && artifact.rawSizeBytes > 0,
@@ -211,5 +211,5 @@ assert(
 );
 
 console.log(
-  `release-data: pass current=aarch64 historical=x86_64 screenshots=${screenshots.length} bytes=${screenshotBytes}`,
+  `release-data: pass public-channel=aarch64 historical-media=aarch64,x86_64 screenshots=${screenshots.length} bytes=${screenshotBytes}`,
 );

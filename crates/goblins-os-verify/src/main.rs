@@ -48,6 +48,7 @@ const BINARIES: &[&str] = &[
     "goblins-os-core",
     "goblins-os-dictate",
     "goblins-os-file-builder",
+    "goblins-os-firmware-label",
     "goblins-os-focus-tick",
     "goblins-os-installer",
     "goblins-os-launcher",
@@ -153,6 +154,7 @@ const ICON_THEME_FILES: &[&str] = &[
     "scalable/actions/preferences-desktop-appearance-symbolic.svg",
     "scalable/apps/org.gnome.Console.svg",
     "scalable/apps/org.gnome.Nautilus.svg",
+    "scalable/apps/org.goblins.OS.Installer-symbolic.svg",
     "scalable/apps/org.goblins.OS.Installer.svg",
     "scalable/apps/org.goblins.OS.OpenAI.Codex.svg",
     "scalable/apps/org.goblins.OS.Settings.svg",
@@ -318,6 +320,12 @@ enum Mode {
     WorkflowActions,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SourceProfile {
+    Release,
+    Update,
+}
+
 struct Config {
     mode: Mode,
     root: PathBuf,
@@ -327,6 +335,7 @@ struct Config {
     release_arch: Option<String>,
     candidate_commit: Option<String>,
     image_ref: Option<String>,
+    source_profile: SourceProfile,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -349,6 +358,7 @@ enum VerifyError {
     InvalidArchitecture(String),
     InvalidCandidateCommit(String),
     InvalidImageRef(String),
+    InvalidSourceProfile(String),
 }
 
 fn main() {
@@ -395,7 +405,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
 
     let checks = match config.mode {
-        Mode::Source => source_checks(&config.root),
+        Mode::Source => source_checks(&config.root, config.source_profile),
         Mode::Installed => installed_checks(&config.root),
         Mode::Stage => {
             stage_install(&config.source, &config.binaries, &config.root).map_err(|error| {
@@ -456,6 +466,7 @@ impl Config {
         let mut candidate_commit = None;
         let mut image_ref = None;
         let mut workflow_action_pins_root = None;
+        let mut source_profile = None;
         let mut quiet = false;
 
         while let Some(arg) = args.next() {
@@ -514,6 +525,12 @@ impl Config {
                             .ok_or_else(|| VerifyError::MissingValue(arg.clone()))?,
                     ));
                 }
+                "--source-profile" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| VerifyError::MissingValue(arg.clone()))?;
+                    source_profile = Some(parse_source_profile(&value)?);
+                }
                 "--quiet" => quiet = true,
                 "--help" | "-h" => return Err(VerifyError::Usage),
                 _ => return Err(VerifyError::UnknownArgument(arg)),
@@ -529,6 +546,7 @@ impl Config {
                 || release_arch.is_some()
                 || candidate_commit.is_some()
                 || image_ref.is_some()
+                || source_profile.is_some()
             {
                 return Err(VerifyError::Usage);
             }
@@ -541,11 +559,16 @@ impl Config {
                 release_arch: None,
                 candidate_commit: None,
                 image_ref: None,
+                source_profile: SourceProfile::Release,
             });
         }
 
         if let Some(output) = release_evidence_output {
-            if installed_root.is_some() || stage_root.is_some() || binaries.is_some() {
+            if installed_root.is_some()
+                || stage_root.is_some()
+                || binaries.is_some()
+                || source_profile.is_some()
+            {
                 return Err(VerifyError::Usage);
             }
             let arch = release_arch.ok_or(VerifyError::Usage)?;
@@ -573,11 +596,12 @@ impl Config {
                 release_arch: Some(arch),
                 candidate_commit: Some(candidate_commit.to_ascii_lowercase()),
                 image_ref: Some(image_ref),
+                source_profile: SourceProfile::Release,
             });
         }
 
         if let Some(destdir) = stage_root {
-            if source_root.is_some() || installed_root.is_some() {
+            if source_root.is_some() || installed_root.is_some() || source_profile.is_some() {
                 return Err(VerifyError::Usage);
             }
             let source = env::current_dir().map_err(|_| VerifyError::Usage)?;
@@ -591,6 +615,7 @@ impl Config {
                 release_arch: None,
                 candidate_commit: None,
                 image_ref: None,
+                source_profile: SourceProfile::Release,
             });
         }
 
@@ -605,17 +630,24 @@ impl Config {
                 release_arch: None,
                 candidate_commit: None,
                 image_ref: None,
+                source_profile: source_profile.unwrap_or(SourceProfile::Release),
             }),
-            (None, Some(root)) => Ok(Self {
-                mode: Mode::Installed,
-                source: root.clone(),
-                binaries: default_binaries(&root),
-                root,
-                quiet,
-                release_arch: None,
-                candidate_commit: None,
-                image_ref: None,
-            }),
+            (None, Some(root)) => {
+                if source_profile.is_some() {
+                    return Err(VerifyError::Usage);
+                }
+                Ok(Self {
+                    mode: Mode::Installed,
+                    source: root.clone(),
+                    binaries: default_binaries(&root),
+                    root,
+                    quiet,
+                    release_arch: None,
+                    candidate_commit: None,
+                    image_ref: None,
+                    source_profile: SourceProfile::Release,
+                })
+            }
             (None, None) => {
                 let current = env::current_dir().map_err(|_| VerifyError::Usage)?;
                 if current.join("os/bootc/Containerfile").is_file() {
@@ -628,6 +660,7 @@ impl Config {
                         release_arch: None,
                         candidate_commit: None,
                         image_ref: None,
+                        source_profile: source_profile.unwrap_or(SourceProfile::Release),
                     })
                 } else {
                     Ok(Self {
@@ -639,6 +672,7 @@ impl Config {
                         release_arch: None,
                         candidate_commit: None,
                         image_ref: None,
+                        source_profile: SourceProfile::Release,
                     })
                 }
             }
@@ -672,7 +706,7 @@ impl fmt::Display for VerifyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter.write_str(
-                "usage: goblins-os-verify [--source-root <path> | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64> --candidate-commit <40-hex-commit> --image-ref <container-image-ref> | --workflow-action-pins <source-root>] [--quiet]",
+                "usage: goblins-os-verify [--source-root <path> [--source-profile release|update] | --installed-root <path> | --stage <destdir> [--binaries <dir>] | --release-evidence <output-dir> --arch <aarch64> --candidate-commit <40-hex-commit> --image-ref <container-image-ref> | --workflow-action-pins <source-root>] [--quiet]",
             ),
             Self::UnknownArgument(arg) => write!(formatter, "unknown argument {arg}"),
             Self::MissingValue(arg) => write!(formatter, "missing value for {arg}"),
@@ -688,13 +722,17 @@ impl fmt::Display for VerifyError {
                 formatter,
                 "invalid image ref {image_ref}; expected a nonempty container image reference without whitespace"
             ),
+            Self::InvalidSourceProfile(profile) => write!(
+                formatter,
+                "invalid source profile {profile}; expected release or update"
+            ),
         }
     }
 }
 
 impl Error for VerifyError {}
 
-fn source_checks(root: &Path) -> Vec<Check> {
+fn source_checks(root: &Path, profile: SourceProfile) -> Vec<Check> {
     let mut checks = vec![
         file_check(root, "Cargo.toml"),
         file_check(root, "Cargo.lock"),
@@ -771,6 +809,36 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root,
         "fedora-bootc-base",
         "FROM quay.io/fedora/fedora-bootc:44",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "oci-description-uses-goblins-product-identity",
+        "org.opencontainers.image.description=\"Goblins OS — an open AI-native Linux desktop for building local software\"",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "oci-metadata-keeps-base-attribution-separate",
+        "org.goblins-os.base=\"Fedora bootc 44\"",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "os-release-pretty-name-is-goblins",
+        "'PRETTY_NAME=\"Goblins OS 44\"'",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "os-release-logo-is-goblins",
+        "'LOGO=goblins-os'",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "os-release-default-hostname-is-goblins",
+        "'DEFAULT_HOSTNAME=goblins'",
+    ));
+    checks.push(container_absent_check(
+        root,
+        "oci-description-does-not-present-base-as-product",
+        "operating system for building local software on Fedora bootc",
     ));
     checks.push(container_contains_check(
         root,
@@ -1015,6 +1083,125 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root,
         "systemd-system-dropins-install",
         "COPY os/systemd-system/ /usr/lib/systemd/system/",
+    ));
+    checks.push(file_check(
+        root,
+        "os/systemd-system/goblins-os-firmware-label-migration.service",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-system/goblins-os-firmware-label-migration.service"),
+        "firmware-label-migration-is-aarch64-only",
+        "ConditionArchitecture=arm64",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-system/goblins-os-firmware-label-migration.service"),
+        "firmware-label-migration-runs-after-local-filesystems",
+        "After=local-fs.target",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-system/goblins-os-firmware-label-migration.service"),
+        "firmware-label-migration-is-one-shot",
+        "ConditionPathExists=!/var/lib/goblins-os-firmware-label/migrated-v1",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-system/goblins-os-firmware-label-migration.service"),
+        "firmware-label-migration-writes-only-efivars",
+        "ReadWritePaths=/sys/firmware/efi/efivars",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-system/goblins-os-firmware-label-migration.service"),
+        "firmware-label-migration-keeps-esp-read-only",
+        "InaccessiblePaths=/boot /efi",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-system/goblins-os-firmware-label-migration.service"),
+        "firmware-label-migration-protects-other-kernel-tunables",
+        "ProtectKernelTunables=yes",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-system/goblins-os-firmware-label-migration.service"),
+        "firmware-label-migration-uses-private-root-state",
+        "StateDirectoryMode=0700",
+    ));
+    checks.push(contains_check(
+        root.join("os/systemd-system/goblins-os-firmware-label-migration.service"),
+        "firmware-label-migration-uses-fixed-helper",
+        "ExecStart=/usr/libexec/goblins-os/goblins-os-firmware-label",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-binds-boot-current",
+        "let prefix = format!(\"Boot{current_id}\")",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-refuses-concurrent-boot-update",
+        "matches!(\n                    comm.trim(),\n                    \"bootupd\" | \"bootupctl\" | \"efibootmgr\" | \"efivar\"\n                )",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-binds-exact-loader",
+        "const EXPECTED_LOADER: &str = \"\\\\EFI\\\\fedora\\\\shimaa64.efi\";",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-binds-esp-partuuid",
+        "validate_device_path(&initial.device_path, &esp.part_uuid, &esp.part_number)",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-binds-root-disk",
+        "if esp.physical_disk != root_disk",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-rewrites-only-legacy-label",
+        "rewrite_variable_label(&initial_bytes, OLD_LABEL, NEW_LABEL)",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-verifies-byte-exact-payload",
+        "if written_bytes != rewritten",
+    ));
+    checks.push(contains_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-tempfile-stays-in-private-state",
+        "tempfile::NamedTempFile::new_in(STATE_DIR)",
+    ));
+    checks.push(absent_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-never-writes-arbitrary-run",
+        "NamedTempFile::new_in(\"/run\")",
+    ));
+    checks.push(absent_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-never-deletes-boot-entries",
+        "--delete-bootnum",
+    ));
+    checks.push(absent_check(
+        root.join("crates/goblins-os-firmware-label/src/main.rs"),
+        "firmware-label-migration-never-creates-boot-entries",
+        "--create",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "firmware-label-migration-installs-efibootmgr",
+        "      efibootmgr \\",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "firmware-label-migration-installs-efivar",
+        "      efivar \\",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "firmware-label-migration-service-is-enabled",
+        "systemctl enable goblins-os-firmware-label-migration.service",
+    ));
+    checks.push(contains_check(
+        root.join("os/bootc/run-selftest.sh"),
+        "firmware-label-migration-service-is-checked-by-installed-selftest",
+        "goblins-os-firmware-label-migration gdm NetworkManager",
     ));
     checks.push(contains_check(
         root.join("os/systemd-system/systemd-remount-fs.service.d/10-goblins-os-composefs.conf"),
@@ -1444,6 +1631,46 @@ fn source_checks(root: &Path) -> Vec<Check> {
         root,
         "accountsservice-default-session",
         "COPY os/accountsservice/goblin /var/lib/AccountsService/users/goblin",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "goblins-product-icon-reuses-reviewed-brand-asset",
+        "COPY os/brand/icons/goblins.svg /usr/share/icons/GoblinsOS/scalable/apps/goblins-os.svg",
+    ));
+    checks.push(file_check(root, "os/dconf/profile/gdm"));
+    checks.push(file_check(root, "os/dconf/db/gdm.d/01-goblins-os-logo"));
+    checks.push(contains_check(
+        root.join("os/dconf/db/gdm.d/01-goblins-os-logo"),
+        "gdm-greeter-logo-is-goblins",
+        "logo='/usr/share/goblins-os/brand/Goblins-white-mark.svg'",
+    ));
+    checks.push(file_check(root, "os/etc/issue"));
+    checks.push(file_check(root, "os/etc/issue.net"));
+    checks.push(file_check(root, "os/etc/system-release"));
+    checks.push(contains_check(
+        root.join("os/etc/issue"),
+        "tty-banner-is-goblins",
+        "Goblins OS 44",
+    ));
+    checks.push(contains_check(
+        root.join("os/etc/issue.net"),
+        "network-banner-is-goblins",
+        "Goblins OS 44",
+    ));
+    checks.push(contains_check(
+        root.join("os/etc/system-release"),
+        "firmware-product-name-source-is-goblins",
+        "Goblins OS release 44",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "generic-logos-replace-fedora-trademark-assets",
+        "swap \\\n      fedora-logos \\\n      generic-logos",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "fedora-trademark-assets-are-absent",
+        "! rpm -q fedora-logos",
     ));
     checks.push(container_contains_check(
         root,
@@ -2291,11 +2518,123 @@ fn source_checks(root: &Path) -> Vec<Check> {
         "shell-mode-no-stock-overview",
         "\"hasOverview\": false",
     ));
+    checks.retain(|check| source_profile_includes(profile, &check.id));
     checks
 }
 
+fn parse_source_profile(value: &str) -> Result<SourceProfile, VerifyError> {
+    match value {
+        "release" => Ok(SourceProfile::Release),
+        "update" => Ok(SourceProfile::Update),
+        _ => Err(VerifyError::InvalidSourceProfile(value.to_string())),
+    }
+}
+
+fn source_profile_includes(profile: SourceProfile, check_id: &str) -> bool {
+    profile == SourceProfile::Release
+        || !matches!(
+            check_id,
+            "os-release-display-proof-authority2-pem"
+                | "os-release-display-proof-authority2-sha256"
+                | "os-release-display-proof-authority2-ca-pem"
+                | "os-release-display-proof-authority2-ca-sha256"
+        )
+}
+
 fn installed_checks(root: &Path) -> Vec<Check> {
-    let mut checks = Vec::new();
+    let mut checks = vec![file_check(root, "usr/lib/os-release")];
+    checks.push(file_check(
+        root,
+        "usr/lib/systemd/system/goblins-os-firmware-label-migration.service",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/system/goblins-os-firmware-label-migration.service"),
+        "installed-firmware-label-migration-is-aarch64-only",
+        "ConditionArchitecture=arm64",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/system/goblins-os-firmware-label-migration.service"),
+        "installed-firmware-label-migration-is-one-shot",
+        "ConditionPathExists=!/var/lib/goblins-os-firmware-label/migrated-v1",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/system/goblins-os-firmware-label-migration.service"),
+        "installed-firmware-label-migration-writes-only-efivars",
+        "ReadWritePaths=/sys/firmware/efi/efivars",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/system/goblins-os-firmware-label-migration.service"),
+        "installed-firmware-label-migration-keeps-esp-read-only",
+        "InaccessiblePaths=/boot /efi",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/systemd/system/goblins-os-firmware-label-migration.service"),
+        "installed-firmware-label-migration-protects-other-kernel-tunables",
+        "ProtectKernelTunables=yes",
+    ));
+    checks.push(file_check(root, "etc/issue"));
+    checks.push(file_check(root, "etc/issue.net"));
+    checks.push(file_check(root, "etc/system-release"));
+    checks.push(contains_check(
+        root.join("etc/issue"),
+        "installed-tty-banner-is-goblins",
+        "Goblins OS 44",
+    ));
+    checks.push(contains_check(
+        root.join("etc/issue.net"),
+        "installed-network-banner-is-goblins",
+        "Goblins OS 44",
+    ));
+    checks.push(contains_check(
+        root.join("etc/system-release"),
+        "installed-firmware-product-name-source-is-goblins",
+        "Goblins OS release 44",
+    ));
+    checks.push(file_check(root, "etc/dconf/profile/gdm"));
+    checks.push(file_check(root, "etc/dconf/db/gdm.d/01-goblins-os-logo"));
+    checks.push(contains_check(
+        root.join("etc/dconf/db/gdm.d/01-goblins-os-logo"),
+        "installed-gdm-greeter-logo-is-goblins",
+        "logo='/usr/share/goblins-os/brand/Goblins-white-mark.svg'",
+    ));
+    checks.push(file_check(
+        root,
+        "usr/share/goblins-os/brand/Goblins-white-mark.svg",
+    ));
+    checks.push(file_check(
+        root,
+        "usr/share/icons/GoblinsOS/scalable/apps/goblins-os.svg",
+    ));
+    checks.push(path_absent_check(
+        root,
+        "usr/share/pixmaps/fedora-gdm-logo.png",
+        "installed-fedora-gdm-logo-is-absent",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/os-release"),
+        "installed-os-release-pretty-name-is-goblins",
+        "PRETTY_NAME=\"Goblins OS 44\"",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/os-release"),
+        "installed-os-release-logo-is-goblins",
+        "LOGO=goblins-os",
+    ));
+    checks.push(contains_check(
+        root.join("usr/lib/os-release"),
+        "installed-os-release-default-hostname-is-goblins",
+        "DEFAULT_HOSTNAME=goblins",
+    ));
+    checks.push(absent_check(
+        root.join("usr/lib/os-release"),
+        "installed-os-release-does-not-present-fedora-name",
+        "PRETTY_NAME=\"Fedora",
+    ));
+    checks.push(absent_check(
+        root.join("usr/lib/os-release"),
+        "installed-os-release-does-not-use-fedora-logo",
+        "LOGO=fedora",
+    ));
     for binary in BINARIES {
         checks.push(file_check(
             root,
@@ -2817,6 +3156,10 @@ fn install_files(source: &Path, binaries: &Path) -> Vec<(PathBuf, String)> {
             format!("usr/lib/systemd/system/{unit}"),
         ));
     }
+    files.push((
+        source.join("os/systemd-system/goblins-os-firmware-label-migration.service"),
+        "usr/lib/systemd/system/goblins-os-firmware-label-migration.service".to_string(),
+    ));
     for dropin in SYSTEMD_SYSTEM_DROPINS {
         files.push((
             source.join(format!("os/systemd-system/{dropin}")),
@@ -9988,7 +10331,52 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/iso/remaster-anaconda-branding.sh"),
             "anaconda-remaster-rejects-legacy-fedora-accent",
-            "installer stylesheet still contains the legacy Fedora accent",
+            "installer styles still contain the legacy Fedora accent",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-brands-every-sidebar-variant",
+            "find \"$PIX\" -mindepth 1 -type f -name 'sidebar-logo.png'",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-recolors-every-stylesheet-variant",
+            "find \"$PIX\" -type f -name '*.css'",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-removes-upstream-release-note-artwork",
+            "rm -rf -- \"$PIX/rnotes\"",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-replaces-installer-compatibility-icons",
+            "org.fedoraproject.AnacondaInstaller-symbolic.*",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-requires-regular-and-symbolic-installer-icons",
+            "installer runtime contains no symbolic Anaconda installer compatibility icon",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-proves-installer-icon-path-set",
+            "installer icon path set changed during branding",
+        ),
+        contains_check(
+            root.join("os/iso/remaster-anaconda-branding.sh"),
+            "anaconda-remaster-proves-installer-icon-pixels",
+            "magick compare -metric AE",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-mounts-reviewed-brand-root",
+            "-v \"$REPO_ROOT/os/brand\":/brand:ro",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-mounts-reviewed-installer-icon-assets",
+            "-v \"$REPO_ROOT/os/icons/GoblinsOS/scalable/apps\":/installer-icons:ro",
         ),
         absent_check(
             root.join("os/iso/remaster-anaconda-branding.sh"),
@@ -15474,6 +15862,11 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
             root.join(".github/workflows/candidate-artifacts.yml"),
             "candidate-workflow-runs-exact-source-verifier",
             "--source-root /workspace",
+        ),
+        contains_check(
+            root.join(".github/workflows/candidate-artifacts.yml"),
+            "candidate-workflow-uses-non-promotional-update-source-profile",
+            "--source-profile update",
         ),
         contains_check(
             root.join(".github/workflows/candidate-artifacts.yml"),
@@ -24324,17 +24717,18 @@ mod tests {
         deprecated_github_action_pins_absent_check, desktop_field, first_executable_initialization,
         image_ref_is_digest_pinned, image_ref_is_valid, imports_shared_core_initializer,
         install_files, is_allowed_dummy_secret, is_suspicious_secret_line,
-        native_design_system_checks, ordered_contains_check, permission_inventory,
-        release_evidence_manifest, reviewed_github_action_pins_check, rg_secret_scan_hit,
-        sha256_path, should_skip_secret_scan_path, source_manifest_classifies_top_level, stable_id,
+        native_design_system_checks, ordered_contains_check, parse_source_profile,
+        permission_inventory, release_evidence_manifest, reviewed_github_action_pins_check,
+        rg_secret_scan_hit, sha256_path, should_skip_secret_scan_path,
+        source_manifest_classifies_top_level, source_profile_includes, stable_id,
         tmpfiles_capability_entries, verify_installer_branding_tool_provenance,
         write_release_evidence, CheckState, ForbiddenClientTokenVisitor, ReleaseEvidenceDigests,
-        APPLICATIONS, AUTOSTART, BINARIES, CORE_SERVICE_READ_WRITE_PATHS, DCONF_FILES,
-        DEPRECATED_GITHUB_ACTION_PINS, GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES,
-        ICON_THEME_FILES, NATIVE_DESIGN_APPS, NAUTILUS_SCRIPTS, POLISH_INTERACTION_PROOF,
-        POLISH_INTERACTION_SCREENSHOTS, REVIEWED_GITHUB_ACTION_PINS,
-        SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS, SYSTEMD_SYSTEM_DROPINS,
-        SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
+        SourceProfile, VerifyError, APPLICATIONS, AUTOSTART, BINARIES,
+        CORE_SERVICE_READ_WRITE_PATHS, DCONF_FILES, DEPRECATED_GITHUB_ACTION_PINS,
+        GLIB_SCHEMA_FILES, GNOME_SHELL_EXTENSION_FILES, ICON_THEME_FILES, NATIVE_DESIGN_APPS,
+        NAUTILUS_SCRIPTS, POLISH_INTERACTION_PROOF, POLISH_INTERACTION_SCREENSHOTS,
+        REVIEWED_GITHUB_ACTION_PINS, SETTINGS_INTERACTION_SCREENSHOTS, SETTINGS_RENDER_SCREENSHOTS,
+        SYSTEMD_SYSTEM_DROPINS, SYSTEMD_UNITS, SYSTEMD_USER_UNITS,
     };
     use std::collections::HashSet;
     use std::fs;
@@ -24569,6 +24963,30 @@ mod tests {
         assert_eq!(
             stable_id("systemd-goblins-os-core.service-NoNewPrivileges=yes"),
             "systemd-goblins-os-core-service-nonewprivileges-yes"
+        );
+    }
+
+    #[test]
+    fn update_source_profile_omits_only_unprovisioned_stable_authority_pins() {
+        let authority_pins = [
+            "os-release-display-proof-authority2-pem",
+            "os-release-display-proof-authority2-sha256",
+            "os-release-display-proof-authority2-ca-pem",
+            "os-release-display-proof-authority2-ca-sha256",
+        ];
+        for check_id in authority_pins {
+            assert!(source_profile_includes(SourceProfile::Release, check_id));
+            assert!(!source_profile_includes(SourceProfile::Update, check_id));
+        }
+        assert!(source_profile_includes(
+            SourceProfile::Update,
+            "source-workflows-have-no-publication-authority"
+        ));
+        assert_eq!(parse_source_profile("release"), Ok(SourceProfile::Release));
+        assert_eq!(parse_source_profile("update"), Ok(SourceProfile::Update));
+        assert_eq!(
+            parse_source_profile("candidate"),
+            Err(VerifyError::InvalidSourceProfile("candidate".to_string()))
         );
     }
 
@@ -25491,7 +25909,7 @@ checksum = "abc123"
             + SYSTEMD_USER_UNITS.len()
             + APPLICATIONS.len()
             + AUTOSTART.len()
-            + 9
+            + 10
             + DCONF_FILES.len()
             + GLIB_SCHEMA_FILES.len()
             + GNOME_SHELL_EXTENSION_FILES.len()

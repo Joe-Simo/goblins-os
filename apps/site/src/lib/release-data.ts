@@ -26,7 +26,7 @@ export type ReleaseArtifact<TArchitecture extends ArchitectureId = ArchitectureI
   evidenceUrl: string;
   downloadParts: ReleaseDownloadPart[];
   builtOn: string;
-  status: "available" | "blocked";
+  status: "historical" | "blocked";
   notes: string[];
 };
 
@@ -101,10 +101,10 @@ export const releaseArtifacts = [
       },
     ],
     builtOn: "2026-07-03T18:19:13Z",
-    status: "available",
+    status: "historical",
     notes: [
-      "Alpha release. Use a spare device or VM and back up first.",
-      "Published with checksums, manifests, and SBOMs. It is not current stable-signoff evidence.",
+      "Historical July 2026 alpha. It predates the current Goblins OS identity and experience updates.",
+      "Retained with checksums, manifests, and SBOMs for provenance; do not use it for a new installation.",
     ],
   },
 ] satisfies ReleaseArtifact<CurrentReleaseArchitectureId>[];
@@ -164,7 +164,7 @@ export const historicalReleaseArtifacts = [
 export const containerImages = [
   {
     arch: "aarch64",
-    label: "Arm / aarch64 bootc image",
+    label: "Goblins OS image · Arm / aarch64",
     image: "ghcr.io/joe-simo/goblins-os:aarch64",
     platform: "linux/arm64",
     sourceManifestUrl: releaseAssetUrl("manifest-goblins-os-aarch64.json"),
@@ -175,7 +175,7 @@ export const containerImages = [
     podmanVerifyCommand:
       "podman run --rm ghcr.io/joe-simo/goblins-os:aarch64 /usr/libexec/goblins-os/goblins-os-verify",
     status: "public",
-    note: "Public GHCR image. Pull with Docker or Podman, then run the verifier command before using it as an install base.",
+    note: "Public GHCR channel. Its current production digest predates the pending Goblins OS identity update; verify the pulled image before using it.",
   },
 ] satisfies ContainerImage[];
 

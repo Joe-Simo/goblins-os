@@ -49,7 +49,7 @@ fi
 
 echo
 echo "── 2. systemd units enabled to start at boot ──"
-for unit in goblins-os-core goblins-os-resident goblins-os-model-cache gdm NetworkManager; do
+for unit in goblins-os-core goblins-os-resident goblins-os-model-cache goblins-os-firmware-label-migration gdm NetworkManager; do
   state=$(systemctl is-enabled "$unit.service" 2>/dev/null || echo "unknown")
   echo "  $unit.service: $state"
   case "$state" in enabled|enabled-runtime|static|alias) ;; *) [ "$unit" = "goblins-os-model-cache" ] || fail=1 ;; esac

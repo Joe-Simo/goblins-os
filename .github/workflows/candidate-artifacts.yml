@@ -178,7 +178,9 @@ jobs:
             -v "$PWD:/workspace:ro" \
             -w /workspace \
             "$LOCAL_IMAGE" \
-            /usr/libexec/goblins-os/goblins-os-verify --source-root /workspace \
+            /usr/libexec/goblins-os/goblins-os-verify \
+            --source-root /workspace \
+            --source-profile update \
             | tee /tmp/goblins-candidate-source-verify.log
           grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
             /tmp/goblins-candidate-source-verify.log

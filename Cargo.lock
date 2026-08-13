@@ -818,6 +818,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "goblins-os-firmware-label"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "goblins-os-installer"
 version = "0.1.0"
 dependencies = [

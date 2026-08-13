@@ -924,9 +924,11 @@ fn read_request_with_optional_fd_before(
 }
 
 fn sync_directory(directory: &Dir) -> io::Result<()> {
-    directory
-        .try_clone()
-        .and_then(|directory| directory.into_std_file().sync_all())
+    // cap-std holds Linux directories with O_PATH. Re-open the held directory
+    // capability as a normal read-only descriptor before fsync; cloning the
+    // O_PATH descriptor itself would make every durable export/recovery publish
+    // fail with EBADF.
+    directory.open(Path::new("."))?.into_std().sync_all()
 }
 
 fn validate_relative_file_path(path: &Path) -> Result<(), &'static str> {
@@ -3017,6 +3019,14 @@ mod tests {
             &metadata,
             effective_user_id().wrapping_add(1)
         ));
+    }
+
+    #[test]
+    fn directory_sync_reopens_linux_capability_handles() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = Dir::open_ambient_dir(temp.path(), ambient_authority()).unwrap();
+
+        super::sync_directory(&directory).expect("durable directory");
     }
 
     #[test]

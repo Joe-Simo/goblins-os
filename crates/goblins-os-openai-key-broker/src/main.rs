@@ -430,7 +430,11 @@ fn run_key_entry(
         // supported, but there is deliberately no reveal control.
         entry.set_show_peek_icon(false);
         entry.set_placeholder_text(Some("API key"));
-        entry.set_max_length(MAX_PLAINTEXT_BYTES as i32);
+        entry
+            .delegate()
+            .and_then(|delegate| delegate.downcast::<gtk::Text>().ok())
+            .expect("GtkPasswordEntry must delegate editing to GtkText")
+            .set_max_length(MAX_PLAINTEXT_BYTES as i32);
         entry.add_css_class("gos-key-broker-entry");
         entry.update_property(&[
             gtk::accessible::Property::Label("OpenAI API key"),
@@ -518,7 +522,8 @@ fn run_key_entry(
         window.present();
     });
     application.run_with_args::<&str>(&[]);
-    returned.borrow_mut().take()
+    let value = returned.borrow_mut().take();
+    value
 }
 
 #[cfg(not(all(target_os = "linux", feature = "native-desktop")))]
@@ -677,6 +682,8 @@ fn run_notice(title: &str, detail: &str) -> bool {
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn dialog_root() -> gtk4::Box {
+    use gtk4::prelude::WidgetExt;
+
     let root = gtk4::Box::new(gtk4::Orientation::Vertical, 18);
     root.add_css_class("gos-key-broker-root");
     root.set_margin_top(28);

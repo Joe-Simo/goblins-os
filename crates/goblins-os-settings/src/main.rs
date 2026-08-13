@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 use std::{
     cell::{Cell, RefCell},
+    path::Path,
     rc::Rc,
 };
 
@@ -11842,7 +11843,7 @@ fn append_system_image_actions(
     }
     available_actions.push(("rollback", "Roll back…", image.actions.can_rollback, true));
     for (action, title, enabled, destructive) in available_actions {
-        let button = button(
+        let action_button = button(
             title,
             if destructive {
                 &["gos-destructive-action"]
@@ -11850,7 +11851,7 @@ fn append_system_image_actions(
                 &["gos-permission-action"]
             },
         );
-        button.set_sensitive(enabled && image.operation.is_none());
+        action_button.set_sensitive(enabled && image.operation.is_none());
         let core = state.core.clone();
         let feedback = feedback.clone();
         if destructive {
@@ -11879,7 +11880,7 @@ fn append_system_image_actions(
             confirmation.append(&confirm_actions);
             {
                 let confirmation = confirmation.clone();
-                button.connect_clicked(move |_| confirmation.set_visible(true));
+                action_button.connect_clicked(move |_| confirmation.set_visible(true));
             }
             {
                 let confirmation = confirmation.clone();
@@ -11917,12 +11918,12 @@ fn append_system_image_actions(
                     );
                 });
             }
-            actions.insert(&button, -1);
+            actions.insert(&action_button, -1);
             card.append(&confirmation);
         } else {
             let panel = panel.clone();
             let state = state.clone();
-            button.connect_clicked(move |button| {
+            action_button.connect_clicked(move |button| {
                 button.set_sensitive(false);
                 feedback.set_text(system_image_action_progress(action));
                 let core = core.clone();
@@ -11943,7 +11944,7 @@ fn append_system_image_actions(
                     },
                 );
             });
-            actions.insert(&button, -1);
+            actions.insert(&action_button, -1);
         }
     }
     card.prepend(&actions);
@@ -15366,8 +15367,6 @@ fn build_recovery(panel: &gtk4::Box, state: &SettingsState) {
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_recovery_snapshots_status(panel: &gtk4::Box, state: &SettingsState) {
-    use gtk4::prelude::*;
-
     let Some(status) = &state.snapshots else {
         append_preference_group(
             panel,
@@ -15507,149 +15506,151 @@ fn append_snapshot_recovery_controls(
             .map(|snapshot| snapshot.id.clone())
             .collect::<Vec<_>>(),
     );
-    let load_browser: Rc<dyn Fn()> = Rc::new_cyclic(|weak_load| {
-        let core = state.core.clone();
-        let selector = selector.clone();
-        let snapshot_ids = snapshot_ids.clone();
-        let current_directory = current_directory.clone();
-        let current_cursor = current_cursor.clone();
-        let next_cursor = next_cursor.clone();
-        let browser_generation = browser_generation.clone();
-        let browser_entries = browser_entries.clone();
-        let browser_path = browser_path.clone();
-        let browser_feedback = browser_feedback.clone();
-        let browser_back = browser_back.clone();
-        let previous_page = previous_page.clone();
-        let next_page = next_page.clone();
-        let cursor_history = cursor_history.clone();
-        let source_path = source_path.clone();
-        let destination_path = destination_path.clone();
-        let chosen = chosen.clone();
-        let review = review.clone();
-        let confirmation = confirmation.clone();
-        let reviewed_selection = reviewed_selection.clone();
-        let weak_load = weak_load.clone();
-        move || {
-            let index = selector.selected() as usize;
-            let Some(snapshot_id) = snapshot_ids.get(index).cloned() else {
-                browser_feedback.set_text("Choose a reported snapshot.");
-                return;
-            };
-            let directory = current_directory.borrow().clone();
-            let cursor = current_cursor.get();
-            let generation = browser_generation.get().wrapping_add(1);
-            browser_generation.set(generation);
-            confirmation.set_visible(false);
-            *reviewed_selection.borrow_mut() = None;
-            browser_feedback.set_text("Loading this read-only snapshot folder…");
-            clear_box_children(&browser_entries);
-            browser_back.set_sensitive(!directory.is_empty());
-            previous_page.set_sensitive(!cursor_history.borrow().is_empty());
-            next_page.set_sensitive(false);
-            next_cursor.set(None);
-            browser_path.set_text(if directory.is_empty() {
-                "Snapshot home"
-            } else {
-                &format!("Snapshot home / {directory}")
-            });
-            let core = core.clone();
-            let browser_entries = browser_entries.clone();
-            let browser_feedback = browser_feedback.clone();
+    let load_browser: Rc<Box<dyn Fn()>> = Rc::new_cyclic(
+        |weak_load: &std::rc::Weak<Box<dyn Fn()>>| {
+            let core = state.core.clone();
+            let selector = selector.clone();
+            let snapshot_ids = snapshot_ids.clone();
             let current_directory = current_directory.clone();
             let current_cursor = current_cursor.clone();
             let next_cursor = next_cursor.clone();
             let browser_generation = browser_generation.clone();
-            let expected_snapshot_id = snapshot_id.clone();
-            let expected_directory = directory.clone();
-            let expected_cursor = cursor;
+            let browser_entries = browser_entries.clone();
+            let browser_path = browser_path.clone();
+            let browser_feedback = browser_feedback.clone();
+            let browser_back = browser_back.clone();
+            let previous_page = previous_page.clone();
+            let next_page = next_page.clone();
+            let cursor_history = cursor_history.clone();
             let source_path = source_path.clone();
             let destination_path = destination_path.clone();
             let chosen = chosen.clone();
             let review = review.clone();
+            let confirmation = confirmation.clone();
+            let reviewed_selection = reviewed_selection.clone();
             let weak_load = weak_load.clone();
-            run_settings_action(
-                move || browse_snapshot_files(&core, &snapshot_id, &directory, cursor),
-                move |outcome| {
-                    let selected_snapshot = snapshot_ids
-                        .get(selector.selected() as usize)
-                        .map(String::as_str);
-                    if browser_generation.get() != generation
-                        || selected_snapshot != Some(expected_snapshot_id.as_str())
-                        || *current_directory.borrow() != expected_directory
-                        || current_cursor.get() != expected_cursor
-                    {
-                        return;
-                    }
-                    match outcome {
-                        Ok(outcome) => {
-                            if outcome.snapshot_id != expected_snapshot_id
-                                || outcome.directory != expected_directory
-                            {
-                                browser_feedback.set_text(
-                                    "The snapshot browser returned a stale page. Reloading…",
-                                );
-                                return;
-                            }
-                            next_cursor.set(outcome.next_cursor);
-                            next_page.set_sensitive(outcome.next_cursor.is_some());
-                            browser_feedback.set_text(&outcome.detail);
-                            for entry in outcome.entries {
-                                let title = if entry.kind == "directory" {
-                                    format!("{} /", entry.name)
-                                } else if let Some(bytes) = entry.bytes {
-                                    format!("{} · {} bytes", entry.name, bytes)
-                                } else {
-                                    entry.name.clone()
-                                };
-                                let entry_button = button(&title, &["gos-permission-action"]);
-                                if entry.kind == "directory" {
-                                    let relative_path = entry.relative_path.clone();
-                                    let current_directory = current_directory.clone();
-                                    let current_cursor = current_cursor.clone();
-                                    let cursor_history = cursor_history.clone();
-                                    let next_cursor = next_cursor.clone();
-                                    let weak_load = weak_load.clone();
-                                    entry_button.connect_clicked(move |_| {
-                                        *current_directory.borrow_mut() = relative_path.clone();
-                                        current_cursor.set(0);
-                                        cursor_history.borrow_mut().clear();
-                                        next_cursor.set(None);
-                                        if let Some(load) = weak_load.upgrade() {
-                                            load();
-                                        }
-                                    });
-                                } else {
-                                    let logical_path = entry.logical_path.clone();
-                                    let source_path = source_path.clone();
-                                    let destination_path = destination_path.clone();
-                                    let chosen = chosen.clone();
-                                    let review = review.clone();
-                                    let confirmation = confirmation.clone();
-                                    let reviewed_selection = reviewed_selection.clone();
-                                    entry_button.connect_clicked(move |_| {
-                                        confirmation.set_visible(false);
-                                        *reviewed_selection.borrow_mut() = None;
-                                        *source_path.borrow_mut() = Some(logical_path.clone());
-                                        update_snapshot_recovery_selection(
-                                            &chosen,
-                                            &review,
-                                            source_path.borrow().as_deref(),
-                                            destination_path.borrow().as_deref(),
-                                        );
-                                    });
-                                }
-                                browser_entries.append(&entry_button);
-                            }
-                            if outcome.truncated {
-                                browser_feedback.set_text("This folder has more entries. Use Next page to keep browsing the same read-only snapshot folder.");
-                            }
+            Box::new(move || {
+                let index = selector.selected() as usize;
+                let Some(snapshot_id) = snapshot_ids.get(index).cloned() else {
+                    browser_feedback.set_text("Choose a reported snapshot.");
+                    return;
+                };
+                let directory = current_directory.borrow().clone();
+                let cursor = current_cursor.get();
+                let generation = browser_generation.get().wrapping_add(1);
+                browser_generation.set(generation);
+                confirmation.set_visible(false);
+                *reviewed_selection.borrow_mut() = None;
+                browser_feedback.set_text("Loading this read-only snapshot folder…");
+                clear_box_children(&browser_entries);
+                browser_back.set_sensitive(!directory.is_empty());
+                previous_page.set_sensitive(!cursor_history.borrow().is_empty());
+                next_page.set_sensitive(false);
+                next_cursor.set(None);
+                browser_path.set_text(if directory.is_empty() {
+                    "Snapshot home"
+                } else {
+                    &format!("Snapshot home / {directory}")
+                });
+                let core = core.clone();
+                let browser_entries = browser_entries.clone();
+                let browser_feedback = browser_feedback.clone();
+                let current_directory = current_directory.clone();
+                let current_cursor = current_cursor.clone();
+                let next_cursor = next_cursor.clone();
+                let browser_generation = browser_generation.clone();
+                let expected_snapshot_id = snapshot_id.clone();
+                let expected_directory = directory.clone();
+                let expected_cursor = cursor;
+                let source_path = source_path.clone();
+                let destination_path = destination_path.clone();
+                let chosen = chosen.clone();
+                let review = review.clone();
+                let weak_load = weak_load.clone();
+                run_settings_action(
+                    move || browse_snapshot_files(&core, &snapshot_id, &directory, cursor),
+                    move |outcome| {
+                        let selected_snapshot = snapshot_ids
+                            .get(selector.selected() as usize)
+                            .map(String::as_str);
+                        if browser_generation.get() != generation
+                            || selected_snapshot != Some(expected_snapshot_id.as_str())
+                            || *current_directory.borrow() != expected_directory
+                            || current_cursor.get() != expected_cursor
+                        {
+                            return;
                         }
-                        Err(error) => browser_feedback.set_text(&error),
-                    }
-                },
-            );
-        }
-    });
+                        match outcome {
+                            Ok(outcome) => {
+                                if outcome.snapshot_id != expected_snapshot_id
+                                    || outcome.directory != expected_directory
+                                {
+                                    browser_feedback.set_text(
+                                        "The snapshot browser returned a stale page. Reloading…",
+                                    );
+                                    return;
+                                }
+                                next_cursor.set(outcome.next_cursor);
+                                next_page.set_sensitive(outcome.next_cursor.is_some());
+                                browser_feedback.set_text(&outcome.detail);
+                                for entry in outcome.entries {
+                                    let title = if entry.kind == "directory" {
+                                        format!("{} /", entry.name)
+                                    } else if let Some(bytes) = entry.bytes {
+                                        format!("{} · {} bytes", entry.name, bytes)
+                                    } else {
+                                        entry.name.clone()
+                                    };
+                                    let entry_button = button(&title, &["gos-permission-action"]);
+                                    if entry.kind == "directory" {
+                                        let relative_path = entry.relative_path.clone();
+                                        let current_directory = current_directory.clone();
+                                        let current_cursor = current_cursor.clone();
+                                        let cursor_history = cursor_history.clone();
+                                        let next_cursor = next_cursor.clone();
+                                        let weak_load = weak_load.clone();
+                                        entry_button.connect_clicked(move |_| {
+                                            *current_directory.borrow_mut() = relative_path.clone();
+                                            current_cursor.set(0);
+                                            cursor_history.borrow_mut().clear();
+                                            next_cursor.set(None);
+                                            if let Some(load) = weak_load.upgrade() {
+                                                load();
+                                            }
+                                        });
+                                    } else {
+                                        let logical_path = entry.logical_path.clone();
+                                        let source_path = source_path.clone();
+                                        let destination_path = destination_path.clone();
+                                        let chosen = chosen.clone();
+                                        let review = review.clone();
+                                        let confirmation = confirmation.clone();
+                                        let reviewed_selection = reviewed_selection.clone();
+                                        entry_button.connect_clicked(move |_| {
+                                            confirmation.set_visible(false);
+                                            *reviewed_selection.borrow_mut() = None;
+                                            *source_path.borrow_mut() = Some(logical_path.clone());
+                                            update_snapshot_recovery_selection(
+                                                &chosen,
+                                                &review,
+                                                source_path.borrow().as_deref(),
+                                                destination_path.borrow().as_deref(),
+                                            );
+                                        });
+                                    }
+                                    browser_entries.append(&entry_button);
+                                }
+                                if outcome.truncated {
+                                    browser_feedback.set_text("This folder has more entries. Use Next page to keep browsing the same read-only snapshot folder.");
+                                }
+                            }
+                            Err(error) => browser_feedback.set_text(&error),
+                        }
+                    },
+                );
+            })
+        },
+    );
     {
         let current_directory = current_directory.clone();
         let current_cursor = current_cursor.clone();
@@ -24916,6 +24917,7 @@ fn append_codex_settings(
                     let cancel = cancel.clone();
                     let core = core.clone();
                     let engine_controls = engine_controls.clone();
+                    let account_surface = account_surface.clone();
                     run_settings_action(
                         move || forget_codex_account(&core),
                         move |outcome| {

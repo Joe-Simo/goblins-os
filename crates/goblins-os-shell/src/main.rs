@@ -1090,7 +1090,7 @@ fn build_desktop(
     let app_detail = gtk::Box::new(gtk::Orientation::Vertical, 0);
     app_detail.set_vexpand(true);
 
-    let home = build_home(config, shell_state, &body, &app_detail, window);
+    let home = build_home(config, shell_state, &body, &app_detail);
     home.set_vexpand(true);
     let studio = build_studio(config, shell_state, &body);
     studio.set_vexpand(true);
@@ -1115,7 +1115,6 @@ fn build_home(
     shell_state: &ShellState,
     stack: &gtk4::Stack,
     detail: &gtk4::Box,
-    window: Option<&gtk4::ApplicationWindow>,
 ) -> gtk4::Box {
     use gtk::prelude::*;
     use gtk4 as gtk;
@@ -1280,7 +1279,6 @@ fn build_home(
 
     let ui = BuildUi {
         core: config.core.clone(),
-        window: window.cloned(),
         entry: entry.clone(),
         build: build.clone(),
         status,
@@ -1316,7 +1314,6 @@ fn build_home(
 #[derive(Clone)]
 struct BuildUi {
     core: CoreClient,
-    window: Option<gtk4::ApplicationWindow>,
     entry: gtk4::Entry,
     build: gtk4::Button,
     status: gtk4::Label,

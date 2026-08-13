@@ -15547,11 +15547,12 @@ fn append_snapshot_recovery_controls(
                 previous_page.set_sensitive(!cursor_history.borrow().is_empty());
                 next_page.set_sensitive(false);
                 next_cursor.set(None);
-                browser_path.set_text(if directory.is_empty() {
-                    "Snapshot home"
+                let browser_path_text = if directory.is_empty() {
+                    "Snapshot home".to_string()
                 } else {
-                    &format!("Snapshot home / {directory}")
-                });
+                    format!("Snapshot home / {directory}")
+                };
+                browser_path.set_text(&browser_path_text);
                 let core = core.clone();
                 let browser_entries = browser_entries.clone();
                 let browser_feedback = browser_feedback.clone();
@@ -15566,6 +15567,12 @@ fn append_snapshot_recovery_controls(
                 let destination_path = destination_path.clone();
                 let chosen = chosen.clone();
                 let review = review.clone();
+                let snapshot_ids = snapshot_ids.clone();
+                let selector = selector.clone();
+                let next_page = next_page.clone();
+                let cursor_history = cursor_history.clone();
+                let confirmation = confirmation.clone();
+                let reviewed_selection = reviewed_selection.clone();
                 let weak_load = weak_load.clone();
                 run_settings_action(
                     move || browse_snapshot_files(&core, &snapshot_id, &directory, cursor),

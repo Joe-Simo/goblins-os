@@ -2118,7 +2118,13 @@ fn remove_studio_transaction_journal(apps_root: &Path, id: &str) -> Result<(), S
 }
 
 fn sync_directory(directory: &Dir) -> io::Result<()> {
-    directory.try_clone()?.into_std_file().sync_all()
+    // On Linux, cap-std deliberately represents `Dir` with an `O_PATH`
+    // descriptor. Duplicating that descriptor and calling fsync fails with
+    // EBADF, even though the held capability is valid. Re-open `.` through the
+    // capability as an ordinary read-only directory descriptor so the
+    // directory-entry transaction can be durably committed without falling
+    // back to an ambient path.
+    directory.open(Path::new("."))?.into_std().sync_all()
 }
 
 fn sync_workspace_tree(directory: &Dir) -> io::Result<()> {
@@ -2919,6 +2925,16 @@ mod tests {
         assert!(!workspace_path.join("new.txt").exists());
         assert!(!workspace_checkpoint_exists(&apps, id));
         assert!(restore_workspace_checkpoint(&apps, id).is_err());
+    }
+
+    #[test]
+    fn directory_sync_reopens_linux_capability_handles() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let directory =
+            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority())
+                .expect("capability directory");
+
+        sync_directory(&directory).expect("durable directory");
     }
 
     #[test]

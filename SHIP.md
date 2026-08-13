@@ -280,8 +280,10 @@ paths: back up and prepare space in the OS being kept when possible, pick
 `Keep my current OS` or manual storage, install only into unallocated free space
 or a dedicated Goblins OS disk, and confirm both systems boot before changing
 boot order. Before any simple-flow write, the installer shows a **Before writing to disk** plan covering
-the selected blank disk, fresh GPT layout, bootloader/EFI target, xfs root
-filesystem, manual-storage handoff for custom formatting/encryption, and
+the selected blank disk, fresh GPT layout, bootloader/EFI target, Btrfs root
+filesystem selected for snapshot compatibility, the first-boot subvolume check
+that must pass before local Snapshot Recovery turns on, manual-storage handoff
+for custom formatting/encryption, and
 firmware boot-picker recovery path. Outputs:
 - `os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso`
 - matching `.sha256` files and the `manifest-goblins-os-aarch64.json` manifest.

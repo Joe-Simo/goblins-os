@@ -18,6 +18,7 @@ members = [
   "crates/goblins-os-screenshot-context",
   "crates/goblins-os-session-tools",
   "crates/goblins-os-session-bridge",
+  "crates/goblins-os-snapshot-broker",
   "crates/goblins-os-settings",
   "crates/goblins-os-shell",
   "crates/goblins-os-textshortcuts-engine",

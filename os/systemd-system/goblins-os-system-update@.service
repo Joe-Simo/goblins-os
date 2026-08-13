@@ -1,0 +1,24 @@
+[Unit]
+Description=Goblins OS immutable image action %i
+Documentation=man:bootc(8)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/libexec/goblins-os/goblins-os-system-update
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/goblins-os/goblins-os-system-update %i
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=-/boot -/etc -/ostree -/sysroot -/var
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+UMask=0077
+TimeoutStartSec=3000

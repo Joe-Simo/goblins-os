@@ -11,7 +11,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fs,
-    io::{self, Read, Write},
+    io::{self, Cursor, Read, Write},
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, Weak},
     time::{SystemTime, UNIX_EPOCH},
@@ -39,6 +39,8 @@ const MAX_WORKSPACE_DEPTH: usize = 32;
 const MAX_WORKSPACE_FILES: usize = 2_000;
 const MAX_CHECKPOINT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CHECKPOINT_FILE_BYTES: usize = 96 * 1024 * 1024;
+const MAX_DIFF_BYTES: usize = 96 * 1024;
+const MAX_EXPORT_ARCHIVE_BYTES: usize = 20 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Message {
@@ -102,6 +104,13 @@ pub struct TurnOutcome {
 pub struct StudioWorkspaceFile {
     path: String,
     size_bytes: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct StudioFileChange {
+    path: String,
+    size_bytes: u64,
+    change: String,
 }
 
 #[derive(Deserialize)]
@@ -170,6 +179,85 @@ pub struct FileView {
     path: String,
     content: String,
     truncated: bool,
+    binary: bool,
+    change: String,
+    diff: String,
+    diff_truncated: bool,
+    previous_available: bool,
+}
+
+#[derive(Serialize)]
+pub struct StudioCapability {
+    available: bool,
+    detail: String,
+}
+
+#[derive(Serialize)]
+pub struct StudioRuntimeCapability {
+    available: bool,
+    kind: String,
+    entrypoint: Option<String>,
+    detail: String,
+}
+
+#[derive(Serialize)]
+pub struct StudioProjectReview {
+    ok: bool,
+    id: String,
+    name: String,
+    files: Vec<StudioFileChange>,
+    file_count: usize,
+    total_bytes: u64,
+    workspace_sha256: String,
+    runtime: StudioRuntimeCapability,
+    export: StudioCapability,
+    containerization: StudioCapability,
+    last_run: Option<StudioRunRecord>,
+}
+
+#[derive(Deserialize)]
+pub struct StudioActionRequest {
+    app_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct StudioRunRecord {
+    state: String,
+    entrypoint: String,
+    started_at: String,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    logs_truncated: bool,
+    detail: String,
+    #[serde(default)]
+    workspace_sha256: String,
+    #[serde(default)]
+    workspace_current: bool,
+}
+
+#[derive(Serialize)]
+pub struct StudioRunOutcome {
+    ok: bool,
+    text: String,
+    run: Option<StudioRunRecord>,
+}
+
+#[derive(Serialize)]
+pub struct StudioExportOutcome {
+    ok: bool,
+    text: String,
+    path: Option<String>,
+    sha256: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct StudioContainerOutcome {
+    ok: bool,
+    text: String,
+    path: Option<String>,
+    sha256: Option<String>,
+    image_ref: Option<String>,
 }
 
 fn studio_app_lock(id: &str) -> Arc<Mutex<()>> {
@@ -312,6 +400,11 @@ pub async fn studio_file(Query(query): Query<FileQuery>) -> (StatusCode, Json<Fi
         path: query.path.clone(),
         content: String::new(),
         truncated: false,
+        binary: false,
+        change: "unavailable".to_string(),
+        diff: String::new(),
+        diff_truncated: false,
+        previous_available: false,
     };
     if canonical_workspace_id(&query.app_id).is_err() || relative_file_path(&query.path).is_err() {
         return (StatusCode::BAD_REQUEST, Json(empty()));
@@ -324,16 +417,320 @@ pub async fn studio_file(Query(query): Query<FileQuery>) -> (StatusCode, Json<Fi
     if recover_interrupted_studio_transaction(&app_builder::apps_dir(), &id).is_err() {
         return (StatusCode::CONFLICT, Json(empty()));
     }
-    match read_workspace_file_at(&app_builder::apps_dir(), &id, &query.path) {
-        Ok((bytes, truncated)) => (
+    match workspace_file_view_at(&app_builder::apps_dir(), &id, &query.path) {
+        Ok(view) => (StatusCode::OK, Json(view)),
+        Err(_) => (StatusCode::NOT_FOUND, Json(empty())),
+    }
+}
+
+pub async fn studio_project(
+    Query(query): Query<SessionQuery>,
+) -> (StatusCode, Json<StudioProjectReview>) {
+    let id = match canonical_workspace_id(&query.app_id) {
+        Ok(id) => id,
+        Err(_) => return project_error(StatusCode::BAD_REQUEST, query.app_id),
+    };
+    let app_lock = studio_app_lock(&id);
+    let _app_guard = app_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if recover_interrupted_studio_transaction(&app_builder::apps_dir(), &id).is_err() {
+        return project_error(StatusCode::CONFLICT, id);
+    }
+    let Some(session) = load_session(&id) else {
+        return project_error(StatusCode::NOT_FOUND, id);
+    };
+    match project_review_at(&app_builder::apps_dir(), &session) {
+        Ok(review) => (StatusCode::OK, Json(review)),
+        Err(_) => project_error(StatusCode::CONFLICT, id),
+    }
+}
+
+/// Run the one fixed, detected Python entrypoint in the networkless Studio
+/// sandbox. This is a bounded local execution, never a model turn or a shell
+/// command supplied by the project.
+pub async fn studio_run(
+    Json(request): Json<StudioActionRequest>,
+) -> (StatusCode, Json<StudioRunOutcome>) {
+    crate::bounded::run_blocking(move || studio_run_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            run_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE,
+            )
+        })
+}
+
+fn studio_run_blocking(request: StudioActionRequest) -> (StatusCode, Json<StudioRunOutcome>) {
+    let id = match canonical_workspace_id(&request.app_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return run_error(
+                StatusCode::BAD_REQUEST,
+                "That Build Studio app identifier is not valid.",
+            )
+        }
+    };
+    let app_lock = studio_app_lock(&id);
+    let _app_guard = app_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let apps_root = app_builder::apps_dir();
+    if recover_interrupted_studio_transaction(&apps_root, &id).is_err() {
+        return run_error(
+            StatusCode::CONFLICT,
+            "An interrupted Studio transaction could not be recovered safely.",
+        );
+    }
+    if load_session(&id).is_none() {
+        return run_error(
+            StatusCode::NOT_FOUND,
+            "No Build Studio session exists for that project.",
+        );
+    }
+    let manifest = match workspace_manifest_at(&apps_root, &id) {
+        Ok(manifest) => manifest,
+        Err(_) => {
+            return run_error(
+                StatusCode::CONFLICT,
+                "The Studio workspace could not be reviewed safely before running.",
+            )
+        }
+    };
+    let files = manifest
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    let runtime = crate::studio_runtime::runtime_status(&files);
+    if !runtime.available {
+        return run_error(StatusCode::CONFLICT, &runtime.detail);
+    }
+    let entrypoint = runtime.entrypoint.unwrap_or_default();
+    let result = if runtime.kind == "static-web" {
+        match workspace_snapshot_at(&apps_root, &id, &manifest) {
+            Ok(snapshot) => crate::studio_runtime::open_web_preview(&id, snapshot, &entrypoint),
+            Err(_) => {
+                return run_error(
+                    StatusCode::CONFLICT,
+                    "The static preview snapshot could not be read safely.",
+                )
+            }
+        }
+    } else {
+        let workspace = match open_workspace_at(&apps_root, &id, false) {
+            Ok(workspace) => workspace.into_std_file(),
+            Err(_) => {
+                return run_error(
+                    StatusCode::CONFLICT,
+                    "The Studio workspace could not be opened safely.",
+                )
+            }
+        };
+        crate::studio_runtime::run_python(workspace, &files)
+    };
+    let run = StudioRunRecord {
+        state: result.state.to_string(),
+        entrypoint,
+        started_at: now_secs(),
+        exit_code: result.exit_code,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        logs_truncated: result.logs_truncated,
+        detail: result.detail,
+        workspace_sha256: hex_digest(manifest.content_digest),
+        workspace_current: true,
+    };
+    if write_run_record_at(&apps_root, &id, &run).is_err() {
+        return run_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The local run finished, but its logs could not be saved safely.",
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(StudioRunOutcome {
+            ok: matches!(run.state.as_str(), "completed" | "preview-opened"),
+            text: run.detail.clone(),
+            run: Some(run),
+        }),
+    )
+}
+
+/// Create byte-for-byte deterministic project tar data, then ask the trusted
+/// desktop-session bridge to save it in the signed-in user's Downloads folder.
+pub async fn studio_export(
+    Json(request): Json<StudioActionRequest>,
+) -> (StatusCode, Json<StudioExportOutcome>) {
+    crate::bounded::run_blocking(move || studio_export_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            export_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE,
+            )
+        })
+}
+
+fn studio_export_blocking(request: StudioActionRequest) -> (StatusCode, Json<StudioExportOutcome>) {
+    let id = match canonical_workspace_id(&request.app_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return export_error(
+                StatusCode::BAD_REQUEST,
+                "That Build Studio app identifier is not valid.",
+            )
+        }
+    };
+    let app_lock = studio_app_lock(&id);
+    let _app_guard = app_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let apps_root = app_builder::apps_dir();
+    if recover_interrupted_studio_transaction(&apps_root, &id).is_err() {
+        return export_error(
+            StatusCode::CONFLICT,
+            "An interrupted Studio transaction could not be recovered safely.",
+        );
+    }
+    if load_session(&id).is_none() {
+        return export_error(
+            StatusCode::NOT_FOUND,
+            "No Build Studio session exists for that project.",
+        );
+    }
+    let archive = match deterministic_export_at(&apps_root, &id) {
+        Ok(archive) => archive,
+        Err(detail) => return export_error(StatusCode::CONFLICT, &detail),
+    };
+    let digest = hex_digest(Sha256::digest(&archive).into());
+    let suggested_name = format!("{id}.tar");
+    match crate::session_bridge::save_studio_export(&suggested_name, &archive, &digest) {
+        crate::session_bridge::SessionBridgeResult::Success(path) => (
             StatusCode::OK,
-            Json(FileView {
-                path: query.path,
-                content: String::from_utf8_lossy(&bytes).into_owned(),
-                truncated,
+            Json(StudioExportOutcome {
+                ok: true,
+                text: format!("Exported a deterministic project archive to {path}."),
+                path: Some(path),
+                sha256: Some(digest),
             }),
         ),
-        Err(_) => (StatusCode::NOT_FOUND, Json(empty())),
+        crate::session_bridge::SessionBridgeResult::Failed(detail) => export_error(
+            StatusCode::BAD_GATEWAY,
+            &format!("The desktop could not save the Studio export: {detail}"),
+        ),
+        crate::session_bridge::SessionBridgeResult::Unavailable => export_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The desktop export service is not available in this session.",
+        ),
+    }
+}
+
+/// Package a reviewed static web workspace as a normalized OCI image-layout
+/// archive. This is an offline data transformation: it neither invokes a
+/// container engine nor executes project code or contacts a registry.
+pub async fn studio_containerize(
+    Json(request): Json<StudioActionRequest>,
+) -> (StatusCode, Json<StudioContainerOutcome>) {
+    crate::bounded::run_blocking(move || studio_containerize_blocking(request))
+        .await
+        .unwrap_or_else(|_| {
+            container_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::bounded::LONG_OPERATION_BUSY_MESSAGE,
+            )
+        })
+}
+
+fn studio_containerize_blocking(
+    request: StudioActionRequest,
+) -> (StatusCode, Json<StudioContainerOutcome>) {
+    let id = match canonical_workspace_id(&request.app_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return container_error(
+                StatusCode::BAD_REQUEST,
+                "That Build Studio app identifier is not valid.",
+            )
+        }
+    };
+    let app_lock = studio_app_lock(&id);
+    let _app_guard = app_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let apps_root = app_builder::apps_dir();
+    if recover_interrupted_studio_transaction(&apps_root, &id).is_err() {
+        return container_error(
+            StatusCode::CONFLICT,
+            "An interrupted Studio transaction could not be recovered safely.",
+        );
+    }
+    if load_session(&id).is_none() {
+        return container_error(
+            StatusCode::NOT_FOUND,
+            "No Build Studio session exists for that project.",
+        );
+    }
+    let manifest = match workspace_manifest_at(&apps_root, &id) {
+        Ok(manifest) => manifest,
+        Err(_) => {
+            return container_error(
+                StatusCode::CONFLICT,
+                "The Studio workspace could not be reviewed safely for container packaging.",
+            )
+        }
+    };
+    let paths = manifest
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    let capability = crate::studio_container::container_status(&paths);
+    if !capability.available {
+        return container_error(StatusCode::CONFLICT, &capability.detail);
+    }
+    let snapshot =
+        match workspace_snapshot_at(&apps_root, &id, &manifest) {
+            Ok(snapshot) => snapshot,
+            Err(_) => return container_error(
+                StatusCode::CONFLICT,
+                "The reviewed project snapshot could not be read safely for container packaging.",
+            ),
+        };
+    let workspace_sha256 = hex_digest(manifest.content_digest);
+    let container = match crate::studio_container::build_container(&id, &workspace_sha256, snapshot)
+    {
+        Ok(container) => container,
+        Err(detail) => return container_error(StatusCode::CONFLICT, &detail),
+    };
+    let suggested_name = format!("{id}-container.oci.tar");
+    match crate::session_bridge::save_studio_export(
+        &suggested_name,
+        &container.bytes,
+        &container.sha256,
+    ) {
+        crate::session_bridge::SessionBridgeResult::Success(path) => (
+            StatusCode::OK,
+            Json(StudioContainerOutcome {
+                ok: true,
+                text: format!(
+                    "Saved deterministic OCI image {} to {path}. Import it with Podman or another OCI-compatible tool.",
+                    container.image_ref
+                ),
+                path: Some(path),
+                sha256: Some(container.sha256),
+                image_ref: Some(container.image_ref),
+            }),
+        ),
+        crate::session_bridge::SessionBridgeResult::Failed(detail) => container_error(
+            StatusCode::BAD_GATEWAY,
+            &format!("The desktop could not save the Studio container: {detail}"),
+        ),
+        crate::session_bridge::SessionBridgeResult::Unavailable => container_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The desktop export service is not available in this session.",
+        ),
     }
 }
 
@@ -445,11 +842,12 @@ fn studio_turn_blocking_with_policy(
     }
     audit_ai_action("build-app", Some("studio"), AiActionOutcome::Started);
 
-    // A new session is keyed by its first message (stable id, so re-describing the
-    // same thing continues the same build rather than forking a new one).
+    // Continuing a build always requires its explicit saved id. A request without
+    // one comes from the intentional New Build state and therefore receives a
+    // fresh identity even when its description matches an existing project.
     let requested_id = match &request.app_id {
         Some(existing) if !existing.trim().is_empty() => existing.trim().to_string(),
-        _ => app_builder::app_id(message),
+        _ => fresh_studio_session_id(message),
     };
     let id = match canonical_workspace_id(&requested_id) {
         Ok(id) => id,
@@ -893,6 +1291,370 @@ fn collect_workspace_manifest(
         .files
         .sort_by(|left, right| left.path.cmp(&right.path));
     Ok(())
+}
+
+fn project_review_at(apps_root: &Path, session: &StoredSession) -> io::Result<StudioProjectReview> {
+    let manifest = workspace_manifest_at(apps_root, &session.id)?;
+    let file_paths = manifest
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    let runtime = crate::studio_runtime::runtime_status(&file_paths);
+    let containerization = crate::studio_container::container_status(&file_paths);
+    let changes = workspace_changes_at(apps_root, &session.id)?;
+    let workspace_sha256 = hex_digest(manifest.content_digest);
+    let last_run = load_run_record_at(apps_root, &session.id)
+        .ok()
+        .flatten()
+        .map(|mut run| {
+            run.workspace_current = !run.workspace_sha256.is_empty()
+                && run.workspace_sha256 == workspace_sha256;
+            if !run.workspace_current {
+                run.detail = format!(
+                    "Saved logs from an earlier project version. Run this version again for current output. {}",
+                    run.detail
+                );
+            }
+            run
+        });
+    Ok(StudioProjectReview {
+        ok: true,
+        id: session.id.clone(),
+        name: session.name.clone(),
+        file_count: manifest.files.len(),
+        total_bytes: manifest.total_bytes,
+        workspace_sha256,
+        files: changes,
+        runtime: StudioRuntimeCapability {
+            available: runtime.available,
+            kind: runtime.kind.to_string(),
+            entrypoint: runtime.entrypoint,
+            detail: runtime.detail,
+        },
+        export: StudioCapability {
+            available: !manifest.files.is_empty(),
+            detail: if manifest.files.is_empty() {
+                "Add at least one project file before exporting.".to_string()
+            } else {
+                "Saves a deterministic tar archive to Downloads with its SHA-256 digest."
+                    .to_string()
+            },
+        },
+        containerization: StudioCapability {
+            available: containerization.available,
+            detail: containerization.detail,
+        },
+        last_run,
+    })
+}
+
+fn project_error(status: StatusCode, id: String) -> (StatusCode, Json<StudioProjectReview>) {
+    (
+        status,
+        Json(StudioProjectReview {
+            ok: false,
+            id,
+            name: String::new(),
+            files: Vec::new(),
+            file_count: 0,
+            total_bytes: 0,
+            workspace_sha256: String::new(),
+            runtime: StudioRuntimeCapability {
+                available: false,
+                kind: "unavailable".to_string(),
+                entrypoint: None,
+                detail: "The Studio project could not be reviewed safely.".to_string(),
+            },
+            export: StudioCapability {
+                available: false,
+                detail: "Export is unavailable until the project can be reviewed safely."
+                    .to_string(),
+            },
+            containerization: StudioCapability {
+                available: false,
+                detail: "Container packaging is unavailable in this image.".to_string(),
+            },
+            last_run: None,
+        }),
+    )
+}
+
+fn run_error(status: StatusCode, text: &str) -> (StatusCode, Json<StudioRunOutcome>) {
+    (
+        status,
+        Json(StudioRunOutcome {
+            ok: false,
+            text: text.to_string(),
+            run: None,
+        }),
+    )
+}
+
+fn export_error(status: StatusCode, text: &str) -> (StatusCode, Json<StudioExportOutcome>) {
+    (
+        status,
+        Json(StudioExportOutcome {
+            ok: false,
+            text: text.to_string(),
+            path: None,
+            sha256: None,
+        }),
+    )
+}
+
+fn container_error(status: StatusCode, text: &str) -> (StatusCode, Json<StudioContainerOutcome>) {
+    (
+        status,
+        Json(StudioContainerOutcome {
+            ok: false,
+            text: text.to_string(),
+            path: None,
+            sha256: None,
+            image_ref: None,
+        }),
+    )
+}
+
+fn workspace_changes_at(apps_root: &Path, id: &str) -> io::Result<Vec<StudioFileChange>> {
+    let workspace = open_workspace_at(apps_root, id, false).ok();
+    let manifest = workspace_manifest_at(apps_root, id)?;
+    let checkpoint = load_workspace_checkpoint_at(apps_root, id)?;
+    let mut current = BTreeMap::new();
+    for file in &manifest.files {
+        current.insert(file.path.clone(), file.size_bytes);
+    }
+    let Some(checkpoint) = checkpoint else {
+        return Ok(manifest
+            .files
+            .into_iter()
+            .map(|file| StudioFileChange {
+                path: file.path,
+                size_bytes: file.size_bytes,
+                change: "current".to_string(),
+            })
+            .collect());
+    };
+    let previous = checkpoint
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.content.as_slice()))
+        .collect::<BTreeMap<_, _>>();
+    let mut paths = current.keys().cloned().collect::<BTreeSet<_>>();
+    paths.extend(checkpoint.files.iter().map(|file| file.path.clone()));
+    let mut changes = Vec::new();
+    for path in paths {
+        let current_bytes = match (&workspace, current.get(&path)) {
+            (Some(workspace), Some(_)) => Some(read_workspace_file_from(
+                workspace,
+                &relative_file_path(&path)?,
+            )?),
+            _ => None,
+        };
+        let previous_bytes = previous.get(path.as_str()).copied();
+        let change = match (current_bytes.as_deref(), previous_bytes) {
+            (Some(current), Some(previous)) if current == previous => "unchanged",
+            (Some(_), Some(_)) => "modified",
+            (Some(_), None) => "added",
+            (None, Some(_)) => "deleted",
+            (None, None) => continue,
+        };
+        changes.push(StudioFileChange {
+            path: path.clone(),
+            size_bytes: current.get(&path).copied().unwrap_or(0),
+            change: change.to_string(),
+        });
+    }
+    Ok(changes)
+}
+
+fn workspace_file_view_at(apps_root: &Path, id: &str, path: &str) -> io::Result<FileView> {
+    let current = match read_workspace_file_at(apps_root, id, path) {
+        Ok((bytes, truncated)) => Some((bytes, truncated)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let checkpoint = load_workspace_checkpoint_at(apps_root, id)?;
+    let previous = checkpoint.as_ref().and_then(|checkpoint| {
+        checkpoint
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .map(|file| file.content.as_slice())
+    });
+    if current.is_none() && previous.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Studio file is missing",
+        ));
+    }
+    let current_bytes = current.as_ref().map(|(bytes, _)| bytes.as_slice());
+    let change = match (current_bytes, previous) {
+        (Some(current), Some(previous)) if current == previous => "unchanged",
+        (Some(_), Some(_)) => "modified",
+        (Some(_), None) if checkpoint.is_some() => "added",
+        (Some(_), None) => "current",
+        (None, Some(_)) => "deleted",
+        (None, None) => "unavailable",
+    };
+    let binary = current_bytes
+        .or(previous)
+        .is_some_and(|bytes| std::str::from_utf8(bytes).is_err());
+    let content = if binary {
+        String::new()
+    } else {
+        current_bytes
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    let (diff, diff_truncated) = if binary || checkpoint.is_none() || change == "unchanged" {
+        (String::new(), false)
+    } else {
+        bounded_file_diff(
+            path,
+            previous.unwrap_or_default(),
+            current_bytes.unwrap_or_default(),
+        )
+    };
+    Ok(FileView {
+        path: path.to_string(),
+        content,
+        truncated: current.as_ref().is_some_and(|(_, truncated)| *truncated),
+        binary,
+        change: change.to_string(),
+        diff,
+        diff_truncated,
+        previous_available: previous.is_some(),
+    })
+}
+
+fn bounded_file_diff(path: &str, previous: &[u8], current: &[u8]) -> (String, bool) {
+    let previous = String::from_utf8_lossy(previous);
+    let current = String::from_utf8_lossy(current);
+    let old_lines = previous.lines().collect::<Vec<_>>();
+    let new_lines = current.lines().collect::<Vec<_>>();
+    let mut prefix = 0;
+    while prefix < old_lines.len()
+        && prefix < new_lines.len()
+        && old_lines[prefix] == new_lines[prefix]
+    {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < old_lines.len().saturating_sub(prefix)
+        && suffix < new_lines.len().saturating_sub(prefix)
+        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    let context_start = prefix.saturating_sub(3);
+    let old_end = old_lines.len().saturating_sub(suffix);
+    let new_end = new_lines.len().saturating_sub(suffix);
+    let context_suffix = suffix.min(3);
+    let mut diff = format!("--- a/{path}\n+++ b/{path}\n");
+    for line in &old_lines[context_start..prefix] {
+        push_diff_line(&mut diff, ' ', line);
+    }
+    for line in &old_lines[prefix..old_end] {
+        push_diff_line(&mut diff, '-', line);
+        if diff.len() > MAX_DIFF_BYTES {
+            truncate_utf8(&mut diff, MAX_DIFF_BYTES);
+            return (diff, true);
+        }
+    }
+    for line in &new_lines[prefix..new_end] {
+        push_diff_line(&mut diff, '+', line);
+        if diff.len() > MAX_DIFF_BYTES {
+            truncate_utf8(&mut diff, MAX_DIFF_BYTES);
+            return (diff, true);
+        }
+    }
+    for line in &new_lines[new_end..new_end.saturating_add(context_suffix)] {
+        push_diff_line(&mut diff, ' ', line);
+    }
+    if diff.len() > MAX_DIFF_BYTES {
+        truncate_utf8(&mut diff, MAX_DIFF_BYTES);
+        (diff, true)
+    } else {
+        (diff, false)
+    }
+}
+
+fn truncate_utf8(text: &mut String, max_bytes: usize) {
+    let mut boundary = max_bytes.min(text.len());
+    while !text.is_char_boundary(boundary) {
+        boundary = boundary.saturating_sub(1);
+    }
+    text.truncate(boundary);
+}
+
+fn push_diff_line(diff: &mut String, marker: char, line: &str) {
+    diff.push(marker);
+    diff.push_str(line);
+    diff.push('\n');
+}
+
+fn deterministic_export_at(apps_root: &Path, id: &str) -> Result<Vec<u8>, String> {
+    let manifest = workspace_manifest_at(apps_root, id)
+        .map_err(|_| "The Studio workspace could not be reviewed safely for export.".to_string())?;
+    if manifest.files.is_empty() {
+        return Err("Add at least one project file before exporting.".to_string());
+    }
+    let workspace = open_workspace_at(apps_root, id, false)
+        .map_err(|_| "The Studio workspace could not be opened safely for export.".to_string())?;
+    let output = Vec::new();
+    let mut archive = tar::Builder::new(output);
+    archive.mode(tar::HeaderMode::Deterministic);
+    for file in &manifest.files {
+        let content = read_workspace_file_from(
+            &workspace,
+            &relative_file_path(&file.path)
+                .map_err(|_| "The export contains an unsafe path.".to_string())?,
+        )
+        .map_err(|_| "A Studio project file could not be read safely for export.".to_string())?;
+        let archive_path = format!("{id}/{}", file.path);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, archive_path, Cursor::new(content))
+            .map_err(|_| "The deterministic Studio archive could not be assembled.".to_string())?;
+    }
+    archive
+        .finish()
+        .map_err(|_| "The deterministic Studio archive could not be finalized.".to_string())?;
+    let output = archive
+        .into_inner()
+        .map_err(|_| "The deterministic Studio archive could not be finalized.".to_string())?;
+    if output.len() > MAX_EXPORT_ARCHIVE_BYTES {
+        return Err(
+            "The Studio project is too large for the bounded desktop export path.".to_string(),
+        );
+    }
+    Ok(output)
+}
+
+fn workspace_snapshot_at(
+    apps_root: &Path,
+    id: &str,
+    manifest: &WorkspaceReview,
+) -> io::Result<BTreeMap<String, Vec<u8>>> {
+    let workspace = open_workspace_at(apps_root, id, false)?;
+    let mut snapshot = BTreeMap::new();
+    for file in &manifest.files {
+        let path = relative_file_path(&file.path)?;
+        let content = read_workspace_file_from(&workspace, &path)?;
+        if content.len() as u64 != file.size_bytes {
+            return Err(invalid_workspace_path());
+        }
+        snapshot.insert(file.path.clone(), content);
+    }
+    Ok(snapshot)
 }
 
 fn create_workspace_checkpoint(
@@ -1383,12 +2145,9 @@ fn restore_workspace_checkpoint(
     let undo = open_undo_dir_at(apps_root, false)
         .map_err(|_| "The Studio checkpoint store is not available.".to_string())?;
     let name = checkpoint_name(id);
-    let encoded = read_bounded_regular_file(&undo, &name, MAX_CHECKPOINT_FILE_BYTES)
-        .map_err(|_| "No safe Studio checkpoint is available for that build.".to_string())?;
-    let checkpoint: WorkspaceCheckpoint = serde_json::from_slice(&encoded)
-        .map_err(|_| "The Studio checkpoint could not be verified.".to_string())?;
-    validate_workspace_checkpoint(id, &checkpoint)
-        .map_err(|_| "The Studio checkpoint failed safety validation.".to_string())?;
+    let checkpoint = load_workspace_checkpoint_at(apps_root, id)
+        .map_err(|_| "The Studio checkpoint could not be verified.".to_string())?
+        .ok_or_else(|| "No safe Studio checkpoint is available for that build.".to_string())?;
 
     let staged = if checkpoint.had_workspace {
         Some(stage_workspace_from_checkpoint(apps_root, &checkpoint)?)
@@ -1404,6 +2163,27 @@ fn restore_workspace_checkpoint(
     undo.remove_file(&name)
         .map_err(|_| "The used Studio checkpoint could not be closed.".to_string())?;
     Ok(checkpoint.previous_session)
+}
+
+fn load_workspace_checkpoint_at(
+    apps_root: &Path,
+    id: &str,
+) -> io::Result<Option<WorkspaceCheckpoint>> {
+    let undo = match open_undo_dir_at(apps_root, false) {
+        Ok(undo) => undo,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let encoded =
+        match read_bounded_regular_file(&undo, &checkpoint_name(id), MAX_CHECKPOINT_FILE_BYTES) {
+            Ok(encoded) => encoded,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+    let checkpoint: WorkspaceCheckpoint =
+        serde_json::from_slice(&encoded).map_err(|_| invalid_workspace_path())?;
+    validate_workspace_checkpoint(id, &checkpoint)?;
+    Ok(Some(checkpoint))
 }
 
 fn validate_workspace_checkpoint(id: &str, checkpoint: &WorkspaceCheckpoint) -> io::Result<()> {
@@ -1470,6 +2250,33 @@ fn validate_workspace_checkpoint(id: &str, checkpoint: &WorkspaceCheckpoint) -> 
         }
     }
     Ok(())
+}
+
+fn write_run_record_at(apps_root: &Path, id: &str, run: &StudioRunRecord) -> io::Result<()> {
+    canonical_workspace_id(id)?;
+    let runs = open_studio_runs_dir_at(apps_root, true)?;
+    let bytes = serde_json::to_vec(run).map_err(io::Error::other)?;
+    if bytes.len() > 192 * 1024 {
+        return Err(invalid_workspace_path());
+    }
+    write_workspace_file(&runs, &checkpoint_name(id), &bytes)?;
+    sync_directory(&runs)
+}
+
+fn load_run_record_at(apps_root: &Path, id: &str) -> io::Result<Option<StudioRunRecord>> {
+    canonical_workspace_id(id)?;
+    let runs = match open_studio_runs_dir_at(apps_root, false) {
+        Ok(runs) => runs,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let bytes = match read_bounded_regular_file(&runs, &checkpoint_name(id), 192 * 1024) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let run = serde_json::from_slice(&bytes).map_err(|_| invalid_workspace_path())?;
+    Ok(Some(run))
 }
 
 fn read_bounded_regular_file(parent: &Dir, name: &OsStr, max_bytes: usize) -> io::Result<Vec<u8>> {
@@ -1626,6 +2433,11 @@ fn open_sessions_dir_at(apps_root: &Path, create: bool) -> io::Result<Dir> {
 fn open_transactions_dir_at(apps_root: &Path, create: bool) -> io::Result<Dir> {
     let apps = open_apps_root_at(apps_root, create)?;
     open_or_create_dir_nofollow(&apps, OsStr::new("studio-transactions"), create)
+}
+
+fn open_studio_runs_dir_at(apps_root: &Path, create: bool) -> io::Result<Dir> {
+    let apps = open_apps_root_at(apps_root, create)?;
+    open_or_create_dir_nofollow(&apps, OsStr::new("studio-runs"), create)
 }
 
 fn open_or_create_dir_nofollow(parent: &Dir, name: &OsStr, create: bool) -> io::Result<Dir> {
@@ -1812,6 +2624,16 @@ fn sanitize_id(id: &str) -> String {
         .collect()
 }
 
+fn fresh_studio_session_id(message: &str) -> String {
+    studio_session_id_with_nonce(message, rand::random(), rand::random())
+}
+
+fn studio_session_id_with_nonce(message: &str, nonce_a: u64, nonce_b: u64) -> String {
+    app_builder::app_id(&format!(
+        "{message}\n[goblins-studio-session:{nonce_a:016x}{nonce_b:016x}]"
+    ))
+}
+
 fn now_secs() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1833,16 +2655,17 @@ fn turn_error(status: StatusCode, text: &str) -> (StatusCode, Json<TurnOutcome>)
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_workspace_id, create_workspace_checkpoint, list_workspace_files_at,
-        open_sessions_dir_at, open_workspace_at, open_workspace_root_at, parse_emitted_files,
-        read_workspace_file_at, recover_all_studio_transactions_at, relative_file_path,
-        restore_workspace_checkpoint, sanitize_id, session_snapshot_digest,
-        stage_workspace_from_checkpoint, studio_chat_context_disclosure,
-        studio_codex_context_disclosure, studio_codex_review_content,
-        studio_turn_blocking_with_policy, sync_directory, unique_absent_name,
-        workspace_checkpoint_exists, workspace_manifest_at, write_emitted_files, write_session_at,
-        write_studio_transaction_journal, write_workspace_file, Message, StoredSession,
-        StudioTransactionJournal, TurnRequest,
+        bounded_file_diff, canonical_workspace_id, create_workspace_checkpoint,
+        deterministic_export_at, list_workspace_files_at, open_sessions_dir_at, open_workspace_at,
+        open_workspace_root_at, parse_emitted_files, read_workspace_file_at,
+        recover_all_studio_transactions_at, relative_file_path, restore_workspace_checkpoint,
+        sanitize_id, session_snapshot_digest, stage_workspace_from_checkpoint,
+        studio_chat_context_disclosure, studio_codex_context_disclosure,
+        studio_codex_review_content, studio_session_id_with_nonce,
+        studio_turn_blocking_with_policy, sync_directory, unique_absent_name, workspace_changes_at,
+        workspace_checkpoint_exists, workspace_file_view_at, workspace_manifest_at,
+        write_emitted_files, write_session_at, write_studio_transaction_journal,
+        write_workspace_file, Message, StoredSession, StudioTransactionJournal, TurnRequest,
     };
     use crate::policy::PolicyControlState;
     use axum::http::StatusCode;
@@ -1874,6 +2697,100 @@ mod tests {
         assert!(relative_file_path("/etc/passwd").is_err());
         assert!(relative_file_path("./main.py").is_err());
         assert!(relative_file_path("").is_err());
+    }
+
+    #[test]
+    fn new_build_ids_are_fresh_while_explicit_ids_can_still_resume() {
+        let first = studio_session_id_with_nonce("Build a notes app", 1, 2);
+        let second = studio_session_id_with_nonce("Build a notes app", 3, 4);
+        assert_ne!(first, second);
+        assert!(canonical_workspace_id(&first).is_ok());
+        assert!(canonical_workspace_id(&second).is_ok());
+        assert!(first.starts_with("build-a-notes-app-"));
+    }
+
+    #[test]
+    fn review_marks_added_modified_and_deleted_files_from_the_real_checkpoint() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let apps = root.path().join("apps");
+        let id = "review-changes";
+        let workspace = apps.join("workspace").join(id);
+        fs::create_dir_all(&workspace).expect("workspace");
+        fs::write(workspace.join("modified.txt"), b"before\n").expect("modified fixture");
+        fs::write(workspace.join("deleted.txt"), b"removed\n").expect("deleted fixture");
+        create_workspace_checkpoint(&apps, id, None).expect("checkpoint");
+        fs::write(workspace.join("modified.txt"), b"after\n").expect("modify");
+        fs::remove_file(workspace.join("deleted.txt")).expect("delete");
+        fs::write(workspace.join("added.txt"), b"new\n").expect("add");
+
+        let changes = workspace_changes_at(&apps, id).expect("changes");
+        assert_eq!(
+            changes
+                .iter()
+                .map(|change| (change.path.as_str(), change.change.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("added.txt", "added"),
+                ("deleted.txt", "deleted"),
+                ("modified.txt", "modified"),
+            ]
+        );
+        let modified = workspace_file_view_at(&apps, id, "modified.txt").expect("file view");
+        assert!(modified.diff.contains("-before"));
+        assert!(modified.diff.contains("+after"));
+        let deleted = workspace_file_view_at(&apps, id, "deleted.txt").expect("deleted view");
+        assert_eq!(deleted.change, "deleted");
+        assert!(deleted.previous_available);
+        assert!(deleted.diff.contains("-removed"));
+    }
+
+    #[test]
+    fn deterministic_export_is_sorted_normalized_and_repeatable() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let apps = root.path().join("apps");
+        let id = "export-app";
+        let workspace = apps.join("workspace").join(id);
+        fs::create_dir_all(workspace.join("src")).expect("workspace");
+        fs::write(workspace.join("z.txt"), b"last").expect("z");
+        fs::write(workspace.join("src/a.txt"), b"first").expect("a");
+
+        let first = deterministic_export_at(&apps, id).expect("first archive");
+        let second = deterministic_export_at(&apps, id).expect("second archive");
+        assert_eq!(first, second);
+
+        let mut archive = tar::Archive::new(std::io::Cursor::new(first));
+        let entries = archive
+            .entries()
+            .expect("archive entries")
+            .map(|entry| {
+                let entry = entry.expect("entry");
+                (
+                    entry.path().expect("path").to_string_lossy().into_owned(),
+                    entry.header().mtime().expect("mtime"),
+                    entry.header().uid().expect("uid"),
+                    entry.header().mode().expect("mode"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.0.as_str())
+                .collect::<Vec<_>>(),
+            vec!["export-app/src/a.txt", "export-app/z.txt"]
+        );
+        assert!(entries
+            .iter()
+            .all(|(_, mtime, uid, mode)| *mtime == 0 && *uid == 0 && *mode == 0o644));
+    }
+
+    #[test]
+    fn bounded_diff_truncates_unicode_on_a_character_boundary() {
+        let current = "é".repeat(80_000);
+        let (diff, truncated) = bounded_file_diff("unicode.txt", b"", current.as_bytes());
+        assert!(truncated);
+        assert!(diff.len() <= super::MAX_DIFF_BYTES);
+        assert!(std::str::from_utf8(diff.as_bytes()).is_ok());
     }
 
     #[test]

@@ -13,7 +13,7 @@
 # Env overrides:
 #   GOBLINS_OS_ARCH   target architecture: aarch64 (default host arch)
 #   GOBLINS_OS_IMAGE   container image to install (default localhost/goblins-os:aarch64)
-#   GOBLINS_OS_ROOTFS  installed root filesystem  (default xfs, matching the
+#   GOBLINS_OS_ROOTFS  installed root filesystem  (default btrfs, matching the
 #                      bootc install config in os/bootc-install/00-goblins-os.toml)
 #   GOBLINS_OS_ISO_CONFIG
 #                      bootc-image-builder config path (default os/iso/config.toml).
@@ -83,7 +83,7 @@ BIB="${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda
 INSTALLER_BRANDING_IMAGE_OVERRIDE="${GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-}"
 INSTALLER_BRANDING_IMAGE="${INSTALLER_BRANDING_IMAGE_OVERRIDE:-ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:4483609aa40e0b8f16e56becda876468309345fadf1b43572ddabfc556382205}"
 INSTALLER_BRANDING_PUBLISHER_EVIDENCE="${GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE:-}"
-ROOTFS="${GOBLINS_OS_ROOTFS:-xfs}"
+ROOTFS="${GOBLINS_OS_ROOTFS:-btrfs}"
 CONTAINER_RUNTIME="${GOBLINS_OS_CONTAINER_RUNTIME:-docker}"
 DOCKER_REGISTRY_PORT="${GOBLINS_OS_DOCKER_REGISTRY_PORT:-5002}"
 DOCKER_REGISTRY_NAME="${GOBLINS_OS_DOCKER_REGISTRY_NAME:-goblins-os-registry}"

@@ -1,0 +1,26 @@
+[Unit]
+Description=Prepare safe local file snapshots for Goblins OS
+Documentation=man:snapper(8)
+After=local-fs.target
+Before=goblins-os-core.service gdm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/goblins-os/goblins-os-snapshots-setup
+RemainAfterExit=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=full
+ReadWritePaths=-/.snapshots -/etc/snapper -/etc/sysconfig/snapper -/var/.snapshots -/var/home -/var/home.goblins-os-seed-v1 -/var/lib/goblins-os-snapshot-layout -/var/lib/snapper
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+UMask=0077
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

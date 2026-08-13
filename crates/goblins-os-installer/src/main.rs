@@ -5060,7 +5060,7 @@ fn populate_install_review(
             ));
             panel.append(&review_row(
                 "Root filesystem",
-                "xfs · immutable system image",
+                "Btrfs · immutable system image · Recovery verified after first boot",
             ));
             if let Some(status) = flow.state.install_targets.as_ref() {
                 // Firmware/boot context follows the device identity and action,
@@ -5867,7 +5867,7 @@ fn execute_install(
 ) -> Result<(u16, String, String), CoreFetchError> {
     let body = serde_json::json!({
         "target_path": target_path,
-        "filesystem": "xfs",
+        "filesystem": "btrfs",
         "block_setup": "direct",
         "wipe": true,
         "execute": true,
@@ -6253,7 +6253,7 @@ fn request_model_install(core: &CoreClient, model_id: &str) -> Result<String, Co
 fn prepare_install_command(core: &CoreClient, target_path: &str) -> Result<String, CoreFetchError> {
     let body = serde_json::json!({
         "target_path": target_path,
-        "filesystem": "xfs",
+        "filesystem": "btrfs",
         "block_setup": "direct",
         "wipe": true,
         "execute": false,
@@ -6563,7 +6563,7 @@ mod tests {
     #[test]
     fn summarizes_prepared_install_command() {
         let summary = install_prepare_summary(
-            br#"{"state":"prepared","command":["bootc","install","to-disk","--filesystem","xfs","--wipe","/dev/nvme0n1"],"detail":"Install plan prepared. No disk has been changed; execution stays blocked until the destructive install gate is explicitly enabled."}"#,
+            br#"{"state":"prepared","command":["bootc","install","to-disk","--filesystem","btrfs","--wipe","/dev/nvme0n1"],"detail":"Install plan prepared. No disk has been changed; execution stays blocked until the destructive install gate is explicitly enabled."}"#,
         )
         .unwrap();
 

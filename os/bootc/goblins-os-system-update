@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+BOOTC=/usr/bin/bootc
+
+case "${1:-}" in
+  check)
+    exec "$BOOTC" upgrade --check
+    ;;
+  download)
+    exec "$BOOTC" upgrade --download-only
+    ;;
+  apply)
+    exec "$BOOTC" upgrade --apply
+    ;;
+  apply-downloaded)
+    exec "$BOOTC" upgrade --from-downloaded --apply
+    ;;
+  reboot)
+    exec /usr/bin/systemctl start --no-block goblins-os-system-reboot.timer
+    ;;
+  rollback)
+    exec "$BOOTC" rollback
+    ;;
+  *)
+    printf '%s\n' "usage: goblins-os-system-update check|download|apply|apply-downloaded|reboot|rollback" >&2
+    exit 64
+    ;;
+esac

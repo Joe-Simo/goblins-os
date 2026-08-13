@@ -10,7 +10,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=goblins-os
 Group=goblins-os
-SupplementaryGroups=goblins-session-bridge goblins-core-resident
+SupplementaryGroups=goblins-session-bridge goblins-snapshot-readers goblins-core-resident
 EnvironmentFile=-/etc/goblins-os/environment
 # Build Studio's Codex CLI account state is core-private. Never export this path
 # through the shared desktop environment: any compatible desktop app owns its
@@ -31,7 +31,8 @@ LimitCORE=0
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ProtectHome=yes
+ProtectHome=read-only
+ReadOnlyPaths=-/.snapshots -/var/.snapshots -/var/home/.snapshots
 ReadWritePaths=/run/goblins-os-core /var/lib/goblins-os/installer /var/lib/goblins-os/session /var/lib/goblins-os/policy /var/lib/goblins-os/ai /var/lib/goblins-os/models /var/lib/goblins-os/voice/work /var/lib/goblins-os/secrets/openai /var/lib/goblins-os/apps /var/lib/goblins-os/codex
 RestrictSUIDSGID=yes
 LockPersonality=yes

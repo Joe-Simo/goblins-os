@@ -34,8 +34,10 @@ to a supported UEFI aarch64 virtual machine.
 - A Fedora bootc desktop OS with image-based updates and rollback.
 - A native desktop environment with Goblins OS branding and installer flows.
 - A local app-building surface where users describe software, review the
-  generated project, preview it locally, inspect files and logs, then export or
-  containerize it.
+  generated project, preview supported Python entrypoints in a networkless
+  sandbox or static web apps through a private CSP-sandboxed loopback snapshot,
+  inspect files and logs, export a deterministic source archive, and package
+  supported static projects as deterministic offline OCI image archives.
 - A project with explicit packaging, release, SBOM, and signoff checks.
 
 ## Scope

@@ -47,6 +47,8 @@ mod shortcuts;
 mod snapshots;
 mod sound_recognition;
 mod studio;
+mod studio_container;
+mod studio_runtime;
 mod switch_control;
 mod system;
 mod system_image;
@@ -86,7 +88,9 @@ use crate::{
         forget_openai_auth_session, openai_auth_callback, openai_auth_device_poll,
         openai_auth_device_start, openai_auth_refresh, openai_auth_start, openai_auth_status,
     },
-    bluetooth::{bluetooth_status, set_bluetooth_power},
+    bluetooth::{
+        bluetooth_status, change_bluetooth_device, scan_bluetooth_devices, set_bluetooth_power,
+    },
     boot_lock::boot_lock_status,
     codex::{codex_login_start, codex_login_url, codex_logout, codex_status},
     context_consent::{broker_fetch_review, broker_submit_decision},
@@ -106,7 +110,7 @@ use crate::{
         migration_sources, migration_start,
     },
     model_manager::{install_local_model, local_model_catalog},
-    network::{network_status, set_proxy_mode, wifi_connect, wifi_scan},
+    network::{network_status, set_proxy_settings, wifi_connect, wifi_scan},
     notifications::{notifications_status, set_notification_preference},
     openai_key::{openai_key_status, set_resident_engine},
     openai_key_provisioning::{
@@ -123,18 +127,19 @@ use crate::{
     session_gate::{session_gate_status, unlock_session},
     settings::{recovery_status, settings_system},
     shortcuts::{set_modifier_remap, set_shortcut_binding, shortcuts_status},
-    snapshots::{restore_snapshot, snapshots_status},
+    snapshots::{browse_snapshot, restore_snapshot, snapshots_status},
     studio::{
-        recover_all_studio_transactions, studio_file, studio_session, studio_sessions, studio_turn,
-        undo_studio_turn,
+        recover_all_studio_transactions, studio_containerize, studio_export, studio_file,
+        studio_project, studio_run, studio_session, studio_sessions, studio_turn, undo_studio_turn,
     },
     system::{health, system_services},
-    system_image::system_image_status,
+    system_image::{system_image_action, system_image_status},
     voice::{voice_converse, voice_dictate, voice_status, voice_storage_release_proof},
     window_management::{set_hot_corner, window_management_status},
 };
 
 const TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES: usize = 64 * 1024;
+const SETTINGS_DEVICE_REQUEST_LIMIT_BYTES: usize = 16 * 1024;
 const OPENAI_KEY_ACTION_REQUEST_LIMIT_BYTES: usize = 1024;
 const OPENAI_KEY_BROKER_REQUEST_LIMIT_BYTES: usize = 160 * 1024;
 
@@ -256,8 +261,16 @@ fn private_router() -> Router {
         .route("/v1/settings/system", get(settings_system))
         .route("/v1/system/hardware", get(hardware_status))
         .route("/v1/system/image", get(system_image_status))
+        .route(
+            "/v1/system/image/action",
+            post(system_image_action)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/displays/status", get(displays_status))
-        .route("/v1/displays/apply", post(apply_displays))
+        .route(
+            "/v1/displays/apply",
+            post(apply_displays).layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/system/services", get(system_services))
         .route("/v1/installer/install-targets", get(install_target_status))
         .route(
@@ -271,7 +284,15 @@ fn private_router() -> Router {
         .route("/v1/recovery/status", get(recovery_status))
         .route("/v1/security/encryption", get(encryption_status))
         .route("/v1/snapshots/status", get(snapshots_status))
-        .route("/v1/snapshots/restore", post(restore_snapshot))
+        .route(
+            "/v1/snapshots/browse",
+            post(browse_snapshot).layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/snapshots/restore",
+            post(restore_snapshot)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/session/gate", get(session_gate_status))
         .route("/v1/session/unlock", post(unlock_session))
         .route("/v1/installer/readiness", get(installer_readiness))
@@ -297,21 +318,43 @@ fn private_router() -> Router {
         .route("/v1/network/status", get(network_status))
         .route("/v1/network/wifi/scan", get(wifi_scan))
         .route("/v1/network/wifi/connect", post(wifi_connect))
-        .route("/v1/network/proxy/mode", post(set_proxy_mode))
+        .route(
+            "/v1/network/proxy/settings",
+            post(set_proxy_settings)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/notifications/status", get(notifications_status))
         .route(
             "/v1/notifications/preference",
             post(set_notification_preference),
         )
         .route("/v1/bluetooth/status", get(bluetooth_status))
-        .route("/v1/bluetooth/power", post(set_bluetooth_power))
+        .route(
+            "/v1/bluetooth/power",
+            post(set_bluetooth_power)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/bluetooth/scan",
+            post(scan_bluetooth_devices)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/bluetooth/device",
+            post(change_bluetooth_device)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/audio/status", get(audio_status))
         .route("/v1/audio/volume", post(set_audio_volume))
         .route("/v1/audio/mute", post(set_audio_mute))
         .route("/v1/audio/default-device", post(set_audio_default_device))
         .route("/v1/audio/preference", post(set_sound_preference))
         .route("/v1/input/status", get(input_status))
-        .route("/v1/input/preference", post(set_input_preference))
+        .route(
+            "/v1/input/preference",
+            post(set_input_preference)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/input/sources", post(set_input_sources))
         .route("/v1/input/source", post(add_input_source))
         .route("/v1/input/switch-next", post(switch_to_next_input_source))
@@ -415,8 +458,16 @@ fn private_router() -> Router {
         .route("/v1/window-management/hot-corner", post(set_hot_corner))
         .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
         .route("/v1/keyboard/shortcuts/status", get(shortcuts_status))
-        .route("/v1/keyboard/shortcuts/binding", post(set_shortcut_binding))
-        .route("/v1/keyboard/modifier-remap", post(set_modifier_remap))
+        .route(
+            "/v1/keyboard/shortcuts/binding",
+            post(set_shortcut_binding)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/keyboard/modifier-remap",
+            post(set_modifier_remap)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route(
             "/v1/migration/capabilities",
             get(migration::migration_capabilities),
@@ -435,6 +486,10 @@ fn private_router() -> Router {
         .route("/v1/studio/sessions", get(studio_sessions))
         .route("/v1/studio/session", get(studio_session))
         .route("/v1/studio/file", get(studio_file))
+        .route("/v1/studio/project", get(studio_project))
+        .route("/v1/studio/run", post(studio_run))
+        .route("/v1/studio/export", post(studio_export))
+        .route("/v1/studio/containerize", post(studio_containerize))
         .route("/v1/codex/status", get(codex_status))
         .route(
             "/v1/codex/login",

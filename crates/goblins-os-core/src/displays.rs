@@ -5,10 +5,15 @@
 //! serial checks so Settings never writes arbitrary display state or reports a
 //! successful apply when the compositor gate is absent.
 
-use std::{env, fs, time::Duration};
+use std::{
+    env, fs,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::bounded::{bounded_session_command_output, probe_timeout, BoundedCommandError};
 use crate::session_bridge::{
@@ -40,17 +45,42 @@ pub struct DisplaysStatus {
     display_config_serial: Option<u32>,
     xrandr_available: bool,
     outputs: Vec<DisplayOutputStatus>,
+    logical_monitors: Vec<DisplayLogicalMonitorStatus>,
     detail: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DisplayOutputStatus {
     name: String,
     connected: bool,
     primary: bool,
     current_mode: Option<String>,
+    current_mode_id: Option<String>,
     position: Option<String>,
+    modes: Vec<DisplayModeStatus>,
     detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DisplayModeStatus {
+    id: String,
+    label: String,
+    width: u32,
+    height: u32,
+    refresh_hz: f64,
+    preferred: bool,
+    current: bool,
+    supported_scales: Vec<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DisplayLogicalMonitorStatus {
+    x: i32,
+    y: i32,
+    scale: f64,
+    transform: u32,
+    primary: bool,
+    monitors: Vec<MonitorConfigRequest>,
 }
 
 #[derive(Deserialize)]
@@ -72,7 +102,7 @@ pub struct LogicalMonitorRequest {
     monitors: Vec<MonitorConfigRequest>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct MonitorConfigRequest {
     connector: String,
     mode_id: String,
@@ -99,15 +129,77 @@ enum DisplayConfigError {
     Failed(String),
 }
 
-pub async fn displays_status() -> Json<DisplaysStatus> {
-    Json(build_displays_status())
+pub async fn displays_status() -> (StatusCode, Json<DisplaysStatus>) {
+    match tokio::task::spawn_blocking(build_displays_status).await {
+        Ok(status) => (StatusCode::OK, Json(status)),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(displays_worker_failed_status()),
+        ),
+    }
 }
 
 pub async fn apply_displays(
     Json(request): Json<ApplyDisplaysRequest>,
 ) -> (StatusCode, Json<ApplyDisplaysOutcome>) {
-    let (status, outcome) = apply_displays_outcome(request);
-    (status, Json(outcome))
+    let method = request.method.clone();
+    let serial = request.serial;
+    let Some(permit) = display_mutation_permit() else {
+        let (status, outcome) = apply_displays_response(
+            StatusCode::CONFLICT,
+            false,
+            "Another display configuration change is already in progress.",
+            method,
+            serial,
+        );
+        return (status, Json(outcome));
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        apply_displays_outcome(request)
+    })
+    .await
+    {
+        Ok((status, outcome)) => (status, Json(outcome)),
+        Err(_) => {
+            let (status, outcome) = apply_displays_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                false,
+                "The display configuration worker stopped unexpectedly. No change is reported.",
+                method,
+                serial,
+            );
+            (status, Json(outcome))
+        }
+    }
+}
+
+fn display_mutation_permit() -> Option<OwnedSemaphorePermit> {
+    static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    Arc::clone(LIMITER.get_or_init(|| Arc::new(Semaphore::new(1))))
+        .try_acquire_owned()
+        .ok()
+}
+
+fn displays_worker_failed_status() -> DisplaysStatus {
+    DisplaysStatus {
+        source: "goblins-os-core",
+        session_type: "unavailable".to_string(),
+        desktop: "unavailable".to_string(),
+        current_desktop: "unavailable".to_string(),
+        wayland_display: None,
+        x11_display: None,
+        gdbus_available: false,
+        mutter_display_config_available: false,
+        mutter_display_apply_allowed: false,
+        display_config_serial: None,
+        xrandr_available: false,
+        outputs: Vec::new(),
+        logical_monitors: Vec::new(),
+        detail: "Display status could not be inspected because its worker stopped unexpectedly."
+            .to_string(),
+    }
 }
 
 fn build_displays_status() -> DisplaysStatus {
@@ -123,17 +215,34 @@ fn build_displays_status() -> DisplaysStatus {
         None
     };
     let mutter_display_config_available = current_state.is_some();
-    let display_config_serial = current_state
+    let parsed_display_config = current_state
         .as_deref()
-        .and_then(parse_current_state_serial);
+        .and_then(parse_display_config_state);
+    let display_config_serial = parsed_display_config
+        .as_ref()
+        .map(|state| state.serial)
+        .or_else(|| {
+            current_state
+                .as_deref()
+                .and_then(parse_current_state_serial)
+        });
     let mutter_display_apply_allowed =
         gdbus_available && mutter_display_config_apply_allowed().unwrap_or(false);
     let xrandr_available = executable_exists("xrandr");
-    let outputs = if xrandr_available {
-        xrandr_outputs().unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let outputs = parsed_display_config
+        .as_ref()
+        .map(|state| state.outputs.clone())
+        .filter(|outputs| !outputs.is_empty())
+        .unwrap_or_else(|| {
+            if xrandr_available {
+                xrandr_outputs().unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        });
+    let logical_monitors = parsed_display_config
+        .map(|state| state.logical_monitors)
+        .unwrap_or_default();
     let detail = displays_detail(
         wayland_display.as_deref(),
         x11_display.as_deref(),
@@ -155,6 +264,7 @@ fn build_displays_status() -> DisplaysStatus {
         display_config_serial,
         xrandr_available,
         outputs,
+        logical_monitors,
         detail,
     }
 }
@@ -263,12 +373,14 @@ fn apply_displays_outcome(request: ApplyDisplaysRequest) -> (StatusCode, ApplyDi
             )
         }
     }
-    match mutter_current_state().and_then(|state| {
-        parse_current_state_serial(&state).ok_or_else(|| {
-            DisplayConfigError::Failed("compositor did not report a display serial".to_string())
+    let current_config = match mutter_current_state().and_then(|state| {
+        parse_display_config_state(&state).ok_or_else(|| {
+            DisplayConfigError::Failed(
+                "compositor did not report a usable display configuration".to_string(),
+            )
         })
     }) {
-        Ok(current_serial) if current_serial == request.serial => {}
+        Ok(config) if config.serial == request.serial => config,
         Ok(_) => {
             return apply_displays_response(
                 StatusCode::CONFLICT,
@@ -296,6 +408,17 @@ fn apply_displays_outcome(request: ApplyDisplaysRequest) -> (StatusCode, ApplyDi
                 request.serial,
             )
         }
+    };
+    if let Err(message) =
+        validate_layout_against_current_state(&request.logical_monitors, &current_config)
+    {
+        return apply_displays_response(
+            StatusCode::BAD_REQUEST,
+            false,
+            &message,
+            request.method,
+            request.serial,
+        );
     }
 
     let logical_monitors = encode_logical_monitors(&request.logical_monitors);
@@ -309,13 +432,22 @@ fn apply_displays_outcome(request: ApplyDisplaysRequest) -> (StatusCode, ApplyDi
         &method_value,
         &logical_monitors,
     ) {
-        Ok(_) => apply_displays_response(
-            StatusCode::OK,
-            true,
-            apply_success_text(method),
-            request.method,
-            request.serial,
-        ),
+        Ok(_) => {
+            // Mutter advances its serial when a configuration is applied. Return
+            // that generation so the confirmation flow can keep or revert the
+            // preview without a stale follow-up request.
+            let applied_serial = mutter_current_state()
+                .ok()
+                .and_then(|state| parse_current_state_serial(&state))
+                .unwrap_or(request.serial);
+            apply_displays_response(
+                StatusCode::OK,
+                true,
+                apply_success_text(method),
+                request.method,
+                applied_serial,
+            )
+        }
         Err(DisplayConfigError::Missing) => apply_displays_response(
             StatusCode::SERVICE_UNAVAILABLE,
             false,
@@ -385,6 +517,349 @@ fn bridge_logical_monitors(
         .collect()
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ParsedDisplayConfigState {
+    serial: u32,
+    physical: Vec<ParsedPhysicalMonitor>,
+    outputs: Vec<DisplayOutputStatus>,
+    logical_monitors: Vec<DisplayLogicalMonitorStatus>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ParsedPhysicalMonitor {
+    connector: String,
+    modes: Vec<DisplayModeStatus>,
+}
+
+/// Parse the stable `GetCurrentState` GVariant into the exact mode IDs and
+/// logical layout needed for an ApplyMonitorsConfig round trip. This parser is
+/// deliberately structural rather than regex-based: commas and nested arrays
+/// inside property dictionaries cannot shift the fields Settings relies on.
+fn parse_display_config_state(reply: &str) -> Option<ParsedDisplayConfigState> {
+    let state = gvariant_tuple(reply)?;
+    if state.len() < 3 {
+        return None;
+    }
+    let serial = parse_gvariant_u32(state[0])?;
+    let physical = parse_physical_monitors(state[1]);
+    let logical_monitors = parse_logical_monitors(state[2], &physical);
+    if physical.is_empty() || logical_monitors.is_empty() {
+        return None;
+    }
+    let outputs = display_outputs_from_config(&physical, &logical_monitors);
+    Some(ParsedDisplayConfigState {
+        serial,
+        physical,
+        outputs,
+        logical_monitors,
+    })
+}
+
+fn parse_physical_monitors(value: &str) -> Vec<ParsedPhysicalMonitor> {
+    gvariant_array(value)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| {
+            let fields = gvariant_tuple(entry)?;
+            if fields.len() < 2 {
+                return None;
+            }
+            let identity = gvariant_tuple(fields[0])?;
+            let connector = identity.first().and_then(|value| gvariant_string(value))?;
+            if !display_connector_is_safe(&connector) {
+                return None;
+            }
+            let modes = gvariant_array(fields[1])?
+                .into_iter()
+                .filter_map(parse_display_mode)
+                .collect::<Vec<_>>();
+            Some(ParsedPhysicalMonitor { connector, modes })
+        })
+        .collect()
+}
+
+fn parse_display_mode(value: &str) -> Option<DisplayModeStatus> {
+    let fields = gvariant_tuple(value)?;
+    if fields.len() < 7 {
+        return None;
+    }
+    let id = gvariant_string(fields[0])?;
+    if !display_mode_id_is_safe(&id) {
+        return None;
+    }
+    let width = parse_gvariant_u32(fields[1])?;
+    let height = parse_gvariant_u32(fields[2])?;
+    let refresh_hz = parse_gvariant_f64(fields[3])?;
+    if width == 0 || height == 0 || !refresh_hz.is_finite() || refresh_hz <= 0.0 {
+        return None;
+    }
+    let supported_scales = gvariant_array(fields[5])
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(parse_gvariant_f64)
+        .filter(|scale| scale.is_finite() && (1.0..=4.0).contains(scale))
+        .collect::<Vec<_>>();
+    let properties = fields[6];
+    let current = gvariant_property_bool(properties, "is-current").unwrap_or(false);
+    let preferred = gvariant_property_bool(properties, "is-preferred").unwrap_or(false);
+    Some(DisplayModeStatus {
+        label: display_mode_label(width, height, refresh_hz),
+        id,
+        width,
+        height,
+        refresh_hz,
+        preferred,
+        current,
+        supported_scales,
+    })
+}
+
+fn parse_logical_monitors(
+    value: &str,
+    physical: &[ParsedPhysicalMonitor],
+) -> Vec<DisplayLogicalMonitorStatus> {
+    gvariant_array(value)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| {
+            let fields = gvariant_tuple(entry)?;
+            if fields.len() < 6 {
+                return None;
+            }
+            let x = parse_gvariant_i32(fields[0])?;
+            let y = parse_gvariant_i32(fields[1])?;
+            let scale = parse_gvariant_f64(fields[2])?;
+            let transform = parse_gvariant_u32(fields[3])?;
+            let primary = parse_gvariant_bool(fields[4])?;
+            let monitors = gvariant_array(fields[5])?
+                .into_iter()
+                .filter_map(|identity| {
+                    let fields = gvariant_tuple(identity)?;
+                    let connector = fields.first().and_then(|value| gvariant_string(value))?;
+                    let monitor = physical
+                        .iter()
+                        .find(|monitor| monitor.connector == connector)?;
+                    let mode_id = monitor
+                        .modes
+                        .iter()
+                        .find(|mode| mode.current)
+                        .or_else(|| monitor.modes.iter().find(|mode| mode.preferred))
+                        .or_else(|| monitor.modes.first())?
+                        .id
+                        .clone();
+                    Some(MonitorConfigRequest { connector, mode_id })
+                })
+                .collect::<Vec<_>>();
+            if monitors.is_empty()
+                || !scale.is_finite()
+                || !(1.0..=4.0).contains(&scale)
+                || transform > 7
+            {
+                return None;
+            }
+            Some(DisplayLogicalMonitorStatus {
+                x,
+                y,
+                scale,
+                transform,
+                primary,
+                monitors,
+            })
+        })
+        .collect()
+}
+
+fn display_outputs_from_config(
+    physical: &[ParsedPhysicalMonitor],
+    logical: &[DisplayLogicalMonitorStatus],
+) -> Vec<DisplayOutputStatus> {
+    physical
+        .iter()
+        .map(|monitor| {
+            let layout = logical.iter().find(|logical| {
+                logical
+                    .monitors
+                    .iter()
+                    .any(|candidate| candidate.connector == monitor.connector)
+            });
+            let current = monitor.modes.iter().find(|mode| mode.current).or_else(|| {
+                layout.and_then(|logical| {
+                    let mode_id = logical
+                        .monitors
+                        .iter()
+                        .find(|candidate| candidate.connector == monitor.connector)
+                        .map(|candidate| candidate.mode_id.as_str())?;
+                    monitor.modes.iter().find(|mode| mode.id == mode_id)
+                })
+            });
+            let primary = layout.is_some_and(|logical| logical.primary);
+            let current_mode = current.map(|mode| mode.label.clone());
+            let current_mode_id = current.map(|mode| mode.id.clone());
+            let position = layout.map(|logical| format!("{:+}{:+}", logical.x, logical.y));
+            DisplayOutputStatus {
+                name: monitor.connector.clone(),
+                connected: true,
+                primary,
+                current_mode: current_mode.clone(),
+                current_mode_id,
+                position,
+                modes: monitor.modes.clone(),
+                detail: display_output_detail(
+                    &monitor.connector,
+                    true,
+                    primary,
+                    current_mode.as_deref(),
+                ),
+            }
+        })
+        .collect()
+}
+
+fn display_mode_label(width: u32, height: u32, refresh_hz: f64) -> String {
+    let refresh = if (refresh_hz.round() - refresh_hz).abs() < 0.01 {
+        format!("{refresh_hz:.0}")
+    } else {
+        format!("{refresh_hz:.2}")
+    };
+    format!("{width} × {height} · {refresh} Hz")
+}
+
+fn gvariant_tuple(value: &str) -> Option<Vec<&str>> {
+    gvariant_container(value, '(', ')')
+}
+
+fn gvariant_array(value: &str) -> Option<Vec<&str>> {
+    gvariant_container(value, '[', ']')
+}
+
+fn gvariant_container(value: &str, open: char, close: char) -> Option<Vec<&str>> {
+    let value = value.trim();
+    if !value.starts_with(open) || !value.ends_with(close) {
+        return None;
+    }
+    split_gvariant_top_level(&value[open.len_utf8()..value.len() - close.len_utf8()])
+}
+
+fn split_gvariant_top_level(value: &str) -> Option<Vec<&str>> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut round = 0_u16;
+    let mut square = 0_u16;
+    let mut curly = 0_u16;
+    let mut angle = 0_u16;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, ch) in value.char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '\'' {
+                quoted = false;
+            }
+            continue;
+        }
+        match ch {
+            '\'' => quoted = true,
+            '(' => round = round.checked_add(1)?,
+            ')' => round = round.checked_sub(1)?,
+            '[' => square = square.checked_add(1)?,
+            ']' => square = square.checked_sub(1)?,
+            '{' => curly = curly.checked_add(1)?,
+            '}' => curly = curly.checked_sub(1)?,
+            '<' => angle = angle.checked_add(1)?,
+            '>' => angle = angle.checked_sub(1)?,
+            ',' if round == 0 && square == 0 && curly == 0 && angle == 0 => {
+                let part = value[start..index].trim();
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if quoted || round != 0 || square != 0 || curly != 0 || angle != 0 {
+        return None;
+    }
+    let tail = value[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    Some(parts)
+}
+
+fn gvariant_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    let inner = value.strip_prefix('\'')?.strip_suffix('\'')?;
+    let mut output = String::new();
+    let mut escaped = false;
+    for ch in inner.chars() {
+        if escaped {
+            output.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else {
+            output.push(ch);
+        }
+    }
+    (!escaped).then_some(output)
+}
+
+fn parse_gvariant_u32(value: &str) -> Option<u32> {
+    gvariant_scalar(value).parse().ok()
+}
+
+fn parse_gvariant_i32(value: &str) -> Option<i32> {
+    gvariant_scalar(value).parse().ok()
+}
+
+fn parse_gvariant_f64(value: &str) -> Option<f64> {
+    gvariant_scalar(value)
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+fn parse_gvariant_bool(value: &str) -> Option<bool> {
+    match gvariant_scalar(value) {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn gvariant_scalar(value: &str) -> &str {
+    let mut value = value.trim();
+    if let Some(inner) = value
+        .strip_prefix('<')
+        .and_then(|value| value.strip_suffix('>'))
+    {
+        value = inner.trim();
+    }
+    for prefix in ["uint32 ", "int32 ", "double "] {
+        if let Some(inner) = value.strip_prefix(prefix) {
+            return inner.trim();
+        }
+    }
+    value
+}
+
+fn gvariant_property_bool(properties: &str, key: &str) -> Option<bool> {
+    let needle = format!("'{key}'");
+    let after_key = properties.split_once(&needle)?.1;
+    let value = after_key.split_once(':')?.1.trim_start();
+    if value.starts_with("<true>") || value.starts_with("true") {
+        Some(true)
+    } else if value.starts_with("<false>") || value.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 fn xrandr_outputs() -> Option<Vec<DisplayOutputStatus>> {
     let output = bounded_session_command_output("xrandr", &["--query"], probe_timeout()).ok()?;
     if !output.status.success() {
@@ -451,7 +926,9 @@ fn apply_success_text(method: DisplayApplyMethod) -> &'static str {
         DisplayApplyMethod::Temporary => {
             "Display configuration was applied temporarily. Confirm it to keep the layout."
         }
-        DisplayApplyMethod::Persistent => "Display configuration was saved.",
+        DisplayApplyMethod::Persistent => {
+            "Display confirmation was handed to the desktop. Choose Keep Changes in the system dialog to save it."
+        }
     }
 }
 
@@ -496,6 +973,60 @@ fn validate_logical_monitors(monitors: &[LogicalMonitorRequest]) -> Result<(), S
                 return Err(
                     "A physical display can appear in only one logical monitor.".to_string()
                 );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Bind every mutable display identifier to the live compositor snapshot whose
+/// serial the caller presented. Safe-looking connector and mode strings are not
+/// sufficient authorization: they must be exact currently connected IDs, and
+/// the requested scale must be one Mutter reported for that exact mode.
+fn validate_layout_against_current_state(
+    monitors: &[LogicalMonitorRequest],
+    current: &ParsedDisplayConfigState,
+) -> Result<(), String> {
+    for logical in monitors {
+        let mut mirrored_mode: Option<(u32, u32, f64)> = None;
+        for requested in &logical.monitors {
+            let physical = current
+                .physical
+                .iter()
+                .find(|candidate| candidate.connector == requested.connector)
+                .ok_or_else(|| {
+                    "Display layout contains a connector that is not currently connected."
+                        .to_string()
+                })?;
+            let mode = physical
+                .modes
+                .iter()
+                .find(|candidate| candidate.id == requested.mode_id)
+                .ok_or_else(|| {
+                    "Display layout contains a mode that the connected display did not report."
+                        .to_string()
+                })?;
+            if !mode
+                .supported_scales
+                .iter()
+                .any(|scale| (*scale - logical.scale).abs() < 0.001)
+            {
+                return Err(
+                    "Display scale is not supported by the selected display mode.".to_string(),
+                );
+            }
+            if let Some((width, height, refresh_hz)) = mirrored_mode {
+                if mode.width != width
+                    || mode.height != height
+                    || (mode.refresh_hz - refresh_hz).abs() >= 0.1
+                {
+                    return Err(
+                        "Mirrored displays must use matching resolution and refresh modes."
+                            .to_string(),
+                    );
+                }
+            } else {
+                mirrored_mode = Some((mode.width, mode.height, mode.refresh_hz));
             }
         }
     }
@@ -646,7 +1177,9 @@ fn parse_xrandr_output_line(line: &str) -> Option<DisplayOutputStatus> {
         connected,
         primary,
         current_mode,
+        current_mode_id: None,
         position,
+        modes: Vec::new(),
         detail,
     })
 }
@@ -749,11 +1282,20 @@ fn executable_exists(binary: &str) -> bool {
 mod tests {
     use super::{
         apply_method_value, display_connector_is_safe, display_mode_id_is_safe,
-        display_output_detail, displays_detail, encode_logical_monitors, parse_apply_method,
-        parse_current_state_serial, parse_gdbus_bool, parse_xrandr_output_line,
-        parse_xrandr_outputs, split_display_geometry, validate_logical_monitors,
-        DisplayApplyMethod, LogicalMonitorRequest, MonitorConfigRequest,
+        display_mutation_permit, display_output_detail, displays_detail, encode_logical_monitors,
+        parse_apply_method, parse_current_state_serial, parse_display_config_state,
+        parse_gdbus_bool, parse_xrandr_output_line, parse_xrandr_outputs, split_display_geometry,
+        validate_layout_against_current_state, validate_logical_monitors, DisplayApplyMethod,
+        LogicalMonitorRequest, MonitorConfigRequest,
     };
+
+    #[test]
+    fn display_mutations_have_single_request_admission() {
+        let first = display_mutation_permit().expect("first display mutation is admitted");
+        assert!(display_mutation_permit().is_none());
+        drop(first);
+        assert!(display_mutation_permit().is_some());
+    }
 
     #[test]
     fn parses_xrandr_connected_outputs_without_inventing_state() {
@@ -831,6 +1373,46 @@ mod tests {
     }
 
     #[test]
+    fn parses_display_config_layout_and_exact_mode_ids() {
+        let state = "(uint32 42, \
+            [(('eDP-1', 'Vendor', 'Panel', 'serial'), \
+              [('2560x1440@59.951', 2560, 1440, 59.951, 1.0, [1.0, 1.25, 2.0], \
+                {'is-current': <true>, 'is-preferred': <true>}), \
+               ('1920x1080@60.000', 1920, 1080, 60.0, 1.0, [1.0, 2.0], {})], \
+              {'is-builtin': <true>}), \
+             (('HDMI-1', 'Vendor', 'Screen', 'serial2'), \
+              [('1920x1080@60.000', 1920, 1080, 60.0, 1.0, [1.0], \
+                {'is-current': <true>, 'is-preferred': <true>})], {})], \
+            [(0, 0, 1.25, uint32 0, true, [('eDP-1', 'Vendor', 'Panel', 'serial')], {}), \
+             (2048, 0, 1.0, uint32 1, false, [('HDMI-1', 'Vendor', 'Screen', 'serial2')], {})], \
+            {'layout-mode': <uint32 1>})";
+
+        let parsed = parse_display_config_state(state).expect("DisplayConfig state");
+        assert_eq!(parsed.serial, 42);
+        assert_eq!(parsed.outputs.len(), 2);
+        assert_eq!(
+            parsed.outputs[0].current_mode_id.as_deref(),
+            Some("2560x1440@59.951")
+        );
+        assert_eq!(parsed.outputs[0].position.as_deref(), Some("+0+0"));
+        assert!(parsed.outputs[0].primary);
+        assert_eq!(parsed.outputs[0].modes.len(), 2);
+        assert_eq!(parsed.logical_monitors.len(), 2);
+        assert_eq!(parsed.logical_monitors[0].scale, 1.25);
+        assert_eq!(parsed.logical_monitors[1].transform, 1);
+        assert_eq!(
+            parsed.logical_monitors[1].monitors[0].mode_id,
+            "1920x1080@60.000"
+        );
+    }
+
+    #[test]
+    fn malformed_display_config_state_fails_closed() {
+        assert!(parse_display_config_state("(uint32 4, [broken], [], {})").is_none());
+        assert!(parse_display_config_state("not a tuple").is_none());
+    }
+
+    #[test]
     fn display_apply_request_rejects_unsafe_layouts() {
         let valid = vec![LogicalMonitorRequest {
             x: 0,
@@ -870,5 +1452,40 @@ mod tests {
             }],
         });
         assert!(validate_logical_monitors(&duplicate).is_err());
+    }
+
+    #[test]
+    fn display_apply_ids_and_scales_must_exist_in_live_mutter_state() {
+        let state = "(uint32 9, \
+            [(('eDP-1', 'Vendor', 'Panel', 'serial'), \
+              [('2560x1440@60.000', 2560, 1440, 60.0, 1.0, [1.0, 2.0], \
+                {'is-current': <true>, 'is-preferred': <true>})], {})], \
+            [(0, 0, 1.0, uint32 0, true, \
+              [('eDP-1', 'Vendor', 'Panel', 'serial')], {})], {})";
+        let current = parse_display_config_state(state).expect("DisplayConfig state");
+        let valid = vec![LogicalMonitorRequest {
+            x: 0,
+            y: 0,
+            scale: 2.0,
+            transform: 0,
+            primary: true,
+            monitors: vec![MonitorConfigRequest {
+                connector: "eDP-1".to_string(),
+                mode_id: "2560x1440@60.000".to_string(),
+            }],
+        }];
+        assert!(validate_layout_against_current_state(&valid, &current).is_ok());
+
+        let mut unknown_connector = valid.clone();
+        unknown_connector[0].monitors[0].connector = "DP-404".to_string();
+        assert!(validate_layout_against_current_state(&unknown_connector, &current).is_err());
+
+        let mut unknown_mode = valid.clone();
+        unknown_mode[0].monitors[0].mode_id = "9999x9999@99.000".to_string();
+        assert!(validate_layout_against_current_state(&unknown_mode, &current).is_err());
+
+        let mut unsupported_scale = valid;
+        unsupported_scale[0].scale = 1.25;
+        assert!(validate_layout_against_current_state(&unsupported_scale, &current).is_err());
     }
 }

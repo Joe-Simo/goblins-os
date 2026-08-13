@@ -1,0 +1,239 @@
+#!/bin/sh
+set -eu
+
+FINDMNT=/usr/bin/findmnt
+SNAPPER=/usr/bin/snapper
+BTRFS=/usr/bin/btrfs
+CONFIG=/etc/snapper/configs/home
+LAYOUT_STATE=/var/lib/goblins-os-snapshot-layout
+FRESH_MARKER=$LAYOUT_STATE/initialize-home-v1
+READY_MARKER=$LAYOUT_STATE/home-subvolume-ready-v1
+HOME_PATH=/var/home
+HOME_SEED=/var/home.goblins-os-seed-v1
+
+# Existing XFS installs remain supported and are never converted in place.
+# New simple installs use Btrfs; on those systems, configure Snapper against
+# the Btrfs mount that contains /var/home before the desktop session starts.
+migration_pending=false
+if [ -e "$FRESH_MARKER" ] || [ -L "$FRESH_MARKER" ] || [ -d "$HOME_SEED" ]; then
+  migration_pending=true
+fi
+if [ ! -x "$FINDMNT" ] || [ ! -x "$SNAPPER" ] || [ ! -x "$BTRFS" ]; then
+  if [ "$migration_pending" = true ]; then
+    printf '%s\n' "goblins-os-snapshots-setup: required storage tools are unavailable during a pending home migration" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+snapshot_acl_is_private() {
+  snapshot_root=$1
+  [ -x /usr/bin/getfacl ] || return 1
+  [ ! -e "$snapshot_root" ] && return 0
+  acl_output="$(/usr/bin/getfacl --absolute-names --numeric --omit-header "$snapshot_root" 2>/dev/null)" || return 1
+  # With an empty Snapper allowlist there may be only owner/group/other/mask
+  # base entries. Any named user or group entry preserves non-root authority.
+  ! printf '%s\n' "$acl_output" | /usr/bin/grep -Eq '^(default:)?(user|group):[0-9]+:'
+}
+
+snapper_authority_is_private() {
+  config_file=$1
+  snapshot_root=$2
+  [ -f "$config_file" ] || return 1
+  /usr/bin/grep -Fxq 'ALLOW_USERS=""' "$config_file" || return 1
+  /usr/bin/grep -Fxq 'ALLOW_GROUPS=""' "$config_file" || return 1
+  /usr/bin/grep -Fxq 'SYNC_ACL="yes"' "$config_file" || return 1
+  snapshot_acl_is_private "$snapshot_root"
+}
+
+# Authority revocation is independent from storage-feature readiness. Older
+# Goblins OS builds granted the desktop bridge group direct Snapper ACL access.
+# Clear and verify that authority before *any* later degraded success exit can
+# allow GDM to start.
+if [ -f "$CONFIG" ]; then
+  configured_subvolume="$(/usr/bin/sed -n 's/^SUBVOLUME="\{0,1\}\([^"[:space:]]*\)"\{0,1\}$/\1/p' "$CONFIG" | /usr/bin/head -n 1)"
+  case "$configured_subvolume" in
+    /) configured_snapshot_root=/.snapshots ;;
+    /var|/var/home) configured_snapshot_root=$configured_subvolume/.snapshots ;;
+    *)
+      printf '%s\n' "goblins-os-snapshots-setup: the existing Snapper config has an unsafe subvolume and its ACL authority cannot be verified" >&2
+      exit 1
+      ;;
+  esac
+  if ! "$SNAPPER" -c home set-config 'ALLOW_USERS=' 'ALLOW_GROUPS=' 'SYNC_ACL=yes'; then
+    if ! snapper_authority_is_private "$CONFIG" "$configured_snapshot_root"; then
+      printf '%s\n' "goblins-os-snapshots-setup: stale Snapper desktop authority could not be revoked" >&2
+      exit 1
+    fi
+  fi
+  if ! snapper_authority_is_private "$CONFIG" "$configured_snapshot_root"; then
+    printf '%s\n' "goblins-os-snapshots-setup: Snapper authority is not confined to the root broker" >&2
+    exit 1
+  fi
+fi
+
+filesystem_probe=$HOME_PATH
+if [ -d "$HOME_SEED" ] && [ ! -e "$HOME_PATH" ]; then
+  # Resume the only authorized interrupted-migration state. /var/home may not
+  # exist between the held rename and subvolume creation, but /var is stable.
+  filesystem_probe=/var
+fi
+if ! filesystem_output="$($FINDMNT --noheadings --output FSTYPE --target "$filesystem_probe")"; then
+  printf '%s\n' "goblins-os-snapshots-setup: the filesystem containing home could not be identified; preserving the migration marker" >&2
+  [ "$migration_pending" = true ] && exit 1
+  exit 0
+fi
+filesystem="$(printf '%s\n' "$filesystem_output" | /usr/bin/head -n 1 | /usr/bin/tr -d '[:space:]')"
+if [ -z "$filesystem" ]; then
+  printf '%s\n' "goblins-os-snapshots-setup: the filesystem containing home was not reported; preserving the migration marker" >&2
+  [ "$migration_pending" = true ] && exit 1
+  exit 0
+fi
+if [ "$filesystem" != btrfs ]; then
+  # A fresh advanced-storage XFS/ext4 install must never become eligible for a
+  # later implicit migration just because its storage changes underneath it.
+  /usr/bin/rm -f "$FRESH_MARKER"
+  exit 0
+fi
+
+# bootc's baseline Btrfs install formats and mounts a filesystem but does not
+# create a Snapper-compatible /var or /var/home subvolume. Only a root-owned
+# marker seeded into an empty OSTree /var on a genuinely new install authorizes
+# this one-time layout initialization. Existing systems never receive it.
+if [ -e "$FRESH_MARKER" ] || [ -L "$FRESH_MARKER" ]; then
+  marker_contract="$(/usr/bin/stat -c '%u:%g:%a:%s' "$FRESH_MARKER" 2>/dev/null || true)"
+  if [ -L "$FRESH_MARKER" ] || [ ! -f "$FRESH_MARKER" ] || [ "$marker_contract" != '0:0:400:0' ]; then
+    printf '%s\n' "goblins-os-snapshots-setup: the fresh-install marker failed its ownership contract; leaving Recovery unavailable" >&2
+    exit 1
+  fi
+  if [ -L "$HOME_PATH" ] || { [ -e "$HOME_PATH" ] && [ ! -d "$HOME_PATH" ]; }; then
+    printf '%s\n' "goblins-os-snapshots-setup: the fresh home path is not a safe directory; leaving Recovery unavailable" >&2
+    exit 1
+  fi
+  if ! "$BTRFS" subvolume show "$HOME_PATH" >/dev/null 2>&1; then
+    if "$FINDMNT" --mountpoint "$HOME_PATH" >/dev/null 2>&1; then
+      printf '%s\n' "goblins-os-snapshots-setup: a custom home mount is not a verified Btrfs subvolume; leaving Recovery unavailable" >&2
+      /usr/bin/rm -f "$FRESH_MARKER"
+      exit 0
+    fi
+    if [ ! -d "$HOME_SEED" ]; then
+      [ -d "$HOME_PATH" ] || exit 1
+      /usr/bin/mv -- "$HOME_PATH" "$HOME_SEED"
+    elif [ -e "$HOME_PATH" ]; then
+      recreated_contract="$(/usr/bin/stat -c '%u:%g:%a' "$HOME_PATH" 2>/dev/null || true)"
+      if [ ! -L "$HOME_PATH" ] && [ "$recreated_contract" = '0:0:755' ] && [ -z "$(/usr/bin/find "$HOME_PATH" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+        /usr/bin/rmdir -- "$HOME_PATH"
+      else
+        printf '%s\n' "goblins-os-snapshots-setup: both home seed and destination exist before subvolume creation; leaving Recovery unavailable" >&2
+        exit 1
+      fi
+    fi
+    "$BTRFS" subvolume create "$HOME_PATH"
+  fi
+  if [ -d "$HOME_SEED" ] && [ ! -e "$READY_MARKER" ]; then
+    /usr/bin/cp -a --reflink=auto --one-file-system "$HOME_SEED/." "$HOME_PATH/"
+    /usr/bin/sync -f "$HOME_PATH"
+    /usr/bin/install -m 0400 -o root -g root /dev/null "$READY_MARKER"
+  fi
+  if [ -x /usr/sbin/selinuxenabled ] && /usr/sbin/selinuxenabled; then
+    if [ ! -x /usr/sbin/restorecon ] || [ ! -x /usr/sbin/matchpathcon ]; then
+      printf '%s\n' "goblins-os-snapshots-setup: SELinux is active but the label verification tools are unavailable" >&2
+      exit 1
+    fi
+    /usr/sbin/restorecon "$HOME_PATH"
+    if ! /usr/sbin/matchpathcon -V "$HOME_PATH" >/dev/null 2>&1; then
+      printf '%s\n' "goblins-os-snapshots-setup: the initialized home subvolume failed its SELinux label contract" >&2
+      exit 1
+    fi
+  elif [ -x /usr/sbin/restorecon ]; then
+    /usr/sbin/restorecon "$HOME_PATH"
+  fi
+  home_contract="$(/usr/bin/stat -c '%u:%g:%a' "$HOME_PATH" 2>/dev/null || true)"
+  if [ "$home_contract" != '0:0:755' ] || ! "$BTRFS" subvolume show "$HOME_PATH" >/dev/null 2>&1; then
+    printf '%s\n' "goblins-os-snapshots-setup: the initialized home subvolume failed its ownership or storage contract" >&2
+    exit 1
+  fi
+  /usr/bin/rm -f "$FRESH_MARKER"
+fi
+
+if [ -e "$READY_MARKER" ] && "$BTRFS" subvolume show "$HOME_PATH" >/dev/null 2>&1 && [ -d "$HOME_SEED" ]; then
+  /usr/bin/rm -rf --one-file-system -- "$HOME_SEED"
+  /usr/bin/sync -f /var
+fi
+
+[ -d "$HOME_PATH" ] || exit 0
+
+if "$BTRFS" subvolume show "$HOME_PATH" >/dev/null 2>&1; then
+  subvolume=$HOME_PATH
+else
+  subvolume="$($FINDMNT --noheadings --output TARGET --target "$HOME_PATH" | /usr/bin/head -n 1 | /usr/bin/tr -d '[:space:]')"
+fi
+case "$subvolume" in
+  /|/var|/var/home) ;;
+  *)
+    printf '%s\n' "goblins-os-snapshots-setup: the Btrfs home mount target is not a supported snapshot source; leaving Recovery unavailable" >&2
+    exit 0
+    ;;
+esac
+
+# bootc/OSTree can expose /var/home through a bind or deployment path even when
+# the physical root filesystem is Btrfs. Snapper requires its configured path
+# itself to be a Btrfs subvolume, so never infer readiness from FSTYPE alone.
+if ! "$BTRFS" subvolume show "$subvolume" >/dev/null 2>&1; then
+  printf '%s\n' "goblins-os-snapshots-setup: the Btrfs home mount target is not a verified subvolume; leaving Recovery unavailable" >&2
+  exit 0
+fi
+
+if [ -f "$CONFIG" ] && ! /usr/bin/grep -Eq "^SUBVOLUME=(\"${subvolume}\"|${subvolume})$" "$CONFIG"; then
+  printf '%s\n' "goblins-os-snapshots-setup: the existing Snapper config names a different subvolume; leaving it unchanged" >&2
+  exit 0
+fi
+
+created=false
+if [ ! -f "$CONFIG" ]; then
+  if ! "$SNAPPER" -c home create-config "$subvolume"; then
+    printf '%s\n' "goblins-os-snapshots-setup: Snapper could not create the home recovery configuration" >&2
+    exit 0
+  fi
+  created=true
+fi
+
+if ! "$SNAPPER" -c home set-config \
+  'ALLOW_USERS=' \
+  'ALLOW_GROUPS=' \
+  'SYNC_ACL=yes' \
+  'TIMELINE_CREATE=yes' \
+  'TIMELINE_CLEANUP=yes' \
+  'TIMELINE_LIMIT_HOURLY=8' \
+  'TIMELINE_LIMIT_DAILY=7' \
+  'TIMELINE_LIMIT_WEEKLY=4' \
+  'TIMELINE_LIMIT_MONTHLY=3' \
+  'TIMELINE_LIMIT_YEARLY=0'; then
+  if ! snapper_authority_is_private "$CONFIG" "$subvolume/.snapshots"; then
+    printf '%s\n' "goblins-os-snapshots-setup: Snapper policy failed before raw snapshot authority was proven private" >&2
+    exit 1
+  fi
+  printf '%s\n' "goblins-os-snapshots-setup: Snapper could not apply the bounded home recovery policy" >&2
+  exit 0
+fi
+if ! snapper_authority_is_private "$CONFIG" "$subvolume/.snapshots"; then
+  printf '%s\n' "goblins-os-snapshots-setup: Snapper authority verification failed after policy update" >&2
+  exit 1
+fi
+
+if [ "$created" = true ]; then
+  if ! "$SNAPPER" -c home create --type single --cleanup timeline --description 'Goblins OS first boot'; then
+    printf '%s\n' "goblins-os-snapshots-setup: the initial recovery snapshot could not be created" >&2
+    exit 0
+  fi
+fi
+
+if [ -x /usr/sbin/restorecon ]; then
+  # Snapshot payloads are immutable and may contain millions of files. Label
+  # only the small Snapper control roots; never recursively walk every retained
+  # home snapshot on the pre-login critical path.
+  /usr/sbin/restorecon -RF /etc/snapper
+  if [ -d "$subvolume/.snapshots" ]; then
+    /usr/sbin/restorecon "$subvolume/.snapshots"
+  fi
+fi

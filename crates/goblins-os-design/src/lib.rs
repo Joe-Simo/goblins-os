@@ -1607,6 +1607,10 @@ button:active {
   background: @gos_studio_hover;
 }
 
+.gos-studio-project.is-active {
+  background: @gos_studio_active;
+}
+
 .gos-studio-thread-item {
   padding: 8px 8px 8px 20px;
   border-radius: 8px;
@@ -1772,6 +1776,54 @@ button:active {
   color: @gos_studio_text_muted;
   font-family: monospace;
   font-size: 12px;
+}
+
+.gos-studio-file-button {
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: @gos_studio_text;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.gos-studio-file-button:hover,
+.gos-studio-file-button:focus:focus-visible {
+  color: @gos_studio_text;
+  background: @gos_studio_hover;
+}
+
+.gos-studio-file-button:focus:focus-visible {
+  box-shadow: 0 0 0 3px @gos_focus;
+}
+
+.gos-studio-inspector {
+  min-height: 220px;
+  margin: 0 22px 2px 22px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid @gos_studio_border;
+  background: @gos_studio_panel;
+}
+
+.gos-studio-inspector notebook,
+.gos-studio-inspector notebook > stack,
+.gos-studio-inspector scrolledwindow {
+  background: @gos_studio_input;
+  border-color: @gos_studio_border_soft;
+}
+
+.gos-studio-code {
+  padding: 12px;
+  color: @gos_studio_text;
+  background: @gos_studio_input;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.gos-studio-code text {
+  color: @gos_studio_text;
+  background: @gos_studio_input;
 }
 
 /* Composer: the input with a model/reasoning/mode/access control row and a round

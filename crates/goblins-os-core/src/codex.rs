@@ -91,6 +91,9 @@ pub struct CodexStatus {
     source: &'static str,
     installed: bool,
     authenticated: bool,
+    /// True while the OS-owned `codex login` child is still waiting for the
+    /// browser handoff to finish. This is non-secret lifecycle state only.
+    sign_in_in_progress: bool,
     /// Compatibility field for existing clients. It intentionally names the
     /// storage boundary without serializing the credential directory path.
     codex_home: &'static str,
@@ -236,24 +239,37 @@ fn read_private_codex_authority(path: &Path) -> io::Result<Vec<u8>> {
 
 fn build_status() -> CodexStatus {
     let installed = codex_installed();
+    // Observe/reap the login child before reading authentication. A successful
+    // login writes its account state as it exits; reading authentication first
+    // could otherwise report one transient `signed out + child stopped` frame
+    // and make Settings offer a retry for a sign-in that actually completed.
+    let login_running = installed && login_in_progress();
     let authentication = if installed {
         codex_authentication()
     } else {
         CodexAuthentication::Unavailable
     };
     let authenticated = authentication == CodexAuthentication::Authenticated;
+    let sign_in_in_progress = !authenticated && login_running;
     CodexStatus {
         source: "goblins-os-core",
         installed,
         authenticated,
+        sign_in_in_progress,
         codex_home: PRIVATE_STORAGE_LABEL,
-        detail: status_detail(installed, authentication),
+        detail: status_detail(installed, authentication, sign_in_in_progress),
     }
 }
 
-fn status_detail(installed: bool, authentication: CodexAuthentication) -> String {
+fn status_detail(
+    installed: bool,
+    authentication: CodexAuthentication,
+    sign_in_in_progress: bool,
+) -> String {
     if !installed {
         "OpenAI account access through the bundled Codex CLI is not included in this build. Start from the full Goblins OS image to use your OpenAI account through Codex.".to_string()
+    } else if sign_in_in_progress && authentication != CodexAuthentication::Authenticated {
+        "OpenAI account sign-in is in progress through the bundled Codex CLI. Finish in your browser; this page will update when the account is ready.".to_string()
     } else {
         match authentication {
             CodexAuthentication::Authenticated => {
@@ -897,6 +913,28 @@ fn login_child() -> &'static Mutex<Option<Child>> {
     CHILD.get_or_init(|| Mutex::new(None))
 }
 
+/// Observe and reap the OS-owned sign-in process without exposing its output,
+/// command line, credential directory, or any account material to callers.
+fn login_in_progress() -> bool {
+    let mut guard = login_child()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    login_child_in_progress(&mut guard)
+}
+
+fn login_child_in_progress(child_slot: &mut Option<Child>) -> bool {
+    let Some(child) = child_slot.as_mut() else {
+        return false;
+    };
+    match child.try_wait() {
+        Ok(None) => true,
+        Ok(Some(_)) | Err(_) => {
+            *child_slot = None;
+            false
+        }
+    }
+}
+
 fn login_start(
     status: StatusCode,
     detail: &str,
@@ -1226,14 +1264,13 @@ mod tests {
         append_codex_permission_profile, binary_present, clear_login_log_at,
         codex_authentication_with, codex_filesystem_policy_override,
         codex_home_metadata_is_private, configure_codex_sandbox, first_https_url,
-        isolated_codex_command, login_start, open_codex_home_directory,
+        isolated_codex_command, login_child_in_progress, login_start, open_codex_home_directory,
         read_private_codex_authority, run_codex_logout, status_detail, terminate_child,
         validated_sandbox_workspace, validated_studio_message, CodexAuthentication,
         CodexSandboxRole, CodexStatus, StudioResultFile, MAX_CODEX_AUTH_BYTES,
     };
     use axum::http::StatusCode;
-    use std::path::Path;
-    use std::process::Command;
+    use std::{path::Path, process::Command, time::Duration};
 
     #[test]
     fn first_https_url_extracts_and_trims_browser_link() {
@@ -1256,21 +1293,51 @@ mod tests {
 
     #[test]
     fn detail_tracks_install_and_sign_in_state() {
-        let not_included = status_detail(false, CodexAuthentication::Unavailable);
+        let not_included = status_detail(false, CodexAuthentication::Unavailable, false);
         assert!(not_included.contains("OpenAI account access"));
         assert!(not_included.contains("bundled Codex CLI"));
 
-        let signed_out = status_detail(true, CodexAuthentication::SignedOut);
+        let signed_out = status_detail(true, CodexAuthentication::SignedOut, false);
         assert!(signed_out.contains("bundled Codex CLI"));
         assert!(signed_out.contains("OpenAI account"));
 
-        let authenticated = status_detail(true, CodexAuthentication::Authenticated);
+        let authenticated = status_detail(true, CodexAuthentication::Authenticated, false);
         assert!(authenticated.contains("Your OpenAI account"));
         assert!(authenticated.contains("bundled Codex CLI"));
 
-        let unavailable = status_detail(true, CodexAuthentication::Unavailable);
+        let unavailable = status_detail(true, CodexAuthentication::Unavailable, false);
         assert!(unavailable.contains("OpenAI account status"));
         assert!(unavailable.contains("bundled Codex CLI"));
+
+        let in_progress = status_detail(true, CodexAuthentication::SignedOut, true);
+        assert!(in_progress.contains("sign-in is in progress"));
+        assert!(in_progress.contains("update when the account is ready"));
+    }
+
+    #[test]
+    fn sign_in_progress_reaps_finished_children_without_exposing_state() {
+        let mut active = Some(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .spawn()
+                .expect("spawn active login stand-in"),
+        );
+        assert!(login_child_in_progress(&mut active));
+        terminate_child(&mut active).expect("terminate active stand-in");
+        assert!(!login_child_in_progress(&mut active));
+
+        let mut finished = Some(
+            Command::new("/usr/bin/true")
+                .spawn()
+                .expect("spawn completed login stand-in"),
+        );
+        for _ in 0..40 {
+            if !login_child_in_progress(&mut finished) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(finished.is_none());
     }
 
     #[test]
@@ -1487,12 +1554,14 @@ mod tests {
             source: "goblins-os-core",
             installed: true,
             authenticated: true,
+            sign_in_in_progress: false,
             codex_home: super::PRIVATE_STORAGE_LABEL,
             detail: "ok".to_string(),
         };
         let json = serde_json::to_string(&status).unwrap();
         // Status reports only presence/sign-in, never credentials or their path.
         assert!(json.contains("\"authenticated\":true"));
+        assert!(json.contains("\"sign_in_in_progress\":false"));
         assert!(!json.contains("auth.json"));
         assert!(!json.contains("/var/lib/goblins-os/codex"));
         assert!(!json.to_lowercase().contains("token"));

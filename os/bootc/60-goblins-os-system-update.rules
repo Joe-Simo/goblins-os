@@ -1,0 +1,18 @@
+polkit.addRule(function(action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units" ||
+        subject.user !== "goblins-os" ||
+        subject.system_unit !== "goblins-os-core.service" ||
+        subject.no_new_privileges !== true) {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (verb === "start" &&
+        unit &&
+        unit.match(/^goblins-os-system-update@(check|download|apply|apply-downloaded|reboot|rollback)\.service$/)) {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NO;
+});

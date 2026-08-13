@@ -1,0 +1,7 @@
+[Unit]
+Description=Delay a queued Goblins OS restart long enough to acknowledge it
+
+[Timer]
+OnActiveSec=5s
+AccuracySec=1s
+Unit=goblins-os-system-reboot.service

@@ -18,7 +18,7 @@ const DEFAULT_EFI_DIR: &str = "/sys/firmware/efi";
 const SECURE_BOOT_VAR: &str =
     "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
 const DEFAULT_BOOTC_INSTALL_CONFIG: &str = "/usr/lib/bootc/install/00-goblins-os.toml";
-const DEFAULT_FILESYSTEM: &str = "xfs";
+const DEFAULT_FILESYSTEM: &str = "btrfs";
 const MIN_INSTALL_DISK_GB: u64 = 32;
 
 /// Live state of a running `bootc install`. The phase is always the latest real
@@ -519,7 +519,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
         install_config_path: env::var("GOBLINS_OS_BOOTC_INSTALL_CONFIG")
             .unwrap_or_else(|_| DEFAULT_BOOTC_INSTALL_CONFIG.to_string()),
         default_filesystem: DEFAULT_FILESYSTEM,
-        command_model: "Goblins OS disk install --filesystem xfs --wipe <device>",
+        command_model: "Goblins OS disk install --filesystem btrfs --wipe <device>",
     };
     let targets = scan_install_targets(&bootc);
 
@@ -533,11 +533,11 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
             destructive_acknowledgement: "WIPE <device> AND INSTALL GOBLINS OS",
             execute_env_gate: "GOBLINS_OS_ENABLE_DESTRUCTIVE_INSTALL=1",
             storage_layout:
-                "The Goblins OS disk installer creates a GPT layout with platform boot partitions, an EFI System Partition on UEFI systems, and an xfs root filesystem by default.",
+                "The Goblins OS disk installer creates a GPT layout with platform boot partitions, an EFI System Partition on UEFI systems, and a Btrfs root filesystem selected for local snapshot compatibility. Recovery turns on only after first boot verifies that the path containing your home is a real Btrfs subvolume.",
             simple_install_scope:
                 "Simple install is for one blank internal disk only after the installer can read the partition scan and reports no existing partitions. It erases the selected disk, creates the boot and root layout, formats the new Goblins OS root filesystem, and installs the bootloader for that disk.",
             formatting_guidance:
-                "Simple install formats a scan-verified blank disk with a fresh GPT layout and xfs root. If the scan cannot read partition data, or if you need ext4, btrfs, separate /home, resized free space, encryption, LUKS/LVM, or any custom partitioning, use advanced storage.",
+                "Simple install formats a scan-verified blank disk with a fresh GPT layout and Btrfs root selected for Snapper compatibility. First boot still verifies the actual bootc/OSTree mount target is a Btrfs subvolume before Recovery is enabled. Existing XFS installs remain supported and are never converted in place. If the scan cannot read partition data, or if you need ext4, XFS, separate /home, resized free space, encryption, LUKS/LVM, or any custom partitioning, use advanced storage.",
             bootloader:
                 "Bootloader and EFI setup are owned by the installer during install. The simple path is not a preservation proof; verify the final storage summary before writing changes.",
             bootloader_recovery:
@@ -559,7 +559,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
                 InstallPathOption {
                     title: "Advanced storage",
-                    summary: "Use this for encryption, ext4, btrfs, separate /home, resized partitions, or mixed disks.",
+                    summary: "Use this for encryption, ext4, XFS, separate /home, resized partitions, or mixed disks.",
                     action: "Use advanced storage and verify formatting, mount points, bootloader, and EFI target in the final summary.",
                     safety: "Continue only when every preserve/format row matches what you intend to keep or replace.",
                 },
@@ -605,11 +605,11 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
                 InstallPlanItem {
                     title: "Root filesystem",
-                    detail: "The simple path formats a new xfs root filesystem for the immutable system image.",
+                    detail: "The simple path formats a new Btrfs root filesystem. First boot must verify the bootc/OSTree path containing your home is itself a Btrfs subvolume before Snapper starts; Recovery then exposes only safe home-file copies.",
                 },
                 InstallPlanItem {
                     title: "Custom formatting",
-                    detail: "ext4, btrfs, separate /home, resized free space, TPM2 LUKS, LUKS/LVM, scan-unknown disks, and mixed-disk layouts stay in advanced storage so every format and preserve row is visible.",
+                    detail: "ext4, XFS, separate /home, resized free space, TPM2 LUKS, LUKS/LVM, scan-unknown disks, and mixed-disk layouts stay in advanced storage so every format and preserve row is visible.",
                 },
                 InstallPlanItem {
                     title: "Startup choice",
@@ -814,7 +814,7 @@ pub(crate) fn build_install_target_status() -> InstallTargetStatus {
                 },
                 StorageReviewItem {
                     title: "Formatting",
-                    detail: "Simple install creates a fresh GPT layout and xfs root. Manual storage is required for ext4, btrfs, separate /home, resized partitions, LUKS/LVM, or TPM2 LUKS choices.",
+                    detail: "Simple install creates a fresh GPT layout and Btrfs root selected for snapshot compatibility. Recovery remains off unless first boot verifies a supported Btrfs subvolume. Manual storage is required for ext4, XFS, separate /home, resized partitions, LUKS/LVM, or TPM2 LUKS choices.",
                 },
                 StorageReviewItem {
                     title: "Bootloader and EFI",
@@ -1481,7 +1481,7 @@ fn install_recommendation(
                 "Continue here only if {path} is the whole disk you want Goblins OS to own."
             ),
             install_target:
-                "Goblins OS will write a fresh GPT layout, boot/EFI setup, and xfs root for the immutable system image."
+                "Goblins OS will write a fresh GPT layout, boot/EFI setup, and Btrfs root selected for local snapshot compatibility. Recovery remains off until first boot verifies the actual Btrfs subvolume."
                     .to_string(),
             preserve:
                 "The readable installer scan reported no existing OS, recovery, EFI, or data partitions on this disk."
@@ -1562,7 +1562,7 @@ fn dual_boot_plan(
                 "Select this disk only if it is the disk you want Goblins OS to own completely."
                     .to_string(),
             storage_target:
-                "The whole disk becomes the Goblins OS target with a fresh GPT layout, boot/EFI setup, and xfs root filesystem."
+                "The whole disk becomes the Goblins OS target with a fresh GPT layout, boot/EFI setup, and Btrfs root filesystem selected for local snapshot compatibility. Recovery remains off until first boot verifies the actual Btrfs subvolume."
                     .to_string(),
             preserve:
                 "Other disks are not selected by this flow; still review firmware boot entries and any external disks before writing."
@@ -1643,8 +1643,8 @@ fn sectors_to_gib(sectors: u64) -> u64 {
 fn simple_install_filesystem(filesystem: &str) -> Result<(), &'static str> {
     match filesystem {
         DEFAULT_FILESYSTEM => Ok(()),
-        "ext4" | "btrfs" => Err(
-            "The simple Goblins OS flow only writes an xfs root on one scan-verified blank disk. Use advanced storage for ext4, btrfs, separate filesystems, or any custom formatting so the final summary shows every format and preserve row.",
+        "ext4" | "xfs" => Err(
+            "New simple installs use a Btrfs root selected for safe local snapshot compatibility; first boot must still verify the actual subvolume before Recovery turns on. Existing XFS installs stay supported and are never converted in place. Use advanced storage for ext4, XFS, separate filesystems, or any custom formatting so the final summary shows every format and preserve row.",
         ),
         _ => Err(
             "The requested root filesystem belongs in advanced storage, where the final summary must show every format row, preserve row, and bootloader/EFI target before writing.",
@@ -1864,7 +1864,7 @@ mod tests {
             .boot_guidance
             .contains("bootloader target"));
         assert!(!status.environment.secure_boot.detail.is_empty());
-        assert_eq!(status.bootc.default_filesystem, "xfs");
+        assert_eq!(status.bootc.default_filesystem, "btrfs");
         assert!(status
             .bootc
             .command_model
@@ -1896,7 +1896,7 @@ mod tests {
             .formatting_guidance
             .contains("scan cannot read partition data"));
         assert!(status.policy.formatting_guidance.contains("ext4"));
-        assert!(status.policy.formatting_guidance.contains("btrfs"));
+        assert!(status.policy.formatting_guidance.contains("Btrfs"));
         assert!(status
             .policy
             .advanced_storage_guidance
@@ -1949,7 +1949,7 @@ mod tests {
             .policy
             .pre_write_install_plan
             .iter()
-            .any(|item| { item.title == "Root filesystem" && item.detail.contains("xfs root") }));
+            .any(|item| { item.title == "Root filesystem" && item.detail.contains("Btrfs root") }));
         assert!(status.policy.pre_write_install_plan.iter().any(|item| {
             item.title == "Custom formatting" && item.detail.contains("TPM2 LUKS")
         }));
@@ -2241,10 +2241,11 @@ mod tests {
 
     #[test]
     fn simple_install_api_rejects_custom_storage_overrides() {
-        assert!(simple_install_filesystem("xfs").is_ok());
-        for filesystem in ["ext4", "btrfs"] {
+        assert!(simple_install_filesystem("btrfs").is_ok());
+        for filesystem in ["ext4", "xfs"] {
             let detail = simple_install_filesystem(filesystem).unwrap_err();
-            assert!(detail.contains("only writes an xfs root"));
+            assert!(detail.contains("Btrfs root"));
+            assert!(detail.contains("never converted in place"));
             assert!(detail.contains("advanced storage"));
             assert!(detail.contains("final summary"));
         }
@@ -2271,6 +2272,57 @@ mod tests {
         assert!(detail.contains("explicit wipe=true"));
         assert!(detail.contains("device-specific confirmation phrase"));
         assert!(simple_install_wipe_for_execute(true, Some(true)).is_ok());
+    }
+
+    #[test]
+    fn installed_storage_policy_defaults_new_installs_to_btrfs_without_xfs_conversion() {
+        let install_config = include_str!("../../../os/bootc-install/00-goblins-os.toml");
+        assert!(install_config.contains("[install.filesystem.root]\ntype = \"btrfs\""));
+
+        let setup = include_str!("../../../os/bootc/goblins-os-snapshots-setup");
+        assert!(setup.starts_with("#!/bin/sh\n"));
+        assert!(setup.contains("Existing XFS installs remain supported"));
+        assert!(setup.contains("if [ \"$filesystem\" != btrfs ]; then"));
+        assert!(setup.contains("\"$BTRFS\" subvolume show \"$subvolume\""));
+        assert!(setup.contains("FRESH_MARKER=$LAYOUT_STATE/initialize-home-v1"));
+        assert!(setup.contains("filesystem_probe=/var"));
+        assert!(setup.contains("stat -c '%u:%g:%a:%s'"));
+        assert!(setup.contains("\"$BTRFS\" subvolume create \"$HOME_PATH\""));
+        assert!(setup.contains("/usr/bin/cp -a --reflink=auto --one-file-system"));
+        assert!(setup.contains("/usr/sbin/matchpathcon -V \"$HOME_PATH\""));
+        assert!(!setup.contains("restorecon -RF /etc/snapper \"$subvolume/.snapshots\""));
+        assert!(setup.contains("Existing systems never receive it"));
+        assert!(setup.contains("leaving Recovery unavailable"));
+        assert!(setup.contains("\"$SNAPPER\" -c home create-config \"$subvolume\""));
+        assert!(setup.contains("'ALLOW_USERS='"));
+        assert!(setup.contains("'ALLOW_GROUPS='"));
+        assert!(!setup.contains("ALLOW_GROUPS=goblins-"));
+        assert!(setup.contains("'SYNC_ACL=yes'"));
+        assert!(setup.contains("snapshot_acl_is_private()"));
+        assert!(setup.contains("getfacl --absolute-names --numeric --omit-header"));
+        assert!(setup.contains("stale Snapper desktop authority could not be revoked"));
+        let authority_revoke = setup
+            .find("Authority revocation is independent")
+            .expect("early stale-authority revocation");
+        let storage_probe = setup
+            .find("filesystem_probe=$HOME_PATH")
+            .expect("storage readiness probe");
+        assert!(authority_revoke < storage_probe);
+        assert!(!setup.contains("mkfs"));
+        assert!(!setup.contains("btrfs-convert"));
+
+        let setup_unit =
+            include_str!("../../../os/systemd-system/goblins-os-snapshots-setup.service");
+        assert!(setup_unit.contains("-/var/home.goblins-os-seed-v1"));
+        assert!(setup_unit.contains("-/var/lib/goblins-os-snapshot-layout"));
+        let gdm_dependency =
+            include_str!("../../../os/systemd-system/gdm.service.d/10-goblins-os-snapshots.conf");
+        assert!(gdm_dependency.contains("Requires=goblins-os-snapshots-setup.service"));
+        assert!(gdm_dependency.contains("After=goblins-os-snapshots-setup.service"));
+
+        let verification_install = include_str!("../../../os/iso/verify-config.toml");
+        assert!(verification_install.contains("part / --fstype=btrfs"));
+        assert!(!verification_install.contains("part / --fstype=xfs"));
     }
 
     #[test]
@@ -2564,8 +2616,8 @@ mod tests {
             privileged: true,
             image: "localhost/goblins-os:test".to_string(),
             install_config_path: "/usr/lib/bootc/install/00-goblins-os.toml".to_string(),
-            default_filesystem: "xfs",
-            command_model: "Goblins OS disk install --filesystem xfs --wipe <device>",
+            default_filesystem: "btrfs",
+            command_model: "Goblins OS disk install --filesystem btrfs --wipe <device>",
         }
     }
 

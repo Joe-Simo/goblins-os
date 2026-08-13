@@ -5,10 +5,13 @@
 //! human-readable reference. Rebinding goes through the same allowlisted bridge:
 //! only known Goblins WM actions can be set/reset, chords are grammar-checked,
 //! conflicts against the owned action table are rejected, and Caps Lock remapping
-//! edits only the reversible `ctrl:*`/`caps:*` token in GNOME's xkb options.
+//! edits only the exact reversible `ctrl:nocaps` token Goblins OS owns.
+
+use std::sync::{Arc, OnceLock};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::bounded::{bounded_session_command_output, probe_timeout};
 
@@ -38,6 +41,7 @@ pub struct ShortcutEntry {
     id: String,
     action: String,
     bindings: Vec<String>,
+    accelerators: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -45,6 +49,8 @@ pub struct ShortcutsStatus {
     source: &'static str,
     available: bool,
     shortcuts: Vec<ShortcutEntry>,
+    modifier_remap_available: bool,
+    caps_lock_behavior: String,
     detail: String,
 }
 
@@ -80,32 +86,126 @@ pub struct ModifierRemapOutcome {
     xkb_options: Vec<String>,
 }
 
-pub async fn shortcuts_status() -> Json<ShortcutsStatus> {
-    Json(build_shortcuts_status())
+pub async fn shortcuts_status() -> (StatusCode, Json<ShortcutsStatus>) {
+    match tokio::task::spawn_blocking(build_shortcuts_status).await {
+        Ok(status) => (StatusCode::OK, Json(status)),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(shortcuts_worker_failed_status()),
+        ),
+    }
 }
 
 pub async fn set_shortcut_binding(
     Json(request): Json<SetShortcutBindingRequest>,
 ) -> (StatusCode, Json<KeyboardShortcutOutcome>) {
-    let (status, outcome) = set_shortcut_binding_outcome(request);
-    (status, Json(outcome))
+    let action = request.action.clone();
+    let bindings = request.bindings.clone().unwrap_or_default();
+    let Some(permit) = shortcut_mutation_permit() else {
+        let (status, outcome) = shortcut_response(
+            StatusCode::CONFLICT,
+            false,
+            "Another keyboard shortcut change is already in progress.",
+            action,
+            bindings,
+        );
+        return (status, Json(outcome));
+    };
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        set_shortcut_binding_outcome(request)
+    })
+    .await
+    {
+        Ok((status, outcome)) => (status, Json(outcome)),
+        Err(_) => {
+            let (status, outcome) = shortcut_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                false,
+                "The keyboard shortcut worker stopped unexpectedly. No change is reported.",
+                action,
+                bindings,
+            );
+            (status, Json(outcome))
+        }
+    }
 }
 
 pub async fn set_modifier_remap(
     Json(request): Json<SetModifierRemapRequest>,
 ) -> (StatusCode, Json<ModifierRemapOutcome>) {
-    let (status, outcome) = set_modifier_remap_outcome(request);
-    (status, Json(outcome))
+    let target = request.target.clone();
+    let value = request.value.clone();
+    let Some(permit) = shortcut_mutation_permit() else {
+        let (status, outcome) = modifier_response(
+            StatusCode::CONFLICT,
+            false,
+            "Another keyboard shortcut change is already in progress.",
+            target,
+            value,
+            Vec::new(),
+        );
+        return (status, Json(outcome));
+    };
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        set_modifier_remap_outcome(request)
+    })
+    .await
+    {
+        Ok((status, outcome)) => (status, Json(outcome)),
+        Err(_) => {
+            let (status, outcome) = modifier_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                false,
+                "The keyboard shortcut worker stopped unexpectedly. No change is reported.",
+                target,
+                value,
+                Vec::new(),
+            );
+            (status, Json(outcome))
+        }
+    }
+}
+
+fn shortcut_mutation_permit() -> Option<OwnedSemaphorePermit> {
+    static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    Arc::clone(LIMITER.get_or_init(|| Arc::new(Semaphore::new(1))))
+        .try_acquire_owned()
+        .ok()
+}
+
+fn shortcuts_worker_failed_status() -> ShortcutsStatus {
+    ShortcutsStatus {
+        source: "goblins-os-core",
+        available: false,
+        shortcuts: Vec::new(),
+        modifier_remap_available: false,
+        caps_lock_behavior: "unavailable".to_string(),
+        detail:
+            "Keyboard shortcuts could not be inspected because their worker stopped unexpectedly."
+                .to_string(),
+    }
 }
 
 fn build_shortcuts_status() -> ShortcutsStatus {
     let gsettings_available = gsettings(&["list-schemas"]).is_ok();
     let schema = schema_snapshot(gsettings_available, WM_SCHEMA);
+    let input_schema = schema_snapshot(gsettings_available, INPUT_SOURCES_SCHEMA);
+    let xkb_options = setting_strv(&input_schema, INPUT_SOURCES_SCHEMA, "xkb-options");
+    let modifier_remap_available = xkb_options.is_some();
+    let caps_lock_behavior = xkb_options
+        .as_deref()
+        .map(caps_lock_behavior)
+        .unwrap_or("unavailable")
+        .to_string();
     if !schema.available {
         return ShortcutsStatus {
             source: "goblins-os-core",
             available: false,
             shortcuts: Vec::new(),
+            modifier_remap_available,
+            caps_lock_behavior,
             detail: "Keyboard shortcuts are unavailable here (the Goblins window-management schema is not installed).".to_string(),
         };
     }
@@ -113,11 +213,15 @@ fn build_shortcuts_status() -> ShortcutsStatus {
     let shortcuts = SHORTCUTS
         .iter()
         .filter_map(|(key, label)| {
-            let bindings = setting_strv(&schema, WM_SCHEMA, key)?;
+            let accelerators = setting_strv(&schema, WM_SCHEMA, key)?;
             Some(ShortcutEntry {
                 id: (*key).to_string(),
                 action: (*label).to_string(),
-                bindings: bindings.iter().map(|b| humanize_accelerator(b)).collect(),
+                bindings: accelerators
+                    .iter()
+                    .map(|binding| humanize_accelerator(binding))
+                    .collect(),
+                accelerators,
             })
         })
         .collect();
@@ -126,6 +230,8 @@ fn build_shortcuts_status() -> ShortcutsStatus {
         source: "goblins-os-core",
         available: true,
         shortcuts,
+        modifier_remap_available,
+        caps_lock_behavior,
         detail: "These are the Goblins window-management shortcuts for this desktop.".to_string(),
     }
 }
@@ -261,6 +367,16 @@ fn set_modifier_remap_outcome(
         );
     }
     let current = setting_strv(&schema, INPUT_SOURCES_SCHEMA, "xkb-options").unwrap_or_default();
+    if caps_lock_behavior(&current) == "custom" {
+        return modifier_response(
+            StatusCode::CONFLICT,
+            false,
+            "A custom Caps Lock or Control mapping is already configured. Goblins OS left every XKB option unchanged; use the Keyboard system tool to edit that custom mapping.",
+            request.target,
+            request.value,
+            current,
+        );
+    }
     let options = remap_caps_lock_options(&current, value == "control");
     let encoded = encode_gsettings_strv(&options);
     match gsettings(&["set", INPUT_SOURCES_SCHEMA, "xkb-options", &encoded]) {
@@ -422,13 +538,27 @@ fn shortcut_conflict(schema: &SchemaSnapshot, action: &str, bindings: &[String])
 fn remap_caps_lock_options(options: &[String], control: bool) -> Vec<String> {
     let mut out = options
         .iter()
-        .filter(|option| !option.starts_with("ctrl:") && !option.starts_with("caps:"))
+        .filter(|option| option.as_str() != "ctrl:nocaps")
         .cloned()
         .collect::<Vec<_>>();
     if control {
         out.push("ctrl:nocaps".to_string());
     }
     out
+}
+
+fn caps_lock_behavior(options: &[String]) -> &'static str {
+    let has_owned = options.iter().any(|option| option == "ctrl:nocaps");
+    let has_custom = options.iter().any(|option| {
+        option != "ctrl:nocaps" && (option.starts_with("ctrl:") || option.starts_with("caps:"))
+    });
+    if has_custom {
+        "custom"
+    } else if has_owned {
+        "control"
+    } else {
+        "default"
+    }
 }
 
 fn encode_gsettings_strv(values: &[String]) -> String {
@@ -613,9 +743,17 @@ fn modifier_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_gsettings_strv, humanize_accelerator, normalize_accelerators, parse_gsettings_strv,
-        remap_caps_lock_options,
+        caps_lock_behavior, encode_gsettings_strv, humanize_accelerator, normalize_accelerators,
+        parse_gsettings_strv, remap_caps_lock_options, shortcut_mutation_permit,
     };
+
+    #[test]
+    fn shortcut_mutations_have_single_request_admission() {
+        let first = shortcut_mutation_permit().expect("first shortcut mutation is admitted");
+        assert!(shortcut_mutation_permit().is_none());
+        drop(first);
+        assert!(shortcut_mutation_permit().is_some());
+    }
 
     #[test]
     fn humanizes_accelerators() {
@@ -659,6 +797,8 @@ mod tests {
     fn caps_lock_remap_preserves_unrelated_xkb_options() {
         let current = vec![
             "grp:alt_shift_toggle".to_string(),
+            "ctrl:aa_ctrl".to_string(),
+            "caps:escape".to_string(),
             "ctrl:nocaps".to_string(),
             "compose:ralt".to_string(),
         ];
@@ -666,6 +806,8 @@ mod tests {
             remap_caps_lock_options(&current, true),
             vec![
                 "grp:alt_shift_toggle".to_string(),
+                "ctrl:aa_ctrl".to_string(),
+                "caps:escape".to_string(),
                 "compose:ralt".to_string(),
                 "ctrl:nocaps".to_string(),
             ]
@@ -674,8 +816,13 @@ mod tests {
             remap_caps_lock_options(&current, false),
             vec![
                 "grp:alt_shift_toggle".to_string(),
+                "ctrl:aa_ctrl".to_string(),
+                "caps:escape".to_string(),
                 "compose:ralt".to_string(),
             ]
         );
+        assert_eq!(caps_lock_behavior(&current), "custom");
+        assert_eq!(caps_lock_behavior(&["ctrl:nocaps".to_string()]), "control");
+        assert_eq!(caps_lock_behavior(&[]), "default");
     }
 }

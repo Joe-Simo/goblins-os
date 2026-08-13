@@ -832,6 +832,41 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(container_contains_check(
         root,
+        "studio-container-runtime-is-explicitly-packaged",
+        "busybox",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "studio-container-runtime-is-static",
+        "test -x /usr/bin/busybox.musl.static",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "studio-container-runtime-serves-static-web",
+        "/usr/bin/busybox.musl.static --list | grep -Fxq httpd",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "studio-container-runtime-license-is-packaged",
+        "test -s /usr/share/doc/busybox/LICENSE",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "studio-container-runtime-corresponding-source-is-packaged",
+        "download \\\n      --srpm \\\n      --destdir=/usr/share/goblins-os/studio-container",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "studio-container-runtime-source-matches-installed-version",
+        "\"busybox-$(rpm -q --qf '%{EVR}' busybox)\"",
+    ));
+    checks.push(container_contains_check(
+        root,
+        "studio-container-runtime-source-signature-is-verified",
+        "rpmkeys --checksig \"$busybox_source\" | grep -Fq 'digests signatures OK'",
+    ));
+    checks.push(container_contains_check(
+        root,
         "codex-cli-version-is-pinned",
         "ARG CODEX_VERSION=0.144.4",
     ));
@@ -1351,8 +1386,8 @@ fn source_checks(root: &Path) -> Vec<Check> {
     ));
     checks.push(contains_check(
         root.join("crates/goblins-os-settings/src/main.rs"),
-        "settings-keeps-snapshot-restore-read-only",
-        "Restore remains CI/qemu-gated",
+        "settings-offers-additive-snapshot-file-recovery",
+        "Current files and existing destination files are never overwritten",
     ));
     checks.extend(systemd_hardening_checks(root));
     checks.push(bootc_install_config_check(root));
@@ -6780,8 +6815,8 @@ fn systemd_hardening_checks(root: &Path) -> Vec<Check> {
 fn bootc_install_config_check(root: &Path) -> Check {
     contains_check(
         root.join("os/bootc-install/00-goblins-os.toml"),
-        "bootc-install-root-xfs",
-        "type = \"xfs\"",
+        "bootc-install-root-btrfs",
+        "type = \"btrfs\"",
     )
 }
 
@@ -7386,8 +7421,8 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
-            "install-policy-pre-write-plan-root-xfs",
-            "xfs root",
+            "install-policy-pre-write-plan-root-btrfs",
+            "Btrfs root",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -7422,17 +7457,174 @@ fn installer_readiness_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
             "install-policy-custom-formatting-options",
-            "ext4, btrfs, separate /home",
+            "ext4, XFS, separate /home",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
-            "install-simple-api-xfs-only-contract",
+            "install-simple-api-btrfs-only-contract",
             "simple_install_filesystem",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
             "install-simple-api-rejects-custom-filesystems",
-            "only writes an xfs root",
+            "New simple installs use a Btrfs root",
+        ),
+        contains_check(
+            root.join("os/bootc-install/00-goblins-os.toml"),
+            "installed-default-root-filesystem-is-btrfs",
+            "type = \"btrfs\"",
+        ),
+        contains_check(
+            root.join("os/iso/build-iso.sh"),
+            "iso-builder-default-root-filesystem-is-btrfs",
+            "ROOTFS=\"${GOBLINS_OS_ROOTFS:-btrfs}\"",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-only-enables-btrfs",
+            "if [ \"$filesystem\" != btrfs ]; then",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-proves-subvolume-before-configuring",
+            "\"$BTRFS\" subvolume show \"$subvolume\"",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-creates-home-subvolume-only-with-fresh-install-marker",
+            "FRESH_MARKER=$LAYOUT_STATE/initialize-home-v1",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-resumes-when-home-is-held-at-seed",
+            "filesystem_probe=/var",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-marker-check-is-numeric-and-locale-independent",
+            "stat -c '%u:%g:%a:%s'",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-verifies-home-selinux-label",
+            "/usr/sbin/matchpathcon -V \"$HOME_PATH\"",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-creates-dedicated-home-subvolume",
+            "\"$BTRFS\" subvolume create \"$HOME_PATH\"",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-fails-closed-on-unverified-bootc-layout",
+            "leaving Recovery unavailable",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-creates-bounded-home-config",
+            "\"$SNAPPER\" -c home create-config \"$subvolume\"",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-grants-no-non-root-snapper-authority",
+            "ALLOW_GROUPS=",
+        ),
+        absent_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-never-authorizes-goblins-groups",
+            "ALLOW_GROUPS=goblins-",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-synchronizes-configured-acl",
+            "SYNC_ACL=yes",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-verifies-no-stale-named-acl-principals",
+            "getfacl --absolute-names --numeric --omit-header",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-fails-closed-when-stale-authority-remains",
+            "stale Snapper desktop authority could not be revoked",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-preserves-existing-xfs",
+            "Existing XFS installs remain supported and are never converted in place.",
+        ),
+        absent_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-never-formats-storage",
+            "mkfs",
+        ),
+        absent_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-never-converts-storage",
+            "btrfs-convert",
+        ),
+        contains_check(
+            root.join("os/systemd-system/goblins-os-snapshots-setup.service"),
+            "snapshot-setup-service-uses-fixed-helper",
+            "ExecStart=/usr/libexec/goblins-os/goblins-os-snapshots-setup",
+        ),
+        contains_check(
+            root.join("os/systemd-system/goblins-os-snapshots-setup.service"),
+            "snapshot-setup-service-keeps-snapshot-paths-writable",
+            "-/var/home.goblins-os-seed-v1",
+        ),
+        contains_check(
+            root.join(
+                "os/systemd-system/gdm.service.d/10-goblins-os-snapshots.conf",
+            ),
+            "snapshot-setup-failure-blocks-graphical-login",
+            "Requires=goblins-os-snapshots-setup.service",
+        ),
+        absent_check(
+            root.join("os/bootc/goblins-os-snapshots-setup"),
+            "snapshot-setup-never-recursively-relabels-snapshot-payloads",
+            "restorecon -RF /etc/snapper \"$subvolume/.snapshots\"",
+        ),
+        contains_check(
+            root.join("os/bootc/Containerfile"),
+            "snapshot-setup-service-is-enabled-in-image",
+            "systemctl enable goblins-os-snapshots-setup.service",
+        ),
+        contains_check(
+            root.join("os/systemd-system/goblins-os-snapshot-broker.service"),
+            "snapshot-broker-runtime-directory-is-reader-traversable",
+            "Group=goblins-snapshot-readers",
+        ),
+        contains_check(
+            root.join("os/systemd-system/goblins-os-snapshot-broker.service"),
+            "snapshot-broker-alone-retains-snapshot-filesystem-access",
+            "SupplementaryGroups=goblins-snapshots",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-snapshot-broker/src/main.rs"),
+            "snapshot-broker-derives-the-fixed-desktop-home",
+            "const DESKTOP_USER: &str = \"goblin\";",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-session-bridge/src/main.rs"),
+            "snapshot-recovery-publishes-a-complete-unnamed-inode",
+            "libc::AT_SYMLINK_FOLLOW",
+        ),
+        contains_check(
+            root.join("os/bootc/goblins-os-system-update"),
+            "downloaded-image-apply-uses-the-fixed-bootc-transition",
+            "exec \"$BOOTC\" upgrade --from-downloaded --apply",
+        ),
+        contains_check(
+            root.join("os/bootc/60-goblins-os-system-update.rules"),
+            "downloaded-image-apply-is-an-exact-polkit-unit",
+            "check|download|apply|apply-downloaded|reboot|rollback",
+        ),
+        contains_check(
+            root.join("os/systemd-system/goblins-os-system-reboot.timer"),
+            "restart-acknowledgement-has-a-fixed-delay",
+            "OnActiveSec=5s",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/install_targets.rs"),
@@ -13041,7 +13233,7 @@ fn arm64_release_checks(root: &Path) -> Vec<Check> {
         contains_check(
             root.join("os/iso/verify-config.toml"),
             "verify-config-puts-root-on-scratch-vda",
-            "part / --fstype=xfs --label=root --grow --size=1024 --ondisk=vda",
+            "part / --fstype=btrfs --label=root --grow --size=1024 --ondisk=vda",
         ),
         contains_check(
             root.join("os/iso/verify-config.toml"),
@@ -19825,14 +20017,24 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
             "/proc/self/mountinfo",
         ),
         contains_check(
-            root.join("crates/goblins-os-core/src/snapshots.rs"),
-            "core-snapshots-snapper-machine-parser",
+            root.join("crates/goblins-os-snapshot-broker/src/main.rs"),
+            "snapshot-broker-snapper-machine-parser",
             "parse_snapper_machine_readable",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/snapshots.rs"),
-            "core-snapshots-btrfs-home-honesty",
-            "Local snapshots need a btrfs /home",
+            "core-snapshots-btrfs-storage-honesty",
+            "Local snapshots need Btrfs storage containing your home folder",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/snapshots.rs"),
+            "core-snapshots-root-scope-honesty",
+            "On the default Btrfs-root layout the storage snapshot also contains system data; Recovery exposes only safe copies of files inside your home.",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-core/src/snapshots.rs"),
+            "core-snapshots-proves-subvolume-at-home-mount-target",
+            "mount_point_covers(mount, configured_subvolume)",
         ),
         contains_check(
             root.join("crates/goblins-os-core/src/snapshots.rs"),
@@ -23561,8 +23763,18 @@ fn goblins_ai_contract_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             root.join("crates/goblins-os-settings/src/main.rs"),
-            "settings-keyboard-shortcuts-source-gated-copy",
-            "Protected shortcut writes are source-gated",
+            "settings-keyboard-shortcuts-editor",
+            "keyboard_shortcut_editor_row",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-shortcuts-protected-write-route",
+            "/v1/keyboard/shortcuts/binding",
+        ),
+        contains_check(
+            root.join("crates/goblins-os-settings/src/main.rs"),
+            "settings-keyboard-shortcuts-recording-control",
+            "Recording keyboard shortcut",
         ),
         contains_check(
             root.join("os/gnome-shell-extensions/goblins-wm@goblins.os/schemas/org.goblins.shell.extensions.wm.gschema.xml"),

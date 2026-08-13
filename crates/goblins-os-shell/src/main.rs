@@ -4104,7 +4104,7 @@ fn run_standalone(config: ShellConfig, target: StandaloneTarget) -> ShellResult<
 
         let app_detail = gtk::Box::new(gtk::Orientation::Vertical, 0);
         app_detail.set_vexpand(true);
-        let home = build_home(&config, &shell_state, &body, &app_detail, None);
+        let home = build_home(&config, &shell_state, &body, &app_detail);
         let studio = build_studio(&config, &shell_state, &body);
         body.add_named(&home, Some("home"));
         body.add_named(&studio, Some("studio"));

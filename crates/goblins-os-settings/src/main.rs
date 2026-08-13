@@ -8477,22 +8477,32 @@ fn append_bluetooth_device_rows(
             actions.append(&bluetooth_device_action_button(
                 core,
                 device,
-                "Disconnect",
-                "disconnect",
+                BluetoothDeviceAction::Disconnect,
                 list,
                 &row,
                 &status,
                 feedback,
-                false,
             ));
         } else if device.paired == Some(true) {
             actions.append(&bluetooth_device_action_button(
-                core, device, "Connect", "connect", list, &row, &status, feedback, false,
+                core,
+                device,
+                BluetoothDeviceAction::Connect,
+                list,
+                &row,
+                &status,
+                feedback,
             ));
         }
         if device.paired == Some(true) || device.trusted == Some(true) {
             actions.append(&bluetooth_device_action_button(
-                core, device, "Forget", "forget", list, &row, &status, feedback, true,
+                core,
+                device,
+                BluetoothDeviceAction::Forget,
+                list,
+                &row,
+                &status,
+                feedback,
             ));
         }
         row.append(&actions);
@@ -8543,19 +8553,57 @@ fn bluetooth_pairing_handoff_button(
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone, Copy)]
+enum BluetoothDeviceAction {
+    Connect,
+    Disconnect,
+    Forget,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+impl BluetoothDeviceAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connect => "Connect",
+            Self::Disconnect => "Disconnect",
+            Self::Forget => "Forget",
+        }
+    }
+
+    fn api_value(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Disconnect => "disconnect",
+            Self::Forget => "forget",
+        }
+    }
+
+    fn present_participle(self) -> &'static str {
+        match self {
+            Self::Connect => "Connecting",
+            Self::Disconnect => "Disconnecting",
+            Self::Forget => "Forgetting",
+        }
+    }
+
+    fn removes_device(self) -> bool {
+        matches!(self, Self::Forget)
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn bluetooth_device_action_button(
     core: &CoreClient,
     device: &BluetoothDeviceStatus,
-    label_text: &'static str,
-    action: &'static str,
+    action: BluetoothDeviceAction,
     list: &gtk4::Box,
     row: &gtk4::Box,
     status: &gtk4::Label,
     feedback: &gtk4::Label,
-    removes_device: bool,
 ) -> gtk4::Button {
     use gtk4::prelude::*;
 
+    let label_text = action.label();
     let control = button(label_text, &["gos-permission-action"]);
     let accessible = format!("{label_text} {}", device.name);
     set_accessible_label_description(&control, &accessible, &device.address);
@@ -8567,10 +8615,7 @@ fn bluetooth_device_action_button(
     let feedback = feedback.clone();
     control.connect_clicked(move |button| {
         button.set_sensitive(false);
-        status.set_text(&format!(
-            "{} in progress…",
-            bluetooth_action_present(action)
-        ));
+        status.set_text(&format!("{} in progress…", action.present_participle()));
         let core_worker = core.clone();
         let core_complete = core.clone();
         let address = address.clone();
@@ -8580,7 +8625,7 @@ fn bluetooth_device_action_button(
         let feedback = feedback.clone();
         let row = row.clone();
         run_settings_action(
-            move || change_bluetooth_device_and_refresh(&core_worker, &address, action),
+            move || change_bluetooth_device_and_refresh(&core_worker, &address, action.api_value()),
             move |result| match result {
                 Ok((message, refreshed_devices)) => {
                     status.set_text(&message);
@@ -8594,7 +8639,7 @@ fn bluetooth_device_action_button(
                                 "No known Bluetooth devices. Choose Scan to find nearby devices.",
                             ));
                         }
-                    } else if removes_device {
+                    } else if action.removes_device() {
                         row.set_visible(false);
                     }
                 }
@@ -8626,15 +8671,6 @@ fn bluetooth_device_detail(device: &BluetoothDeviceStatus) -> String {
         ""
     };
     format!("{state}{trust} · {}", device.address)
-}
-
-fn bluetooth_action_present(action: &str) -> &'static str {
-    match action {
-        "connect" => "Connecting",
-        "disconnect" => "Disconnecting",
-        "forget" => "Forgetting",
-        _ => "Bluetooth change",
-    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]

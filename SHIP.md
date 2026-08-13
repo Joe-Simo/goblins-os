@@ -261,8 +261,9 @@ before writes happen. The simple flow is
 blank-disk, whole-disk erase only: if it detects existing OS, recovery, EFI, or
 data partitions, it protects that disk from the simple flow and points the user
 to advanced storage. Whole-disk erase still requires a
-typed device-specific acknowledgement. The simple flow uses xfs on a fresh GPT
-layout; ext4, btrfs, separate `/home`, resized free space, encryption, TPM2
+typed device-specific acknowledgement. The simple flow uses Btrfs on a fresh GPT
+layout so Snapshot Recovery can be verified after first boot; ext4, XFS,
+separate `/home`, resized free space, encryption, TPM2
 LUKS, LUKS/LVM, and any custom partitioning stay in advanced storage where
 the formatting, mount points, bootloader/EFI target, and
 preserved partitions are visible before writing. The installer also exposes a

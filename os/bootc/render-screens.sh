@@ -781,17 +781,20 @@ capture_settings_polish_interactions() {
 
   # Load authoritative engine state first, then stop the real core and invoke the
   # real selector. This proves the product error state without treating a missing
-  # status response as evidence that GPT-OSS is active.
+  # status response as evidence that GPT-OSS is active. Unlock the on-device
+  # route first so the GPT-OSS segment is actually sensitive; a disabled
+  # control would swallow the click and produce a false zero-pixel proof.
+  core_proof_curl -sSf -X POST "$CORE_PROOF_URL/v1/session/unlock" \
+    -H 'content-type: application/json' -d '{"mode":"local-gpt-oss"}' >/dev/null
   start_interaction_window goblins-os-settings "Goblins OS Settings - AI & Models" --panel=models
   width="$(interaction_window_size "$INTERACTION_WID" WIDTH 1055)"
   height="$(interaction_window_size "$INTERACTION_WID" HEIGHT 840)"
   xdotool mousemove 2 2
   capture_existing_window "$INTERACTION_WID" .settings-models-engine-online.png "Settings Models online comparison"
   stop_core
-  # The selected on-device segment occupies the left half of the selector near
-  # the top of the Models pane. Click its stable center so the real action—not
-  # nearby explanatory copy—is exercised after the core goes offline.
-  xdotool mousemove --window "$INTERACTION_WID" $((width * 49 / 100)) $((height * 41 / 100))
+  # The on-device segment is the left half of the two-button engine row, just
+  # below the Models header and "Goblins AI engine" kicker.
+  xdotool mousemove --window "$INTERACTION_WID" $((width * 38 / 100)) $((height * 25 / 100))
   xdotool click 1
   sleep 1.0
   xdotool mousemove 2 2

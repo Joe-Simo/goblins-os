@@ -839,7 +839,7 @@ capture_settings_polish_interactions() {
 }
 
 capture_studio_polish_interactions() {
-  local width height picker_x picker_y option_x option_y menu_difference closed_error_difference dark_menu_difference
+  local width height picker_x picker_y option_x option_y menu_open_difference menu_difference closed_error_difference dark_menu_difference
 
   export GOBLINS_OS_THEME=light
   seed_first_boot_profile cloud-openai
@@ -848,9 +848,10 @@ capture_studio_polish_interactions() {
   start_interaction_window goblins-os-shell "Goblins OS" --studio
   width="$(interaction_window_size "$INTERACTION_WID" WIDTH 940)"
   height="$(interaction_window_size "$INTERACTION_WID" HEIGHT 700)"
-  # The engine picker is anchored in the lower-left of the right-side composer.
-  picker_x=$((width * 63 / 100))
-  picker_y=$((height * 83 / 100))
+  # On the 940x700 Studio surface the GPT-OSS MenuButton is the left control
+  # in the composer card (x=370-480, y=527-560), not the empty card interior.
+  picker_x=$((width * 45 / 100))
+  picker_y=$((height * 78 / 100))
   xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" .studio-engine-menu-closed.png "Studio engine menu closed comparison"
   xdotool mousemove --window "$INTERACTION_WID" "$picker_x" "$picker_y"
@@ -858,13 +859,20 @@ capture_studio_polish_interactions() {
   sleep 0.8
   xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" 127-studio-engine-menu.png "Studio explicit engine menu"
+  menu_open_difference="$(image_absolute_error_pixels \
+    "$OUT/.studio-engine-menu-closed.png" \
+    "$OUT/127-studio-engine-menu.png")"
+  if [ "$menu_open_difference" -lt 100 ]; then
+    echo "RENDER-FAILED Studio engine menu did not visibly open (changed_pixels=$menu_open_difference)" >&2
+    return 1
+  fi
 
   stop_core
-  # The popover opens above the lower composer. Exercise its first enabled,
-  # on-device option directly; keyboard traversal from a MenuButton closes the
+  # The popover opens above the picker. The first enabled on-device option sits
+  # under the readiness line; keyboard traversal from a MenuButton closes the
   # popover before entering this plain vertical button list on GTK 4.
   option_x="$picker_x"
-  option_y=$((picker_y - height * 34 / 100))
+  option_y=$((picker_y - height * 28 / 100))
   xdotool mousemove --window "$INTERACTION_WID" "$option_x" "$option_y"
   xdotool click 1
   sleep 1.0
@@ -894,8 +902,8 @@ capture_studio_polish_interactions() {
   start_interaction_window goblins-os-shell "Goblins OS" --studio
   width="$(interaction_window_size "$INTERACTION_WID" WIDTH 940)"
   height="$(interaction_window_size "$INTERACTION_WID" HEIGHT 700)"
-  picker_x=$((width * 63 / 100))
-  picker_y=$((height * 83 / 100))
+  picker_x=$((width * 45 / 100))
+  picker_y=$((height * 78 / 100))
   xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" .studio-dark-engine-menu-closed.png "Studio dark engine menu closed comparison"
   xdotool mousemove --window "$INTERACTION_WID" "$picker_x" "$picker_y"

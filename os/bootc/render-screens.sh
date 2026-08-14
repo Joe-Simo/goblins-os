@@ -854,10 +854,12 @@ capture_studio_polish_interactions() {
   picker_y=$((height * 78 / 100))
   xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" .studio-engine-menu-closed.png "Studio engine menu closed comparison"
+  # Stop core before opening the popover. Stopping it while the menu is open
+  # destroys that transient and collapses the proof back to the closed frame.
+  stop_core
   xdotool mousemove --window "$INTERACTION_WID" "$picker_x" "$picker_y"
   xdotool click 1
   sleep 0.8
-  xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" 127-studio-engine-menu.png "Studio explicit engine menu"
   menu_open_difference="$(image_absolute_error_pixels \
     "$OUT/.studio-engine-menu-closed.png" \
@@ -867,7 +869,6 @@ capture_studio_polish_interactions() {
     return 1
   fi
 
-  stop_core
   # The popover opens above the picker. The first enabled on-device option sits
   # under the readiness line; keyboard traversal from a MenuButton closes the
   # popover before entering this plain vertical button list on GTK 4.

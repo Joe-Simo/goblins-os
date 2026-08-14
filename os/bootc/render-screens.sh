@@ -213,6 +213,21 @@ stop_core() {
   return 1
 }
 
+# GPT-OSS is selectable only when the local runtime contract is present.
+# Session unlock does not create that contract. Use the same loopback runtime
+# the ISO and hardware-gate fixtures publish so the real selector is sensitive.
+configure_local_engine_route_for_proof() {
+  export GOBLINS_OS_LOCAL_RUNTIME_URL="${GOBLINS_OS_LOCAL_RUNTIME_URL:-http://127.0.0.1:41134}"
+  export GOBLINS_OS_LOCAL_MODEL="${GOBLINS_OS_LOCAL_MODEL:-llama3.2:1b}"
+  stop_core
+  start_core
+  if ! core_proof_curl -sSf "$CORE_PROOF_URL/v1/ai/runtime/status" \
+    | jq -e '.engine.local_ready == true' >/dev/null; then
+    echo "RENDER-FAILED on-device GPT-OSS route was not ready after configuring the local runtime contract" >&2
+    return 1
+  fi
+}
+
 seed_first_boot_profile() {
   local mode="$1"
 
@@ -707,7 +722,7 @@ image_absolute_error_pixels() {
 }
 
 capture_settings_polish_interactions() {
-  local width height content_x content_y click_x click_y expanded_difference dark_expanded_difference offline_difference
+  local width height content_x content_y content_left content_width click_x click_y expanded_difference dark_expanded_difference offline_difference
 
   export GOBLINS_OS_THEME=light
   seed_first_boot_profile cloud-openai
@@ -781,9 +796,9 @@ capture_settings_polish_interactions() {
 
   # Load authoritative engine state first, then stop the real core and invoke the
   # real selector. This proves the product error state without treating a missing
-  # status response as evidence that GPT-OSS is active. Unlock the on-device
-  # route first so the GPT-OSS segment is actually sensitive; a disabled
-  # control would swallow the click and produce a false zero-pixel proof.
+  # status response as evidence that GPT-OSS is active. The GPT-OSS segment stays
+  # disabled until the local runtime contract is present, so configure that
+  # contract before opening Settings. A disabled control swallows the click.
   core_proof_curl -sSf -X POST "$CORE_PROOF_URL/v1/session/unlock" \
     -H 'content-type: application/json' -d '{"mode":"local-gpt-oss"}' >/dev/null
   start_interaction_window goblins-os-settings "Goblins OS Settings - AI & Models" --panel=models
@@ -792,9 +807,14 @@ capture_settings_polish_interactions() {
   xdotool mousemove 2 2
   capture_existing_window "$INTERACTION_WID" .settings-models-engine-online.png "Settings Models online comparison"
   stop_core
-  # The on-device segment is the left half of the two-button engine row, just
-  # below the Models header and "Goblins AI engine" kicker.
-  xdotool mousemove --window "$INTERACTION_WID" $((width * 38 / 100)) $((height * 25 / 100))
+  # Sidebar min-width is 244px and the main pane pads 32px. The GPT-OSS segment
+  # is the left half of the two-button row under "Goblins AI engine", not the
+  # intro copy above it.
+  content_left=$((244 + 32))
+  content_width=$((width - 244 - 64))
+  click_x=$((content_left + content_width / 4))
+  click_y=$((height * 32 / 100))
+  xdotool mousemove --window "$INTERACTION_WID" "$click_x" "$click_y"
   xdotool click 1
   sleep 1.0
   xdotool mousemove 2 2
@@ -1274,6 +1294,7 @@ capture_polish_interactions() {
   FIRST_BOOT_OFFLINE_CODEX_SUPPORTED=""
   FIRST_BOOT_OFFLINE_CODEX_CAPTURED=""
 
+  configure_local_engine_route_for_proof
   capture_settings_polish_interactions
   capture_studio_polish_interactions
   capture_first_app_polish_interactions

@@ -8954,6 +8954,16 @@ fn polish_interaction_screenshot_checks(root: &Path) -> Vec<Check> {
         ),
         contains_check(
             render_script.clone(),
+            "render-polish-interaction-enables-local-runtime-contract",
+            "GOBLINS_OS_LOCAL_RUNTIME_URL",
+        ),
+        contains_check(
+            render_script.clone(),
+            "render-polish-interaction-asserts-local-ready",
+            ".engine.local_ready == true",
+        ),
+        contains_check(
+            render_script.clone(),
             "render-polish-interaction-requires-zero-motion-difference",
             "reduced_motion_zero_difference",
         ),

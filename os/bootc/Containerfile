@@ -138,7 +138,7 @@ COPY os/etc/system-release /etc/system-release
 FROM quay.io/fedora/fedora-bootc:44 AS goblins-os
 
 LABEL org.opencontainers.image.title="Goblins OS" \
-    org.opencontainers.image.description="Goblins OS — an open AI-native Linux desktop for building local software" \
+    org.opencontainers.image.description="Goblins OS â an open AI-native Linux desktop for building local software" \
     org.opencontainers.image.source="https://github.com/Joe-Simo/goblins-os" \
     org.opencontainers.image.url="https://goblinsos.com" \
     org.opencontainers.image.documentation="https://github.com/Joe-Simo/goblins-os/blob/main/SHIP.md" \
@@ -464,7 +464,7 @@ RUN for client in \
 # the home lives under /var/home for bootc/ostree persistence. The login user is
 # deliberately NOT a member of the `goblins-os` service group: the OS account
 # credential (CODEX_HOME/auth.json) and the operator secrets are owned by the
-# service user only, so the desktop session — and anything it launches — can
+# service user only, so the desktop session â and anything it launches â can
 # never read them. The password hash is intentionally invalid but not
 # shadow-locked: GDM autologin can enter the local session, while password auth
 # still has no valid local secret to verify. Codex sign-in is driven by the core
@@ -551,7 +551,18 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && test ! -e /usr/share/applications/chatgpt.desktop && test ! -L /usr/share/applications/chatgpt.desktop \
     && ! rpm -q chatgpt \
     && command -v notify-send \
-    && test -L /usr/local && test "$(readlink -f /usr/local)" = "/var/usrlocal" \
+    && install -d -m 0755 /var/usrlocal \
+    && if [ ! -L /usr/local ] || [ "$(readlink -f /usr/local 2>/dev/null || true)" != "/var/usrlocal" ]; then \
+         if [ -e /usr/local ] && [ ! -L /usr/local ]; then \
+           cp -a /usr/local/. /var/usrlocal/ 2>/dev/null || true; \
+           rm -rf /usr/local; \
+         else \
+           rm -f /usr/local; \
+         fi; \
+         ln -s ../var/usrlocal /usr/local; \
+       fi \
+    && test -L /usr/local \
+    && test "$(readlink -f /usr/local)" = "/var/usrlocal" \
     && ! grep -q '^CODEX_HOME=' /etc/goblins-os/environment \
     && grep -Fxq 'Environment=CODEX_HOME=/var/lib/goblins-os/codex' /usr/lib/systemd/system/goblins-os-core.service \
     && desktop-file-validate /usr/lib/goblins-os/application-overrides/chatgpt.desktop \
@@ -658,7 +669,7 @@ RUN (gtk4-update-icon-cache -f /usr/share/icons/GoblinsOS \
 # owns the shortcuts directly.
 RUN glib-compile-schemas /usr/share/gnome-shell/extensions/goblins-wm@goblins.os/schemas
 
-# Goblins-owned system schemas (Focus modes, …) compiled into the shared schema set.
+# Goblins-owned system schemas (Focus modes, â¦) compiled into the shared schema set.
 RUN glib-compile-schemas /usr/share/glib-2.0/schemas
 
 # Rebrand the Anaconda installer chrome (the disk installer the ISO boots into):

@@ -148,7 +148,9 @@ jobs:
             -v "$PWD:/workspace:ro" \
             -w /workspace \
             "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
-            /usr/libexec/goblins-os/goblins-os-verify --source-root /workspace \
+            /usr/libexec/goblins-os/goblins-os-verify \
+            --source-root /workspace \
+            --source-profile update \
             | tee /tmp/goblins-os-aarch64-source-verify.log
           grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
             /tmp/goblins-os-aarch64-source-verify.log

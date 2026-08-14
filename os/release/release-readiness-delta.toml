@@ -4,9 +4,9 @@
 
 [manifest]
 name = "goblins-os-release-readiness-delta"
-version = 1
+version = 2
 status = "partial"
-reason = "The public alpha media and anonymous GHCR pulls exist, but stable readiness is not established: no exact stable candidate is tied to fresh dual-architecture release and display proof, and the aarch64 proof-manifest and signoff ISO hashes disagree."
+reason = "Earlier public alpha media remain historical, but stable readiness is not established: the ARM64-only policy requires a new exact candidate tied to fresh native aarch64 packaging, capture-host-signed display, and signoff proof."
 
 [source_package]
 root = "."
@@ -14,7 +14,7 @@ source_tree_manifest = "os/release/source-tree-manifest.toml"
 base_os = "Fedora bootc"
 desktop_stack = ["Rust", "GNOME", "GTK", "systemd"]
 font_stack = ["Inter", "Noto Sans fallback"]
-architecture_policy = ["x86_64", "aarch64"]
+architecture_policy = ["aarch64"]
 prohibited = [
   "OpenAI Sans",
   "SF Pro",
@@ -38,13 +38,13 @@ verification = "cargo fmt, clippy, test, and release build with native desktop f
 name = "bootc_image_contract"
 paths = ["os/bootc/Containerfile", "os/bootc-install/"]
 purpose = "Fedora bootc image package list, bootc install configuration, native app installation, GNOME/session integration, and image build assertions."
-verification = "Native bootc image build for x86_64 and aarch64 plus installed-root self-test."
+verification = "Native aarch64 bootc image build plus installed-root self-test."
 
 [[source_sets]]
 name = "native_architecture_image_contract"
 paths = ["os/bootc/Containerfile"]
-purpose = "Fail-closed native image builds for exactly x86_64 and aarch64. The Rust builder host, Fedora image machine architecture, and Fedora RPM architecture must all match a supported architecture."
-verification = "Image build must fail outside x86_64/aarch64 and must fail if uname -m disagrees with rpm --eval %{_arch}; release automation still must produce separate goblins-os-x86_64.iso and goblins-os-aarch64.iso artifacts."
+purpose = "Fail-closed native image builds for exactly aarch64. The Rust builder host, Fedora image machine architecture, and Fedora RPM architecture must all match the sole supported architecture."
+verification = "Image construction must reject every non-aarch64 host and fail if uname -m disagrees with rpm --eval %{_arch}; release automation produces only goblins-os-aarch64.iso."
 
 [[source_sets]]
 name = "installer_and_dual_boot"
@@ -72,7 +72,7 @@ verification = "Image build must prove Inter resolves through fontconfig, OpenAI
 name = "non_steam_gaming_substrate"
 paths = ["os/bootc/Containerfile", "crates/goblins-os-settings/src/main.rs", "crates/goblins-os-verify/src/main.rs"]
 purpose = "Native Fedora gaming substrate without Steam: Vulkan/Mesa, Vulkan tools, Gamescope, GameMode, MangoHud, VAAPI diagnostics, Flatpak portals, PipeWire audio, and controller/device diagnostics."
-verification = "Image build must prove the packages and commands exist, prove steam and steam-devices are absent, then display-backed hardware proof must run Vulkan sample, GameMode, Gamescope, MangoHud, controller detection, and audio output per architecture."
+verification = "The native aarch64 image must prove the packages and commands exist, prove steam and steam-devices are absent, then display-backed Arm hardware proof must run Vulkan sample, GameMode, Gamescope, MangoHud, controller detection, and audio output."
 
 [[source_sets]]
 name = "user_initiated_non_steam_launchers"
@@ -98,14 +98,7 @@ package_status = "generated proof artifacts; preserve but do not treat as source
 [[generated_outputs]]
 name = "iso_outputs"
 paths = ["os/iso/output*/", "artifacts/"]
-package_status = "release/build artifacts; regenerate per architecture"
-
-[[release_artifacts]]
-name = "x86_64_iso"
-path = "goblins-os-x86_64.iso"
-required = true
-status = "published-alpha-not-stable-candidate"
-verification = "The published alpha has x86_64 media and evidence; stable promotion requires fresh media, checksums, manifests, runtime proof, screenshots, and signoff tied to the exact stable candidate."
+package_status = "release/build artifacts; regenerate for native aarch64"
 
 [[release_artifacts]]
 name = "aarch64_iso"
@@ -159,36 +152,32 @@ name = "source_package_materialized"
 evidence = "The tracked source package and release-governance paths are present; current worktree cleanliness and exact-candidate proof are not established here."
 
 [[current_evidence]]
-name = "x86_64_rpm_sbom_present"
-evidence = "The published alpha evidence includes x86_64 RPM package data. It is historical alpha evidence, not proof for an exact stable candidate."
-
-[[current_evidence]]
-name = "dual_arch_rpm_sbom_present"
-evidence = "The published alpha evidence includes package data for both architectures. Stable promotion still requires regenerated evidence tied to the exact candidate."
+name = "historical_alpha_evidence_preserved"
+evidence = "Published alpha records remain immutable history. They are not accepted as proof for the new ARM64-only stable candidate."
 
 [[current_evidence]]
 name = "ghcr_public_pull_verified"
-evidence = "The goblins-os package is public and anonymous manifest requests for the x86_64 and aarch64 tags succeed."
+evidence = "The historical goblins-os alpha package is public. Stable promotion still requires a fresh immutable aarch64 digest tied to the selected candidate."
 
 [[current_blockers]]
 name = "native_linux_release_runner_required"
-evidence = "An exact stable candidate still requires native per-architecture release construction and x86_64 Linux/KVM display proof; the current macOS host cannot supply those authoritative results."
-next_required_action = "After selecting the stable candidate, run the canonical native architecture release and display-proof routes with the required Linux, Docker, QEMU/KVM, bootc-image-builder, and storage capacity."
+evidence = "An exact stable candidate still requires native aarch64 Linux release construction. The current macOS host can capture Apple Silicon/HVF display proof but cannot replace native Linux packaging evidence."
+next_required_action = "After selecting the stable candidate, run the canonical native aarch64 Linux packaging route with Docker and bootc-image-builder, then capture the matching Apple Silicon/HVF display proof."
 
 [[current_blockers]]
 name = "shippable_release_iso_artifacts_incomplete"
-evidence = "Shippable alpha ISOs are published, but no fresh x86_64 and aarch64 media set is tied to an exact stable candidate."
-next_required_action = "Build both stable-candidate ISO tracks from immutable release image references and record their checksums, manifests, and package evidence."
+evidence = "Historical alpha ISOs are published, but no fresh aarch64 medium is tied to the ARM64-only stable candidate."
+next_required_action = "Build the aarch64 stable-candidate ISO from its immutable release image reference and record its checksum, manifests, and package evidence."
 
 [[current_blockers]]
 name = "display_backed_architecture_proofs_missing"
-evidence = "Historical architecture runs exist, but neither is proof for an exact stable candidate. The aarch64 proof manifest records ISO SHA 3c73a77335b8be7b1fdaeb73e7992bacf6ec253cb0755f030484a673b0c293dc while its latest signoff row records 539fe24454f5cf1b0bb3ac00c9b8a838614ada85a310511fb9605afa978686a7."
-next_required_action = "Capture fresh display-backed proof for both architectures from the exact stable candidate, and require each proof manifest and signoff row to identify the same verification ISO SHA."
+evidence = "Historical runs are not proof for the new ARM64-only candidate. Fresh aarch64 display evidence, its isolated Authority 2 signature, and native packaging proof must identify the same candidate and verification ISO SHA."
+next_required_action = "Capture fresh Apple Silicon/HVF display proof from the exact aarch64 stable candidate and bind its evidence seal, host authority signature, native packaging proof, and signoff row to the same verification ISO SHA."
 
 [[current_blockers]]
 name = "complete_signoff_rows_missing"
-evidence = "Historical signoff rows exist, but coherent rows for one exact stable candidate do not. The aarch64 row is not coherent with its proof-manifest ISO SHA."
-next_required_action = "After exact-candidate artifacts, screenshots, runtime, and built-app proof exist, generate new per-architecture signoff rows and verify their media linkage before promotion."
+evidence = "Historical signoff rows exist, but no complete aarch64 row is bound to the new exact stable candidate."
+next_required_action = "After exact-candidate artifacts, screenshots, runtime, and built-app proof exist, generate the aarch64 signoff row and verify every media and evidence linkage before promotion."
 
 [[current_blockers]]
 name = "stable_tag_and_site_promotion_pending"

@@ -4,6 +4,11 @@ rpm_sbom_arch_matches() {
   local tsv="$1"
   local expected_arch="$2"
 
+  if [ "$expected_arch" != "aarch64" ]; then
+    echo "Unsupported RPM SBOM architecture '$expected_arch'; expected canonical aarch64." >&2
+    return 1
+  fi
+
   [ -f "$tsv" ] || {
     echo "RPM SBOM missing: $tsv" >&2
     return 1

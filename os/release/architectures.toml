@@ -1,6 +1,6 @@
 # Native release architecture contract.
 
-supported = ["aarch64", "x86_64"]
+supported = ["aarch64"]
 
 [artifacts.aarch64]
 iso = "goblins-os-aarch64.iso"
@@ -14,31 +14,50 @@ release_evidence = "os/signoff-proofs/sbom/aarch64/"
 cargo_sbom = "os/signoff-proofs/sbom/aarch64/cargo-lock-packages.tsv"
 rpm_sbom = "os/signoff-proofs/sbom/aarch64/rpm-packages.tsv"
 qemu = "qemu-system-aarch64"
-qemu_machine = "virt,accel=kvm,gic-version=max"
 uefi_code = "AARCH64_UEFI_CODE"
 uefi_vars = "AARCH64_UEFI_VARS or AARCH64_UEFI_VARS_TEMPLATE"
-runner = "Native aarch64 Linux runner; do not use x86_64 emulation as baseline."
 
-[artifacts.x86_64]
-iso = "goblins-os-x86_64.iso"
-sha256 = "goblins-os-x86_64.iso.sha256"
-manifest = "manifest-goblins-os-x86_64.json"
-iso_path = "os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso"
-sha256_path = "os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso.sha256"
-manifest_path = "os/iso/output/x86_64/manifest-goblins-os-x86_64.json"
-hardware_proofs = "os/screenshots/hardware-gate/x86_64/<date>/"
-release_evidence = "os/signoff-proofs/sbom/x86_64/"
-cargo_sbom = "os/signoff-proofs/sbom/x86_64/cargo-lock-packages.tsv"
-rpm_sbom = "os/signoff-proofs/sbom/x86_64/rpm-packages.tsv"
-qemu = "qemu-system-x86_64"
-qemu_accel = "kvm"
-runner = "Native x86_64 Linux runner."
+[authority.native_packaging]
+host_os = "Linux"
+host_architecture = "aarch64"
+guest_architecture = "aarch64"
+execution = "native"
+authoritative = true
+scope = "bootc image, public installer ISO, manifests, checksum, SBOM, and exact-candidate metadata"
+runner = "Native aarch64 Linux runner; emulated builds are not a release baseline."
+
+[diagnostic.linux_kvm]
+host_os = "Linux"
+host_architecture = "aarch64"
+guest_architecture = "aarch64"
+qemu = "qemu-system-aarch64"
+qemu_machine = "virt,accel=kvm,gic-version=max"
+optional = true
+authoritative = false
+satisfies_display_signoff = false
+scope = "Optional native packaging and boot diagnostic only; KVM can never satisfy display signoff."
+
+[authority.display_signoff]
+host_os = "Darwin"
+host_architecture = "arm64"
+guest_architecture = "aarch64"
+qemu = "qemu-system-aarch64"
+qemu_machine = "virt,accel=hvf,gic-version=max"
+accelerator = "hvf"
+authoritative = true
+scope = "Final display-backed capture and signoff through the Apple Silicon Darwin/arm64/HVF capture harness."
+
+[compatibility]
+packaging_authority = "Native aarch64 Linux packaging is authoritative only for image and media production."
+display_proof_target = "The final display authority is a UEFI aarch64 virtual machine using virt,accel=hvf,gic-version=max on Darwin/arm64 Apple Silicon."
+bare_metal_support = "No bare-metal Arm device is supported until that exact model has current install, input, graphics, networking, audio, suspend, update, rollback, and recovery proof."
+apple_silicon_scope = "Apple Silicon is a local HVF proof host, not a claimed bare-metal Goblins OS install target."
 
 [gaming]
 package_contract = "Native Fedora RPM packages in the bootc image: Mesa Vulkan/VA-API, VDPAU wrapper diagnostics, vulkan-tools, gamescope, gamemode, mangohud, Flatpak/portal support, PipeWire audio compatibility, joystick-support, evtest, and usbutils."
 non_steam_launcher_policy = "Heroic, Lutris, Bottles, UMU-compatible launchers, Proton runtimes, and Flatpak runtimes are user-initiated installs through Software/Flatpak or Fedora packages where available."
 steam_policy = "Steam and steam-devices are intentionally absent from the base image and are checked absent in source and installed-root verification."
-architecture_policy = "Gaming readiness evidence is captured separately for aarch64 and x86_64 RPMs. Goblins OS does not claim x86-only game runtimes work on Arm unless a user-initiated launcher path installs and verifies that compatibility layer."
+architecture_policy = "Gaming readiness is verified on native aarch64 RPMs and hardware. Goblins OS does not ship or claim an x86 compatibility layer; launchers and runtimes must provide native Arm support."
 display_proofs = [
   "19-vulkan-vkcube.png",
   "20-gamemode-active.png",

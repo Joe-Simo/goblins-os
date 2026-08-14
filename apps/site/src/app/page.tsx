@@ -43,6 +43,7 @@ import { assetBudget, screenshots } from "@/lib/site-assets";
 import {
   containerImages,
   formatBytes,
+  historicalReleaseArtifacts,
   releaseArtifacts,
   releaseEvidence,
 } from "@/lib/release-data";
@@ -52,7 +53,7 @@ const sourceUrl = "https://github.com/Joe-Simo/goblins-os";
 
 const features = [
   {
-    title: "Immutable Fedora bootc base",
+    title: "Image-based Goblins OS foundation",
     description: "Image-based updates, rollback, and native Linux packaging.",
     icon: BoxIcon,
   },
@@ -63,8 +64,9 @@ const features = [
     icon: TerminalSquareIcon,
   },
   {
-    title: "Server-side secrets only",
-    description: "The image ships without credentials; provider keys stay outside the desktop session.",
+    title: "AI choices in the current source",
+    description:
+      "Choose on-device GPT-OSS, an OpenAI account through the bundled Codex CLI, or your own API key through a protected per-user window. The linked July alpha predates this flow.",
     icon: LockKeyholeIcon,
   },
   {
@@ -73,8 +75,8 @@ const features = [
     icon: MonitorIcon,
   },
   {
-    title: "Architecture-specific media",
-    description: "Arm and x86_64 use separate native release media.",
+    title: "Native Arm release",
+    description: "The installer and container image target the aarch64 architecture.",
     icon: CpuIcon,
   },
   {
@@ -87,21 +89,61 @@ const features = [
 const installSteps = [
   {
     title: "Choose the right ISO",
-    body: "Use the installer media that matches the target CPU: Arm/aarch64 or Intel/AMD x86_64.",
+    body: "A current Goblins OS installer is not published yet. The July alpha is retained only as a historical record.",
   },
   {
-    title: "Verify before flashing",
-    body: "Check the SHA256 file after download. Do not flash media when the checksum does not match.",
+    title: "Verify the download",
+    body: "Check the published SHA256 before using the ISO. Stop if the checksum does not match.",
   },
   {
-    title: "Back up and boot",
-    body: "Use a USB flashing tool, boot from the installer, and choose storage deliberately.",
+    title: "Create and boot the VM",
+    body: "Create a UEFI aarch64 virtual machine, attach the ISO, and review the virtual target disk before installation.",
   },
 ];
 
 export default function Home() {
   const totalMedia = formatBytes(assetBudget.screenshotBytes);
   const demoMedia = formatBytes(assetBudget.demoVideoBytes);
+  const currentArmRelease = releaseArtifacts.find(({ arch }) => arch === "aarch64");
+  if (!currentArmRelease) {
+    throw new Error("The current Arm release manifest is missing.");
+  }
+  const macLinuxVerificationCommand = [
+    "(",
+    "set -eu",
+    "if command -v sha256sum >/dev/null 2>&1; then",
+    "  verify_sha256() { sha256sum -c -; }",
+    "elif command -v shasum >/dev/null 2>&1; then",
+    "  verify_sha256() { shasum -a 256 -c -; }",
+    "else",
+    "  echo 'Install sha256sum or shasum before continuing.' >&2; exit 1",
+    "fi",
+    ...currentArmRelease.downloadParts.map(
+      (part) =>
+        `printf '%s  %s\\n' '${part.sha256}' '${part.filename}' | verify_sha256`,
+    ),
+    `cat ${currentArmRelease.downloadParts.map(({ filename }) => `'${filename}'`).join(" ")} > '${currentArmRelease.compressedName}'`,
+    `printf '%s  %s\\n' '${currentArmRelease.compressedSha256}' '${currentArmRelease.compressedName}' | verify_sha256`,
+    `zstd -d --long=31 --force '${currentArmRelease.compressedName}'`,
+    `printf '%s  %s\\n' '${currentArmRelease.sha256}' '${currentArmRelease.isoName}' | verify_sha256`,
+    ")",
+  ].join("\n");
+  const windowsVerificationCommand = [
+    "& {",
+    "  $ErrorActionPreference = 'Stop'",
+    "  Set-StrictMode -Version Latest",
+    ...currentArmRelease.downloadParts.map(
+      (part) =>
+        `  if ((Get-FileHash '.\\${part.filename}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${part.sha256}') { throw 'Checksum mismatch: ${part.filename}' }`,
+    ),
+    `  cmd /c copy /b /y ${currentArmRelease.downloadParts.map(({ filename }) => filename).join("+")} ${currentArmRelease.compressedName}`,
+    "  if ($LASTEXITCODE -ne 0) { throw 'Could not reassemble the compressed ISO.' }",
+    `  if ((Get-FileHash '.\\${currentArmRelease.compressedName}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${currentArmRelease.compressedSha256}') { throw 'Checksum mismatch: ${currentArmRelease.compressedName}' }`,
+    `  zstd -d --long=31 --force '.\\${currentArmRelease.compressedName}'`,
+    "  if ($LASTEXITCODE -ne 0) { throw 'Could not decompress the ISO.' }",
+    `  if ((Get-FileHash '.\\${currentArmRelease.isoName}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${currentArmRelease.sha256}') { throw 'Checksum mismatch: ${currentArmRelease.isoName}' }`,
+    "}",
+  ].join("\n");
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -113,15 +155,15 @@ export default function Home() {
           <div className="flex max-w-2xl flex-col gap-6" data-gsap="reveal">
             <div className="flex flex-col gap-4">
               <Badge variant="secondary" className="w-fit">
-                Fedora bootc · native desktop · local builds
+                Goblins OS · native Linux desktop · local builds
               </Badge>
               <h1 className="text-5xl font-semibold leading-[0.95] tracking-normal text-balance sm:text-6xl lg:text-7xl">
                 Goblins OS
               </h1>
               <p className="max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
-                An open AI-native desktop for building local software on a
-                Fedora bootc base. Choose the right architecture, verify the
-                release media, and keep your system under your control.
+                An open AI-native Linux desktop for building local software.
+                Verify the native Arm release media and keep your system under
+                your control.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
@@ -139,9 +181,9 @@ export default function Home() {
               </Button>
             </div>
             <div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-              <ProofPoint>Fedora bootc base</ProofPoint>
+              <ProofPoint>Goblins OS system image</ProofPoint>
               <ProofPoint>Local app builds</ProofPoint>
-              <ProofPoint>Server-side secrets</ProofPoint>
+              <ProofPoint>No bundled API key</ProofPoint>
             </div>
           </div>
 
@@ -168,7 +210,7 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
           <SectionHeading
             title="Built for creativity and control"
-            description="A native Linux desktop for local software creation, with verified release artifacts, per-architecture media, and a clean credential boundary."
+            description="A native Linux desktop for local software creation, with published Arm release artifacts and source-enforced credential boundaries."
           />
           <div className="grid gap-x-8 gap-y-0 md:grid-cols-2 lg:grid-cols-3">
             {features.map((feature) => (
@@ -187,6 +229,18 @@ export default function Home() {
               </div>
             ))}
           </div>
+          <Alert role="note" data-gsap="reveal">
+            <ShieldCheckIcon aria-hidden="true" />
+            <AlertTitle>OpenAI is a provider, not the OS identity</AlertTitle>
+            <AlertDescription>
+              The public image ships no maintainer API key and no proprietary OpenAI desktop app.
+              In the current source, Goblins AI uses the bundled verified Codex CLI for an OpenAI
+              account. The separate Codex shortcut opens a user-installed compatible app or the
+              official web, while ChatGPT remains on the official web. The linked July alpha
+              predates the protected per-user key flow and compatible-app routing; do not treat it
+              as proof of these candidate capabilities.
+            </AlertDescription>
+          </Alert>
         </div>
       </section>
 
@@ -250,24 +304,26 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
             <SectionHeading
-              title="Downloads"
-              description="Installer media is architecture-specific. Large files are hosted on GitHub release assets."
+              title="Historical Arm installer"
+              description="The July aarch64 alpha predates the current Goblins OS identity and experience updates. It remains available only as a verifiable historical record; a current installer will be published after its release gates pass."
             />
-            <Button asChild variant="ghost">
-              <a href={releaseEvidence.releaseUrl} rel="noreferrer" target="_blank">
-                Open release
-                <ExternalLinkIcon data-icon="inline-end" />
-              </a>
-            </Button>
-            <Button asChild variant="ghost">
-              <a href="#verify">
-                Verify checksums
-                <ArrowRightIcon data-icon="inline-end" />
-              </a>
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button asChild variant="ghost">
+                <a href={releaseEvidence.releaseUrl} rel="noreferrer" target="_blank">
+                  Open release
+                  <ExternalLinkIcon data-icon="inline-end" />
+                </a>
+              </Button>
+              <Button asChild variant="ghost">
+                <a href="#verify">
+                  Verify checksums
+                  <ArrowRightIcon data-icon="inline-end" />
+                </a>
+              </Button>
+            </div>
           </div>
 
-          <div className="grid gap-4 md:hidden">
+          <div className="grid gap-4 xl:hidden">
             {releaseArtifacts.map((artifact) => (
               <DownloadArtifactCard key={artifact.arch} artifact={artifact} />
             ))}
@@ -287,7 +343,7 @@ export default function Home() {
             </div>
           </div>
 
-          <Card className="hidden md:block" data-gsap="reveal">
+          <Card className="hidden xl:block" data-gsap="reveal">
             <CardContent className="px-0">
               <Table className="min-w-[1120px]">
                 <TableHeader>
@@ -315,7 +371,7 @@ export default function Home() {
                       <TableCell className="min-w-[260px] whitespace-normal">
                         <div className="flex flex-col gap-2">
                           <Badge variant="secondary" className="w-fit">
-                            Download ready
+                            Historical · not current
                           </Badge>
                           <ul className="flex flex-col gap-1 text-xs leading-5 text-muted-foreground">
                             {artifact.notes.map((note) => (
@@ -368,7 +424,7 @@ export default function Home() {
               </Table>
             </CardContent>
             <CardFooter className="flex flex-col items-start gap-3 border-t text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <span>Large OS media is served from GitHub release assets.</span>
+              <span>Historical OS media is preserved on GitHub for provenance.</span>
               <a
                 className="font-medium text-foreground underline-offset-4 hover:underline"
                 href={releaseEvidence.releaseRunUrl}
@@ -379,6 +435,53 @@ export default function Home() {
               </a>
             </CardFooter>
           </Card>
+
+          <div className="mt-2 flex flex-col gap-4 border-t pt-8">
+            <div className="max-w-2xl space-y-2">
+              <h3 className="text-lg font-semibold tracking-tight">Earlier release record</h3>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Retired media remains visible for audit and provenance only. It is not an
+                installation option.
+              </p>
+            </div>
+            {historicalReleaseArtifacts.map((artifact) => (
+              <Card
+                key={`${artifact.releaseTag}-${artifact.arch}`}
+                className="bg-card/60"
+                data-gsap="reveal"
+              >
+                <CardHeader>
+                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                    <div className="flex flex-col gap-2">
+                      <CardTitle>{artifact.label}</CardTitle>
+                      <CardDescription>{artifact.recordNote}</CardDescription>
+                    </div>
+                    <Badge variant="outline">Historical · unsupported</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="grid gap-4 text-sm md:grid-cols-3">
+                  <MetadataRow label="Release">
+                    <code className="text-xs">{artifact.releaseTag}</code>
+                  </MetadataRow>
+                  <MetadataRow label="ISO">
+                    <code className="break-all text-xs">{artifact.isoName}</code>
+                  </MetadataRow>
+                  <MetadataRow label="SHA256">
+                    <code className="break-all text-xs">{artifact.sha256}</code>
+                  </MetadataRow>
+                </CardContent>
+                <CardFooter className="flex flex-col items-start justify-between gap-3 border-t text-sm text-muted-foreground sm:flex-row sm:items-center">
+                  <span>Preserved for provenance; do not use for a new installation.</span>
+                  <Button asChild variant="ghost" size="sm">
+                    <a href={artifact.releaseUrl} rel="noreferrer" target="_blank">
+                      View record
+                      <ExternalLinkIcon data-icon="inline-end" />
+                    </a>
+                  </Button>
+                </CardFooter>
+              </Card>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -386,8 +489,8 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
             <SectionHeading
-              title="Container images"
-              description="Use the bootc container image to inspect, verify, or build from Goblins OS without writing installer media to hardware."
+              title="Arm container image"
+              description="Use the public aarch64 Goblins OS channel to inspect or verify the currently published system image. The pending identity update is not live until its channel promotion completes."
             />
             <Button asChild variant="ghost">
               <a href={releaseEvidence.releaseRunUrl} rel="noreferrer" target="_blank">
@@ -397,18 +500,18 @@ export default function Home() {
             </Button>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid max-w-3xl gap-4">
             {containerImages.map((image) => (
               <ContainerImageCard key={image.arch} image={image} />
             ))}
           </div>
 
-          <Alert data-gsap="reveal">
+          <Alert role="note" data-gsap="reveal">
             <BoxIcon aria-hidden="true" />
             <AlertTitle>Containers are not a desktop VM</AlertTitle>
             <AlertDescription>
               Container images are for inspection, automation, and derived
-              builds. Use the ISO when you need the graphical desktop installer.
+              builds. There is no current graphical installer release yet.
             </AlertDescription>
           </Alert>
         </div>
@@ -419,7 +522,7 @@ export default function Home() {
           <div className="flex flex-col gap-8">
             <SectionHeading
               title="Install Goblins OS"
-              description="The installer writes an operating system. Back up first, choose the architecture intentionally, and verify the media."
+              description="Wait for the next current installer release. The preserved July alpha is not the current branded product and should not be used for a new installation."
             />
             <div className="grid gap-4 md:grid-cols-3">
               {installSteps.map((step, index) => (
@@ -436,12 +539,16 @@ export default function Home() {
             </div>
           </div>
 
-          <Alert className="h-fit" data-gsap="reveal">
+          <Alert role="note" className="h-fit" data-gsap="reveal">
             <ShieldCheckIcon aria-hidden="true" />
             <AlertTitle>Install guardrails</AlertTitle>
             <AlertDescription>
               <ul className="flex flex-col gap-2">
-                <li>Arm and x86_64 use separate installer media.</li>
+                <li>No current Goblins OS installer is published.</li>
+                <li>The next install target is a UEFI aarch64 virtual machine.</li>
+                <li>Apple Silicon is an HVF proof host, not a bare-metal install target.</li>
+                <li>Bare-metal Arm devices need explicit model-specific proof before support is claimed.</li>
+                <li>Intel and AMD systems are not supported.</li>
                 <li>Dual boot uses advanced storage and preserved partitions.</li>
                 <li>Whole-disk erase requires an explicit blank-disk decision.</li>
               </ul>
@@ -454,8 +561,8 @@ export default function Home() {
         <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.72fr_0.28fr] lg:px-8">
           <div className="flex min-w-0 flex-col gap-6">
             <SectionHeading
-              title="Verify your download"
-              description="Download both parts for your architecture, verify the split files, reassemble the compressed ISO, decompress it, and verify the final ISO."
+              title="Verify the historical media"
+              description="If you need to audit the preserved July alpha, verify both parts, reassemble the compressed ISO, decompress it, and verify the final ISO. Do not use it for a new installation."
             />
             <Tabs defaultValue="macos-linux" className="w-full min-w-0">
               <TabsList className="w-full justify-start overflow-x-auto sm:w-fit">
@@ -467,19 +574,21 @@ export default function Home() {
                   <CardHeader>
                     <CardTitle>Reassemble and verify</CardTitle>
                     <CardDescription>
-                      Replace <code>&lt;arch&gt;</code> with <code>aarch64</code> or{" "}
-                      <code>x86_64</code>. Requires <code>zstd</code>.
+                      Commands for the historical <code>aarch64</code> alpha. Requires{" "}
+                      <code>zstd</code>.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="min-w-0">
                     <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-4 text-sm leading-6">
-                      <code>{`shasum -a 256 -c goblins-os-<arch>.iso.zst.parts.sha256
-cat goblins-os-<arch>.iso.zst.part-* > goblins-os-<arch>.iso.zst
-shasum -a 256 -c goblins-os-<arch>.iso.zst.sha256
-zstd -d --long=31 goblins-os-<arch>.iso.zst
-shasum -a 256 -c goblins-os-<arch>.iso.sha256`}</code>
+                      <code>{macLinuxVerificationCommand}</code>
                     </pre>
                   </CardContent>
+                  <CardFooter>
+                    <CopyButton
+                      value={macLinuxVerificationCommand}
+                      label="Copy macOS and Linux verification commands"
+                    />
+                  </CardFooter>
                 </Card>
               </TabsContent>
               <TabsContent value="windows" className="min-w-0">
@@ -487,19 +596,21 @@ shasum -a 256 -c goblins-os-<arch>.iso.sha256`}</code>
                   <CardHeader>
                     <CardTitle>PowerShell checks</CardTitle>
                     <CardDescription>
-                      Compare each hash with the published <code>.sha256</code> files before flashing.
+                      Each command stops with an error if a downloaded or reassembled file differs
+                      from the exact published Arm release hash.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="min-w-0">
                     <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-4 text-sm leading-6">
-                      <code>{`Get-FileHash .\\goblins-os-<arch>.iso.zst.part-00 -Algorithm SHA256
-Get-FileHash .\\goblins-os-<arch>.iso.zst.part-01 -Algorithm SHA256
-copy /b goblins-os-<arch>.iso.zst.part-00+goblins-os-<arch>.iso.zst.part-01 goblins-os-<arch>.iso.zst
-Get-FileHash .\\goblins-os-<arch>.iso.zst -Algorithm SHA256
-zstd -d --long=31 .\\goblins-os-<arch>.iso.zst
-Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
+                      <code>{windowsVerificationCommand}</code>
                     </pre>
                   </CardContent>
+                  <CardFooter>
+                    <CopyButton
+                      value={windowsVerificationCommand}
+                      label="Copy Windows verification commands"
+                    />
+                  </CardFooter>
                 </Card>
               </TabsContent>
             </Tabs>
@@ -509,7 +620,7 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
             <CardHeader>
               <CardTitle>Release checksums</CardTitle>
               <CardDescription>
-                Final ISO SHA256 values from the published release assets.
+                Final Arm ISO SHA256 from the published release assets.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
@@ -563,9 +674,9 @@ Get-FileHash .\\goblins-os-<arch>.iso -Algorithm SHA256`}</code>
             />
             <EvidenceCard
               icon={HardDriveIcon}
-              title="Architecture matrix"
+              title="Arm release contract"
               href={`${sourceUrl}/blob/main/os/release/architectures.toml`}
-              body="Expected ISO, checksum, and manifest paths."
+              body="Expected aarch64 ISO, checksum, and manifest paths."
             />
             <EvidenceCard
               icon={ShieldCheckIcon}
@@ -636,7 +747,7 @@ function DownloadArtifactCard({ artifact }: { artifact: (typeof releaseArtifacts
             <CardDescription>{artifact.cpu}</CardDescription>
           </div>
           <Badge variant="secondary" className="shrink-0">
-            Download ready
+            Historical · not current
           </Badge>
         </div>
       </CardHeader>
@@ -767,12 +878,10 @@ function SiteHeader() {
     <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur">
       <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <a href="#" className="flex items-center gap-3 font-semibold" aria-label="Goblins OS home">
-          <span className="flex size-8 items-center justify-center rounded-md bg-foreground text-sm text-background">
-            G
-          </span>
+          <Image src="/favicon.svg" alt="" aria-hidden width={32} height={32} priority />
           <span>Goblins OS</span>
         </a>
-        <nav className="hidden items-center gap-5 text-sm text-muted-foreground md:flex">
+        <nav className="hidden items-center gap-5 text-sm text-muted-foreground xl:flex">
           <a className="transition-colors hover:text-foreground" href="#features">
             Features
           </a>

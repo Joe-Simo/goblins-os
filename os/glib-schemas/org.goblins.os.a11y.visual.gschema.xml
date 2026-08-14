@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.goblins.os.a11y.visual" path="/org/goblins/os/a11y/visual/">
+    <key name="reduce-transparency" type="b">
+      <default>false</default>
+      <summary>Reduce transparency</summary>
+      <description>Whether Goblins OS materials use solid, non-blurred surfaces instead of transparency and blur.</description>
+    </key>
+  </schema>
+</schemalist>

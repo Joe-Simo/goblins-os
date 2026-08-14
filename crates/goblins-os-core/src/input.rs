@@ -3,11 +3,15 @@
 //! Goblins OS keeps desktop input preferences behind an allowlisted settings
 //! bridge so the Settings GUI cannot mutate arbitrary schemas or keys.
 
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Arc, OnceLock},
+};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::bounded::{bounded_session_command_output, probe_timeout, BoundedCommandError};
 
@@ -85,9 +89,12 @@ pub struct TouchpadInputStatus {
     schema_available: bool,
     speed: Option<f64>,
     tap_to_click: Option<bool>,
+    tap_and_drag: Option<bool>,
+    tap_and_drag_lock: Option<bool>,
     natural_scroll: Option<bool>,
     two_finger_scrolling_enabled: Option<bool>,
     disable_while_typing: Option<bool>,
+    click_method: Option<String>,
     detail: String,
 }
 
@@ -169,9 +176,12 @@ enum InputPreferenceTarget {
     MouseMiddleClickEmulation,
     TouchpadSpeed,
     TouchpadTapToClick,
+    TouchpadTapAndDrag,
+    TouchpadTapAndDragLock,
     TouchpadNaturalScroll,
     TouchpadTwoFingerScrolling,
     TouchpadDisableWhileTyping,
+    TouchpadClickMethod,
 }
 
 #[derive(Serialize)]
@@ -219,6 +229,7 @@ enum InputValueKind {
     Bool,
     U32(fn(u32) -> u32),
     F64(fn(f64) -> f64),
+    Choice(&'static [&'static str]),
 }
 
 #[derive(Clone, Copy)]
@@ -234,6 +245,7 @@ enum InputPreferenceValue {
     Bool(bool),
     U32(u32),
     F64(f64),
+    String(String),
 }
 
 #[derive(Clone, Copy)]
@@ -248,30 +260,216 @@ struct InputEnginePackageSpec {
     engine_binary: &'static str,
 }
 
-pub async fn input_status() -> Json<InputStatus> {
-    Json(build_input_status())
+pub async fn input_status() -> (StatusCode, Json<InputStatus>) {
+    match tokio::task::spawn_blocking(build_input_status).await {
+        Ok(status) => (StatusCode::OK, Json(status)),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(input_worker_failed_status()),
+        ),
+    }
 }
 
 pub async fn set_input_preference(
     Json(request): Json<SetInputPreferenceRequest>,
 ) -> (StatusCode, Json<InputPreferenceOutcome>) {
-    set_input_preference_outcome(request)
+    let spec = input_target_spec(request.target);
+    let Some(permit) = input_mutation_permit() else {
+        return input_preference_worker_response(
+            StatusCode::CONFLICT,
+            spec.target,
+            "Another input preference change is already in progress.",
+        );
+    };
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        set_input_preference_outcome(request)
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(_) => input_preference_worker_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            spec.target,
+            "The input preference worker stopped unexpectedly. No change is reported.",
+        ),
+    }
 }
 
 pub async fn set_input_sources(
     Json(request): Json<SetInputSourcesRequest>,
 ) -> (StatusCode, Json<InputSourcesOutcome>) {
-    set_input_sources_outcome(request)
+    let response_sources = request.sources.clone();
+    let Some(permit) = input_mutation_permit() else {
+        return input_sources_worker_response(
+            StatusCode::CONFLICT,
+            response_sources,
+            "Another input preference change is already in progress.",
+        );
+    };
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        set_input_sources_outcome(request)
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(_) => input_sources_worker_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            response_sources,
+            "The input-source worker stopped unexpectedly. No change is reported.",
+        ),
+    }
 }
 
 pub async fn add_input_source(
     Json(request): Json<AddInputSourceRequest>,
 ) -> (StatusCode, Json<InputSourcesOutcome>) {
-    add_input_source_outcome(request)
+    let Some(permit) = input_mutation_permit() else {
+        return input_sources_worker_response(
+            StatusCode::CONFLICT,
+            Vec::new(),
+            "Another input preference change is already in progress.",
+        );
+    };
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        add_input_source_outcome(request)
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(_) => input_sources_worker_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Vec::new(),
+            "The input-source worker stopped unexpectedly. No change is reported.",
+        ),
+    }
 }
 
 pub async fn switch_to_next_input_source() -> (StatusCode, Json<SwitchInputSourceOutcome>) {
-    switch_to_next_input_source_outcome()
+    let Some(permit) = input_mutation_permit() else {
+        return switch_input_source_worker_response(
+            StatusCode::CONFLICT,
+            "Another input preference change is already in progress.",
+        );
+    };
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        switch_to_next_input_source_outcome()
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(_) => switch_input_source_worker_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The input-source worker stopped unexpectedly. No change is reported.",
+        ),
+    }
+}
+
+fn input_mutation_permit() -> Option<OwnedSemaphorePermit> {
+    static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    Arc::clone(LIMITER.get_or_init(|| Arc::new(Semaphore::new(1))))
+        .try_acquire_owned()
+        .ok()
+}
+
+fn input_preference_worker_response(
+    status: StatusCode,
+    target: &'static str,
+    text: &str,
+) -> (StatusCode, Json<InputPreferenceOutcome>) {
+    (
+        status,
+        Json(InputPreferenceOutcome {
+            ok: false,
+            target,
+            text: text.to_string(),
+        }),
+    )
+}
+
+fn input_sources_worker_response(
+    status: StatusCode,
+    sources: Vec<InputSourceEntry>,
+    text: &str,
+) -> (StatusCode, Json<InputSourcesOutcome>) {
+    (
+        status,
+        Json(InputSourcesOutcome {
+            ok: false,
+            sources,
+            text: text.to_string(),
+        }),
+    )
+}
+
+fn switch_input_source_worker_response(
+    status: StatusCode,
+    text: &str,
+) -> (StatusCode, Json<SwitchInputSourceOutcome>) {
+    (
+        status,
+        Json(SwitchInputSourceOutcome {
+            ok: false,
+            switched: false,
+            source_count: 0,
+            current_index: None,
+            current: None,
+            text: text.to_string(),
+        }),
+    )
+}
+
+fn input_worker_failed_status() -> InputStatus {
+    InputStatus {
+        source: "goblins-os-core",
+        gsettings_available: false,
+        keyboard: KeyboardInputStatus {
+            schema_available: false,
+            repeat: None,
+            delay_ms: None,
+            repeat_interval_ms: None,
+            remember_numlock_state: None,
+            detail: "Keyboard preferences could not be inspected.".to_string(),
+        },
+        mouse: MouseInputStatus {
+            schema_available: false,
+            speed: None,
+            natural_scroll: None,
+            left_handed: None,
+            middle_click_emulation: None,
+            detail: "Mouse preferences could not be inspected.".to_string(),
+        },
+        touchpad: TouchpadInputStatus {
+            schema_available: false,
+            speed: None,
+            tap_to_click: None,
+            tap_and_drag: None,
+            tap_and_drag_lock: None,
+            natural_scroll: None,
+            two_finger_scrolling_enabled: None,
+            disable_while_typing: None,
+            click_method: None,
+            detail: "Trackpad preferences could not be inspected.".to_string(),
+        },
+        input_sources: InputSourcesStatus {
+            schema_available: false,
+            sources: Vec::new(),
+            addable_sources: Vec::new(),
+            add_detail: "Input sources could not be inspected.".to_string(),
+            detail: "Input sources could not be inspected.".to_string(),
+        },
+        input_engine_packages: InputEnginePackagesStatus {
+            engines: Vec::new(),
+            installed_count: 0,
+            all_installed: false,
+            detail: "Input-engine packages could not be inspected.".to_string(),
+        },
+        detail: "Input status could not be inspected because its worker stopped unexpectedly."
+            .to_string(),
+    }
 }
 
 fn build_input_status() -> InputStatus {
@@ -332,6 +530,8 @@ fn build_input_status() -> InputStatus {
             speed: setting_f64(&touchpad_schema, TOUCHPAD_SCHEMA, "speed")
                 .map(normalized_unit_speed),
             tap_to_click: setting_bool(&touchpad_schema, TOUCHPAD_SCHEMA, "tap-to-click"),
+            tap_and_drag: setting_bool(&touchpad_schema, TOUCHPAD_SCHEMA, "tap-and-drag"),
+            tap_and_drag_lock: setting_bool(&touchpad_schema, TOUCHPAD_SCHEMA, "tap-and-drag-lock"),
             natural_scroll: setting_bool(&touchpad_schema, TOUCHPAD_SCHEMA, "natural-scroll"),
             two_finger_scrolling_enabled: setting_bool(
                 &touchpad_schema,
@@ -343,6 +543,7 @@ fn build_input_status() -> InputStatus {
                 TOUCHPAD_SCHEMA,
                 "disable-while-typing",
             ),
+            click_method: setting_string(&touchpad_schema, TOUCHPAD_SCHEMA, "click-method"),
             detail: schema_detail(
                 gsettings_available,
                 touchpad_schema.available,
@@ -1092,6 +1293,24 @@ fn setting_f64(schema: &SchemaSnapshot, schema_name: &str, key: &str) -> Option<
         .and_then(|value| parse_gsettings_f64(&value))
 }
 
+fn setting_string(schema: &SchemaSnapshot, schema_name: &str, key: &str) -> Option<String> {
+    if !schema.has_key(key) {
+        return None;
+    }
+    gsettings(&["get", schema_name, key])
+        .ok()
+        .and_then(|value| parse_gsettings_string(&value))
+}
+
+fn parse_gsettings_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    let inner = value.strip_prefix('\'')?.strip_suffix('\'')?;
+    if inner.is_empty() || inner.len() > 64 || inner.chars().any(char::is_control) {
+        return None;
+    }
+    Some(inner.replace("\\'", "'").replace("\\\\", "\\"))
+}
+
 fn parse_gsettings_bool(value: &str) -> Option<bool> {
     match value.trim() {
         "true" => Some(true),
@@ -1141,6 +1360,11 @@ fn parse_preference_value(
             .map(normalize)
             .map(InputPreferenceValue::F64)
             .ok_or_else(|| format!("{} expects a finite number.", spec.label)),
+        InputValueKind::Choice(choices) => value
+            .as_str()
+            .filter(|value| choices.contains(value))
+            .map(|value| InputPreferenceValue::String(value.to_string()))
+            .ok_or_else(|| format!("{} expects one of the supported choices.", spec.label)),
     }
 }
 
@@ -1165,6 +1389,9 @@ fn encode_preference_value(value: &InputPreferenceValue) -> String {
         InputPreferenceValue::Bool(value) => value.to_string(),
         InputPreferenceValue::U32(value) => value.to_string(),
         InputPreferenceValue::F64(value) => format!("{value:.2}"),
+        InputPreferenceValue::String(value) => {
+            format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+        }
     }
 }
 
@@ -1240,6 +1467,20 @@ fn input_target_spec(target: InputPreferenceTarget) -> InputTargetSpec {
             label: "Tap to click",
             kind: InputValueKind::Bool,
         },
+        InputPreferenceTarget::TouchpadTapAndDrag => InputTargetSpec {
+            target: "touchpad-tap-and-drag",
+            schema: TOUCHPAD_SCHEMA,
+            key: "tap-and-drag",
+            label: "Tap and drag",
+            kind: InputValueKind::Bool,
+        },
+        InputPreferenceTarget::TouchpadTapAndDragLock => InputTargetSpec {
+            target: "touchpad-tap-and-drag-lock",
+            schema: TOUCHPAD_SCHEMA,
+            key: "tap-and-drag-lock",
+            label: "Drag lock",
+            kind: InputValueKind::Bool,
+        },
         InputPreferenceTarget::TouchpadNaturalScroll => InputTargetSpec {
             target: "touchpad-natural-scroll",
             schema: TOUCHPAD_SCHEMA,
@@ -1261,6 +1502,13 @@ fn input_target_spec(target: InputPreferenceTarget) -> InputTargetSpec {
             label: "Ignore trackpad while typing",
             kind: InputValueKind::Bool,
         },
+        InputPreferenceTarget::TouchpadClickMethod => InputTargetSpec {
+            target: "touchpad-click-method",
+            schema: TOUCHPAD_SCHEMA,
+            key: "click-method",
+            label: "Secondary click",
+            kind: InputValueKind::Choice(&["fingers", "areas", "none", "default"]),
+        },
     }
 }
 
@@ -1270,6 +1518,12 @@ fn input_preference_success_detail(spec: InputTargetSpec, value: &InputPreferenc
         InputPreferenceValue::Bool(false) => "off".to_string(),
         InputPreferenceValue::U32(value) => format!("{value} ms"),
         InputPreferenceValue::F64(value) => pointer_speed_label(*value).to_string(),
+        InputPreferenceValue::String(value) => match value.as_str() {
+            "fingers" => "two-finger click".to_string(),
+            "areas" => "corner areas".to_string(),
+            "none" => "off".to_string(),
+            _ => "the desktop default".to_string(),
+        },
     };
     format!("{} is now {value}.", spec.label)
 }
@@ -1363,12 +1617,21 @@ fn gsettings_error_detail(stderr: &str, stdout: &str) -> String {
 mod tests {
     use super::{
         addable_input_source_choices, cjk_engine_package_statuses_with, encode_input_sources,
-        encode_preference_value, input_engine_packages_detail, input_sources_with_added_choice,
-        input_target_spec, next_input_source_index, normalize_input_sources, parse_gsettings_bool,
-        parse_gsettings_f64, parse_gsettings_u32, parse_ibus_list_engine, parse_preference_value,
-        IbusEngineProbe, InputPreferenceTarget, InputPreferenceValue, InputSourceEntry,
+        encode_preference_value, input_engine_packages_detail, input_mutation_permit,
+        input_sources_with_added_choice, input_target_spec, next_input_source_index,
+        normalize_input_sources, parse_gsettings_bool, parse_gsettings_f64, parse_gsettings_u32,
+        parse_ibus_list_engine, parse_preference_value, IbusEngineProbe, InputPreferenceTarget,
+        InputPreferenceValue, InputSourceEntry,
     };
     use serde_json::json;
+
+    #[test]
+    fn input_mutations_have_single_request_admission() {
+        let first = input_mutation_permit().expect("first input mutation is admitted");
+        assert!(input_mutation_permit().is_none());
+        drop(first);
+        assert!(input_mutation_permit().is_some());
+    }
 
     #[test]
     fn parses_gsettings_scalar_values() {
@@ -1402,6 +1665,13 @@ mod tests {
             parse_preference_value(speed, &json!(2.5)),
             Ok(InputPreferenceValue::F64(1.0))
         ));
+
+        let click_method = input_target_spec(InputPreferenceTarget::TouchpadClickMethod);
+        assert!(matches!(
+            parse_preference_value(click_method, &json!("areas")),
+            Ok(InputPreferenceValue::String(value)) if value == "areas"
+        ));
+        assert!(parse_preference_value(click_method, &json!("areas'; reboot")).is_err());
     }
 
     #[test]
@@ -1439,6 +1709,10 @@ mod tests {
         assert_eq!(
             encode_preference_value(&InputPreferenceValue::F64(-0.25)),
             "-0.25"
+        );
+        assert_eq!(
+            encode_preference_value(&InputPreferenceValue::String("fingers".to_string())),
+            "'fingers'"
         );
     }
 

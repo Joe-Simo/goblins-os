@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 use std::{
     cell::{Cell, RefCell},
+    path::Path,
     rc::Rc,
 };
 
@@ -31,7 +32,7 @@ const DEFAULT_CORE_WAIT_SECS: u64 = 45;
 const LONG_CORE_JOB_TIMEOUT: Duration = Duration::from_secs(65 * 60);
 const SETTINGS_DEFAULT_WIDTH: i32 = 1055;
 const SETTINGS_DEFAULT_HEIGHT: i32 = 840;
-const GNOME_CONTROL_CENTER: &str = "gnome-control-center";
+const GNOME_CONTROL_CENTER: &str = "/usr/bin/gnome-control-center";
 const GNOME_DISK_USAGE_ANALYZER: &str = "baobab";
 const GNOME_DISKS: &str = "gnome-disks";
 const GNOME_SYSTEM_MONITOR: &str = "gnome-system-monitor";
@@ -252,8 +253,7 @@ struct EncryptionStatus {
     detail: String,
 }
 
-/// Read-only local snapshot posture from `GET /v1/snapshots/status`.
-/// Restore remains disabled until the qemu path proves a non-destructive copy.
+/// Local snapshot posture and additive recovery capability.
 #[cfg_attr(
     not(all(target_os = "linux", feature = "native-desktop")),
     allow(dead_code)
@@ -281,8 +281,28 @@ struct SnapshotRecord {
     description: Option<String>,
 }
 
-/// Read-only Goblins keyboard shortcuts from `GET /v1/shortcuts/status`. The Settings
-/// UI presents them as a reference; rebinding stays a deliberate future capability.
+#[derive(Clone, Deserialize)]
+struct SnapshotBrowseEntry {
+    name: String,
+    relative_path: String,
+    logical_path: String,
+    kind: String,
+    bytes: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct BrowseSnapshotOutcome {
+    ok: bool,
+    snapshot_id: String,
+    directory: String,
+    entries: Vec<SnapshotBrowseEntry>,
+    truncated: bool,
+    next_cursor: Option<usize>,
+    detail: String,
+}
+
+/// Goblins keyboard shortcuts from `GET /v1/shortcuts/status`. Settings can edit the
+/// OS-owned bindings and modifier remap through the corresponding protected routes.
 #[cfg_attr(
     not(all(target_os = "linux", feature = "native-desktop")),
     allow(dead_code)
@@ -291,6 +311,10 @@ struct SnapshotRecord {
 struct ShortcutsStatus {
     available: bool,
     shortcuts: Vec<ShortcutEntry>,
+    #[serde(default)]
+    modifier_remap_available: bool,
+    #[serde(default)]
+    caps_lock_behavior: String,
     detail: String,
 }
 
@@ -300,6 +324,7 @@ struct ShortcutsStatus {
 )]
 #[derive(Clone, Deserialize)]
 struct ShortcutEntry {
+    id: String,
     action: String,
     bindings: Vec<String>,
 }
@@ -392,18 +417,86 @@ struct HotspotClient {
 )]
 #[derive(Clone, Deserialize)]
 struct SystemImageStatus {
+    #[serde(default)]
+    immutable: bool,
     available: bool,
     #[serde(default)]
     rollback_available: bool,
     #[serde(default)]
     staged_available: bool,
     #[serde(default)]
+    rollback_queued: bool,
+    #[serde(default)]
+    read_only: bool,
+    #[serde(default)]
+    update_available: Option<bool>,
+    #[serde(default)]
+    available_update: Option<ImageDeployment>,
+    #[serde(default)]
     booted: Option<ImageDeployment>,
     #[serde(default)]
     rollback: Option<ImageDeployment>,
     #[serde(default)]
     staged: Option<ImageDeployment>,
+    #[serde(default)]
+    actions: SystemImageActions,
+    #[serde(default)]
+    operation: Option<SystemImageOperation>,
     detail: String,
+}
+
+#[derive(Clone, Default, Deserialize)]
+struct SystemImageActions {
+    can_check: bool,
+    can_download: bool,
+    can_apply: bool,
+    can_reboot: bool,
+    can_rollback: bool,
+}
+
+#[derive(Clone, Deserialize)]
+struct SystemImageOperation {
+    action: String,
+    phase: String,
+    detail: String,
+}
+
+#[derive(Deserialize)]
+struct SystemImageActionOutcome {
+    ok: bool,
+    action: String,
+    phase: String,
+    reboot_expected: bool,
+    detail: String,
+    status: SystemImageStatus,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+thread_local! {
+    /// Keeps the latest authoritative bootc response across panel navigation.
+    /// GTK owns this state on its main thread; it contains no credentials.
+    static LIVE_SYSTEM_IMAGE_STATUS: RefCell<Option<SystemImageStatus>> = const { RefCell::new(None) };
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn current_system_image_status(state: &SettingsState) -> Option<SystemImageStatus> {
+    LIVE_SYSTEM_IMAGE_STATUS
+        .with(|live| live.borrow().clone())
+        .or_else(|| state.system_image.clone())
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn remember_system_image_status(status: &SystemImageStatus) {
+    LIVE_SYSTEM_IMAGE_STATUS.with(|live| *live.borrow_mut() = Some(status.clone()));
+}
+
+#[derive(Deserialize)]
+struct RestoreSnapshotOutcome {
+    ok: bool,
+    executes_restore: bool,
+    destination_path: Option<String>,
+    bytes_copied: u64,
+    text: String,
 }
 
 #[cfg_attr(
@@ -422,6 +515,8 @@ struct ImageDeployment {
     version: Option<String>,
     #[serde(default)]
     timestamp: Option<String>,
+    #[serde(default)]
+    download_only: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -471,6 +566,8 @@ struct ProxyStatus {
     gsettings_available: bool,
     schema_available: bool,
     mode_available: bool,
+    #[serde(default)]
+    editor_available: bool,
     mode: String,
     autoconfig_url: Option<String>,
     ignore_hosts: Vec<String>,
@@ -489,6 +586,23 @@ struct ProxyStatus {
 struct ProxyEndpoint {
     host: Option<String>,
     port: Option<i32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct ProxySettingsPayload {
+    mode: String,
+    autoconfig_url: Option<String>,
+    ignore_hosts: Vec<String>,
+    http: ProxyEndpointPayload,
+    https: ProxyEndpointPayload,
+    ftp: ProxyEndpointPayload,
+    socks: ProxyEndpointPayload,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct ProxyEndpointPayload {
+    host: Option<String>,
+    port: Option<u16>,
 }
 
 #[cfg_attr(
@@ -514,8 +628,9 @@ struct WifiNetwork {
     in_use: bool,
 }
 
-/// Display status from Goblins OS. Resolution, scaling, mirroring, and
-/// arrangement controls stay qemu-pending until the apply/keep flow is proven.
+/// Display status from Goblins OS. Settings stages topology changes against the
+/// exact Mutter serial, while GNOME's native dialog owns confirmation and safe
+/// rollback for a persistent apply.
 #[cfg_attr(
     not(all(target_os = "linux", feature = "native-desktop")),
     allow(dead_code)
@@ -531,17 +646,49 @@ struct DisplaysStatus {
     #[serde(default)]
     display_config_serial: Option<u32>,
     outputs: Vec<DisplayOutputStatus>,
+    #[serde(default)]
+    logical_monitors: Vec<DisplayLogicalMonitorStatus>,
     detail: String,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, PartialEq)]
 struct DisplayOutputStatus {
     name: String,
     connected: bool,
     primary: bool,
     current_mode: Option<String>,
     position: Option<String>,
+    #[serde(default)]
+    modes: Vec<DisplayModeStatus>,
     detail: String,
+}
+
+#[derive(Clone, Deserialize, PartialEq)]
+struct DisplayModeStatus {
+    id: String,
+    label: String,
+    width: u32,
+    height: u32,
+    refresh_hz: f64,
+    preferred: bool,
+    current: bool,
+    supported_scales: Vec<f64>,
+}
+
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
+struct DisplayLogicalMonitorStatus {
+    x: i32,
+    y: i32,
+    scale: f64,
+    transform: u32,
+    primary: bool,
+    monitors: Vec<DisplayMonitorConfig>,
+}
+
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
+struct DisplayMonitorConfig {
+    connector: String,
+    mode_id: String,
 }
 
 /// Desktop notification preference status from Goblins OS. Settings only
@@ -612,8 +759,7 @@ struct OpenAIAuthStatus {
     message: String,
 }
 
-/// Read-only Bluetooth status. Pairing stays disabled
-/// until the core owns a protected route for changing adapter state.
+/// Bluetooth status and known-device state from the protected core route.
 #[cfg_attr(
     not(all(target_os = "linux", feature = "native-desktop")),
     allow(dead_code)
@@ -627,7 +773,13 @@ struct BluetoothStatus {
     powered: Option<bool>,
     discoverable: Option<bool>,
     pairable: Option<bool>,
+    #[serde(default)]
+    discovering: Option<bool>,
     adapter: Option<BluetoothAdapterStatus>,
+    #[serde(default)]
+    devices_available: bool,
+    #[serde(default)]
+    devices: Vec<BluetoothDeviceStatus>,
     // Backend detail is retained for compatibility but not shown in product copy.
     #[allow(dead_code)]
     detail: String,
@@ -638,6 +790,15 @@ struct BluetoothAdapterStatus {
     name: Option<String>,
     alias: Option<String>,
     address: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct BluetoothDeviceStatus {
+    address: String,
+    name: String,
+    paired: Option<bool>,
+    trusted: Option<bool>,
+    connected: Option<bool>,
 }
 
 #[cfg_attr(
@@ -809,9 +970,15 @@ struct TouchpadInputStatus {
     schema_available: bool,
     speed: Option<f64>,
     tap_to_click: Option<bool>,
+    #[serde(default)]
+    tap_and_drag: Option<bool>,
+    #[serde(default)]
+    tap_and_drag_lock: Option<bool>,
     natural_scroll: Option<bool>,
     two_finger_scrolling_enabled: Option<bool>,
     disable_while_typing: Option<bool>,
+    #[serde(default)]
+    click_method: Option<String>,
     detail: String,
 }
 
@@ -862,8 +1029,11 @@ struct MagnifierAccessibilityStatus {
 #[derive(Clone, Deserialize)]
 struct VisualAccessibilityStatus {
     schema_available: bool,
+    reduce_transparency_schema_available: bool,
     high_contrast: Option<bool>,
+    reduce_transparency: Option<bool>,
     detail: String,
+    reduce_transparency_detail: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -913,6 +1083,52 @@ struct BluetoothPowerOutcome {
     #[allow(dead_code)]
     powered: bool,
     text: String,
+}
+
+#[derive(Deserialize)]
+struct BluetoothScanOutcome {
+    ok: bool,
+    devices: Vec<BluetoothDeviceStatus>,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct BluetoothDeviceActionOutcome {
+    ok: bool,
+    #[allow(dead_code)]
+    address: String,
+    #[allow(dead_code)]
+    action: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct DisplayApplyOutcome {
+    ok: bool,
+    text: String,
+    #[allow(dead_code)]
+    method: String,
+    serial: u32,
+}
+
+#[derive(Deserialize)]
+struct KeyboardShortcutOutcome {
+    ok: bool,
+    text: String,
+    #[allow(dead_code)]
+    action: String,
+    #[allow(dead_code)]
+    bindings: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ModifierRemapOutcome {
+    ok: bool,
+    text: String,
+    #[allow(dead_code)]
+    target: String,
+    #[allow(dead_code)]
+    value: String,
 }
 
 #[derive(Deserialize)]
@@ -1067,6 +1283,8 @@ struct SoundRecognitionSoundToggleOutcome {
 struct CodexStatus {
     installed: bool,
     authenticated: bool,
+    #[serde(default)]
+    sign_in_in_progress: bool,
     detail: String,
 }
 
@@ -1101,6 +1319,21 @@ enum CodexLoginOutcome {
     AlreadyRunning,
     OpenUrl(String),
     Started,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+enum CodexHandoffOutcome {
+    Ready(CodexStatus),
+    OpenUrl(String),
+    Stopped(CodexStatus),
+    TimedOut,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+enum CodexSignInCompletion {
+    Ready(CodexStatus),
+    Stopped(CodexStatus),
+    TimedOut,
 }
 
 /// Visual Look Up capability from Goblins OS. GPT-OSS is text-only, so this row
@@ -1687,15 +1920,127 @@ struct DesktopPrivacyStatus {
     detail: String,
 }
 
-/// Status of the optional administrator-installed OpenAI API credential. The key
-/// itself is never returned — Settings only mirrors readiness and selected model.
+/// Non-secret readiness for this user's optional OpenAI API key. The key itself
+/// is never returned — Settings only mirrors readiness and the selected engine.
 #[derive(Clone, Deserialize)]
 struct OpenAiKeyStatus {
     configured: bool,
     model: String,
     engine_selected: bool,
     engine: String,
+    #[serde(default)]
+    key_change_pending: bool,
+    #[allow(dead_code)]
     storage: String,
+}
+
+/// The complete, fixed vocabulary accepted by the protected API-key broker
+/// launcher. Ordinary Settings sends only one of these action identifiers.
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenAiKeyManagementAction {
+    Add,
+    Rotate,
+    Remove,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+impl OpenAiKeyManagementAction {
+    #[cfg(test)]
+    const ALL: [Self; 3] = [Self::Add, Self::Rotate, Self::Remove];
+
+    const fn as_id(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Rotate => "rotate",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn openai_key_management_body(action: OpenAiKeyManagementAction) -> String {
+    serde_json::json!({ "action": action.as_id() }).to_string()
+}
+
+fn openai_key_status_title(status: &OpenAiKeyStatus) -> &'static str {
+    if status.key_change_pending {
+        "OpenAI API key · protected change open"
+    } else if status.configured {
+        "OpenAI API key · ready"
+    } else {
+        "OpenAI API key · not added"
+    }
+}
+
+fn openai_key_status_detail(status: &OpenAiKeyStatus) -> String {
+    if status.key_change_pending {
+        return "Finish or cancel the change in the separate protected Goblins OS window. Settings cannot see anything entered there."
+            .to_string();
+    }
+    if status.configured {
+        let model = if status.model.trim().is_empty() {
+            "OpenAI hosted models"
+        } else {
+            status.model.trim()
+        };
+        let selection = if status.engine_selected {
+            "It is the active Goblins AI engine."
+        } else {
+            "Choose Use OpenAI API key above when you want to use it."
+        };
+        format!(
+            "{model} is ready for this account. {selection} The key never enters Settings; it is entered only in a separate protected Goblins OS window."
+        )
+    } else {
+        "Add your own OpenAI API key in a separate protected Goblins OS window. The key never enters Settings, and GPT-OSS remains available on this device."
+            .to_string()
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn openai_key_management_started_copy(action: OpenAiKeyManagementAction) -> &'static str {
+    match action {
+        OpenAiKeyManagementAction::Add => {
+            "The protected API key window opened. Finish or cancel there."
+        }
+        OpenAiKeyManagementAction::Rotate => {
+            "The protected replacement window opened. Finish or cancel there."
+        }
+        OpenAiKeyManagementAction::Remove => {
+            "The protected removal window opened. Confirm or cancel there."
+        }
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn openai_key_management_finished_copy(
+    action: OpenAiKeyManagementAction,
+    status: &OpenAiKeyStatus,
+) -> &'static str {
+    if status.key_change_pending {
+        return "The protected API key window is still open. Finish or cancel there, then choose Refresh status.";
+    }
+    match action {
+        OpenAiKeyManagementAction::Add if status.configured => {
+            "API key added. OpenAI hosted models are ready to select."
+        }
+        OpenAiKeyManagementAction::Add => {
+            "The protected window closed without adding an API key. Nothing changed."
+        }
+        OpenAiKeyManagementAction::Rotate if status.configured => {
+            "The protected replacement window closed. Your API key remains ready; Settings cannot see whether its private value changed."
+        }
+        OpenAiKeyManagementAction::Rotate => {
+            "The protected replacement window closed and no API key is now available. Add a key to use OpenAI hosted models."
+        }
+        OpenAiKeyManagementAction::Remove if !status.configured => {
+            "API key removed. It is no longer available to OpenAI hosted models."
+        }
+        OpenAiKeyManagementAction::Remove => {
+            "The protected window closed without removing the API key. Nothing changed."
+        }
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -2155,7 +2500,7 @@ const SETTINGS_SEARCH_ITEMS: &[SettingsSearchItem] = &[
     },
     SettingsSearchItem {
         panel: SettingsPanel::UsersAccounts,
-        title: "Codex account",
+        title: "OpenAI account through Codex",
         terms: &["codex", "login", "authenticated"],
     },
     SettingsSearchItem {
@@ -2307,7 +2652,7 @@ const SETTINGS_SEARCH_ITEMS: &[SettingsSearchItem] = &[
     },
     SettingsSearchItem {
         panel: SettingsPanel::Storage,
-        title: "Model cache",
+        title: "Local model storage",
         terms: &["storage", "models", "cache", "disk usage"],
     },
     SettingsSearchItem {
@@ -2630,6 +2975,8 @@ struct ResidentEngine {
     ready: bool,
     provider: ResidentEngineProvider,
     locality: ResidentEngineLocality,
+    local_ready: bool,
+    local_detail: String,
     cloud_relay_configured: bool,
     local_relay_configured: bool,
     relay_contract: String,
@@ -2661,7 +3008,7 @@ impl ResidentEngineSelection {
         match self {
             Self::LocalGptOss => "GPT-OSS",
             Self::Codex => "your OpenAI account through Codex",
-            Self::OpenAiApi => "OpenAI hosted models with a protected service credential",
+            Self::OpenAiApi => "OpenAI hosted models with your protected API key",
             Self::ManagedCloud => "managed OpenAI cloud",
         }
     }
@@ -2825,6 +3172,11 @@ struct SettingsContextAiResponse {
     ok: bool,
     text: String,
     context: Option<SettingsContextAiSummary>,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+enum SettingsAiHelpResult {
+    Completed(String),
 }
 
 #[derive(Clone, Deserialize)]
@@ -3048,6 +3400,8 @@ impl SettingsPanel {
                 "zoom",
                 "text size",
                 "reduce motion",
+                "reduce transparency",
+                "solid panels",
             ],
             Self::DesktopWallpaper => &[
                 "desktop",
@@ -3221,10 +3575,9 @@ impl SettingsPanel {
         }
     }
 
-    /// The colored rounded icon-tile class for the sidebar — the macOS-kit
-    /// "system settings" signature, translated to project-owned tints. Each
-    /// category carries a calm, saturated tile with a white glyph; the CSS
-    /// resolves the class to `@gos_tint_*` so light and dark both stay vivid.
+    /// The colored rounded icon-tile class for the Goblins sidebar. Each category
+    /// carries a calm, saturated tile with a white glyph; the CSS resolves the
+    /// class to `@gos_tint_*` so light and dark both stay vivid.
     #[cfg(all(target_os = "linux", feature = "native-desktop"))]
     fn sidebar_icon_tint(self) -> &'static str {
         match self {
@@ -3382,7 +3735,7 @@ impl SettingsPanel {
             Self::MouseTrackpad => "Pointer and touchpad readiness from Linux input devices.",
             Self::DrawingTablet => "Pen, stylus, and drawing tablet settings.",
             Self::Accessibility => {
-                "Assistive technologies, motion, text scale, and accessibility readiness."
+                "Assistive technologies, motion, text scale, visual clarity, and accessibility readiness."
             }
             Self::DesktopWallpaper => "Desktop background, session theme, and wallpaper ownership.",
             Self::Notifications => {
@@ -3409,7 +3762,9 @@ impl SettingsPanel {
                 "Goblin actions, GPT-OSS, Codex, OpenAI API key, local models, vision, and voice engines."
             }
             Self::Policy => "Consumer/business/enterprise policy profile and permission grants.",
-            Self::Storage => "Model cache, OS state directories, mounted storage, and free space.",
+            Self::Storage => {
+                "Local model storage, private OS data, mounted storage, and free space."
+            }
             Self::UpdatesAbout => "OS image, tooling, identity, and update readiness.",
             Self::Recovery => "Service health, recovery checks, and repair readiness.",
             Self::Developer => "Local diagnostics, logs, service health, and device details.",
@@ -4092,8 +4447,11 @@ fn settings_state_debug_summary(state: &SettingsState) -> String {
                     .as_ref()
                     .map(|codex| {
                         format!(
-                            "installed={}:auth={}:{}",
-                            codex.installed, codex.authenticated, codex.detail
+                            "installed={}:auth={}:signing_in={}:{}",
+                            codex.installed,
+                            codex.authenticated,
+                            codex.sign_in_in_progress,
+                            codex.detail
                         )
                     })
                     .unwrap_or_else(|| "unavailable".to_string())
@@ -4376,8 +4734,8 @@ fn build_settings(
     main_scroll.set_hexpand(true);
     main_scroll.set_vexpand(true);
     main_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    // Non-overlay scrollbar so the styled slim slider reads as a persistent macOS
-    // scrollbar (matching the sidebar's nav_scroll), not the stock overlay fade.
+    // Keep the styled slim slider visible in both content panes instead of using
+    // the stock overlay fade.
     main_scroll.set_overlay_scrolling(false);
     main_scroll.set_propagate_natural_height(false);
 
@@ -5287,7 +5645,7 @@ fn populate_panel(
         SettingsPanel::Games => build_games(main),
         SettingsPanel::PrintersScanners => build_device_settings_panel(main, panel, state),
         SettingsPanel::DateTime => build_device_settings_panel(main, panel, state),
-        SettingsPanel::LanguageRegion => build_device_settings_panel(main, panel, state),
+        SettingsPanel::LanguageRegion => build_language_region(main, state),
         SettingsPanel::UsersAccounts => build_users_accounts(main, state),
         SettingsPanel::OnlineAccounts => build_device_settings_panel(main, panel, state),
         SettingsPanel::PrivacyPermissions => build_privacy_permissions(main, state),
@@ -5519,7 +5877,7 @@ fn build_overview(panel: &gtk4::Box, state: &SettingsState) {
                     ),
                     system_row(
                         "Local model storage",
-                        "Model cache and private credential storage are managed by Goblins OS.",
+                        "Local model storage and private credential storage are managed by Goblins OS.",
                     ),
                     system_row(
                         "Session readiness",
@@ -5729,6 +6087,397 @@ fn build_device_settings_panel(
     let title = settings_panel.display_name();
     let detail = device_settings_integrated_detail(settings_panel);
     append_device_settings_handoff(panel, settings_panel, title, &detail, state.system.as_ref());
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocaleIdentity {
+    language: String,
+    region: Option<String>,
+    encoding: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocaleEnvironmentSnapshot {
+    interface_language: Option<String>,
+    requested_locale: String,
+    requested_locale_source: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NativeLocaleFacts {
+    active_messages_locale: String,
+    active_time_locale: String,
+    active_numeric_locale: String,
+    date_pattern: String,
+    date_now: String,
+    time_now: String,
+    decimal_separator: String,
+    grouping_separator: String,
+    encoding: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LanguageRegionFact {
+    title: &'static str,
+    value: String,
+    detail: String,
+    accessible_label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LanguageRegionPresentation {
+    facts: Vec<LanguageRegionFact>,
+}
+
+fn clean_locale_value(value: Option<&str>) -> Option<String> {
+    let value = value?
+        .chars()
+        .take_while(|character| !character.is_control())
+        .take(96)
+        .collect::<String>();
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn locale_environment_snapshot(
+    lc_all: Option<&str>,
+    lang: Option<&str>,
+    language: Option<&str>,
+) -> LocaleEnvironmentSnapshot {
+    let lc_all = clean_locale_value(lc_all);
+    let lang = clean_locale_value(lang);
+    let (requested_locale, requested_locale_source) = if let Some(locale) = lc_all {
+        (locale, "LC_ALL")
+    } else if let Some(locale) = lang {
+        (locale, "LANG")
+    } else {
+        ("C".to_string(), "system fallback")
+    };
+
+    LocaleEnvironmentSnapshot {
+        interface_language: clean_locale_value(language),
+        requested_locale,
+        requested_locale_source,
+    }
+}
+
+fn parse_locale_identity(locale: &str) -> LocaleIdentity {
+    let base = locale.split('@').next().unwrap_or(locale);
+    let mut base_and_encoding = base.splitn(2, '.');
+    let language_region = base_and_encoding.next().unwrap_or("C");
+    let encoding = base_and_encoding
+        .next()
+        .and_then(|value| clean_locale_value(Some(value)));
+    let mut pieces = language_region.splitn(2, ['_', '-']);
+    let language = clean_locale_value(pieces.next()).unwrap_or_else(|| "C".to_string());
+    let region = pieces
+        .next()
+        .and_then(|value| clean_locale_value(Some(value)));
+
+    LocaleIdentity {
+        language,
+        region,
+        encoding,
+    }
+}
+
+fn locale_display_name(identity: &LocaleIdentity) -> String {
+    use countries_iso3166::BCP47LanguageInfo;
+
+    if matches!(identity.language.as_str(), "C" | "POSIX") {
+        return "System default".to_string();
+    }
+    let language = identity.language.to_ascii_lowercase();
+    let tag = identity
+        .region
+        .as_ref()
+        .map(|region| format!("{language}-{}", region.to_ascii_uppercase()))
+        .unwrap_or_else(|| language.clone());
+    let named = BCP47LanguageInfo::from(tag.as_str());
+    if !matches!(named, BCP47LanguageInfo::UnsupportedLanguage) {
+        return named.english().to_string();
+    }
+    let language_only = BCP47LanguageInfo::from(language.as_str());
+    if matches!(language_only, BCP47LanguageInfo::UnsupportedLanguage) {
+        "System language and region".to_string()
+    } else {
+        language_only.english().to_string()
+    }
+}
+
+fn interface_language_name(language: Option<&str>, identity: &LocaleIdentity) -> String {
+    let requested = language
+        .and_then(|value| value.split(':').next())
+        .and_then(|value| clean_locale_value(Some(value)));
+    let requested_identity = requested
+        .as_deref()
+        .map(parse_locale_identity)
+        .unwrap_or_else(|| identity.clone());
+    locale_display_name(&LocaleIdentity {
+        region: None,
+        ..requested_identity
+    })
+}
+
+fn locale_separator_name(separator: &str, empty_label: &str) -> String {
+    match separator {
+        "" => empty_label.to_string(),
+        "." => "period".to_string(),
+        "," => "comma".to_string(),
+        " " => "space".to_string(),
+        "\u{a0}" => "no-break space".to_string(),
+        "\u{202f}" => "narrow no-break space".to_string(),
+        _ => "locale-specific symbol".to_string(),
+    }
+}
+
+fn encoding_display_name(encoding: &str) -> String {
+    let normalized = encoding
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if normalized == "UTF8" {
+        "Unicode (UTF-8)".to_string()
+    } else if encoding.is_empty() {
+        "System default".to_string()
+    } else {
+        "Current system encoding".to_string()
+    }
+}
+
+fn build_language_region_presentation(
+    environment: &LocaleEnvironmentSnapshot,
+    native: &NativeLocaleFacts,
+) -> LanguageRegionPresentation {
+    let messages_identity = parse_locale_identity(&native.active_messages_locale);
+    let language_value = interface_language_name(
+        environment.interface_language.as_deref(),
+        &messages_identity,
+    );
+    let time_region = locale_display_name(&parse_locale_identity(&native.active_time_locale));
+    let numeric_region = locale_display_name(&parse_locale_identity(&native.active_numeric_locale));
+    let (regional_value, locale_detail) = if time_region == numeric_region {
+        (
+            time_region,
+            "Dates, times, and numbers below use this session’s regional settings.".to_string(),
+        )
+    } else {
+        (
+            "Mixed regional formats".to_string(),
+            format!("Dates and times use {time_region}. Numbers use {numeric_region}."),
+        )
+    };
+    let language_detail = match environment.interface_language.as_deref() {
+        Some(_) => "Goblins OS interface text is currently available in English.".to_string(),
+        None => "Goblins OS interface text is available in English.".to_string(),
+    };
+    let date_detail = "Shown using the current regional date and time format.".to_string();
+    let decimal_name = locale_separator_name(&native.decimal_separator, "not available");
+    let grouping_name = locale_separator_name(&native.grouping_separator, "no thousands separator");
+    let number_value = format!("Decimal {decimal_name} · thousands separator {grouping_name}");
+    let number_detail = "Shown using the current regional number format.".to_string();
+    let language_accessible_label = if environment.interface_language.is_some() {
+        format!(
+            "Requested interface language: {language_value}. Goblins OS interface text is currently available in English."
+        )
+    } else {
+        "Goblins OS interface language: English".to_string()
+    };
+    let encoding_value = encoding_display_name(&native.encoding);
+
+    LanguageRegionPresentation {
+        facts: vec![
+            LanguageRegionFact {
+                title: "Interface language",
+                value: language_value,
+                detail: language_detail,
+                accessible_label: language_accessible_label,
+            },
+            LanguageRegionFact {
+                title: "Regional format",
+                value: regional_value.clone(),
+                detail: locale_detail,
+                accessible_label: format!("Regional format: {regional_value}"),
+            },
+            LanguageRegionFact {
+                title: "Date and time",
+                value: format!("{} · {}", native.date_now, native.time_now),
+                detail: date_detail,
+                accessible_label: format!(
+                    "Date and time: {}, {}",
+                    native.date_now, native.time_now
+                ),
+            },
+            LanguageRegionFact {
+                title: "Number format",
+                value: number_value.clone(),
+                detail: number_detail,
+                accessible_label: format!("Number format: {number_value}"),
+            },
+            LanguageRegionFact {
+                title: "Text encoding",
+                value: encoding_value.clone(),
+                detail: "Unicode supports text from languages around the world.".to_string(),
+                accessible_label: format!("Text encoding: {encoding_value}"),
+            },
+        ],
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn native_locale_string(category: libc::c_int) -> String {
+    use std::{ffi::CStr, ptr};
+
+    // Querying `setlocale` with a null pointer does not change process state.
+    // GTK has already initialized the process locale before this panel is built.
+    let value = unsafe { libc::setlocale(category, ptr::null()) };
+    if value.is_null() {
+        return "unavailable".to_string();
+    }
+    unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn native_locale_info(item: libc::nl_item) -> String {
+    use std::ffi::CStr;
+
+    let value = unsafe { libc::nl_langinfo(item) };
+    if value.is_null() {
+        return String::new();
+    }
+    unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn native_numeric_separators() -> (String, String) {
+    use std::ffi::CStr;
+
+    let locale = unsafe { libc::localeconv() };
+    if locale.is_null() {
+        return (String::new(), String::new());
+    }
+    let decimal = unsafe { (*locale).decimal_point };
+    let grouping = unsafe { (*locale).thousands_sep };
+    let decimal = if decimal.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(decimal) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let grouping = if grouping.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(grouping) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    (decimal, grouping)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn current_native_locale_facts() -> NativeLocaleFacts {
+    let now = gtk4::glib::DateTime::now_local().ok();
+    let formatted_now = |format: &str, fallback: &str| {
+        now.as_ref()
+            .and_then(|date_time| date_time.format(format).ok())
+            .map(|value| value.to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| fallback.to_string())
+    };
+    let (decimal_separator, grouping_separator) = native_numeric_separators();
+
+    NativeLocaleFacts {
+        active_messages_locale: native_locale_string(libc::LC_MESSAGES),
+        active_time_locale: native_locale_string(libc::LC_TIME),
+        active_numeric_locale: native_locale_string(libc::LC_NUMERIC),
+        date_pattern: native_locale_info(libc::D_FMT),
+        date_now: formatted_now("%x", "unavailable"),
+        time_now: formatted_now("%X", "unavailable"),
+        decimal_separator,
+        grouping_separator,
+        encoding: native_locale_info(libc::CODESET),
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn current_language_region_presentation() -> LanguageRegionPresentation {
+    let environment = locale_environment_snapshot(
+        env::var("LC_ALL").ok().as_deref(),
+        env::var("LANG").ok().as_deref(),
+        env::var("LANGUAGE").ok().as_deref(),
+    );
+    let native = current_native_locale_facts();
+    if env::var_os("GOBLINS_OS_CAPTURE_PRESENT_LEDGER").is_some() {
+        eprintln!(
+            "settings_language_region_readback={}",
+            serde_json::json!({
+                "interface_language": environment.interface_language,
+                "requested_locale": environment.requested_locale,
+                "requested_locale_source": environment.requested_locale_source,
+                "active_messages_locale": native.active_messages_locale,
+                "active_time_locale": native.active_time_locale,
+                "active_numeric_locale": native.active_numeric_locale,
+                "date_pattern": native.date_pattern,
+                "date_now": native.date_now,
+                "time_now": native.time_now,
+                "decimal_separator": native.decimal_separator,
+                "grouping_separator": native.grouping_separator,
+                "encoding": native.encoding,
+            })
+        );
+    }
+    build_language_region_presentation(&environment, &native)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn language_region_fact_row(fact: &LanguageRegionFact) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-system-row");
+    row.set_hexpand(true);
+    set_accessible_label_description(&row, &fact.accessible_label, &fact.detail);
+    row.append(&label(fact.title, &["gos-row-title"]));
+    row.append(&label(&fact.value, &["gos-row-copy"]));
+    row.append(&label(&fact.detail, &["gos-row-copy"]));
+    row
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn build_language_region(panel: &gtk4::Box, state: &SettingsState) {
+    append_panel_header(
+        panel,
+        "Language & Region",
+        "Review the language request and the live regional formats used by this session.",
+    );
+    let presentation = current_language_region_presentation();
+    append_preference_group(
+        panel,
+        "Current session",
+        presentation
+            .facts
+            .iter()
+            .map(language_region_fact_row)
+            .collect(),
+    );
+
+    append_device_native_handoffs(panel, SettingsPanel::LanguageRegion);
+    panel.append(&label("Controls", &["gos-subsection-title"]));
+    let detail = device_settings_integrated_detail(SettingsPanel::LanguageRegion);
+    append_device_settings_handoff(
+        panel,
+        SettingsPanel::LanguageRegion,
+        "Language & Region",
+        &detail,
+        state.system.as_ref(),
+    );
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -6518,7 +7267,7 @@ fn build_appearance(panel: &gtk4::Box, state: &SettingsState) {
     ));
     panel.append(&system_row(
         "Window style",
-        "Rounded client chrome, traffic-light window controls, semantic light/dark tokens, and focused blue selection are owned by Goblins OS.",
+        "Rounded client chrome, neutral icon controls, semantic light and dark tokens, and visible keyboard focus are owned by Goblins OS.",
     ));
     append_motion_preference(panel, state);
     append_text_scale_preference(panel, state);
@@ -6986,6 +7735,8 @@ fn append_wifi_management(panel: &gtk4::Box, state: &SettingsState) {
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_proxy_settings(panel: &gtk4::Box, state: &SettingsState) {
+    use gtk4::prelude::*;
+
     panel.append(&label("Proxy", &["gos-subsection-title"]));
     let Some(proxy) = state
         .network
@@ -6998,35 +7749,199 @@ fn append_proxy_settings(panel: &gtk4::Box, state: &SettingsState) {
 
     panel.append(&health_row(
         "Proxy settings",
-        if proxy.gsettings_available && proxy.schema_available {
+        if proxy.editor_available {
             "available"
         } else {
-            "unavailable"
+            "read only"
         },
-        proxy.gsettings_available && proxy.schema_available,
+        proxy.editor_available,
         &proxy.detail,
     ));
 
     if !proxy.schema_available {
+        append_authenticated_proxy_handoff(panel, state);
         return;
     }
 
-    if proxy.mode_available {
-        let core = config_core(state);
-        panel.append(&choice_row(
-            "Proxy mode",
-            normalized_proxy_mode(&proxy.mode),
-            PROXY_MODE_OPTIONS,
-            |value| proxy_mode_detail(value).to_string(),
-            move |value| set_proxy_mode(&core, value),
-        ));
-    } else {
-        panel.append(&system_row(
-            "Proxy mode",
-            "Proxy mode is not available in this session.",
-        ));
+    if !proxy.editor_available || !proxy.mode_available {
+        append_proxy_read_only_status(panel, proxy);
+        append_authenticated_proxy_handoff(panel, state);
+        return;
     }
 
+    let form = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    form.add_css_class("gos-preference-group");
+
+    let mode = gtk4::ComboBoxText::new();
+    mode.add_css_class("gos-choice-control");
+    mode.set_width_request(188);
+    for option in PROXY_MODE_OPTIONS {
+        mode.append(Some(option.id), option.label);
+    }
+    let _ = mode.set_active_id(Some(normalized_proxy_mode(&proxy.mode)));
+    set_accessible_label_description(
+        &mode,
+        "Proxy mode",
+        proxy_mode_detail(normalized_proxy_mode(&proxy.mode)),
+    );
+    form.append(&input_row(
+        "Proxy mode",
+        "Choose Off, Automatic, or Manual, then save the complete configuration.",
+        &mode,
+    ));
+
+    let pac = proxy_text_entry(
+        proxy.autoconfig_url.as_deref().unwrap_or_default(),
+        "https://proxy.example/proxy.pac",
+        2_048,
+        "Automatic configuration URL",
+    );
+    form.append(&input_row(
+        "Automatic configuration URL",
+        "HTTP or HTTPS only. Credentials and query secrets are not accepted here.",
+        &pac,
+    ));
+
+    let bypass = proxy_text_entry(
+        &proxy.ignore_hosts.join(", "),
+        "localhost, 127.0.0.0/8, *.example.test",
+        4_096,
+        "Proxy bypass list",
+    );
+    form.append(&input_row(
+        "Bypass list",
+        "Comma-separated hosts, domain patterns, IP addresses, or CIDR ranges.",
+        &bypass,
+    ));
+
+    let (http_fields, http_host, http_port) = proxy_endpoint_editor("HTTP", &proxy.http);
+    form.append(&input_row(
+        "HTTP proxy",
+        "Host and port must be provided together.",
+        &http_fields,
+    ));
+    let (https_fields, https_host, https_port) = proxy_endpoint_editor("HTTPS", &proxy.https);
+    form.append(&input_row(
+        "HTTPS proxy",
+        "Host and port must be provided together.",
+        &https_fields,
+    ));
+    let (ftp_fields, ftp_host, ftp_port) = proxy_endpoint_editor("FTP", &proxy.ftp);
+    form.append(&input_row(
+        "FTP proxy",
+        "Optional compatibility proxy for applications that still use FTP.",
+        &ftp_fields,
+    ));
+    let (socks_fields, socks_host, socks_port) = proxy_endpoint_editor("SOCKS", &proxy.socks);
+    form.append(&input_row(
+        "SOCKS proxy",
+        "Host and port must be provided together.",
+        &socks_fields,
+    ));
+
+    panel.append(&form);
+
+    let feedback = label(
+        "Changes are validated as one configuration. The active mode switches only after every address is saved.",
+        &["gos-row-copy"],
+    );
+    feedback.set_selectable(true);
+    panel.append(&feedback);
+
+    let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    actions.add_css_class("gos-inline-controls");
+    actions.set_halign(gtk4::Align::End);
+    let save = button("Save Proxy Settings", &["gos-primary-button"]);
+    set_accessible_label_description(
+        &save,
+        "Save Proxy Settings",
+        "Validate and apply the complete proxy configuration.",
+    );
+    actions.append(&save);
+    panel.append(&actions);
+
+    let endpoint_hosts = [
+        http_host.clone(),
+        https_host.clone(),
+        ftp_host.clone(),
+        socks_host.clone(),
+    ];
+    let endpoint_ports = [
+        http_port.clone(),
+        https_port.clone(),
+        ftp_port.clone(),
+        socks_port.clone(),
+    ];
+    set_proxy_editor_mode_sensitivity(
+        normalized_proxy_mode(&proxy.mode),
+        &pac,
+        &endpoint_hosts,
+        &endpoint_ports,
+    );
+    {
+        let pac = pac.clone();
+        let endpoint_hosts = endpoint_hosts.clone();
+        let endpoint_ports = endpoint_ports.clone();
+        mode.connect_changed(move |mode| {
+            if let Some(active) = mode.active_id() {
+                set_proxy_editor_mode_sensitivity(
+                    active.as_str(),
+                    &pac,
+                    &endpoint_hosts,
+                    &endpoint_ports,
+                );
+            }
+        });
+    }
+
+    let core = config_core(state);
+    save.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        let result = mode
+            .active_id()
+            .ok_or_else(|| "Choose a proxy mode before saving.".to_string())
+            .and_then(|mode| {
+                proxy_settings_payload(
+                    mode.as_str(),
+                    pac.text().as_str(),
+                    bypass.text().as_str(),
+                    [
+                        ("HTTP", http_host.text().as_str(), http_port.text().as_str()),
+                        (
+                            "HTTPS",
+                            https_host.text().as_str(),
+                            https_port.text().as_str(),
+                        ),
+                        ("FTP", ftp_host.text().as_str(), ftp_port.text().as_str()),
+                        (
+                            "SOCKS",
+                            socks_host.text().as_str(),
+                            socks_port.text().as_str(),
+                        ),
+                    ],
+                )
+            })
+            .and_then(|payload| set_proxy_settings(&core, &payload));
+
+        match result {
+            Ok(message) => feedback.set_text(&settings_detail_display_copy(&message)),
+            Err(error) => {
+                feedback.set_text(&settings_detail_display_copy(&error));
+                eprintln!("settings_control_change_rejected title=\"Proxy\" error={error:?}");
+            }
+        }
+        button.set_sensitive(true);
+    });
+
+    append_authenticated_proxy_handoff(panel, state);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_proxy_read_only_status(panel: &gtk4::Box, proxy: &ProxyStatus) {
+    panel.append(&system_row(
+        "Proxy mode",
+        proxy_mode_detail(normalized_proxy_mode(&proxy.mode)),
+    ));
     panel.append(&system_row(
         "Automatic configuration",
         &proxy
@@ -7041,26 +7956,97 @@ fn append_proxy_settings(panel: &gtk4::Box, state: &SettingsState) {
         "Bypass list",
         &proxy_ignore_hosts_detail(&proxy.ignore_hosts),
     ));
-    panel.append(&system_row(
-        "HTTP proxy",
-        &proxy_endpoint_detail(proxy.http.host.clone(), proxy.http.port),
-    ));
-    panel.append(&system_row(
-        "HTTPS proxy",
-        &proxy_endpoint_detail(proxy.https.host.clone(), proxy.https.port),
-    ));
-    panel.append(&system_row(
-        "FTP proxy",
-        &proxy_endpoint_detail(proxy.ftp.host.clone(), proxy.ftp.port),
-    ));
-    panel.append(&system_row(
-        "SOCKS proxy",
-        &proxy_endpoint_detail(proxy.socks.host.clone(), proxy.socks.port),
-    ));
-    panel.append(&system_row(
-        "Proxy details",
-        "Mode changes are applied by Goblins OS. Hosts, ports, bypass entries, and proxy authentication stay read-only until a validated editor can manage them without exposing secrets.",
-    ));
+    for (title, endpoint) in [
+        ("HTTP proxy", &proxy.http),
+        ("HTTPS proxy", &proxy.https),
+        ("FTP proxy", &proxy.ftp),
+        ("SOCKS proxy", &proxy.socks),
+    ] {
+        panel.append(&system_row(
+            title,
+            &proxy_endpoint_detail(endpoint.host.clone(), endpoint.port),
+        ));
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_authenticated_proxy_handoff(panel: &gtk4::Box, state: &SettingsState) {
+    append_device_settings_handoff(
+        panel,
+        SettingsPanel::NetworkServices,
+        "Authenticated proxy",
+        "Open the system network tool for proxies that require a username or password. Credentials never pass through Goblins OS Settings or core.",
+        state.system.as_ref(),
+    );
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn proxy_text_entry(
+    value: &str,
+    placeholder: &str,
+    max_length: i32,
+    accessible_label: &str,
+) -> gtk4::Entry {
+    use gtk4::prelude::*;
+
+    let entry = gtk4::Entry::new();
+    entry.add_css_class("gos-entry");
+    entry.set_text(value);
+    entry.set_placeholder_text(Some(placeholder));
+    entry.set_max_length(max_length);
+    entry.set_hexpand(true);
+    set_accessible_label_description(&entry, accessible_label, placeholder);
+    entry
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn proxy_endpoint_editor(
+    label_text: &str,
+    endpoint: &ProxyEndpoint,
+) -> (gtk4::Box, gtk4::Entry, gtk4::Entry) {
+    use gtk4::prelude::*;
+
+    let fields = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    fields.set_hexpand(true);
+    let host = proxy_text_entry(
+        endpoint.host.as_deref().unwrap_or_default(),
+        "proxy.example.test",
+        253,
+        &format!("{label_text} proxy host"),
+    );
+    let port = proxy_text_entry(
+        &endpoint
+            .port
+            .filter(|port| *port > 0)
+            .map(|port| port.to_string())
+            .unwrap_or_default(),
+        "8080",
+        5,
+        &format!("{label_text} proxy port"),
+    );
+    port.set_input_purpose(gtk4::InputPurpose::Digits);
+    port.set_width_chars(6);
+    port.set_max_width_chars(6);
+    port.set_hexpand(false);
+    fields.append(&host);
+    fields.append(&port);
+    (fields, host, port)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_proxy_editor_mode_sensitivity(
+    mode: &str,
+    pac: &gtk4::Entry,
+    endpoint_hosts: &[gtk4::Entry; 4],
+    endpoint_ports: &[gtk4::Entry; 4],
+) {
+    use gtk4::prelude::*;
+
+    pac.set_sensitive(mode == "auto");
+    let manual = mode == "manual";
+    for field in endpoint_hosts.iter().chain(endpoint_ports) {
+        field.set_sensitive(manual);
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -7178,10 +8164,7 @@ fn build_bluetooth(panel: &gtk4::Box, state: &SettingsState) {
             "Waiting for Bluetooth status.",
         ),
     }
-    panel.append(&system_row(
-        "Pairing controls",
-        "Read-only until secure device actions are available. Pair, connect, disconnect, and forget controls stay disabled for now.",
-    ));
+    append_bluetooth_devices(panel, state);
     panel.append(&label("Advanced controls", &["gos-subsection-title"]));
     append_device_settings_handoff(
         panel,
@@ -7285,7 +8268,7 @@ fn append_bluetooth_power_control(
     panel.append(&row);
 
     let feedback = label(
-        "Bluetooth power changes are applied. Pairing will appear when secure device actions are available.",
+        "Power changes are applied through the protected Bluetooth service.",
         &["gos-row-copy"],
     );
     panel.append(&feedback);
@@ -7309,25 +8292,385 @@ fn append_bluetooth_power_control(
             }
 
             toggle.set_sensitive(false);
-            match set_bluetooth_power(&core, next_powered) {
-                Ok(message) => {
-                    current_powered.set(next_powered);
-                    title.set_text(bluetooth_power_label(next_powered));
-                    let next_detail = bluetooth_power_detail(next_powered);
-                    detail.set_text(next_detail);
-                    feedback.set_text(&message);
-                    toggle.update_property(&[gtk4::accessible::Property::Description(next_detail)]);
-                }
-                Err(message) => {
-                    feedback.set_text(&message);
-                    updating_switch.set(true);
-                    toggle.set_active(current_powered.get());
-                    updating_switch.set(false);
-                }
-            }
-            toggle.set_sensitive(true);
+            feedback.set_text(if next_powered {
+                "Turning Bluetooth on…"
+            } else {
+                "Turning Bluetooth off…"
+            });
+            let core_worker = core.clone();
+            let toggle = toggle.clone();
+            let title = title.clone();
+            let detail = detail.clone();
+            let feedback = feedback.clone();
+            let current_powered = current_powered.clone();
+            let updating_switch = updating_switch.clone();
+            run_settings_action(
+                move || set_bluetooth_power(&core_worker, next_powered),
+                move |result| {
+                    match result {
+                        Ok(message) => {
+                            current_powered.set(next_powered);
+                            title.set_text(bluetooth_power_label(next_powered));
+                            let next_detail = bluetooth_power_detail(next_powered);
+                            detail.set_text(next_detail);
+                            feedback.set_text(&message);
+                            toggle.update_property(&[gtk4::accessible::Property::Description(
+                                next_detail,
+                            )]);
+                        }
+                        Err(message) => {
+                            feedback.set_text(&message);
+                            updating_switch.set(true);
+                            toggle.set_active(current_powered.get());
+                            updating_switch.set(false);
+                        }
+                    }
+                    toggle.set_sensitive(true);
+                },
+            );
         });
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_bluetooth_devices(panel: &gtk4::Box, state: &SettingsState) {
+    use gtk4::prelude::*;
+
+    panel.append(&label("Devices", &["gos-subsection-title"]));
+    let Some(bluetooth) = &state.bluetooth else {
+        panel.append(&system_row(
+            "Bluetooth devices",
+            "Waiting for known Bluetooth devices.",
+        ));
+        return;
+    };
+    if !bluetooth.bluez_available || !bluetooth.service_active || !bluetooth.adapter_present {
+        panel.append(&system_row("Bluetooth devices", &bluetooth.detail));
+        return;
+    }
+
+    let controls = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+    controls.add_css_class("gos-row");
+    let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
+    copy.set_hexpand(true);
+    copy.append(&label("Find nearby devices", &["gos-row-title"]));
+    let feedback = label(
+        if bluetooth.discovering == Some(true) {
+            "Bluetooth discovery is already running."
+        } else {
+            "Scan for eight seconds, then review the devices below."
+        },
+        &["gos-row-copy"],
+    );
+    copy.append(&feedback);
+    controls.append(&copy);
+    let scan = button(
+        if bluetooth.discovering == Some(true) {
+            "Scanning…"
+        } else {
+            "Scan"
+        },
+        &["gos-permission-action"],
+    );
+    scan.set_sensitive(bluetooth.powered == Some(true) && bluetooth.discovering != Some(true));
+    set_accessible_label_description(
+        &scan,
+        "Scan for Bluetooth devices",
+        "Run one bounded Bluetooth discovery scan.",
+    );
+    controls.append(&scan);
+    panel.append(&controls);
+
+    let device_list = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    device_list.add_css_class("gos-bluetooth-device-list");
+    append_bluetooth_device_rows(
+        &device_list,
+        &config_core(state),
+        &bluetooth.devices,
+        &feedback,
+    );
+    if bluetooth.devices.is_empty() {
+        let detail = if bluetooth.devices_available {
+            "No known Bluetooth devices yet. Choose Scan to find nearby devices."
+        } else {
+            "Known Bluetooth devices could not be read. You can still run a fresh scan."
+        };
+        device_list.append(&system_row("Known devices", detail));
+    }
+    panel.append(&device_list);
+
+    let core = config_core(state);
+    let list = device_list.clone();
+    scan.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        button.set_label("Scanning…");
+        feedback.set_text("Looking for nearby Bluetooth devices…");
+        let core_worker = core.clone();
+        let core_complete = core.clone();
+        let button = button.clone();
+        let feedback = feedback.clone();
+        let list = list.clone();
+        run_settings_action(
+            move || scan_bluetooth_devices(&core_worker),
+            move |result| {
+                match result {
+                    Ok(outcome) => {
+                        feedback.set_text(&settings_detail_display_copy(&outcome.text));
+                        clear_box_children(&list);
+                        append_bluetooth_device_rows(
+                            &list,
+                            &core_complete,
+                            &outcome.devices,
+                            &feedback,
+                        );
+                        if outcome.devices.is_empty() {
+                            list.append(&system_row(
+                                "Nearby devices",
+                                "No Bluetooth devices responded during this scan.",
+                            ));
+                        }
+                    }
+                    Err(error) => feedback.set_text(&settings_detail_display_copy(
+                        &setting_change_rejected_detail(&error),
+                    )),
+                }
+                button.set_label("Scan again");
+                button.set_sensitive(true);
+            },
+        );
+    });
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn clear_box_children(container: &gtk4::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_bluetooth_device_rows(
+    list: &gtk4::Box,
+    core: &CoreClient,
+    devices: &[BluetoothDeviceStatus],
+    feedback: &gtk4::Label,
+) {
+    use gtk4::prelude::*;
+
+    for device in devices {
+        let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+        row.add_css_class("gos-row");
+        row.add_css_class("gos-bluetooth-device-row");
+        let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
+        copy.set_hexpand(true);
+        copy.append(&label(&device.name, &["gos-row-title"]));
+        let status = label(&bluetooth_device_detail(device), &["gos-row-copy"]);
+        copy.append(&status);
+        row.append(&copy);
+
+        let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        actions.set_valign(gtk4::Align::Center);
+        if device.paired == Some(false) {
+            actions.append(&bluetooth_pairing_handoff_button(device, &status, feedback));
+        }
+        if device.connected == Some(true) {
+            actions.append(&bluetooth_device_action_button(
+                core,
+                device,
+                BluetoothDeviceAction::Disconnect,
+                list,
+                &row,
+                &status,
+                feedback,
+            ));
+        } else if device.paired == Some(true) {
+            actions.append(&bluetooth_device_action_button(
+                core,
+                device,
+                BluetoothDeviceAction::Connect,
+                list,
+                &row,
+                &status,
+                feedback,
+            ));
+        }
+        if device.paired == Some(true) || device.trusted == Some(true) {
+            actions.append(&bluetooth_device_action_button(
+                core,
+                device,
+                BluetoothDeviceAction::Forget,
+                list,
+                &row,
+                &status,
+                feedback,
+            ));
+        }
+        row.append(&actions);
+        list.append(&row);
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn bluetooth_pairing_handoff_button(
+    device: &BluetoothDeviceStatus,
+    status: &gtk4::Label,
+    feedback: &gtk4::Label,
+) -> gtk4::Button {
+    use gtk4::prelude::*;
+
+    let available = gnome_control_center_available();
+    let control = button("Pair…", &["gos-permission-action"]);
+    control.set_sensitive(available);
+    let accessible = format!("Pair {} in Bluetooth controls", device.name);
+    let detail = if available {
+        "Open the system Bluetooth agent for passkey entry and numeric confirmation."
+    } else {
+        "The complete Bluetooth pairing agent is not available in this image."
+    };
+    set_accessible_label_description(&control, &accessible, detail);
+    if available {
+        let status = status.clone();
+        let feedback = feedback.clone();
+        control.connect_clicked(move |_| {
+            match launch_gnome_control_center_panel("bluetooth") {
+                Ok(()) => {
+                    status.set_text(
+                        "Complete pairing in Bluetooth controls, including any passkey or confirmation.",
+                    );
+                    feedback.set_text("Opening the complete Bluetooth pairing experience.");
+                }
+                Err(error) => {
+                    status.set_text("Bluetooth pairing controls could not be opened.");
+                    feedback.set_text(
+                        "The Bluetooth pairing experience could not be opened from this session.",
+                    );
+                    eprintln!("settings_bluetooth_pairing_handoff_error={error}");
+                }
+            }
+        });
+    }
+    control
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone, Copy)]
+enum BluetoothDeviceAction {
+    Connect,
+    Disconnect,
+    Forget,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+impl BluetoothDeviceAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connect => "Connect",
+            Self::Disconnect => "Disconnect",
+            Self::Forget => "Forget",
+        }
+    }
+
+    fn api_value(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Disconnect => "disconnect",
+            Self::Forget => "forget",
+        }
+    }
+
+    fn present_participle(self) -> &'static str {
+        match self {
+            Self::Connect => "Connecting",
+            Self::Disconnect => "Disconnecting",
+            Self::Forget => "Forgetting",
+        }
+    }
+
+    fn removes_device(self) -> bool {
+        matches!(self, Self::Forget)
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn bluetooth_device_action_button(
+    core: &CoreClient,
+    device: &BluetoothDeviceStatus,
+    action: BluetoothDeviceAction,
+    list: &gtk4::Box,
+    row: &gtk4::Box,
+    status: &gtk4::Label,
+    feedback: &gtk4::Label,
+) -> gtk4::Button {
+    use gtk4::prelude::*;
+
+    let label_text = action.label();
+    let control = button(label_text, &["gos-permission-action"]);
+    let accessible = format!("{label_text} {}", device.name);
+    set_accessible_label_description(&control, &accessible, &device.address);
+    let core = core.clone();
+    let address = device.address.clone();
+    let list = list.clone();
+    let row = row.clone();
+    let status = status.clone();
+    let feedback = feedback.clone();
+    control.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        status.set_text(&format!("{} in progress…", action.present_participle()));
+        let core_worker = core.clone();
+        let core_complete = core.clone();
+        let address = address.clone();
+        let list = list.clone();
+        let button = button.clone();
+        let status = status.clone();
+        let feedback = feedback.clone();
+        let row = row.clone();
+        run_settings_action(
+            move || change_bluetooth_device_and_refresh(&core_worker, &address, action.api_value()),
+            move |result| match result {
+                Ok((message, refreshed_devices)) => {
+                    status.set_text(&message);
+                    feedback.set_text(&message);
+                    if let Some(devices) = refreshed_devices {
+                        clear_box_children(&list);
+                        append_bluetooth_device_rows(&list, &core_complete, &devices, &feedback);
+                        if devices.is_empty() {
+                            list.append(&system_row(
+                                "Known devices",
+                                "No known Bluetooth devices. Choose Scan to find nearby devices.",
+                            ));
+                        }
+                    } else if action.removes_device() {
+                        row.set_visible(false);
+                    }
+                }
+                Err(error) => {
+                    status.set_text(&settings_detail_display_copy(
+                        &setting_change_rejected_detail(&error),
+                    ));
+                    button.set_sensitive(true);
+                }
+            },
+        );
+    });
+    control
+}
+
+fn bluetooth_device_detail(device: &BluetoothDeviceStatus) -> String {
+    let state = if device.connected == Some(true) {
+        "Connected"
+    } else if device.paired == Some(true) {
+        "Paired"
+    } else if device.paired == Some(false) {
+        "Available to pair"
+    } else {
+        "Pairing status unavailable"
+    };
+    let trust = if device.trusted == Some(true) {
+        " · trusted"
+    } else {
+        ""
+    };
+    format!("{state}{trust} · {}", device.address)
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -7358,14 +8701,7 @@ fn build_displays(panel: &gtk4::Box, state: &SettingsState) {
             }
         }
     }
-    panel.append(&system_row(
-        "Resolution and scaling",
-        &display_apply_detail(state.displays.as_ref()),
-    ));
-    panel.append(&system_row(
-        "Display arrangement",
-        "Monitor placement, mirroring, and primary-display changes stay disabled until the qemu apply/keep proof is green.",
-    ));
+    append_display_layout_editor(panel, state);
     panel.append(&label("Advanced controls", &["gos-subsection-title"]));
     append_device_settings_handoff(
         panel,
@@ -7384,7 +8720,7 @@ fn display_apply_detail(displays: Option<&DisplaysStatus>) -> String {
                 .map(|serial| format!(" serial {serial}"))
                 .unwrap_or_else(|| " without a reported serial".to_string());
             format!(
-                "Protected display apply is available for this session ({serial}); the layout editor stays disabled until live qemu proof covers apply and keep."
+                "Protected display apply is available for this session ({serial}). Changes are previewed temporarily before you keep them."
             )
         }
         Some(displays) if displays.mutter_display_config_available => {
@@ -7397,6 +8733,864 @@ fn display_apply_detail(displays: Option<&DisplaysStatus>) -> String {
         }
         None => "Waiting for display configuration status.".to_string(),
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_display_layout_editor(panel: &gtk4::Box, state: &SettingsState) {
+    use gtk4::prelude::*;
+
+    panel.append(&label("Layout controls", &["gos-subsection-title"]));
+    let Some(displays) = &state.displays else {
+        panel.append(&system_row(
+            "Display layout",
+            "Waiting for the current display layout.",
+        ));
+        return;
+    };
+    let Some(serial) = displays.display_config_serial else {
+        panel.append(&system_row(
+            "Display layout",
+            &display_apply_detail(Some(displays)),
+        ));
+        return;
+    };
+    if !displays.mutter_display_apply_allowed || displays.logical_monitors.is_empty() {
+        panel.append(&system_row(
+            "Display layout",
+            &display_apply_detail(Some(displays)),
+        ));
+        return;
+    }
+
+    // The baseline advances only after the desktop confirmation window closes
+    // and a fresh compositor query reports the resulting layout.
+    let baseline = Rc::new(RefCell::new(displays.logical_monitors.clone()));
+    let draft = Rc::new(RefCell::new(baseline.borrow().clone()));
+    let feedback = label(
+        "Adjust the layout below, then apply it. The desktop will ask you to keep or revert the change.",
+        &["gos-row-copy"],
+    );
+    let layout_editor = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    let primary_controls: Rc<RefCell<Vec<DisplayPrimaryControls>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let refreshing = Rc::new(Cell::new(false));
+    for index in 0..displays.logical_monitors.len() {
+        layout_editor.append(&display_logical_monitor_editor(
+            displays,
+            index,
+            &draft,
+            &feedback,
+            &primary_controls,
+            &refreshing,
+        ));
+    }
+    refresh_display_editor_controls(
+        &draft.borrow(),
+        &displays.outputs,
+        &primary_controls,
+        &refreshing,
+    );
+    panel.append(&layout_editor);
+
+    let action_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+    action_row.add_css_class("gos-row");
+    let action_copy = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
+    action_copy.set_hexpand(true);
+    action_copy.append(&label("Apply display changes", &["gos-row-title"]));
+    action_copy.append(&feedback);
+    action_row.append(&action_copy);
+    let apply = button("Apply", &["gos-permission-action"]);
+    set_accessible_label_description(
+        &apply,
+        "Apply display layout",
+        "Apply the selected layout and confirm it in the desktop Keep Changes dialog.",
+    );
+    action_row.append(&apply);
+    panel.append(&action_row);
+
+    let confirmation = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+    confirmation.add_css_class("gos-row");
+    confirmation.set_visible(false);
+    let confirmation_copy = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
+    confirmation_copy.set_hexpand(true);
+    confirmation_copy.append(&label("System confirmation", &["gos-row-title"]));
+    let confirmation_status = label(
+        "Choose Keep Changes in the desktop dialog. If you do nothing, GNOME restores the previous layout automatically.",
+        &["gos-row-copy"],
+    );
+    confirmation_copy.append(&confirmation_status);
+    confirmation.append(&confirmation_copy);
+    panel.append(&confirmation);
+
+    let current_serial = Rc::new(Cell::new(serial));
+    let core = config_core(state);
+    {
+        let core = core.clone();
+        let draft = draft.clone();
+        let baseline = baseline.clone();
+        let feedback = feedback.clone();
+        let confirmation = confirmation.clone();
+        let current_serial = current_serial.clone();
+        let layout_editor = layout_editor.clone();
+        let primary_controls = primary_controls.clone();
+        let refreshing = refreshing.clone();
+        let original_outputs = displays.outputs.clone();
+        apply.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            layout_editor.set_sensitive(false);
+            confirmation.set_visible(false);
+            let selected = draft.borrow().clone();
+            let previous = baseline.borrow().clone();
+            feedback.set_text("Applying the layout. Confirm it in the system Keep Changes dialog…");
+            let serial = current_serial.get();
+            let core_worker = core.clone();
+            let core_for_refresh = core.clone();
+            let button = button.clone();
+            let feedback = feedback.clone();
+            let confirmation = confirmation.clone();
+            let current_serial = current_serial.clone();
+            let layout_editor = layout_editor.clone();
+            let baseline = baseline.clone();
+            let draft = draft.clone();
+            let primary_controls = primary_controls.clone();
+            let refreshing = refreshing.clone();
+            let original_outputs = original_outputs.clone();
+            let selected_for_refresh = selected.clone();
+            run_settings_action(
+                move || {
+                    apply_display_layout(&core_worker, serial, "persistent", true, &selected)
+                },
+                move |result| match result {
+                    Ok((message, applied_serial)) => {
+                        current_serial.set(applied_serial);
+                        confirmation.set_visible(true);
+                        feedback.set_text(&format!(
+                            "{message} Settings will verify the final desktop layout after the system dialog closes."
+                        ));
+                        let feedback_after = feedback.clone();
+                        let confirmation_after = confirmation.clone();
+                        let current_serial_after = current_serial.clone();
+                        let layout_editor_after = layout_editor.clone();
+                        let button_after = button.clone();
+                        let baseline_after = baseline.clone();
+                        let draft_after = draft.clone();
+                        let primary_controls_after = primary_controls.clone();
+                        let refreshing_after = refreshing.clone();
+                        gtk4::glib::timeout_add_seconds_local_once(25, move || {
+                            run_settings_action(
+                                move || {
+                                    get_core_json::<DisplaysStatus>(
+                                        &core_for_refresh,
+                                        "/v1/displays/status",
+                                    )
+                                    .map_err(|error| error.to_string())
+                                },
+                                move |status| {
+                                    confirmation_after.set_visible(false);
+                                    match status {
+                                        Ok(status)
+                                            if display_output_catalogs_match(
+                                                &original_outputs,
+                                                &status.outputs,
+                                            )
+                                                && display_layout_topology_matches(
+                                                &selected_for_refresh,
+                                                &status.logical_monitors,
+                                            )
+                                                && (status.logical_monitors
+                                                    == selected_for_refresh
+                                                    || status.logical_monitors == previous) =>
+                                        {
+                                            let final_layout = status.logical_monitors;
+                                            let final_outputs = status.outputs;
+                                            if let Some(serial) = status.display_config_serial {
+                                                current_serial_after.set(serial);
+                                            }
+                                            let final_message = if final_layout == selected_for_refresh {
+                                                "The desktop confirmed and saved this display layout."
+                                            } else {
+                                                "The desktop restored the previous display layout."
+                                            };
+                                            *baseline_after.borrow_mut() = final_layout.clone();
+                                            *draft_after.borrow_mut() = final_layout;
+                                            refresh_display_editor_controls(
+                                                &draft_after.borrow(),
+                                                &final_outputs,
+                                                &primary_controls_after,
+                                                &refreshing_after,
+                                            );
+                                            feedback_after.set_text(final_message);
+                                            layout_editor_after.set_sensitive(true);
+                                            button_after.set_sensitive(true);
+                                        }
+                                        Ok(_) | Err(_) => {
+                                            feedback_after.set_text(
+                                                "The system dialog controls the final result. Display topology changed or could not be refreshed; reopen Displays to load it safely.",
+                                            );
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                    }
+                    Err(error) => {
+                        layout_editor.set_sensitive(true);
+                        button.set_sensitive(true);
+                        feedback.set_text(&settings_detail_display_copy(
+                            &setting_change_rejected_detail(&error),
+                        ));
+                    }
+                },
+            );
+        });
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn display_logical_monitor_editor(
+    displays: &DisplaysStatus,
+    index: usize,
+    draft: &Rc<RefCell<Vec<DisplayLogicalMonitorStatus>>>,
+    feedback: &gtk4::Label,
+    primary_controls: &Rc<RefCell<Vec<DisplayPrimaryControls>>>,
+    refreshing: &Rc<Cell<bool>>,
+) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let monitor = &displays.logical_monitors[index];
+    let connectors = monitor
+        .monitors
+        .iter()
+        .map(|monitor| monitor.connector.as_str())
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let row = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-display-editor-row");
+    let head = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let title_label = label(&connectors, &["gos-row-title"]);
+    title_label.set_hexpand(true);
+    head.append(&title_label);
+    let make_primary = button("Make primary", &["gos-permission-action"]);
+    {
+        let draft = draft.clone();
+        let feedback = feedback.clone();
+        let primary_controls = primary_controls.clone();
+        let refreshing = refreshing.clone();
+        let outputs = displays.outputs.clone();
+        make_primary.connect_clicked(move |_| {
+            display_layout_make_primary(&mut draft.borrow_mut(), index);
+            display_layout_normalize(&mut draft.borrow_mut());
+            refresh_display_primary_controls(
+                &draft.borrow(),
+                &outputs,
+                &primary_controls,
+                &refreshing,
+            );
+            feedback.set_text("Primary display updated in the draft. Choose Apply to preview it.");
+        });
+    }
+    head.append(&make_primary);
+    row.append(&head);
+
+    let controls = gtk4::FlowBox::new();
+    controls.add_css_class("gos-display-editor-controls");
+    controls.set_selection_mode(gtk4::SelectionMode::None);
+    controls.set_min_children_per_line(1);
+    controls.set_max_children_per_line(2);
+    controls.set_column_spacing(8);
+    controls.set_row_spacing(8);
+    controls.set_homogeneous(true);
+    let output = monitor
+        .monitors
+        .first()
+        .and_then(|physical| display_output(displays, &physical.connector));
+
+    let scale = gtk4::ComboBoxText::new();
+    scale.add_css_class("gos-choice-control");
+    refresh_display_scale_control(&scale, &displays.outputs, monitor, refreshing);
+    set_accessible_label_description(&scale, "Display scale", &connectors);
+    {
+        let draft = draft.clone();
+        let feedback = feedback.clone();
+        let refreshing = refreshing.clone();
+        let outputs = displays.outputs.clone();
+        let primary_controls = primary_controls.clone();
+        scale.connect_changed(move |control| {
+            if refreshing.get() {
+                return;
+            }
+            let Some(value) = control
+                .active_id()
+                .and_then(|value| value.parse::<f64>().ok())
+            else {
+                return;
+            };
+            let mut layout = draft.borrow_mut();
+            let placements = display_layout_relative_placements(&layout, &outputs);
+            layout[index].scale = value;
+            display_layout_reflow_relative(&mut layout, &outputs, &placements);
+            refresh_display_primary_controls(&layout, &outputs, &primary_controls, &refreshing);
+            feedback.set_text("Scale updated in the draft. Choose Apply to preview it.");
+        });
+    }
+
+    let mut mode_control = None;
+    if let Some(output) = output {
+        if !output.modes.is_empty() {
+            let mode = gtk4::ComboBoxText::new();
+            mode.add_css_class("gos-choice-control");
+            for option in &output.modes {
+                mode.append(Some(&option.id), &option.label);
+            }
+            let current = monitor
+                .monitors
+                .first()
+                .map(|monitor| monitor.mode_id.as_str());
+            let _ = mode.set_active_id(current);
+            set_accessible_label_description(&mode, "Resolution and refresh rate", &connectors);
+            let draft = draft.clone();
+            let displays = displays.clone();
+            let feedback = feedback.clone();
+            let refreshing = refreshing.clone();
+            let primary_controls = primary_controls.clone();
+            mode.connect_changed(move |control| {
+                if refreshing.get() {
+                    return;
+                }
+                let Some(id) = control.active_id() else {
+                    return;
+                };
+                let previous_mode = draft
+                    .borrow()
+                    .get(index)
+                    .and_then(|monitor| monitor.monitors.first())
+                    .map(|monitor| monitor.mode_id.clone());
+                let changed = {
+                    let mut layout = draft.borrow_mut();
+                    let placements =
+                        display_layout_relative_placements(&layout, &displays.outputs);
+                    if !display_layout_set_mode(&mut layout, &displays.outputs, index, &id) {
+                        false
+                    } else {
+                        display_layout_reflow_relative(
+                            &mut layout,
+                            &displays.outputs,
+                            &placements,
+                        );
+                        refresh_display_editor_controls(
+                            &layout,
+                            &displays.outputs,
+                            &primary_controls,
+                            &refreshing,
+                        );
+                        true
+                    }
+                };
+                if changed {
+                    feedback
+                        .set_text("Resolution and supported scale updated in the draft. Choose Apply to preview it.");
+                } else {
+                    let was_refreshing = refreshing.replace(true);
+                    let _ = control.set_active_id(previous_mode.as_deref());
+                    refreshing.set(was_refreshing);
+                    feedback.set_text(
+                        "That mode is not supported by every mirrored display. The previous mode remains selected.",
+                    );
+                }
+            });
+            controls.insert(&mode, -1);
+            mode_control = Some(mode);
+        }
+    }
+    controls.insert(&scale, -1);
+
+    let rotation = gtk4::ComboBoxText::new();
+    rotation.add_css_class("gos-choice-control");
+    for (id, text) in [
+        ("0", "Landscape"),
+        ("1", "Portrait right"),
+        ("2", "Upside down"),
+        ("3", "Portrait left"),
+    ] {
+        rotation.append(Some(id), text);
+    }
+    let _ = rotation.set_active_id(Some(&monitor.transform.to_string()));
+    set_accessible_label_description(&rotation, "Display rotation", &connectors);
+    {
+        let draft = draft.clone();
+        let feedback = feedback.clone();
+        let refreshing = refreshing.clone();
+        let outputs = displays.outputs.clone();
+        let primary_controls = primary_controls.clone();
+        rotation.connect_changed(move |control| {
+            if refreshing.get() {
+                return;
+            }
+            let Some(value) = control
+                .active_id()
+                .and_then(|value| value.parse::<u32>().ok())
+            else {
+                return;
+            };
+            let mut layout = draft.borrow_mut();
+            let placements = display_layout_relative_placements(&layout, &outputs);
+            layout[index].transform = value;
+            display_layout_reflow_relative(&mut layout, &outputs, &placements);
+            refresh_display_primary_controls(&layout, &outputs, &primary_controls, &refreshing);
+            feedback.set_text("Rotation updated in the draft. Choose Apply to preview it.");
+        });
+    }
+    controls.insert(&rotation, -1);
+
+    let position = if displays.logical_monitors.len() > 1 {
+        let position = gtk4::ComboBoxText::new();
+        position.add_css_class("gos-choice-control");
+        for (id, text) in [
+            ("right", "Right of primary"),
+            ("left", "Left of primary"),
+            ("above", "Above primary"),
+            ("below", "Below primary"),
+        ] {
+            position.append(Some(id), text);
+        }
+        set_accessible_label_description(&position, "Display position", &connectors);
+        let draft = draft.clone();
+        let outputs = displays.outputs.clone();
+        let feedback = feedback.clone();
+        let refreshing = refreshing.clone();
+        let primary_controls = primary_controls.clone();
+        position.connect_changed(move |control| {
+            if refreshing.get() {
+                return;
+            }
+            let Some(value) = control.active_id() else {
+                return;
+            };
+            let mut layout = draft.borrow_mut();
+            display_layout_set_placement(&mut layout, &outputs, index, &value);
+            display_layout_normalize(&mut layout);
+            refresh_display_primary_controls(&layout, &outputs, &primary_controls, &refreshing);
+            feedback.set_text("Position updated in the draft. Choose Apply to preview it.");
+        });
+        controls.insert(&position, -1);
+        Some(position)
+    } else {
+        None
+    };
+    primary_controls.borrow_mut().push(DisplayPrimaryControls {
+        connectors,
+        title: title_label,
+        make_primary,
+        position,
+        mode: mode_control,
+        scale,
+        rotation,
+    });
+    row.append(&controls);
+    row
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone)]
+struct DisplayPrimaryControls {
+    connectors: String,
+    title: gtk4::Label,
+    make_primary: gtk4::Button,
+    position: Option<gtk4::ComboBoxText>,
+    mode: Option<gtk4::ComboBoxText>,
+    scale: gtk4::ComboBoxText,
+    rotation: gtk4::ComboBoxText,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn refresh_display_primary_controls(
+    layout: &[DisplayLogicalMonitorStatus],
+    outputs: &[DisplayOutputStatus],
+    controls: &Rc<RefCell<Vec<DisplayPrimaryControls>>>,
+    refreshing: &Rc<Cell<bool>>,
+) {
+    use gtk4::prelude::*;
+
+    let was_refreshing = refreshing.replace(true);
+    for (index, control) in controls.borrow().iter().enumerate() {
+        let primary = layout.get(index).is_some_and(|monitor| monitor.primary);
+        let title = if primary {
+            format!("{} · Primary", control.connectors)
+        } else {
+            control.connectors.clone()
+        };
+        control.title.set_text(&title);
+        control
+            .make_primary
+            .set_label(if primary { "Primary" } else { "Make primary" });
+        control.make_primary.set_sensitive(!primary);
+        if let Some(position) = &control.position {
+            position.set_sensitive(!primary);
+            if !primary {
+                let _ =
+                    position.set_active_id(Some(display_layout_placement(layout, outputs, index)));
+            }
+        }
+    }
+    refreshing.set(was_refreshing);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn refresh_display_editor_controls(
+    layout: &[DisplayLogicalMonitorStatus],
+    outputs: &[DisplayOutputStatus],
+    controls: &Rc<RefCell<Vec<DisplayPrimaryControls>>>,
+    refreshing: &Rc<Cell<bool>>,
+) {
+    use gtk4::prelude::*;
+
+    let was_refreshing = refreshing.replace(true);
+    refresh_display_primary_controls(layout, outputs, controls, refreshing);
+    for (index, control) in controls.borrow().iter().enumerate() {
+        let Some(monitor) = layout.get(index) else {
+            continue;
+        };
+        if let Some(mode) = &control.mode {
+            let active = monitor
+                .monitors
+                .first()
+                .map(|physical| physical.mode_id.as_str());
+            let _ = mode.set_active_id(active);
+        }
+        refresh_display_scale_control(&control.scale, outputs, monitor, refreshing);
+        let _ = control
+            .rotation
+            .set_active_id(Some(&monitor.transform.to_string()));
+    }
+    refreshing.set(was_refreshing);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn refresh_display_scale_control(
+    scale: &gtk4::ComboBoxText,
+    outputs: &[DisplayOutputStatus],
+    monitor: &DisplayLogicalMonitorStatus,
+    refreshing: &Rc<Cell<bool>>,
+) {
+    use gtk4::prelude::*;
+
+    let was_refreshing = refreshing.replace(true);
+    scale.remove_all();
+    let options = display_scale_options_for_logical(outputs, monitor);
+    for value in &options {
+        // Keep the compositor's exact round-trippable scale in the ID. Common
+        // fractional scales such as 4/3 must not be truncated to 1.33 before
+        // core validates them against Mutter's live mode table.
+        let id = value.to_string();
+        scale.append(Some(&id), &format!("{}%", (value * 100.0).round()));
+    }
+    let current = monitor.scale.to_string();
+    if !scale.set_active_id(Some(&current)) && !options.is_empty() {
+        scale.set_active(Some(0));
+    }
+    scale.set_sensitive(!options.is_empty());
+    refreshing.set(was_refreshing);
+}
+
+fn display_output<'a>(
+    displays: &'a DisplaysStatus,
+    connector: &str,
+) -> Option<&'a DisplayOutputStatus> {
+    displays
+        .outputs
+        .iter()
+        .find(|output| output.name == connector)
+}
+
+fn display_scale_options_for_logical(
+    outputs: &[DisplayOutputStatus],
+    monitor: &DisplayLogicalMonitorStatus,
+) -> Vec<f64> {
+    let mut common: Option<Vec<f64>> = None;
+    for physical in &monitor.monitors {
+        let Some(mode) = outputs
+            .iter()
+            .find(|output| output.name == physical.connector)
+            .and_then(|output| output.modes.iter().find(|mode| mode.id == physical.mode_id))
+        else {
+            return Vec::new();
+        };
+        let supported = mode
+            .supported_scales
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite() && (1.0..=4.0).contains(value))
+            .collect::<Vec<_>>();
+        match &mut common {
+            Some(options) => options.retain(|candidate| {
+                supported
+                    .iter()
+                    .any(|value| (*value - *candidate).abs() < 0.001)
+            }),
+            None => common = Some(supported),
+        }
+    }
+    let mut options = common.unwrap_or_default();
+    options.retain(|value| value.is_finite() && (1.0..=4.0).contains(value));
+    options.sort_by(|left, right| left.total_cmp(right));
+    options.dedup_by(|left, right| (*left - *right).abs() < 0.001);
+    options
+}
+
+fn display_layout_make_primary(layout: &mut [DisplayLogicalMonitorStatus], index: usize) {
+    for (candidate, monitor) in layout.iter_mut().enumerate() {
+        monitor.primary = candidate == index;
+    }
+}
+
+fn display_layout_set_mode(
+    layout: &mut [DisplayLogicalMonitorStatus],
+    outputs: &[DisplayOutputStatus],
+    index: usize,
+    mode_id: &str,
+) -> bool {
+    let Some(current) = layout.get(index) else {
+        return false;
+    };
+    let Some(first) = current.monitors.first() else {
+        return false;
+    };
+    let Some(selected) = outputs
+        .iter()
+        .find(|output| output.name == first.connector)
+        .and_then(|output| output.modes.iter().find(|mode| mode.id == mode_id))
+    else {
+        return false;
+    };
+    let mut candidate = current.clone();
+    for physical in &mut candidate.monitors {
+        let Some(compatible) = outputs
+            .iter()
+            .find(|output| output.name == physical.connector)
+            .and_then(|output| {
+                output.modes.iter().find(|mode| {
+                    mode.width == selected.width
+                        && mode.height == selected.height
+                        && (mode.refresh_hz - selected.refresh_hz).abs() < 0.1
+                })
+            })
+        else {
+            return false;
+        };
+        physical.mode_id = compatible.id.clone();
+    }
+    let scales = display_scale_options_for_logical(outputs, &candidate);
+    if scales.is_empty() {
+        return false;
+    }
+    if !scales
+        .iter()
+        .any(|scale| (*scale - candidate.scale).abs() < 0.001)
+    {
+        candidate.scale = scales[0];
+    }
+    layout[index] = candidate;
+    true
+}
+
+fn display_layout_placement(
+    layout: &[DisplayLogicalMonitorStatus],
+    outputs: &[DisplayOutputStatus],
+    index: usize,
+) -> &'static str {
+    let Some(primary) = layout.iter().find(|monitor| monitor.primary) else {
+        return "right";
+    };
+    let Some(target) = layout.get(index) else {
+        return "right";
+    };
+    let (primary_width, primary_height) = display_logical_size(primary, outputs);
+    let (target_width, target_height) = display_logical_size(target, outputs);
+    if target.x.saturating_add(target_width) <= primary.x {
+        "left"
+    } else if target.x >= primary.x.saturating_add(primary_width) {
+        "right"
+    } else if target.y.saturating_add(target_height) <= primary.y {
+        "above"
+    } else if target.y >= primary.y.saturating_add(primary_height) {
+        "below"
+    } else {
+        let horizontal = target.x.saturating_sub(primary.x);
+        let vertical = target.y.saturating_sub(primary.y);
+        if horizontal.abs() >= vertical.abs() {
+            if horizontal < 0 {
+                "left"
+            } else {
+                "right"
+            }
+        } else if vertical < 0 {
+            "above"
+        } else {
+            "below"
+        }
+    }
+}
+
+fn display_layout_relative_placements(
+    layout: &[DisplayLogicalMonitorStatus],
+    outputs: &[DisplayOutputStatus],
+) -> Vec<&'static str> {
+    layout
+        .iter()
+        .enumerate()
+        .map(|(index, monitor)| {
+            if monitor.primary {
+                "primary"
+            } else {
+                display_layout_placement(layout, outputs, index)
+            }
+        })
+        .collect()
+}
+
+fn display_layout_reflow_relative(
+    layout: &mut [DisplayLogicalMonitorStatus],
+    outputs: &[DisplayOutputStatus],
+    placements: &[&str],
+) {
+    let Some(primary_index) = layout.iter().position(|monitor| monitor.primary) else {
+        return;
+    };
+    layout[primary_index].x = 0;
+    layout[primary_index].y = 0;
+    let primary = layout[primary_index].clone();
+    let (primary_width, primary_height) = display_logical_size(&primary, outputs);
+    let mut left_offset = 0_i32;
+    let mut right_offset = 0_i32;
+    let mut above_offset = 0_i32;
+    let mut below_offset = 0_i32;
+    for (index, monitor) in layout.iter_mut().enumerate() {
+        if index == primary_index {
+            continue;
+        }
+        let (width, height) = display_logical_size(monitor, outputs);
+        match placements.get(index).copied().unwrap_or("right") {
+            "left" => {
+                monitor.x = 0_i32.saturating_sub(width);
+                monitor.y = left_offset;
+                left_offset = left_offset.saturating_add(height);
+            }
+            "above" => {
+                monitor.x = above_offset;
+                monitor.y = 0_i32.saturating_sub(height);
+                above_offset = above_offset.saturating_add(width);
+            }
+            "below" => {
+                monitor.x = below_offset;
+                monitor.y = primary_height;
+                below_offset = below_offset.saturating_add(width);
+            }
+            _ => {
+                monitor.x = primary_width;
+                monitor.y = right_offset;
+                right_offset = right_offset.saturating_add(height);
+            }
+        }
+    }
+    display_layout_normalize(layout);
+}
+
+fn display_layout_normalize(layout: &mut [DisplayLogicalMonitorStatus]) {
+    let min_x = layout.iter().map(|monitor| monitor.x).min().unwrap_or(0);
+    let min_y = layout.iter().map(|monitor| monitor.y).min().unwrap_or(0);
+    for monitor in layout {
+        monitor.x = monitor.x.saturating_sub(min_x);
+        monitor.y = monitor.y.saturating_sub(min_y);
+    }
+}
+
+fn display_layout_topology_matches(
+    expected: &[DisplayLogicalMonitorStatus],
+    observed: &[DisplayLogicalMonitorStatus],
+) -> bool {
+    if expected.len() != observed.len() {
+        return false;
+    }
+    expected.iter().zip(observed).all(|(expected, observed)| {
+        expected.monitors.len() == observed.monitors.len()
+            && expected
+                .monitors
+                .iter()
+                .zip(&observed.monitors)
+                .all(|(expected, observed)| expected.connector == observed.connector)
+    })
+}
+
+fn display_output_catalogs_match(
+    expected: &[DisplayOutputStatus],
+    observed: &[DisplayOutputStatus],
+) -> bool {
+    expected.len() == observed.len()
+        && expected.iter().all(|expected_output| {
+            observed
+                .iter()
+                .find(|observed_output| observed_output.name == expected_output.name)
+                .is_some_and(|observed_output| {
+                    expected_output.modes.len() == observed_output.modes.len()
+                        && expected_output.modes.iter().all(|expected_mode| {
+                            observed_output.modes.iter().any(|observed_mode| {
+                                observed_mode.id == expected_mode.id
+                                    && observed_mode.width == expected_mode.width
+                                    && observed_mode.height == expected_mode.height
+                                    && observed_mode.refresh_hz == expected_mode.refresh_hz
+                                    && observed_mode.supported_scales
+                                        == expected_mode.supported_scales
+                            })
+                        })
+                })
+        })
+}
+
+fn display_layout_set_placement(
+    layout: &mut [DisplayLogicalMonitorStatus],
+    outputs: &[DisplayOutputStatus],
+    index: usize,
+    placement: &str,
+) {
+    let Some(primary_index) = layout.iter().position(|monitor| monitor.primary) else {
+        return;
+    };
+    if index == primary_index || index >= layout.len() {
+        return;
+    }
+    let mut placements = display_layout_relative_placements(layout, outputs);
+    placements[index] = match placement {
+        "left" => "left",
+        "above" => "above",
+        "below" => "below",
+        _ => "right",
+    };
+    display_layout_reflow_relative(layout, outputs, &placements);
+}
+
+fn display_logical_size(
+    monitor: &DisplayLogicalMonitorStatus,
+    outputs: &[DisplayOutputStatus],
+) -> (i32, i32) {
+    let mode = monitor.monitors.first().and_then(|physical| {
+        outputs
+            .iter()
+            .find(|output| output.name == physical.connector)
+            .and_then(|output| output.modes.iter().find(|mode| mode.id == physical.mode_id))
+    });
+    let (mut width, mut height) = mode
+        .map(|mode| {
+            (
+                (f64::from(mode.width) / monitor.scale).round() as i32,
+                (f64::from(mode.height) / monitor.scale).round() as i32,
+            )
+        })
+        .unwrap_or((1920, 1080));
+    if matches!(monitor.transform, 1 | 3 | 5 | 7) {
+        std::mem::swap(&mut width, &mut height);
+    }
+    (width.max(1), height.max(1))
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -7627,14 +9821,6 @@ fn build_keyboard(panel: &gtk4::Box, state: &SettingsState) {
         "Waiting for keyboard and input-device status.",
     );
     append_keyboard_preferences(panel, state);
-    panel.append(&system_row(
-        "Keyboard shortcuts",
-        "Protected shortcut writes are source-gated through Goblins OS. Recording and reset controls stay disabled until qemu proves the gsettings round trip.",
-    ));
-    panel.append(&system_row(
-        "Modifier keys",
-        "Caps Lock to Control is source-gated through Goblins OS and preserves other xkb options; the dropdown stays disabled until qemu proof is green.",
-    ));
     panel.append(&label("Advanced controls", &["gos-subsection-title"]));
     append_device_settings_handoff(
         panel,
@@ -7661,10 +9847,6 @@ fn build_mouse_trackpad(panel: &gtk4::Box, state: &SettingsState) {
         "Waiting for pointer-device status.",
     );
     append_pointer_preferences(panel, state);
-    panel.append(&system_row(
-        "Gestures",
-        "Read-only until protected gesture controls are available. Gesture editing stays disabled for now.",
-    ));
     panel.append(&label("Advanced controls", &["gos-subsection-title"]));
     append_device_settings_handoff(
         panel,
@@ -7742,7 +9924,7 @@ fn build_accessibility(panel: &gtk4::Box, state: &SettingsState) {
     append_panel_header(
         panel,
         "Accessibility",
-        "Motion and type preferences write system interface keys so system utilities and Goblins OS surfaces follow the same setting.",
+        "Adjust motion, text, visual clarity, and assistive access across Goblins OS.",
     );
     append_accessibility_summary(panel, state);
     append_facility_status(
@@ -7752,6 +9934,7 @@ fn build_accessibility(panel: &gtk4::Box, state: &SettingsState) {
         "Accessibility services",
         "Waiting for AT-SPI accessibility status.",
     );
+    append_visual_accessibility_settings(panel, state);
     append_assistive_technology_settings(panel, state);
     append_switch_control_settings(panel, state);
     append_live_captions_settings(panel, state);
@@ -8080,7 +10263,8 @@ fn append_notifications_ai_context(panel: &gtk4::Box, state: &SettingsState) {
     {
         Some(action) => {
             let detail = format!(
-                "From an invoked notification, Goblins OS sends only that notification's title, body, app, and chosen action label through the OS-owned notification context route. {}",
+                "{} From an invoked notification, Goblins OS uses only that notification's exact title, body, app, chosen action label, and question. A hosted route requires a fresh review bound to the active engine before any of it leaves this device. {}",
+                context_route_disclosure(&context_submission_route(state.resident.as_ref())),
                 ai_action_detail(action)
             );
             health_row(
@@ -8348,7 +10532,12 @@ fn build_users_accounts(panel: &gtk4::Box, state: &SettingsState) {
         "Manage local users, device identity, OpenAI account state, and Codex sign-in without showing secrets.",
     );
     append_users_accounts_summary(panel, state);
-    let feedback = label("", &["gos-row-copy"]);
+    let feedback = gtk4::Label::builder()
+        .accessible_role(gtk4::AccessibleRole::Status)
+        .build();
+    feedback.set_xalign(0.0);
+    feedback.set_wrap(true);
+    feedback.add_css_class("gos-row-copy");
     let has_openai_action = append_openai_account_settings(panel, state, &feedback);
     panel.append(&label("Codex", &["gos-subsection-title"]));
     let has_codex_action = append_codex_settings(panel, state, &feedback, None);
@@ -8604,8 +10793,8 @@ fn append_openai_account_settings(
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_local_user_settings(panel: &gtk4::Box, state: &SettingsState) {
-    // The local-user facts are read-only, so they sit in one grouped inset card
-    // with hairline dividers rather than as separate floating dashboard cards.
+    // Identity facts live here; account mutation stays in GNOME's protected
+    // Accounts service through the explicit system-tool handoff below.
     let mut rows: Vec<gtk4::Box> = Vec::new();
     if let Some(system) = &state.system {
         if let Some(account) = system.local_account.as_ref() {
@@ -8662,7 +10851,7 @@ fn append_local_user_settings(panel: &gtk4::Box, state: &SettingsState) {
     }
     rows.push(system_row(
         "User management",
-        "Read-only until secure account actions are available. Creating users, changing passwords, and changing administrator rights stay disabled for now.",
+        "Use the User system tool below to create users, change passwords, and manage administrator access through the desktop's protected Accounts service.",
     ));
     append_preference_group(panel, "Local User", rows);
 }
@@ -8727,9 +10916,8 @@ fn build_privacy_permissions(panel: &gtk4::Box, state: &SettingsState) {
     );
 }
 
-/// Per-app permission entries from the xdg PermissionStore (macOS per-app Privacy
-/// altitude). Revokes are scoped to app-keyed grants that the core bridge can
-/// delete by exact table/id/app.
+/// Per-app permission entries from the xdg PermissionStore. Revokes are scoped
+/// to app-keyed grants that the core bridge can delete by exact table/id/app.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_app_permissions(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
@@ -8887,12 +11075,12 @@ fn build_storage(panel: &gtk4::Box, state: &SettingsState) {
     let model_rows = vec![match (&state.local_models, &state.system) {
         (Some(catalog), _) => model_cache_capacity_row(catalog),
         (None, Some(_system)) => system_row(
-            "Model cache",
-            "Waiting for model-cache capacity from Goblins OS.",
+            "Local model storage",
+            "Waiting for local model storage from Goblins OS.",
         ),
-        (None, None) => system_row("Model cache", "Waiting for model-cache capacity."),
+        (None, None) => system_row("Local model storage", "Waiting for local model storage."),
     }];
-    append_preference_group(panel, "Model cache", model_rows);
+    append_preference_group(panel, "Local model storage", model_rows);
 
     append_preference_group(
         panel,
@@ -8983,13 +11171,12 @@ fn snapshots_restore_state(status: &SnapshotsStatus) -> (&'static str, bool) {
 
 fn snapshots_restore_detail(status: &SnapshotsStatus) -> String {
     if status.restore_ready && status.executes_restore {
-        "Restore is enabled for the reported local snapshots.".to_string()
+        "Recover a file as a new copy in a folder you choose. Current files and existing destination files are never overwritten.".to_string()
     } else if status.available {
-        "Restore remains CI/qemu-gated; Settings does not mutate files from this substrate."
-            .to_string()
+        "No recoverable local snapshot is available yet.".to_string()
     } else {
         format!(
-            "{} Restore is unavailable until btrfs home storage and Snapper are ready.",
+            "{} Restore is unavailable until the Btrfs storage containing your home folder and Snapper are ready.",
             status.detail
         )
     }
@@ -9150,7 +11337,7 @@ fn append_native_storage_handoffs(panel: &gtk4::Box) {
 fn model_cache_capacity_row(catalog: &LocalModelCatalog) -> gtk4::Box {
     let detail = model_cache_capacity_detail(catalog);
     health_row(
-        "Model cache",
+        "Local model storage",
         model_cache_capacity_label(catalog.hardware.model_dir_available_gb),
         model_cache_capacity_ready(catalog.hardware.model_dir_available_gb),
         &detail,
@@ -9226,23 +11413,23 @@ fn model_cache_summary_spec(
 ) -> StorageSummarySpec {
     match catalog {
         Some(catalog) => StorageSummarySpec {
-            title: "Model cache",
+            title: "Local model storage",
             state: model_cache_capacity_label(catalog.hardware.model_dir_available_gb),
             ready: model_cache_capacity_ready(catalog.hardware.model_dir_available_gb),
             detail: model_cache_capacity_detail(catalog),
         },
         None => match system {
             Some(_system) => StorageSummarySpec {
-                title: "Model cache",
+                title: "Local model storage",
                 state: "waiting",
                 ready: false,
-                detail: "Waiting for model-cache capacity from Goblins OS.".to_string(),
+                detail: "Waiting for local model storage from Goblins OS.".to_string(),
             },
             None => StorageSummarySpec {
-                title: "Model cache",
+                title: "Local model storage",
                 state: "waiting",
                 ready: false,
-                detail: "Waiting for model-cache capacity.".to_string(),
+                detail: "Waiting for local model storage.".to_string(),
             },
         },
     }
@@ -9398,7 +11585,7 @@ fn storage_volume_row(volume: &StorageVolume) -> gtk4::Box {
 fn append_system_image_deployment(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
 
-    let Some(image) = state.system_image.as_ref() else {
+    let Some(image) = current_system_image_status(state) else {
         return;
     };
     panel.append(&label("Deployments", &["gos-subsection-title"]));
@@ -9433,12 +11620,63 @@ fn append_system_image_deployment(panel: &gtk4::Box, state: &SettingsState) {
     if image.staged_available {
         if let Some(staged) = image.staged.as_ref() {
             rows.push((
-                "Staged update",
-                deployment_value(staged, "staged"),
+                if staged.download_only {
+                    "Downloaded update"
+                } else {
+                    "Staged update"
+                },
+                deployment_value(
+                    staged,
+                    if staged.download_only {
+                        "downloaded"
+                    } else {
+                        "staged"
+                    },
+                ),
                 true,
-                deployment_detail(staged),
+                if staged.download_only {
+                    format!(
+                        "{} · Explicitly apply this downloaded deployment before restarting into it.",
+                        deployment_detail(staged)
+                    )
+                } else {
+                    deployment_detail(staged)
+                },
             ));
         }
+    } else if image.rollback_queued {
+        rows.push((
+            "Next boot",
+            "rollback queued".to_string(),
+            true,
+            "The previous immutable deployment is selected for the next restart.".to_string(),
+        ));
+    }
+    if image.update_available == Some(true) {
+        if let Some(candidate) = image.available_update.as_ref() {
+            rows.push((
+                "Available update",
+                deployment_value(candidate, "available"),
+                true,
+                deployment_detail(candidate),
+            ));
+        }
+    } else if image.update_available == Some(false) {
+        rows.push((
+            "Update check",
+            "up to date".to_string(),
+            true,
+            "The latest completed bootc check found no newer image.".to_string(),
+        ));
+    }
+    if image.read_only {
+        rows.push((
+            "Boot medium",
+            "read only".to_string(),
+            false,
+            "Install Goblins OS to writable storage to download, apply, or roll back system images."
+                .to_string(),
+        ));
     }
     panel.append(&health_summary_group(rows));
 }
@@ -9538,11 +11776,7 @@ fn build_updates_about(panel: &gtk4::Box, state: &SettingsState) {
                 "Internet access is required to check for online updates.",
             ));
 
-            panel.append(&label("Update actions", &["gos-subsection-title"]));
-            panel.append(&system_row(
-                "Check, apply, and rollback",
-                &bootc_update_actions_detail(system),
-            ));
+            append_system_image_actions(panel, state, SettingsPanel::UpdatesAbout);
 
             panel.append(&label("About", &["gos-subsection-title"]));
             panel.append(&system_row("Desktop", &desktop_session_detail(system)));
@@ -9565,6 +11799,225 @@ fn build_updates_about(panel: &gtk4::Box, state: &SettingsState) {
         "Open the desktop system tool for device identity and About controls.",
         state.system.as_ref(),
     );
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_system_image_actions(
+    panel: &gtk4::Box,
+    state: &SettingsState,
+    active_panel: SettingsPanel,
+) {
+    use gtk4::prelude::*;
+
+    panel.append(&label("Update actions", &["gos-subsection-title"]));
+    let Some(image) = current_system_image_status(state) else {
+        panel.append(&system_row(
+            "Immutable image controls",
+            "Waiting for deployment status before enabling update actions.",
+        ));
+        return;
+    };
+    if let Some(operation) = image.operation.as_ref() {
+        panel.append(&health_row(
+            &format!("{} · {}", operation.action, operation.phase),
+            "running",
+            true,
+            &operation.detail,
+        ));
+    }
+
+    let card = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    card.add_css_class("gos-row");
+    let feedback_copy = if image.immutable {
+        format!(
+            "Updates are staged as a second immutable deployment. The running system is never edited in place. {}",
+            image.detail
+        )
+    } else {
+        image.detail.clone()
+    };
+    let feedback = label(&feedback_copy, &["gos-row-copy"]);
+    card.append(&feedback);
+    let actions = gtk4::FlowBox::new();
+    actions.set_selection_mode(gtk4::SelectionMode::None);
+    actions.set_min_children_per_line(1);
+    actions.set_max_children_per_line(3);
+    actions.set_column_spacing(8);
+    actions.set_row_spacing(8);
+    let downloaded_only = image
+        .staged
+        .as_ref()
+        .is_some_and(|staged| staged.download_only);
+    let mut available_actions = vec![
+        ("check", "Check for updates", image.actions.can_check, false),
+        ("download", "Download", image.actions.can_download, false),
+        (
+            "apply",
+            if downloaded_only {
+                "Apply download & restart…"
+            } else {
+                "Update & restart…"
+            },
+            image.actions.can_apply,
+            true,
+        ),
+    ];
+    // A download-only deployment has one unambiguous primary transition: the
+    // Apply action unlocks that exact deployment with --from-downloaded and
+    // restarts. Do not also offer a plain "restart staged" control.
+    if !downloaded_only {
+        available_actions.push((
+            "reboot",
+            if image.rollback_queued {
+                "Restart into rollback image…"
+            } else {
+                "Restart into staged image…"
+            },
+            image.actions.can_reboot,
+            true,
+        ));
+    }
+    available_actions.push(("rollback", "Roll back…", image.actions.can_rollback, true));
+    for (action, title, enabled, destructive) in available_actions {
+        let action_button = button(
+            title,
+            if destructive {
+                &["gos-destructive-action"]
+            } else {
+                &["gos-permission-action"]
+            },
+        );
+        action_button.set_sensitive(enabled && image.operation.is_none());
+        let core = state.core.clone();
+        let feedback = feedback.clone();
+        if destructive {
+            let confirmation = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+            confirmation.set_visible(false);
+            let copy = match action {
+                "rollback" => "Queue the previous immutable image for the next boot? Your current image remains available as the rollback deployment.",
+                "apply" if downloaded_only => "Apply the exact downloaded immutable image and restart into it now? Save your work before continuing.",
+                "apply" => "Download the newest immutable image and restart Goblins OS into it? Save your work before continuing.",
+                _ => "Restart Goblins OS now into the staged immutable image? Save your work before continuing.",
+            };
+            confirmation.append(&label(copy, &["gos-row-copy"]));
+            let confirm_actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            let cancel = button("Cancel", &["gos-permission-action"]);
+            let confirm = button(
+                match action {
+                    "rollback" => "Queue rollback",
+                    "apply" if downloaded_only => "Apply & restart",
+                    "apply" => "Update & restart",
+                    _ => "Restart now",
+                },
+                &["gos-destructive-action"],
+            );
+            confirm_actions.append(&cancel);
+            confirm_actions.append(&confirm);
+            confirmation.append(&confirm_actions);
+            {
+                let confirmation = confirmation.clone();
+                action_button.connect_clicked(move |_| confirmation.set_visible(true));
+            }
+            {
+                let confirmation = confirmation.clone();
+                cancel.connect_clicked(move |_| confirmation.set_visible(false));
+            }
+            {
+                let confirmation = confirmation.clone();
+                let feedback = feedback.clone();
+                let panel = panel.clone();
+                let state = state.clone();
+                confirm.connect_clicked(move |confirm| {
+                    confirm.set_sensitive(false);
+                    feedback.set_text(system_image_action_progress(action));
+                    let core = core.clone();
+                    let feedback = feedback.clone();
+                    let confirm = confirm.clone();
+                    let confirmation = confirmation.clone();
+                    let panel = panel.clone();
+                    let state = state.clone();
+                    run_settings_action(
+                        move || run_system_image_action(&core, action),
+                        move |outcome| {
+                            confirm.set_sensitive(true);
+                            confirmation.set_visible(false);
+                            match outcome {
+                                Ok(outcome) => refresh_system_image_panel(
+                                    &panel,
+                                    active_panel,
+                                    &state,
+                                    outcome,
+                                ),
+                                Err(error) => feedback.set_text(&error),
+                            }
+                        },
+                    );
+                });
+            }
+            actions.insert(&action_button, -1);
+            card.append(&confirmation);
+        } else {
+            let panel = panel.clone();
+            let state = state.clone();
+            action_button.connect_clicked(move |button| {
+                button.set_sensitive(false);
+                feedback.set_text(system_image_action_progress(action));
+                let core = core.clone();
+                let feedback = feedback.clone();
+                let button = button.clone();
+                let panel = panel.clone();
+                let state = state.clone();
+                run_settings_action(
+                    move || run_system_image_action(&core, action),
+                    move |outcome| {
+                        button.set_sensitive(true);
+                        match outcome {
+                            Ok(outcome) => {
+                                refresh_system_image_panel(&panel, active_panel, &state, outcome)
+                            }
+                            Err(error) => feedback.set_text(&error),
+                        }
+                    },
+                );
+            });
+            actions.insert(&action_button, -1);
+        }
+    }
+    card.prepend(&actions);
+    panel.append(&card);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn refresh_system_image_panel(
+    panel: &gtk4::Box,
+    active_panel: SettingsPanel,
+    state: &SettingsState,
+    outcome: SystemImageActionOutcome,
+) {
+    use gtk4::prelude::*;
+
+    let mut status = outcome.status;
+    status.detail = outcome.detail.clone();
+    if outcome.reboot_expected {
+        status.operation = Some(SystemImageOperation {
+            action: outcome.action,
+            phase: outcome.phase,
+            detail: outcome.detail,
+        });
+    }
+    remember_system_image_status(&status);
+    let mut refreshed = state.clone();
+    refreshed.system_image = Some(status);
+    while let Some(child) = panel.first_child() {
+        panel.remove(&child);
+    }
+    match active_panel {
+        SettingsPanel::UpdatesAbout => build_updates_about(panel, &refreshed),
+        SettingsPanel::Recovery => build_recovery(panel, &refreshed),
+        _ => return,
+    }
+    append_settings_ai_help(panel, active_panel, &refreshed);
+    fade_in_panel(panel);
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -10278,8 +12731,9 @@ fn local_model_row(core: &CoreClient, model: &LocalModelOption) -> gtk4::Box {
     row
 }
 
-/// Hosted OpenAI readiness for an administrator-installed protected service
-/// credential. Settings never accepts, stores, or receives the API key itself.
+/// Hosted OpenAI readiness and secret-blind management for this user's protected
+/// key. Settings can launch the trusted broker but never accepts or receives key
+/// material itself.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     use gtk4::prelude::*;
@@ -10292,8 +12746,8 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     let core = config_core(state);
 
     // Engine selector — three honest engines: GPT-OSS on this device, the user's
-    // OpenAI account via Codex CLI, or an administrator-installed service
-    // credential. Each option is selectable only when it can be honored.
+    // OpenAI account via Codex CLI, or their protected API key. Each option is
+    // selectable only when it can be honored.
     let _ = engine_selected;
     let active_engine = status.map(|status| status.engine.as_str());
     let codex_ready = state
@@ -10301,8 +12755,19 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         .as_ref()
         .is_some_and(|codex| codex.installed && codex.authenticated);
     let engine_status_available = status.is_some();
-    let codex_available = Rc::new(Cell::new(engine_status_available && codex_ready));
-    let hosted_available = Rc::new(Cell::new(engine_status_available && configured));
+    let local_ready = state
+        .resident
+        .as_ref()
+        .is_some_and(|resident| resident.engine.local_ready);
+    let local_detail = state
+        .resident
+        .as_ref()
+        .map(|resident| resident.engine.local_detail.as_str())
+        .unwrap_or("Waiting for authoritative GPT-OSS readiness from Goblins OS.");
+    let engine_status_available_flag = Rc::new(Cell::new(engine_status_available));
+    let local_available = Rc::new(Cell::new(local_ready));
+    let codex_available = Rc::new(Cell::new(codex_ready));
+    let hosted_available = Rc::new(Cell::new(configured));
     let engine_pending = Rc::new(Cell::new(false));
 
     panel.append(&label("Engine", &["gos-kicker"]));
@@ -10310,12 +12775,12 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     choice.add_css_class("gos-engine-choice");
 
     // Two primary paths: build on-device with GPT-OSS (keyless, private, the
-    // default), or with your OpenAI account through Codex. An administrator-
-    // installed API credential is an advanced option below.
+    // default), or with your OpenAI account through Codex. A user-supplied key
+    // remains available below without ever passing through this process.
     let gpt_btn = button("On-device · GPT-OSS", &["gos-engine-option"]);
     let codex_btn = button("OpenAI account · Codex", &["gos-engine-option"]);
     let hosted_btn = button(
-        "Use administrator OpenAI key",
+        "Use OpenAI API key",
         &["gos-engine-option", "gos-engine-advanced"],
     );
     set_accessible_label_description(
@@ -10326,12 +12791,12 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     set_accessible_label_description(
         &codex_btn,
         "Use OpenAI account through Codex",
-        "Select Codex account mode when Codex is ready and signed in.",
+        "Select your OpenAI account through the bundled Codex CLI when it is ready and signed in.",
     );
     set_accessible_label_description(
         &hosted_btn,
-        "Use an administrator-installed OpenAI API key",
-        "Select hosted OpenAI models when a protected service credential is ready.",
+        "Use your OpenAI API key",
+        "Select OpenAI hosted models when your key is ready in protected Goblins OS storage.",
     );
     // The two primary segments share the column width, flush with the cards' margin.
     gpt_btn.set_hexpand(true);
@@ -10342,9 +12807,10 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         Some("local-gpt-oss") => gpt_btn.add_css_class("gos-engine-active"),
         _ => {}
     }
-    gpt_btn.set_sensitive(engine_status_available);
-    codex_btn.set_sensitive(codex_available.get());
-    hosted_btn.set_sensitive(hosted_available.get());
+    gpt_btn.set_sensitive(engine_status_available && local_available.get());
+    gpt_btn.set_tooltip_text(Some(local_detail));
+    codex_btn.set_sensitive(engine_status_available && codex_available.get());
+    hosted_btn.set_sensitive(engine_status_available && hosted_available.get());
     choice.append(&gpt_btn);
     choice.append(&codex_btn);
     panel.append(&choice);
@@ -10357,6 +12823,62 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
     );
     panel.append(&engine_feedback);
 
+    let local_readiness = label(local_detail, &["gos-row-copy"]);
+    local_readiness.set_wrap(true);
+    local_readiness.set_xalign(0.0);
+    panel.append(&local_readiness);
+    if !local_ready {
+        let retry_local = button("Retry GPT-OSS readiness", &["gos-permission-action"]);
+        set_accessible_label_description(
+            &retry_local,
+            "Retry on-device GPT-OSS readiness",
+            "Checks the authoritative local model route again. Choose a compatible model under Local models below if setup is still needed.",
+        );
+        let core = core.clone();
+        let gpt = gpt_btn.clone();
+        let feedback = local_readiness.clone();
+        let local_available = local_available.clone();
+        let status_available = engine_status_available_flag.clone();
+        retry_local.connect_clicked(move |retry| {
+            retry.set_sensitive(false);
+            retry.set_label("Checking…");
+            feedback.set_text("Checking the on-device GPT-OSS route…");
+            let core = core.clone();
+            let gpt = gpt.clone();
+            let feedback = feedback.clone();
+            let local_available = local_available.clone();
+            let status_available = status_available.clone();
+            let retry = retry.clone();
+            run_settings_action(
+                move || get_core_json::<ResidentStatus>(&core, "/v1/ai/runtime"),
+                move |outcome| {
+                    retry.set_label("Retry GPT-OSS readiness");
+                    retry.set_sensitive(true);
+                    match outcome {
+                        Ok(resident) => {
+                            local_available.set(resident.engine.local_ready);
+                            gpt.set_sensitive(
+                                status_available.get() && resident.engine.local_ready,
+                            );
+                            feedback.set_text(&if resident.engine.local_ready {
+                                resident.engine.local_detail
+                            } else {
+                                format!(
+                                    "{} Choose a compatible model under Local models below, then retry.",
+                                    resident.engine.local_detail
+                                )
+                            });
+                        }
+                        Err(error) => feedback.set_text(&format!(
+                            "Goblins OS could not refresh GPT-OSS readiness: {error}. Try again."
+                        )),
+                    }
+                },
+            );
+        });
+        panel.append(&retry_local);
+    }
+
     // Each engine button moves the active highlight across all three on success.
     {
         let gpt = gpt_btn.clone();
@@ -10366,6 +12888,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let core = core.clone();
         let hosted_available = hosted_available.clone();
         let codex_available = codex_available.clone();
+        let local_available = local_available.clone();
         let engine_pending = engine_pending.clone();
         gpt_btn.connect_clicked(move |_| {
             if engine_pending.get() {
@@ -10386,13 +12909,14 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             let core = core.clone();
             let hosted_available = hosted_available.clone();
             let codex_available = codex_available.clone();
+            let local_available = local_available.clone();
             let engine_pending = engine_pending.clone();
             run_settings_action(
                 move || set_engine(&core, "local-gpt-oss"),
                 move |outcome| {
                     engine_pending.set(false);
                     gpt.set_label("On-device · GPT-OSS");
-                    gpt.set_sensitive(engine_status_available);
+                    gpt.set_sensitive(local_available.get());
                     codex.set_sensitive(codex_available.get());
                     hosted.set_sensitive(hosted_available.get());
                     match outcome {
@@ -10421,6 +12945,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let core = core.clone();
         let hosted_available = hosted_available.clone();
         let codex_available = codex_available.clone();
+        let local_available = local_available.clone();
         let engine_pending = engine_pending.clone();
         codex_btn.connect_clicked(move |_| {
             if engine_pending.get() {
@@ -10441,13 +12966,14 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             let core = core.clone();
             let hosted_available = hosted_available.clone();
             let codex_available = codex_available.clone();
+            let local_available = local_available.clone();
             let engine_pending = engine_pending.clone();
             run_settings_action(
                 move || set_engine(&core, "codex"),
                 move |outcome| {
                     engine_pending.set(false);
                     codex.set_label("OpenAI account · Codex");
-                    gpt.set_sensitive(engine_status_available);
+                    gpt.set_sensitive(local_available.get());
                     codex.set_sensitive(codex_available.get());
                     hosted.set_sensitive(hosted_available.get());
                     match outcome {
@@ -10459,7 +12985,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
                         }
                         Err(error) => {
                             feedback.set_text(&format!(
-                                "Goblins OS could not switch to Codex: {error}. Confirm that Codex is signed in and try again."
+                                "Goblins OS could not switch to Codex: {error}. Confirm that your OpenAI account is signed in through Codex and try again."
                             ));
                             eprintln!("settings_engine_error={error}");
                         }
@@ -10476,6 +13002,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
         let core = core.clone();
         let hosted_available = hosted_available.clone();
         let codex_available = codex_available.clone();
+        let local_available = local_available.clone();
         let engine_pending = engine_pending.clone();
         hosted_btn.connect_clicked(move |_| {
             if engine_pending.get() {
@@ -10488,7 +13015,7 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             codex.set_sensitive(false);
             hosted.set_sensitive(false);
             feedback.set_text(
-                "Switching Goblins AI to OpenAI hosted models using the protected service credential.",
+                "Switching Goblins AI to OpenAI hosted models using your protected API key.",
             );
 
             let gpt = gpt.clone();
@@ -10498,13 +13025,14 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
             let core = core.clone();
             let hosted_available = hosted_available.clone();
             let codex_available = codex_available.clone();
+            let local_available = local_available.clone();
             let engine_pending = engine_pending.clone();
             run_settings_action(
                 move || set_engine(&core, "openai-api"),
                 move |outcome| {
                     engine_pending.set(false);
-                    hosted.set_label("Use administrator OpenAI key");
-                    gpt.set_sensitive(engine_status_available);
+                    hosted.set_label("Use OpenAI API key");
+                    gpt.set_sensitive(local_available.get());
                     codex.set_sensitive(codex_available.get());
                     hosted.set_sensitive(hosted_available.get());
                     match outcome {
@@ -10528,53 +13056,30 @@ fn append_openai_key_settings(panel: &gtk4::Box, state: &SettingsState) {
 
     // Codex sign-in: the honest way to use a real OpenAI account. The OS triggers
     // `codex login` (browser) and never sees the credentials — Codex owns them.
+    let engine_controls = SettingsEngineControls {
+        gpt: gpt_btn.clone(),
+        codex: codex_btn.clone(),
+        hosted: hosted_btn.clone(),
+        status_available: engine_status_available_flag,
+        local_available: local_available.clone(),
+        codex_available: codex_available.clone(),
+        hosted_available: hosted_available.clone(),
+        engine_pending: engine_pending.clone(),
+    };
     append_codex_settings(
         panel,
         state,
         &engine_feedback,
-        Some(SettingsEngineControls {
-            gpt: gpt_btn.clone(),
-            codex: codex_btn.clone(),
-            hosted: hosted_btn.clone(),
-            status_available: engine_status_available,
-            codex_available: codex_available.clone(),
-            hosted_available: hosted_available.clone(),
-            engine_pending: engine_pending.clone(),
-        }),
+        Some(engine_controls.clone()),
     );
 
-    // Advanced: an administrator-provisioned OpenAI API key. The desktop only
-    // receives readiness; the credential itself is accepted and read solely by
-    // the protected core service.
-    panel.append(&label(
-        "Advanced · OpenAI API key",
-        &["gos-subsection-title"],
-    ));
+    // Settings owns only the ordinary, non-secret management surface. Every key
+    // value is entered in the separate trusted broker launched by the core.
+    panel.append(&label("OpenAI API key", &["gos-subsection-title"]));
     hosted_btn.set_hexpand(false);
     hosted_btn.set_halign(gtk4::Align::Start);
     panel.append(&hosted_btn);
-
-    match status {
-        Some(status) => panel.append(&system_row(
-            if status.configured {
-                "OpenAI API key · ready"
-            } else {
-                "OpenAI API key · not installed"
-            },
-            &if status.configured {
-                format!(
-                    "Hosted model {} · loaded only by the core from a {}",
-                    status.model, status.storage
-                )
-            } else {
-                "A device administrator can install an OpenAI API key in Goblins OS protected service credentials. The key never enters Settings; Goblins OS stays on GPT-OSS until one is ready.".to_string()
-            },
-        )),
-        None => panel.append(&system_row(
-            "OpenAI API key",
-            "Waiting for protected credential readiness.",
-        )),
-    }
+    append_openai_key_management_controls(panel, status, &core, &engine_controls, &engine_feedback);
 }
 
 /// The Models panel: the focused home for the engine that powers Goblins OS.
@@ -10588,7 +13093,7 @@ fn build_models(panel: &gtk4::Box, state: &SettingsState) {
         panel,
         "Goblin & Models",
         "Choose where Goblins AI works: GPT-OSS on this device, your OpenAI account through \
-         Codex, or OpenAI models with an administrator-installed protected service credential. The active choice applies across Goblins \
+         Codex, or OpenAI models with your protected API key. The active choice applies across Goblins \
          OS, and Private mode always keeps requests on this device.",
     );
 
@@ -10636,10 +13141,10 @@ fn append_goblins_ai_settings(panel: &gtk4::Box, state: &SettingsState) {
                 &catalog.permission_model,
             ),
             health_row(
-                "Entry points",
+                "Where Goblin appears",
                 "system-wide",
                 true,
-                &format!("Available from {entrypoints}."),
+                &format!("Open Goblin from {entrypoints}."),
             ),
         ],
     );
@@ -10736,12 +13241,80 @@ fn append_goblins_ai_history(panel: &gtk4::Box, history: Option<&AiActionHistory
     append_preference_group(panel, "Recent Goblins AI actions", rows);
 }
 
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ContextSubmissionRoute {
+    engine_name: String,
+    ready: bool,
+    hosted: bool,
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn context_submission_route(resident: Option<&ResidentStatus>) -> ContextSubmissionRoute {
+    let Some(resident) = resident else {
+        return ContextSubmissionRoute {
+            engine_name: "Engine unavailable".to_string(),
+            ready: false,
+            hosted: false,
+        };
+    };
+    ContextSubmissionRoute {
+        engine_name: resident.engine.selected.display_name().to_string(),
+        ready: resident.engine.ready,
+        hosted: resident.engine.ready && resident.engine.locality == ResidentEngineLocality::Cloud,
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn context_route_disclosure(route: &ContextSubmissionRoute) -> String {
+    if !route.ready {
+        return format!(
+            "{} is not ready. Nothing will be sent until the engine is set up.",
+            route.engine_name
+        );
+    }
+    if route.hosted {
+        format!(
+            "Active engine: {} · cloud. The reviewed context leaves this device only after you confirm.",
+            route.engine_name
+        )
+    } else {
+        format!(
+            "Active engine: {} · on-device. The reviewed context stays on this computer.",
+            route.engine_name
+        )
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn settings_context_review_copy(
+    route: &ContextSubmissionRoute,
+    panel: &str,
+    question: &str,
+    status_summary: &str,
+) -> String {
+    let question = bounded_settings_context_value(question, 480);
+    let question = if question.is_empty() {
+        "(no question typed)".to_string()
+    } else {
+        question
+    };
+    format!(
+        "Engine: {}. Panel: {}. Exact question: {}. Bounded OS status summary: {}. No files, screenshots, hidden windows, credentials, or secrets are included.",
+        route.engine_name, panel, question, status_summary
+    )
+}
+
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_settings_ai_help(panel: &gtk4::Box, active_panel: SettingsPanel, state: &SettingsState) {
     use gtk4::prelude::*;
 
     let core = config_core(state);
     let readiness = settings_ai_help_readiness(state);
+    let route = context_submission_route(state.resident.as_ref());
+    let panel_summary = settings_ai_panel_status_summary(active_panel, state);
+    let topic = active_panel.display_name().to_string();
+    let panel_id = active_panel.as_str().to_string();
     let entry = gtk4::Entry::new();
     entry.add_css_class("gos-search-entry");
     entry.set_placeholder_text(Some("Ask about this setting or describe the problem"));
@@ -10773,7 +13346,33 @@ fn append_settings_ai_help(panel: &gtk4::Box, active_panel: SettingsPanel, state
         &format!("Ask Goblin about {}", active_panel.display_name()),
         &["gos-row-title"],
     ));
+    let route_label = label(
+        &context_route_disclosure(&route),
+        &["gos-row-copy", "gos-engine-disclosure"],
+    );
+    route_label.set_wrap(true);
+    route_label.set_xalign(0.0);
+    row.append(&route_label);
     row.append(&controls);
+
+    let exact_context = label(
+        &settings_context_review_copy(&route, active_panel.display_name(), "", &panel_summary),
+        &["gos-row-copy"],
+    );
+    exact_context.set_wrap(true);
+    exact_context.set_selectable(true);
+    exact_context.set_xalign(0.0);
+    let review = gtk4::Expander::new(Some("Review exact context"));
+    review.add_css_class("gos-advanced-disclosure");
+    review.set_expanded(route.hosted);
+    review.set_child(Some(&exact_context));
+    set_accessible_label_description(
+        &review,
+        "Review exact Settings context",
+        "Shows the engine, panel, exact question, bounded OS status summary, and excluded data before submission.",
+    );
+    row.append(&review);
+
     row.append(&feedback);
     set_accessible_label_description(
         &row,
@@ -10781,39 +13380,87 @@ fn append_settings_ai_help(panel: &gtk4::Box, active_panel: SettingsPanel, state
         readiness.detail.as_str(),
     );
 
-    let panel_summary = settings_ai_panel_status_summary(active_panel, state);
-    let topic = active_panel.display_name().to_string();
-    let panel_id = active_panel.as_str().to_string();
+    {
+        let exact_context = exact_context.clone();
+        let route = route.clone();
+        let panel_name = active_panel.display_name().to_string();
+        let panel_summary = panel_summary.clone();
+        entry.connect_changed(move |entry| {
+            exact_context.set_text(&settings_context_review_copy(
+                &route,
+                &panel_name,
+                entry.text().as_str(),
+                &panel_summary,
+            ));
+        });
+    }
+
     let ask_enabled = readiness.enabled;
     ask.connect_clicked(move |ask| {
-        let question = entry.text().to_string();
-        ask.set_sensitive(false);
-        ask.set_label("Asking…");
-        entry.set_sensitive(false);
-        feedback.set_text("Asking Goblin through the OS-owned Settings context route.");
-
-        let ask = ask.clone();
-        let entry = entry.clone();
-        let feedback = feedback.clone();
-        let core = core.clone();
-        let panel_id = panel_id.clone();
-        let topic = topic.clone();
-        let panel_summary = panel_summary.clone();
-        run_settings_action(
-            move || ask_settings_context(&core, &panel_id, &topic, &question, &panel_summary),
-            move |outcome| {
-                ask.set_label("Ask Goblin");
-                ask.set_sensitive(ask_enabled);
-                entry.set_sensitive(true);
-                match outcome {
-                    Ok(answer) => feedback.set_text(&answer),
-                    Err(detail) => feedback.set_text(&detail),
-                }
-            },
-        );
+        let question = bounded_settings_context_value(entry.text().as_str(), 480);
+        start_settings_ai_help_request(SettingsAiHelpRequest {
+            core: core.clone(),
+            panel_id: panel_id.clone(),
+            topic: topic.clone(),
+            question,
+            panel_summary: panel_summary.clone(),
+            ask: ask.clone(),
+            entry: entry.clone(),
+            feedback: feedback.clone(),
+            ask_enabled,
+        });
     });
 
     append_preference_group(panel, "Goblin help", vec![row]);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone)]
+struct SettingsAiHelpRequest {
+    core: CoreClient,
+    panel_id: String,
+    topic: String,
+    question: String,
+    panel_summary: String,
+    ask: gtk4::Button,
+    entry: gtk4::Entry,
+    feedback: gtk4::Label,
+    ask_enabled: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn start_settings_ai_help_request(request: SettingsAiHelpRequest) {
+    use gtk4::prelude::*;
+
+    request.ask.set_sensitive(false);
+    request.ask.set_label("Asking…");
+    request.entry.set_sensitive(false);
+    request
+        .feedback
+        .set_text("Asking Goblin through the protected Settings context route.");
+
+    let core = request.core.clone();
+    let panel_id = request.panel_id.clone();
+    let topic = request.topic.clone();
+    let question = request.question.clone();
+    let panel_summary = request.panel_summary.clone();
+    let complete_request = request.clone();
+    run_settings_action(
+        move || ask_settings_context(&core, &panel_id, &topic, &question, &panel_summary),
+        move |outcome| {
+            complete_request.ask.set_label("Ask Goblin");
+            complete_request
+                .ask
+                .set_sensitive(complete_request.ask_enabled);
+            complete_request.entry.set_sensitive(true);
+            match outcome {
+                Ok(SettingsAiHelpResult::Completed(answer)) => {
+                    complete_request.feedback.set_text(&answer);
+                }
+                Err(detail) => complete_request.feedback.set_text(&detail),
+            }
+        },
+    );
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -10836,7 +13483,10 @@ fn settings_ai_help_readiness(state: &SettingsState) -> SettingsAiHelpReadiness 
     match action {
         Some(action) if action.enabled => SettingsAiHelpReadiness {
             enabled: true,
-            detail: "Ask a question about this panel. Settings sends only the panel name and a bounded OS status summary through local OS services.".to_string(),
+            detail: format!(
+                "{} Settings uses only the panel name, your exact question, and the bounded OS status summary shown before submission.",
+                context_route_disclosure(&context_submission_route(state.resident.as_ref()))
+            ),
         },
         Some(action) => SettingsAiHelpReadiness {
             enabled: false,
@@ -12087,6 +14737,10 @@ fn openai_access_summary_spec(
         );
     }
 
+    if let Some(codex) = codex.filter(|codex| codex.sign_in_in_progress) {
+        return model_summary_spec("OpenAI access", "signing in", false, codex.detail.as_str());
+    }
+
     if let Some(key) = key {
         if key.configured {
             return model_summary_spec(
@@ -12240,8 +14894,8 @@ fn overview_storage_detail(
             .map(|gb| format!(" Models: {gb}GB free."))
             .unwrap_or_else(|| " Models: free space unknown.".to_string()),
         None => match system {
-            Some(_system) => " Model cache capacity is waiting for Goblins OS.".to_string(),
-            None => " Model cache capacity is waiting.".to_string(),
+            Some(_system) => " Local model storage is waiting for Goblins OS.".to_string(),
+            None => " Local model storage is waiting.".to_string(),
         },
     };
 
@@ -12446,7 +15100,7 @@ fn append_desktop_privacy_bool_row(
 fn engine_selection_success_copy(engine: &str) -> &'static str {
     match engine {
         "openai-api" => {
-            "Active engine: OpenAI hosted models. Answers use the administrator-installed protected service credential."
+            "Active engine: OpenAI hosted models. Answers use your API key from protected Goblins OS storage."
         }
         "codex" => {
             "Active engine: your OpenAI account via Codex. Goblins OS works through OpenAI's own coding agent."
@@ -12570,12 +15224,12 @@ fn recovery_overall_summary_spec(status: Option<&RecoveryStatus>) -> RecoverySum
 
 fn recovery_actions_detail(status: Option<&RecoveryStatus>) -> String {
     let Some(status) = status else {
-        return "Disabled: waiting for recovery status.".to_string();
+        return "Waiting for recovery status before enabling protected image and file-recovery actions.".to_string();
     };
 
     let counts = recovery_counts(&status.checks);
     if counts.total > 0 && counts.waiting == 0 {
-        return "Read-only for now. Recovery checks are ready, but repair, rollback, and reset actions stay disabled until secure recovery actions are available.".to_string();
+        return "Recovery is ready. Recover individual files from local snapshots above, or use the immutable image actions below to stage an update, restart, or roll back. A full device reset remains an explicit reinstall from Goblins OS boot media so Settings never erases the running system.".to_string();
     }
 
     let blockers = status
@@ -12587,10 +15241,10 @@ fn recovery_actions_detail(status: Option<&RecoveryStatus>) -> String {
         .collect::<Vec<_>>();
 
     if blockers.is_empty() {
-        "Disabled: no recovery checks were reported through Goblins OS.".to_string()
+        "No recovery checks were reported through Goblins OS, so protected recovery actions are not enabled.".to_string()
     } else {
         format!(
-            "Disabled: {}. Recovery actions stay disabled until all checks are ready and secure recovery actions are available.",
+            "Resolve these recovery checks before continuing: {}. Snapshot browsing remains non-destructive, and Settings will not guess at repair state.",
             blockers.join(", ")
         )
     }
@@ -12679,6 +15333,7 @@ fn build_recovery(panel: &gtk4::Box, state: &SettingsState) {
     );
     append_recovery_summary(panel, state);
     append_recovery_snapshots_status(panel, state);
+    append_system_image_actions(panel, state, SettingsPanel::Recovery);
 
     if let Some(status) = &state.system_services {
         panel.append(&label("Service health", &["gos-subsection-title"]));
@@ -12779,6 +15434,496 @@ fn append_recovery_snapshots_status(panel: &gtk4::Box, state: &SettingsState) {
             ),
         ],
     );
+
+    if status.restore_ready && status.executes_restore && !status.snapshots.is_empty() {
+        append_snapshot_recovery_controls(panel, state, status);
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_snapshot_recovery_controls(
+    panel: &gtk4::Box,
+    state: &SettingsState,
+    status: &SnapshotsStatus,
+) {
+    use gtk4::prelude::*;
+
+    let card = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    card.add_css_class("gos-row");
+    card.append(&label("Recover one file", &["gos-row-title"]));
+    card.append(&label(
+        "Choose a snapshot, browse its read-only copy of your home, then choose a destination folder. Deleted files remain selectable because the browser reads the snapshot itself. Recovery creates a separate copy and never overwrites anything.",
+        &["gos-row-copy"],
+    ));
+
+    let snapshot_labels = status
+        .snapshots
+        .iter()
+        .map(|snapshot| {
+            format!(
+                "#{}{}",
+                snapshot.id,
+                snapshot
+                    .date
+                    .as_deref()
+                    .filter(|date| !date.trim().is_empty())
+                    .map(|date| format!(" · {date}"))
+                    .unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>();
+    let label_refs = snapshot_labels
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let selector = gtk4::DropDown::from_strings(&label_refs);
+    selector.set_hexpand(true);
+    card.append(&selector);
+
+    let source_path = Rc::new(RefCell::new(None::<String>));
+    let destination_path = Rc::new(RefCell::new(None::<String>));
+    let chosen = label("No file or destination selected.", &["gos-row-copy"]);
+    let browser_path = label("Snapshot home", &["gos-row-copy"]);
+    let browser_feedback = label("Loading snapshot files…", &["gos-row-copy"]);
+    let browser_entries = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+    browser_entries.add_css_class("gos-preference-group");
+    let browser_back = button("Back", &["gos-permission-action"]);
+    browser_back.set_sensitive(false);
+    let previous_page = button("Previous page", &["gos-permission-action"]);
+    previous_page.set_sensitive(false);
+    let next_page = button("Next page", &["gos-permission-action"]);
+    next_page.set_sensitive(false);
+    let choose_destination = button("Choose destination…", &["gos-permission-action"]);
+    let review = button("Review recovery…", &["gos-permission-action"]);
+    review.set_sensitive(false);
+    let choices = gtk4::FlowBox::new();
+    choices.set_selection_mode(gtk4::SelectionMode::None);
+    choices.set_min_children_per_line(1);
+    choices.set_max_children_per_line(5);
+    choices.set_column_spacing(8);
+    choices.set_row_spacing(8);
+    choices.insert(&browser_back, -1);
+    choices.insert(&previous_page, -1);
+    choices.insert(&next_page, -1);
+    choices.insert(&choose_destination, -1);
+    choices.insert(&review, -1);
+    card.append(&choices);
+    card.append(&browser_path);
+    card.append(&browser_feedback);
+    card.append(&browser_entries);
+    card.append(&chosen);
+
+    let reviewed_selection = Rc::new(RefCell::new(None::<(String, String, String)>));
+    let confirmation = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    confirmation.set_visible(false);
+    confirmation.append(&label(
+        "Create this recovered copy now? The reviewed snapshot, source file, and destination are frozen below. The current file remains untouched, and an existing destination is never overwritten.",
+        &["gos-row-copy"],
+    ));
+    let confirmation_summary = label("", &["gos-row-copy"]);
+    confirmation.append(&confirmation_summary);
+    let confirmation_actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let cancel = button("Cancel", &["gos-permission-action"]);
+    let recover = button("Recover copy", &["gos-permission-action"]);
+    confirmation_actions.append(&cancel);
+    confirmation_actions.append(&recover);
+    confirmation.append(&confirmation_actions);
+    card.append(&confirmation);
+
+    let current_directory = Rc::new(RefCell::new(String::new()));
+    let current_cursor = Rc::new(Cell::new(0_usize));
+    let cursor_history = Rc::new(RefCell::new(Vec::<usize>::new()));
+    let next_cursor = Rc::new(Cell::new(None::<usize>));
+    let browser_generation = Rc::new(Cell::new(0_u64));
+    let snapshot_ids = Rc::new(
+        status
+            .snapshots
+            .iter()
+            .map(|snapshot| snapshot.id.clone())
+            .collect::<Vec<_>>(),
+    );
+    let load_browser: Rc<Box<dyn Fn()>> = Rc::new_cyclic(
+        |weak_load: &std::rc::Weak<Box<dyn Fn()>>| {
+            let core = state.core.clone();
+            let selector = selector.clone();
+            let snapshot_ids = snapshot_ids.clone();
+            let current_directory = current_directory.clone();
+            let current_cursor = current_cursor.clone();
+            let next_cursor = next_cursor.clone();
+            let browser_generation = browser_generation.clone();
+            let browser_entries = browser_entries.clone();
+            let browser_path = browser_path.clone();
+            let browser_feedback = browser_feedback.clone();
+            let browser_back = browser_back.clone();
+            let previous_page = previous_page.clone();
+            let next_page = next_page.clone();
+            let cursor_history = cursor_history.clone();
+            let source_path = source_path.clone();
+            let destination_path = destination_path.clone();
+            let chosen = chosen.clone();
+            let review = review.clone();
+            let confirmation = confirmation.clone();
+            let reviewed_selection = reviewed_selection.clone();
+            let weak_load = weak_load.clone();
+            Box::new(move || {
+                let index = selector.selected() as usize;
+                let Some(snapshot_id) = snapshot_ids.get(index).cloned() else {
+                    browser_feedback.set_text("Choose a reported snapshot.");
+                    return;
+                };
+                let directory = current_directory.borrow().clone();
+                let cursor = current_cursor.get();
+                let generation = browser_generation.get().wrapping_add(1);
+                browser_generation.set(generation);
+                confirmation.set_visible(false);
+                *reviewed_selection.borrow_mut() = None;
+                browser_feedback.set_text("Loading this read-only snapshot folder…");
+                clear_box_children(&browser_entries);
+                browser_back.set_sensitive(!directory.is_empty());
+                previous_page.set_sensitive(!cursor_history.borrow().is_empty());
+                next_page.set_sensitive(false);
+                next_cursor.set(None);
+                let browser_path_text = if directory.is_empty() {
+                    "Snapshot home".to_string()
+                } else {
+                    format!("Snapshot home / {directory}")
+                };
+                browser_path.set_text(&browser_path_text);
+                let core = core.clone();
+                let browser_entries = browser_entries.clone();
+                let browser_feedback = browser_feedback.clone();
+                let current_directory = current_directory.clone();
+                let current_cursor = current_cursor.clone();
+                let next_cursor = next_cursor.clone();
+                let browser_generation = browser_generation.clone();
+                let expected_snapshot_id = snapshot_id.clone();
+                let expected_directory = directory.clone();
+                let expected_cursor = cursor;
+                let source_path = source_path.clone();
+                let destination_path = destination_path.clone();
+                let chosen = chosen.clone();
+                let review = review.clone();
+                let snapshot_ids = snapshot_ids.clone();
+                let selector = selector.clone();
+                let next_page = next_page.clone();
+                let cursor_history = cursor_history.clone();
+                let confirmation = confirmation.clone();
+                let reviewed_selection = reviewed_selection.clone();
+                let weak_load = weak_load.clone();
+                run_settings_action(
+                    move || browse_snapshot_files(&core, &snapshot_id, &directory, cursor),
+                    move |outcome| {
+                        let selected_snapshot = snapshot_ids
+                            .get(selector.selected() as usize)
+                            .map(String::as_str);
+                        if browser_generation.get() != generation
+                            || selected_snapshot != Some(expected_snapshot_id.as_str())
+                            || *current_directory.borrow() != expected_directory
+                            || current_cursor.get() != expected_cursor
+                        {
+                            return;
+                        }
+                        match outcome {
+                            Ok(outcome) => {
+                                if outcome.snapshot_id != expected_snapshot_id
+                                    || outcome.directory != expected_directory
+                                {
+                                    browser_feedback.set_text(
+                                        "The snapshot browser returned a stale page. Reloading…",
+                                    );
+                                    return;
+                                }
+                                next_cursor.set(outcome.next_cursor);
+                                next_page.set_sensitive(outcome.next_cursor.is_some());
+                                browser_feedback.set_text(&outcome.detail);
+                                for entry in outcome.entries {
+                                    let title = if entry.kind == "directory" {
+                                        format!("{} /", entry.name)
+                                    } else if let Some(bytes) = entry.bytes {
+                                        format!("{} · {} bytes", entry.name, bytes)
+                                    } else {
+                                        entry.name.clone()
+                                    };
+                                    let entry_button = button(&title, &["gos-permission-action"]);
+                                    if entry.kind == "directory" {
+                                        let relative_path = entry.relative_path.clone();
+                                        let current_directory = current_directory.clone();
+                                        let current_cursor = current_cursor.clone();
+                                        let cursor_history = cursor_history.clone();
+                                        let next_cursor = next_cursor.clone();
+                                        let weak_load = weak_load.clone();
+                                        entry_button.connect_clicked(move |_| {
+                                            *current_directory.borrow_mut() = relative_path.clone();
+                                            current_cursor.set(0);
+                                            cursor_history.borrow_mut().clear();
+                                            next_cursor.set(None);
+                                            if let Some(load) = weak_load.upgrade() {
+                                                load();
+                                            }
+                                        });
+                                    } else {
+                                        let logical_path = entry.logical_path.clone();
+                                        let source_path = source_path.clone();
+                                        let destination_path = destination_path.clone();
+                                        let chosen = chosen.clone();
+                                        let review = review.clone();
+                                        let confirmation = confirmation.clone();
+                                        let reviewed_selection = reviewed_selection.clone();
+                                        entry_button.connect_clicked(move |_| {
+                                            confirmation.set_visible(false);
+                                            *reviewed_selection.borrow_mut() = None;
+                                            *source_path.borrow_mut() = Some(logical_path.clone());
+                                            update_snapshot_recovery_selection(
+                                                &chosen,
+                                                &review,
+                                                source_path.borrow().as_deref(),
+                                                destination_path.borrow().as_deref(),
+                                            );
+                                        });
+                                    }
+                                    browser_entries.append(&entry_button);
+                                }
+                                if outcome.truncated {
+                                    browser_feedback.set_text("This folder has more entries. Use Next page to keep browsing the same read-only snapshot folder.");
+                                }
+                            }
+                            Err(error) => browser_feedback.set_text(&error),
+                        }
+                    },
+                );
+            })
+        },
+    );
+    {
+        let current_directory = current_directory.clone();
+        let current_cursor = current_cursor.clone();
+        let cursor_history = cursor_history.clone();
+        let next_cursor = next_cursor.clone();
+        let load_browser = load_browser.clone();
+        browser_back.connect_clicked(move |_| {
+            let parent = Path::new(current_directory.borrow().as_str())
+                .parent()
+                .and_then(Path::to_str)
+                .unwrap_or("")
+                .to_string();
+            *current_directory.borrow_mut() = parent;
+            current_cursor.set(0);
+            cursor_history.borrow_mut().clear();
+            next_cursor.set(None);
+            load_browser();
+        });
+    }
+    {
+        let current_cursor = current_cursor.clone();
+        let cursor_history = cursor_history.clone();
+        let load_browser = load_browser.clone();
+        previous_page.connect_clicked(move |_| {
+            if let Some(cursor) = cursor_history.borrow_mut().pop() {
+                current_cursor.set(cursor);
+                load_browser();
+            }
+        });
+    }
+    {
+        let current_cursor = current_cursor.clone();
+        let cursor_history = cursor_history.clone();
+        let next_cursor = next_cursor.clone();
+        let load_browser = load_browser.clone();
+        next_page.connect_clicked(move |_| {
+            if let Some(cursor) = next_cursor.get() {
+                cursor_history.borrow_mut().push(current_cursor.get());
+                current_cursor.set(cursor);
+                load_browser();
+            }
+        });
+    }
+    {
+        let current_directory = current_directory.clone();
+        let current_cursor = current_cursor.clone();
+        let cursor_history = cursor_history.clone();
+        let next_cursor = next_cursor.clone();
+        let source_path = source_path.clone();
+        let destination_path = destination_path.clone();
+        let chosen = chosen.clone();
+        let review = review.clone();
+        let confirmation = confirmation.clone();
+        let reviewed_selection = reviewed_selection.clone();
+        let load_browser = load_browser.clone();
+        selector.connect_selected_notify(move |_| {
+            current_directory.borrow_mut().clear();
+            current_cursor.set(0);
+            cursor_history.borrow_mut().clear();
+            next_cursor.set(None);
+            *source_path.borrow_mut() = None;
+            confirmation.set_visible(false);
+            *reviewed_selection.borrow_mut() = None;
+            update_snapshot_recovery_selection(
+                &chosen,
+                &review,
+                source_path.borrow().as_deref(),
+                destination_path.borrow().as_deref(),
+            );
+            load_browser();
+        });
+    }
+    load_browser();
+    {
+        let panel = panel.clone();
+        let source_path = source_path.clone();
+        let destination_path = destination_path.clone();
+        let chosen = chosen.clone();
+        let review = review.clone();
+        let confirmation = confirmation.clone();
+        let confirmation_summary = confirmation_summary.clone();
+        let reviewed_selection = reviewed_selection.clone();
+        choose_destination.connect_clicked(move |_| {
+            let dialog = gtk4::FileChooserNative::new(
+                Some("Choose where to save the recovered copy"),
+                panel.root().and_downcast::<gtk4::Window>().as_ref(),
+                gtk4::FileChooserAction::SelectFolder,
+                Some("Choose"),
+                Some("Cancel"),
+            );
+            let source_path = source_path.clone();
+            let destination_path = destination_path.clone();
+            let chosen = chosen.clone();
+            let review = review.clone();
+            let confirmation = confirmation.clone();
+            let confirmation_summary = confirmation_summary.clone();
+            let reviewed_selection = reviewed_selection.clone();
+            dialog.connect_response(move |dialog, response| {
+                if response == gtk4::ResponseType::Accept {
+                    *destination_path.borrow_mut() = dialog
+                        .file()
+                        .and_then(|file| file.path())
+                        .map(|path| path.to_string_lossy().into_owned());
+                    confirmation.set_visible(false);
+                    confirmation_summary.set_text("");
+                    *reviewed_selection.borrow_mut() = None;
+                    update_snapshot_recovery_selection(
+                        &chosen,
+                        &review,
+                        source_path.borrow().as_deref(),
+                        destination_path.borrow().as_deref(),
+                    );
+                }
+                dialog.destroy();
+            });
+            dialog.show();
+        });
+    }
+
+    {
+        let confirmation = confirmation.clone();
+        let confirmation_summary = confirmation_summary.clone();
+        let reviewed_selection = reviewed_selection.clone();
+        let snapshot_ids = snapshot_ids.clone();
+        let selector = selector.clone();
+        let source_path = source_path.clone();
+        let destination_path = destination_path.clone();
+        let chosen = chosen.clone();
+        review.connect_clicked(move |_| {
+            let snapshot_id = snapshot_ids.get(selector.selected() as usize).cloned();
+            let source = source_path.borrow().clone();
+            let destination = destination_path.borrow().clone();
+            let Some((snapshot_id, source, destination)) = snapshot_id
+                .zip(source)
+                .zip(destination)
+                .map(|((snapshot_id, source), destination)| (snapshot_id, source, destination))
+            else {
+                confirmation.set_visible(false);
+                *reviewed_selection.borrow_mut() = None;
+                chosen.set_text("Choose a snapshot file and destination before review.");
+                return;
+            };
+            confirmation_summary.set_text(&format!(
+                "Snapshot: #{snapshot_id}\nSource: {source}\nNew copy folder: {destination}"
+            ));
+            *reviewed_selection.borrow_mut() = Some((snapshot_id, source, destination));
+            confirmation.set_visible(true);
+        });
+    }
+    {
+        let confirmation = confirmation.clone();
+        let confirmation_summary = confirmation_summary.clone();
+        let reviewed_selection = reviewed_selection.clone();
+        cancel.connect_clicked(move |_| {
+            confirmation.set_visible(false);
+            confirmation_summary.set_text("");
+            *reviewed_selection.borrow_mut() = None;
+        });
+    }
+    {
+        let core = state.core.clone();
+        let confirmation = confirmation.clone();
+        let confirmation_summary = confirmation_summary.clone();
+        let reviewed_selection = reviewed_selection.clone();
+        let chosen = chosen.clone();
+        recover.connect_clicked(move |recover| {
+            let Some((snapshot_id, source, destination)) = reviewed_selection.borrow().clone()
+            else {
+                confirmation.set_visible(false);
+                chosen.set_text("Review the exact recovery selection again before continuing.");
+                return;
+            };
+            recover.set_sensitive(false);
+            chosen.set_text("Recovering a new file copy from the selected snapshot…");
+            let core = core.clone();
+            let recover = recover.clone();
+            let chosen = chosen.clone();
+            let confirmation = confirmation.clone();
+            let confirmation_summary = confirmation_summary.clone();
+            let reviewed_selection = reviewed_selection.clone();
+            run_settings_action(
+                move || recover_snapshot_copy(&core, &snapshot_id, &source, &destination),
+                move |outcome| {
+                    recover.set_sensitive(true);
+                    confirmation.set_visible(false);
+                    confirmation_summary.set_text("");
+                    *reviewed_selection.borrow_mut() = None;
+                    match outcome {
+                        Ok(outcome) => chosen.set_text(&format!(
+                            "Recovered {} bytes to {}.",
+                            outcome.bytes_copied,
+                            outcome
+                                .destination_path
+                                .as_deref()
+                                .unwrap_or("the selected destination")
+                        )),
+                        Err(error) => chosen.set_text(&error),
+                    }
+                },
+            );
+        });
+    }
+    panel.append(&card);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn update_snapshot_recovery_selection(
+    chosen: &gtk4::Label,
+    review: &gtk4::Button,
+    source: Option<&str>,
+    destination: Option<&str>,
+) {
+    match (source, destination) {
+        (Some(source), Some(destination)) => {
+            chosen.set_text(&format!("{source} → {destination}"));
+            review.set_sensitive(true);
+        }
+        (Some(source), None) => {
+            chosen.set_text(&format!("File: {source} · choose a destination folder."));
+            review.set_sensitive(false);
+        }
+        (None, Some(destination)) => {
+            chosen.set_text(&format!("Destination: {destination} · choose a file."));
+            review.set_sensitive(false);
+        }
+        (None, None) => {
+            chosen.set_text("No file or destination selected.");
+            review.set_sensitive(false);
+        }
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -13379,21 +16524,6 @@ fn append_assistive_technology_settings(panel: &gtk4::Box, state: &SettingsState
     );
     append_magnifier_controls(panel, state, accessibility, assistive);
 
-    let visual = &accessibility.visual;
-    panel.append(&label("Contrast", &["gos-subsection-title"]));
-    if visual.schema_available {
-        append_accessibility_bool_row(
-            panel,
-            state,
-            "high-contrast",
-            "High contrast",
-            visual.high_contrast,
-            high_contrast_detail,
-        );
-    } else {
-        panel.append(&system_row("High contrast", &visual.detail));
-    }
-
     let typing = &accessibility.typing;
     panel.append(&label("Typing assistance", &["gos-subsection-title"]));
     if typing.schema_available {
@@ -13446,6 +16576,48 @@ fn append_assistive_technology_settings(panel: &gtk4::Box, state: &SettingsState
         );
     } else {
         panel.append(&system_row("Dwell click", &pointing.detail));
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_visual_accessibility_settings(panel: &gtk4::Box, state: &SettingsState) {
+    panel.append(&label("Visual clarity", &["gos-subsection-title"]));
+    let Some(accessibility) = &state.accessibility else {
+        panel.append(&system_row(
+            "Visual clarity",
+            "Waiting for accessibility preferences.",
+        ));
+        return;
+    };
+
+    let visual = &accessibility.visual;
+    if visual.schema_available {
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "high-contrast",
+            "High contrast",
+            visual.high_contrast,
+            high_contrast_detail,
+        );
+    } else {
+        panel.append(&system_row("High contrast", &visual.detail));
+    }
+
+    if visual.reduce_transparency_schema_available {
+        append_accessibility_bool_row(
+            panel,
+            state,
+            "reduce-transparency",
+            "Reduce transparency",
+            visual.reduce_transparency,
+            reduce_transparency_detail,
+        );
+    } else {
+        panel.append(&system_row(
+            "Reduce transparency",
+            &visual.reduce_transparency_detail,
+        ));
     }
 }
 
@@ -14401,8 +17573,6 @@ fn text_shortcut_add_row(core: &CoreClient, shortcuts: &[TextShortcutEntry]) -> 
     row
 }
 
-/// Read-only reference of the Goblins window-management shortcuts (macOS "Keyboard ▸
-/// Shortcuts" altitude). Rebinding stays a deliberate future capability.
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn append_keyboard_shortcuts(panel: &gtk4::Box, state: &SettingsState) {
     let Some(shortcuts) = &state.shortcuts else {
@@ -14411,16 +17581,293 @@ fn append_keyboard_shortcuts(panel: &gtk4::Box, state: &SettingsState) {
     panel.append(&label("Shortcuts", &["gos-subsection-title"]));
     if !shortcuts.available || shortcuts.shortcuts.is_empty() {
         panel.append(&system_row("Keyboard shortcuts", &shortcuts.detail));
-        return;
+    } else {
+        let core = config_core(state);
+        for shortcut in &shortcuts.shortcuts {
+            panel.append(&keyboard_shortcut_editor_row(&core, shortcut));
+        }
     }
-    for shortcut in &shortcuts.shortcuts {
-        let binding = if shortcut.bindings.is_empty() {
-            "Not set".to_string()
-        } else {
-            shortcut.bindings.join(", ")
-        };
-        panel.append(&system_row(&shortcut.action, &binding));
+
+    panel.append(&label("Modifier keys", &["gos-subsection-title"]));
+    if shortcuts.modifier_remap_available && shortcuts.caps_lock_behavior == "custom" {
+        panel.append(&system_row(
+            "Caps Lock key · Custom",
+            "A custom Caps Lock or Control mapping is active. Goblins OS left every XKB option unchanged; use the Keyboard system tool below to edit it.",
+        ));
+    } else if shortcuts.modifier_remap_available {
+        let options = [
+            ChoiceOption {
+                id: "default",
+                label: "Caps Lock",
+            },
+            ChoiceOption {
+                id: "control",
+                label: "Control",
+            },
+        ];
+        let core = config_core(state);
+        panel.append(&choice_row(
+            "Caps Lock key",
+            if shortcuts.caps_lock_behavior == "control" {
+                "control"
+            } else {
+                "default"
+            },
+            &options,
+            |value| {
+                if value == "control" {
+                    "Caps Lock works as Control.".to_string()
+                } else {
+                    "Caps Lock keeps its standard behavior.".to_string()
+                }
+            },
+            move |value| set_modifier_remap(&core, value),
+        ));
+    } else {
+        panel.append(&system_row(
+            "Caps Lock key",
+            "Modifier remapping is not available in this desktop session.",
+        ));
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn keyboard_shortcut_editor_row(core: &CoreClient, shortcut: &ShortcutEntry) -> gtk4::Box {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+    row.add_css_class("gos-row");
+    row.add_css_class("gos-shortcut-editor-row");
+    let copy = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
+    copy.set_hexpand(true);
+    copy.append(&label(&shortcut.action, &["gos-row-title"]));
+    let current = if shortcut.bindings.is_empty() {
+        "No shortcut assigned".to_string()
+    } else {
+        shortcut.bindings.join(", ")
+    };
+    let status = label(&current, &["gos-row-copy"]);
+    copy.append(&status);
+    row.append(&copy);
+
+    let recorder_idle_label = if shortcut.bindings.is_empty() {
+        "Record"
+    } else {
+        "Change"
+    };
+    let recorder = button(recorder_idle_label, &["gos-permission-action"]);
+    recorder.set_focusable(true);
+    set_accessible_label_description(
+        &recorder,
+        &format!("Record shortcut for {}", shortcut.action),
+        &current,
+    );
+    let reset = button("Reset", &["gos-permission-action"]);
+    set_accessible_label_description(
+        &reset,
+        &format!("Reset shortcut for {}", shortcut.action),
+        "Restore the Goblins OS default.",
+    );
+
+    let recording = Rc::new(Cell::new(false));
+    {
+        let recording = recording.clone();
+        let status = status.clone();
+        let recorder_idle_label = recorder_idle_label.to_string();
+        recorder.connect_clicked(move |button| {
+            recording.set(true);
+            button.set_label("Press keys…");
+            button.grab_focus();
+            status.set_text("Press the new key combination. Escape cancels.");
+            set_accessible_label_description(
+                button,
+                "Recording keyboard shortcut",
+                &format!("Press a new combination, or Escape to cancel. Previous action: {recorder_idle_label}."),
+            );
+        });
+    }
+    let keys = gtk4::EventControllerKey::new();
+    keys.set_propagation_phase(gtk4::PropagationPhase::Capture);
+    {
+        let core = core.clone();
+        let action = shortcut.id.clone();
+        let recording = recording.clone();
+        let recorder = recorder.clone();
+        let reset = reset.clone();
+        let status = status.clone();
+        let recorder_idle_label = recorder_idle_label.to_string();
+        keys.connect_key_pressed(move |_, key, _, modifiers| {
+            if !recording.get() {
+                return gtk4::glib::Propagation::Proceed;
+            }
+            let key_name = key.name().map(|name| name.to_string()).unwrap_or_default();
+            if key_name.eq_ignore_ascii_case("escape") {
+                recording.set(false);
+                recorder.set_label(&recorder_idle_label);
+                status.set_text("Shortcut recording cancelled.");
+                return gtk4::glib::Propagation::Stop;
+            }
+            let Some(accelerator) = recorded_shortcut_accelerator(&key_name, modifiers) else {
+                status.set_text("Use a letter with a modifier, or a function/navigation key.");
+                return gtk4::glib::Propagation::Stop;
+            };
+            recording.set(false);
+            recorder.set_sensitive(false);
+            recorder.set_label("Saving…");
+            reset.set_sensitive(false);
+            status.set_text("Saving the new keyboard shortcut…");
+            let core_worker = core.clone();
+            let action_worker = action.clone();
+            let accelerator_worker = accelerator.clone();
+            let accelerator_label = accelerator_display_label(&accelerator);
+            let recorder = recorder.clone();
+            let reset = reset.clone();
+            let status = status.clone();
+            run_settings_action(
+                move || {
+                    set_keyboard_shortcut(
+                        &core_worker,
+                        &action_worker,
+                        Some(&accelerator_worker),
+                        false,
+                    )
+                },
+                move |result| {
+                    match result {
+                        Ok(message) => {
+                            status.set_text(&format!("{accelerator_label} · {message}"));
+                            recorder.set_label("Change");
+                        }
+                        Err(error) => {
+                            status.set_text(&settings_detail_display_copy(
+                                &setting_change_rejected_detail(&error),
+                            ));
+                            recorder.set_label("Record again");
+                        }
+                    }
+                    recorder.set_sensitive(true);
+                    reset.set_sensitive(true);
+                },
+            );
+            gtk4::glib::Propagation::Stop
+        });
+    }
+    recorder.add_controller(keys);
+    row.append(&recorder);
+
+    {
+        let core = core.clone();
+        let action = shortcut.id.clone();
+        let status = status.clone();
+        let recorder = recorder.clone();
+        reset.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            recorder.set_sensitive(false);
+            status.set_text("Restoring the default keyboard shortcut…");
+            let button = button.clone();
+            let core_worker = core.clone();
+            let action_worker = action.clone();
+            let status = status.clone();
+            let recorder = recorder.clone();
+            run_settings_action(
+                move || set_keyboard_shortcut(&core_worker, &action_worker, None, true),
+                move |result| {
+                    match result {
+                        Ok(message) => {
+                            status.set_text(&message);
+                            recorder.set_label("Change");
+                        }
+                        Err(error) => status.set_text(&settings_detail_display_copy(
+                            &setting_change_rejected_detail(&error),
+                        )),
+                    }
+                    recorder.set_sensitive(true);
+                    button.set_sensitive(true);
+                },
+            );
+        });
+    }
+    row.append(&reset);
+    row
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn recorded_shortcut_accelerator(
+    key_name: &str,
+    modifiers: gtk4::gdk::ModifierType,
+) -> Option<String> {
+    let key = key_name.trim();
+    if key.is_empty()
+        || key.len() > 32
+        || key.chars().any(char::is_control)
+        || matches!(
+            key.to_ascii_lowercase().as_str(),
+            "shift_l"
+                | "shift_r"
+                | "control_l"
+                | "control_r"
+                | "alt_l"
+                | "alt_r"
+                | "super_l"
+                | "super_r"
+                | "meta_l"
+                | "meta_r"
+        )
+    {
+        return None;
+    }
+    let mut accelerator = String::new();
+    for (mask, name) in [
+        (gtk4::gdk::ModifierType::SUPER_MASK, "Super"),
+        (gtk4::gdk::ModifierType::CONTROL_MASK, "Control"),
+        (gtk4::gdk::ModifierType::ALT_MASK, "Alt"),
+        (gtk4::gdk::ModifierType::SHIFT_MASK, "Shift"),
+        (gtk4::gdk::ModifierType::META_MASK, "Meta"),
+    ] {
+        if modifiers.contains(mask) {
+            accelerator.push('<');
+            accelerator.push_str(name);
+            accelerator.push('>');
+        }
+    }
+    if accelerator.is_empty() && !plain_shortcut_key_for_settings(key) {
+        return None;
+    }
+    accelerator.push_str(key);
+    Some(accelerator)
+}
+
+fn plain_shortcut_key_for_settings(key: &str) -> bool {
+    matches!(
+        key,
+        "Print"
+            | "Escape"
+            | "Tab"
+            | "BackSpace"
+            | "Delete"
+            | "Insert"
+            | "Home"
+            | "End"
+            | "Page_Up"
+            | "Page_Down"
+            | "Left"
+            | "Right"
+            | "Up"
+            | "Down"
+    ) || key.strip_prefix('F').is_some_and(|value| {
+        value
+            .parse::<u8>()
+            .is_ok_and(|number| (1..=24).contains(&number))
+    })
+}
+
+fn accelerator_display_label(accelerator: &str) -> String {
+    accelerator
+        .replace("<Control>", "Ctrl + ")
+        .replace("<Super>", "Super + ")
+        .replace("<Alt>", "Alt + ")
+        .replace("<Shift>", "Shift + ")
+        .replace("<Meta>", "Meta + ")
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -14532,6 +17979,17 @@ fn append_touchpad_preferences(panel: &gtk4::Box, state: &SettingsState, input: 
     append_input_bool_preference(
         panel,
         &core,
+        "touchpad-disable-while-typing",
+        "Ignore trackpad while typing",
+        touchpad.disable_while_typing,
+        disable_trackpad_while_typing_detail,
+        "The ignore-while-typing preference is not reported by this session.",
+    );
+
+    panel.append(&label("Gestures", &["gos-subsection-title"]));
+    append_input_bool_preference(
+        panel,
+        &core,
         "touchpad-two-finger-scrolling",
         "Two-finger scrolling",
         touchpad.two_finger_scrolling_enabled,
@@ -14541,12 +17999,54 @@ fn append_touchpad_preferences(panel: &gtk4::Box, state: &SettingsState, input: 
     append_input_bool_preference(
         panel,
         &core,
-        "touchpad-disable-while-typing",
-        "Ignore trackpad while typing",
-        touchpad.disable_while_typing,
-        disable_trackpad_while_typing_detail,
-        "The ignore-while-typing preference is not reported by this session.",
+        "touchpad-tap-and-drag",
+        "Tap and drag",
+        touchpad.tap_and_drag,
+        tap_and_drag_detail,
+        "Tap-and-drag is not reported by this trackpad session.",
     );
+    append_input_bool_preference(
+        panel,
+        &core,
+        "touchpad-tap-and-drag-lock",
+        "Drag lock",
+        touchpad.tap_and_drag_lock,
+        tap_and_drag_lock_detail,
+        "Drag lock is not reported by this trackpad session.",
+    );
+    if let Some(click_method) = touchpad.click_method.as_deref() {
+        let options = [
+            ChoiceOption {
+                id: "fingers",
+                label: "Two-finger click",
+            },
+            ChoiceOption {
+                id: "areas",
+                label: "Bottom-right corner",
+            },
+            ChoiceOption {
+                id: "none",
+                label: "Off",
+            },
+            ChoiceOption {
+                id: "default",
+                label: "Device default",
+            },
+        ];
+        let core = core.clone();
+        panel.append(&choice_row(
+            "Secondary click",
+            click_method,
+            &options,
+            secondary_click_detail,
+            move |value| set_input_string(&core, "touchpad-click-method", value),
+        ));
+    } else {
+        panel.append(&system_row(
+            "Secondary click",
+            "Secondary-click gestures are not reported by this trackpad session.",
+        ));
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -14943,6 +18443,105 @@ fn proxy_endpoint_detail(host: Option<String>, port: Option<i32>) -> String {
     }
 }
 
+fn proxy_settings_payload(
+    mode: &str,
+    autoconfig_url: &str,
+    bypass_hosts: &str,
+    endpoints: [(&str, &str, &str); 4],
+) -> Result<ProxySettingsPayload, String> {
+    if !matches!(mode, "none" | "auto" | "manual") {
+        return Err("Choose Off, Automatic, or Manual before saving.".to_string());
+    }
+
+    let autoconfig_url = autoconfig_url.trim();
+    if autoconfig_url.len() > 2_048 || autoconfig_url.chars().any(char::is_control) {
+        return Err(
+            "The automatic configuration URL must be 2,048 bytes or fewer and cannot contain control characters."
+                .to_string(),
+        );
+    }
+
+    let ignore_hosts = if bypass_hosts.trim().is_empty() {
+        Vec::new()
+    } else {
+        let hosts = bypass_hosts.split(',').map(str::trim).collect::<Vec<_>>();
+        if hosts.iter().any(|host| host.is_empty()) {
+            return Err("Remove empty entries from the proxy bypass list.".to_string());
+        }
+        if hosts.len() > 64 {
+            return Err("The proxy bypass list accepts at most 64 entries.".to_string());
+        }
+        hosts.into_iter().map(ToString::to_string).collect()
+    };
+
+    let [http, https, ftp, socks] =
+        endpoints.map(|(label, host, port)| proxy_endpoint_payload(label, host, port));
+    let http = http?;
+    let https = https?;
+    let ftp = ftp?;
+    let socks = socks?;
+    if mode == "auto" && autoconfig_url.is_empty() {
+        return Err("Automatic mode requires an HTTP or HTTPS configuration URL.".to_string());
+    }
+    if mode == "manual"
+        && [&http, &https, &ftp, &socks]
+            .iter()
+            .all(|endpoint| endpoint.host.is_none())
+    {
+        return Err("Manual mode requires at least one complete proxy host and port.".to_string());
+    }
+
+    Ok(ProxySettingsPayload {
+        mode: mode.to_string(),
+        autoconfig_url: (!autoconfig_url.is_empty()).then(|| autoconfig_url.to_string()),
+        ignore_hosts,
+        http,
+        https,
+        ftp,
+        socks,
+    })
+}
+
+fn proxy_endpoint_payload(
+    label: &str,
+    host: &str,
+    port: &str,
+) -> Result<ProxyEndpointPayload, String> {
+    let host = host.trim();
+    let port = port.trim();
+    match (host.is_empty(), port.is_empty()) {
+        (true, true) => Ok(ProxyEndpointPayload {
+            host: None,
+            port: None,
+        }),
+        (true, false) => Err(format!(
+            "The {label} proxy needs a host when a port is set."
+        )),
+        (false, true) => Err(format!(
+            "The {label} proxy needs a port when a host is set."
+        )),
+        (false, false) => {
+            if host.len() > 253 || host.chars().any(char::is_control) {
+                return Err(format!(
+                    "The {label} proxy host must be 253 bytes or fewer and cannot contain control characters."
+                ));
+            }
+            let port = port
+                .parse::<u16>()
+                .map_err(|_| format!("The {label} proxy port must be between 1 and 65535."))?;
+            if port == 0 {
+                return Err(format!(
+                    "The {label} proxy port must be between 1 and 65535."
+                ));
+            }
+            Ok(ProxyEndpointPayload {
+                host: Some(host.to_string()),
+                port: Some(port),
+            })
+        }
+    }
+}
+
 fn recent_files_detail(enabled: bool) -> &'static str {
     if enabled {
         "Applications can keep a recent-files list for faster reopening."
@@ -15062,6 +18661,14 @@ fn high_contrast_detail(enabled: bool) -> &'static str {
         "High contrast is on. Interface colors use stronger contrast for legibility."
     } else {
         "High contrast is off. The desktop uses its standard color contrast."
+    }
+}
+
+fn reduce_transparency_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Reduce transparency is on. Goblins OS panels use solid, non-blurred surfaces."
+    } else {
+        "Reduce transparency is off. Goblins OS panels may use subtle translucent materials."
     }
 }
 
@@ -15446,6 +19053,31 @@ fn two_finger_scroll_detail(enabled: bool) -> &'static str {
         "Two-finger gestures scroll when the touchpad driver supports them."
     } else {
         "Two-finger scrolling is disabled for the touchpad."
+    }
+}
+
+fn tap_and_drag_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "Tap, then keep your finger down to drag items without a physical click."
+    } else {
+        "Dragging begins with a physical click or another supported device gesture."
+    }
+}
+
+fn tap_and_drag_lock_detail(enabled: bool) -> &'static str {
+    if enabled {
+        "A drag stays active briefly when you lift your finger, so it can continue across the trackpad."
+    } else {
+        "A tap-and-drag ends when your finger leaves the trackpad."
+    }
+}
+
+fn secondary_click_detail(value: &str) -> String {
+    match value {
+        "fingers" => "Click with two fingers for a secondary click.".to_string(),
+        "areas" => "Click the bottom-right trackpad area for a secondary click.".to_string(),
+        "none" => "Trackpad secondary-click gestures are off.".to_string(),
+        _ => "Use the trackpad driver's default secondary-click behavior.".to_string(),
     }
 }
 
@@ -16872,13 +20504,13 @@ fn storage_overall_pressure_detail(
                 .model_dir_available_gb
                 .map(|gb| format!("{gb}GB free"))
                 .unwrap_or_else(|| "free space unknown".to_string());
-            parts.push(format!("Model cache has {capacity}."));
+            parts.push(format!("Local model storage has {capacity}."));
         }
         None => match system {
             Some(_system) => {
-                parts.push("Model-cache capacity is waiting for Goblins OS.".to_string())
+                parts.push("Local model storage is waiting for Goblins OS.".to_string())
             }
-            None => parts.push("Model-cache capacity is waiting for Goblins OS.".to_string()),
+            None => parts.push("Local model storage is waiting for Goblins OS.".to_string()),
         },
     }
 
@@ -16896,7 +20528,7 @@ fn storage_pressure_plan_detail(
         "critical" => "Free space now before downloads, updates, installs, or large file work.",
         "low space" => "Review storage before starting downloads, updates, installs, or local model work.",
         "available" => "No storage pressure is reported. Keep the review tools available for large downloads and disk changes.",
-        _ => "Waiting for capacity data. Keep storage changes paused until Goblins OS reports mounted-volume and model-cache space.",
+        _ => "Waiting for capacity data. Keep storage changes paused until Goblins OS reports mounted volumes and local model storage.",
     };
     let disk_usage = if disk_usage_available {
         "Open Disk Usage Analyzer to inspect folders, mounted volumes, and where space is used."
@@ -16914,9 +20546,9 @@ fn storage_pressure_plan_detail(
         "Automatic Trash and temporary-file cleanup controls are not available in this session."
     };
     let cache = if model_cache_reported {
-        "Review model-cache capacity before starting local model downloads."
+        "Review local model storage before starting downloads."
     } else {
-        "Model-cache capacity is still waiting for Goblins OS."
+        "Local model storage is still waiting for Goblins OS."
     };
 
     format!("{lead} {disk_usage} {cleanup} {cache} {disks}")
@@ -17018,7 +20650,7 @@ fn storage_volume_title(volume: &StorageVolume) -> String {
     if volume.mount_point == "/" {
         "System volume".to_string()
     } else if volume.mount_point.contains("/models") || volume.id.contains("model") {
-        "Model cache volume".to_string()
+        "Local model storage".to_string()
     } else {
         "Mounted volume".to_string()
     }
@@ -17375,8 +21007,11 @@ fn codex_account_summary_spec(codex: Option<&CodexStatus>) -> AccountSummarySpec
             "Codex",
             "signed in",
             true,
-            "OpenAI account access is owned by Codex; Settings never receives credentials.",
+            "OpenAI account access is handled by the bundled Codex CLI; Settings never receives credentials.",
         ),
+        Some(codex) if codex.sign_in_in_progress => {
+            account_summary_spec("Codex", "signing in", false, &codex.detail)
+        }
         Some(codex) if codex.installed => {
             account_summary_spec("Codex", "sign in", false, &codex.detail)
         }
@@ -17385,7 +21020,7 @@ fn codex_account_summary_spec(codex: Option<&CodexStatus>) -> AccountSummarySpec
             "Codex",
             "waiting",
             false,
-            "Waiting for Codex account status.",
+            "Waiting for OpenAI account status through Codex.",
         ),
     }
 }
@@ -17493,7 +21128,7 @@ fn bootc_update_actions_detail(system: &SettingsSystemStatus) -> String {
     }
 
     if blockers.is_empty() {
-        "Read-only for now. Check, apply, and rollback will appear when secure update actions are available.".to_string()
+        "Update prerequisites are ready. Protected controls below show which actions the current immutable deployment can perform.".to_string()
     } else {
         format!(
             "Disabled: {}. Update actions will appear when these checks and secure update actions are available.",
@@ -17636,9 +21271,31 @@ fn update_prerequisites_ready(system: &SettingsSystemStatus) -> bool {
 
 fn update_readiness_detail(system: &SettingsSystemStatus) -> String {
     if update_prerequisites_ready(system) {
-        "The update system is ready. Check, apply, and rollback will appear when secure update actions are available.".to_string()
+        "The update system is ready. Protected controls below stay gated by the current immutable deployment and ask before disruptive actions.".to_string()
     } else {
         bootc_update_actions_detail(system)
+    }
+}
+
+fn system_image_action_confirmation(action: &str) -> Option<&'static str> {
+    match action {
+        "check" => Some("CHECK FOR UPDATES"),
+        "download" => Some("DOWNLOAD UPDATE"),
+        "apply" => Some("APPLY UPDATE AND RESTART"),
+        "reboot" => Some("RESTART GOBLINS OS"),
+        "rollback" => Some("ROLL BACK GOBLINS OS"),
+        _ => None,
+    }
+}
+
+fn system_image_action_progress(action: &str) -> &'static str {
+    match action {
+        "check" => "Checking the image registry for an update…",
+        "download" => "Downloading and staging the immutable update…",
+        "apply" => "Downloading the update and preparing to restart…",
+        "reboot" => "Requesting restart into the staged image…",
+        "rollback" => "Queueing the previous immutable image…",
+        _ => "Starting the system-image action…",
     }
 }
 
@@ -19447,6 +23104,85 @@ where
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn run_system_image_action(
+    core: &CoreClient,
+    action: &str,
+) -> Result<SystemImageActionOutcome, String> {
+    let confirmation = system_image_action_confirmation(action)
+        .ok_or_else(|| "Settings rejected an unknown system-image action.".to_string())?;
+    let body = serde_json::json!({
+        "action": action,
+        "confirmation": confirmation,
+    })
+    .to_string();
+    let response = http_post_json_response(core, "/v1/system/image/action", &body).map_err(|_| {
+        if matches!(action, "apply" | "reboot") {
+            "The restart request may have been accepted before the connection closed. Do not submit it again. After Goblins OS returns, reopen Updates to verify the booted image."
+                .to_string()
+        } else {
+            "Settings could not reach the protected update service. Refresh deployment status before trying again."
+                .to_string()
+        }
+    })?;
+    let outcome: SystemImageActionOutcome = serde_json::from_slice(&response.body)
+        .map_err(|_| "The update service returned an invalid result.".to_string())?;
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(outcome)
+    } else {
+        Err(outcome.detail)
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn recover_snapshot_copy(
+    core: &CoreClient,
+    snapshot_id: &str,
+    path: &str,
+    destination_directory: &str,
+) -> Result<RestoreSnapshotOutcome, String> {
+    let body = serde_json::json!({
+        "snapshot_id": snapshot_id,
+        "path": path,
+        "destination_directory": destination_directory,
+        "confirmation": "RECOVER FILE COPY",
+    })
+    .to_string();
+    let response = http_post_json_response(core, "/v1/snapshots/restore", &body)
+        .map_err(|_| "Settings could not reach the protected recovery service.".to_string())?;
+    let outcome: RestoreSnapshotOutcome = serde_json::from_slice(&response.body)
+        .map_err(|_| "The recovery service returned an invalid result.".to_string())?;
+    if (200..=299).contains(&response.status) && outcome.ok && outcome.executes_restore {
+        Ok(outcome)
+    } else {
+        Err(outcome.text)
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn browse_snapshot_files(
+    core: &CoreClient,
+    snapshot_id: &str,
+    directory: &str,
+    cursor: usize,
+) -> Result<BrowseSnapshotOutcome, String> {
+    let body = serde_json::json!({
+        "snapshot_id": snapshot_id,
+        "directory": directory,
+        "cursor": cursor,
+    })
+    .to_string();
+    let response = http_post_json_response(core, "/v1/snapshots/browse", &body)
+        .map_err(|_| "Settings could not reach the protected snapshot browser.".to_string())?;
+    let outcome: BrowseSnapshotOutcome = serde_json::from_slice(&response.body)
+        .map_err(|_| "The snapshot browser returned an invalid result.".to_string())?;
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(outcome)
+    } else {
+        Err(outcome.detail)
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn openai_login_destination(core: &CoreClient) -> Result<String, CoreFetchError> {
     let response = http_get_response(core, "/v1/auth/openai/start")?;
     openai_login_destination_from_response(&response)
@@ -19618,10 +23354,17 @@ fn settings_ai_panel_status_summary(panel: SettingsPanel, state: &SettingsState)
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn bounded_status_summary(value: &str) -> String {
+    // Match the core's settings-context boundary exactly so the review shown in
+    // Settings is the same summary the engine can receive.
+    bounded_settings_context_value(value, 900)
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn bounded_settings_context_value(value: &str, max_chars: usize) -> String {
     value
         .chars()
         .filter(|character| !character.is_control())
-        .take(1200)
+        .take(max_chars)
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -19635,11 +23378,11 @@ fn ask_settings_context(
     topic: &str,
     question: &str,
     status_summary: &str,
-) -> Result<String, String> {
+) -> Result<SettingsAiHelpResult, String> {
     let body = serde_json::json!({
         "panel": panel,
         "topic": topic,
-        "question": question.trim(),
+        "question": bounded_settings_context_value(question, 480),
         "status_summary": status_summary,
     })
     .to_string();
@@ -19649,7 +23392,7 @@ fn ask_settings_context(
         serde_json::from_slice(&response.body).map_err(|error| error.to_string())?;
 
     if (200..=299).contains(&response.status) && outcome.ok {
-        Ok(outcome.text)
+        Ok(SettingsAiHelpResult::Completed(outcome.text))
     } else {
         Err(outcome.text)
     }
@@ -19663,6 +23406,56 @@ fn forget_openai_account_session(core: &CoreClient) -> Result<(), CoreFetchError
     } else {
         Err(CoreFetchError::Status(response.status))
     }
+}
+
+#[cfg(any(test, all(target_os = "linux", feature = "native-desktop")))]
+fn openai_key_management_error_copy(error: &CoreFetchError) -> &'static str {
+    match error {
+        CoreFetchError::Status(409) => {
+            "The API key status changed, or another protected change is already open. Finish or cancel any open window, refresh the status, and try again."
+        }
+        CoreFetchError::Status(503) => {
+            "The protected API key window could not open. Nothing changed. Try again."
+        }
+        CoreFetchError::Transport => {
+            "Settings could not reach Goblins OS. Reconnect to local OS services and try again."
+        }
+        CoreFetchError::Decode | CoreFetchError::Malformed => {
+            "Settings could not confirm the protected key-window handoff. Nothing was shown as changed; refresh the status before trying again."
+        }
+        CoreFetchError::Status(_) => {
+            "Goblins OS could not open the protected API key window. Nothing was shown as changed; refresh the status and try again."
+        }
+    }
+}
+
+/// Ask the core to launch its trusted broker, then immediately refetch the
+/// non-secret per-user readiness status. The request body can never carry key
+/// material, and the ordinary Settings process never receives any.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn request_openai_key_management(
+    core: &CoreClient,
+    action: OpenAiKeyManagementAction,
+) -> Result<Option<OpenAiKeyStatus>, String> {
+    let body = openai_key_management_body(action);
+    let response = http_post_json_response(core, "/v1/models/openai-key/manage", &body)
+        .map_err(|error| openai_key_management_error_copy(&error).to_string())?;
+    if !(200..=299).contains(&response.status) {
+        let error = CoreFetchError::Status(response.status);
+        return Err(openai_key_management_error_copy(&error).to_string());
+    }
+
+    let mut status = get_core_json(core, "/v1/models/openai-key").ok();
+    let deadline = Instant::now() + Duration::from_secs(305);
+    while status
+        .as_ref()
+        .is_some_and(|status: &OpenAiKeyStatus| status.key_change_pending)
+        && Instant::now() < deadline
+    {
+        thread::sleep(Duration::from_millis(500));
+        status = get_core_json(core, "/v1/models/openai-key").ok();
+    }
+    Ok(status)
 }
 
 /// Select which engine powers the Goblins AI runtime: the on-device GPT-OSS heart, or the
@@ -19791,9 +23584,13 @@ fn hot_corner_outcome(body: &[u8]) -> Result<HotCornerOutcome, CoreFetchError> {
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
-fn set_proxy_mode(core: &CoreClient, mode: &str) -> Result<String, String> {
-    let body = serde_json::json!({ "mode": mode }).to_string();
-    let response = http_post_json_response(core, "/v1/network/proxy/mode", &body)
+fn set_proxy_settings(
+    core: &CoreClient,
+    settings: &ProxySettingsPayload,
+) -> Result<String, String> {
+    let body = serde_json::to_string(settings)
+        .map_err(|_| "Goblins OS could not prepare the proxy configuration.".to_string())?;
+    let response = http_post_json_response(core, "/v1/network/proxy/settings", &body)
         .map_err(|error| format!("Goblins OS could not reach the proxy manager: {error}."))?;
     let outcome = proxy_mode_outcome(&response.body).map_err(|error| error.to_string())?;
 
@@ -19824,6 +23621,152 @@ fn set_bluetooth_power(core: &CoreClient, powered: bool) -> Result<String, Strin
     } else {
         Err(settings_detail_display_copy(&outcome.text))
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn scan_bluetooth_devices(core: &CoreClient) -> Result<BluetoothScanOutcome, String> {
+    let response = http_post_json_response(core, "/v1/bluetooth/scan", "{}")
+        .map_err(|error| format!("Goblins OS could not reach Bluetooth discovery: {error}."))?;
+    let outcome = bluetooth_scan_outcome(&response.body).map_err(|error| error.to_string())?;
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(outcome)
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn bluetooth_scan_outcome(body: &[u8]) -> Result<BluetoothScanOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn change_bluetooth_device(
+    core: &CoreClient,
+    address: &str,
+    action: &str,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "address": address,
+        "action": action,
+    })
+    .to_string();
+    let response = http_post_json_response(core, "/v1/bluetooth/device", &body)
+        .map_err(|error| format!("Goblins OS could not reach the Bluetooth manager: {error}."))?;
+    let outcome =
+        bluetooth_device_action_outcome(&response.body).map_err(|error| error.to_string())?;
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn change_bluetooth_device_and_refresh(
+    core: &CoreClient,
+    address: &str,
+    action: &str,
+) -> Result<(String, Option<Vec<BluetoothDeviceStatus>>), String> {
+    let message = change_bluetooth_device(core, address, action)?;
+    let devices = get_core_json::<BluetoothStatus>(core, "/v1/bluetooth/status")
+        .ok()
+        .map(|status| status.devices);
+    Ok((message, devices))
+}
+
+fn bluetooth_device_action_outcome(
+    body: &[u8],
+) -> Result<BluetoothDeviceActionOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn apply_display_layout(
+    core: &CoreClient,
+    serial: u32,
+    method: &str,
+    confirm_persistent: bool,
+    logical_monitors: &[DisplayLogicalMonitorStatus],
+) -> Result<(String, u32), String> {
+    request_display_layout(core, serial, method, confirm_persistent, logical_monitors)
+        .map(|outcome| (settings_detail_display_copy(&outcome.text), outcome.serial))
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn request_display_layout(
+    core: &CoreClient,
+    serial: u32,
+    method: &str,
+    confirm_persistent: bool,
+    logical_monitors: &[DisplayLogicalMonitorStatus],
+) -> Result<DisplayApplyOutcome, String> {
+    let body = serde_json::json!({
+        "serial": serial,
+        "method": method,
+        "confirm_persistent": confirm_persistent,
+        "logical_monitors": logical_monitors,
+    })
+    .to_string();
+    let response = http_post_json_response(core, "/v1/displays/apply", &body)
+        .map_err(|error| format!("Goblins OS could not reach display controls: {error}."))?;
+    let outcome = display_apply_outcome(&response.body).map_err(|error| error.to_string())?;
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(outcome)
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn display_apply_outcome(body: &[u8]) -> Result<DisplayApplyOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_keyboard_shortcut(
+    core: &CoreClient,
+    action: &str,
+    binding: Option<&str>,
+    reset: bool,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "action": action,
+        "bindings": binding.map(|binding| vec![binding]),
+        "reset": reset,
+    })
+    .to_string();
+    let response = http_post_json_response(core, "/v1/keyboard/shortcuts/binding", &body)
+        .map_err(|error| format!("Goblins OS could not reach keyboard shortcuts: {error}."))?;
+    let outcome = keyboard_shortcut_outcome(&response.body).map_err(|error| error.to_string())?;
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn keyboard_shortcut_outcome(body: &[u8]) -> Result<KeyboardShortcutOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_modifier_remap(core: &CoreClient, value: &str) -> Result<String, String> {
+    let body = serde_json::json!({
+        "target": "caps-lock",
+        "value": value,
+    })
+    .to_string();
+    let response = http_post_json_response(core, "/v1/keyboard/modifier-remap", &body)
+        .map_err(|error| format!("Goblins OS could not reach modifier settings: {error}."))?;
+    let outcome = modifier_remap_outcome(&response.body).map_err(|error| error.to_string())?;
+    if (200..=299).contains(&response.status) && outcome.ok {
+        Ok(settings_detail_display_copy(&outcome.text))
+    } else {
+        Err(settings_detail_display_copy(&outcome.text))
+    }
+}
+
+fn modifier_remap_outcome(body: &[u8]) -> Result<ModifierRemapOutcome, CoreFetchError> {
+    serde_json::from_slice(body).map_err(|_| CoreFetchError::Decode)
 }
 
 fn bluetooth_power_outcome(body: &[u8]) -> Result<BluetoothPowerOutcome, CoreFetchError> {
@@ -20325,6 +24268,11 @@ fn set_input_number(core: &CoreClient, target: &str, value: f64) -> Result<Strin
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn set_input_string(core: &CoreClient, target: &str, value: &str) -> Result<String, String> {
+    set_input_preference(core, target, serde_json::json!(value))
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
 fn set_input_preference(
     core: &CoreClient,
     target: &str,
@@ -20436,7 +24384,7 @@ fn engine_active_copy(engine: &str) -> &'static str {
             "Active engine: managed OpenAI cloud — requests leave this device through your organization's protected service."
         }
         "openai-api" => {
-            "Active engine: OpenAI hosted models — answers use the administrator-installed protected service credential."
+            "Active engine: OpenAI hosted models — answers use your API key from protected Goblins OS storage."
         }
         "codex" => {
             "Active engine: your OpenAI account via Codex — Goblins OS works through OpenAI's own coding agent."
@@ -20454,10 +24402,48 @@ struct SettingsEngineControls {
     gpt: gtk4::Button,
     codex: gtk4::Button,
     hosted: gtk4::Button,
-    status_available: bool,
+    status_available: Rc<Cell<bool>>,
+    local_available: Rc<Cell<bool>>,
     codex_available: Rc<Cell<bool>>,
     hosted_available: Rc<Cell<bool>>,
     engine_pending: Rc<Cell<bool>>,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone)]
+struct CodexAccountSurface {
+    row: gtk4::Box,
+    title: gtk4::Label,
+    detail: gtk4::Label,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+impl CodexAccountSurface {
+    fn new(title: &str, detail: &str) -> Self {
+        use gtk4::prelude::*;
+
+        let row = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+        row.add_css_class("gos-row");
+        row.add_css_class("gos-system-row");
+        let title_label = label(title, &["gos-row-title"]);
+        let detail_label = label(&settings_detail_display_copy(detail), &["gos-row-copy"]);
+        row.append(&title_label);
+        row.append(&detail_label);
+        let surface = Self {
+            row,
+            title: title_label,
+            detail: detail_label,
+        };
+        surface.update(title, detail);
+        surface
+    }
+
+    fn update(&self, title: &str, detail: &str) {
+        let detail = settings_detail_display_copy(detail);
+        self.title.set_text(title);
+        self.detail.set_text(&detail);
+        set_accessible_label_description(&self.row, title, &detail);
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "native-desktop"))]
@@ -20475,15 +24461,17 @@ impl SettingsEngineControls {
 
     fn finish_account_action(&self) {
         self.engine_pending.set(false);
-        self.gpt.set_sensitive(self.status_available);
+        self.gpt
+            .set_sensitive(self.local_available.get() && self.status_available.get());
         self.codex
-            .set_sensitive(self.codex_available.get() && self.status_available);
+            .set_sensitive(self.codex_available.get() && self.status_available.get());
         self.hosted
-            .set_sensitive(self.hosted_available.get() && self.status_available);
+            .set_sensitive(self.hosted_available.get() && self.status_available.get());
     }
 
     fn set_codex_available(&self, available: bool) {
-        self.codex_available.set(self.status_available && available);
+        self.codex_available
+            .set(self.status_available.get() && available);
     }
 
     fn show_local_active(&self) {
@@ -20491,6 +24479,405 @@ impl SettingsEngineControls {
         self.codex.remove_css_class("gos-engine-active");
         self.hosted.remove_css_class("gos-engine-active");
     }
+
+    fn apply_openai_key_status(&self, status: &OpenAiKeyStatus) {
+        self.status_available.set(true);
+        self.hosted_available
+            .set(status.configured && !status.key_change_pending);
+        match status.engine.as_str() {
+            "openai-api" if status.configured => {
+                self.hosted.add_css_class("gos-engine-active");
+                self.gpt.remove_css_class("gos-engine-active");
+                self.codex.remove_css_class("gos-engine-active");
+            }
+            "codex" => {
+                self.codex.add_css_class("gos-engine-active");
+                self.gpt.remove_css_class("gos-engine-active");
+                self.hosted.remove_css_class("gos-engine-active");
+            }
+            "local-gpt-oss" => self.show_local_active(),
+            _ => {
+                self.gpt.remove_css_class("gos-engine-active");
+                self.codex.remove_css_class("gos-engine-active");
+                self.hosted.remove_css_class("gos-engine-active");
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+#[derive(Clone)]
+struct OpenAiKeyManagementControls {
+    status_title: gtk4::Label,
+    status_detail: gtk4::Label,
+    manage: gtk4::Button,
+    remove: gtk4::Button,
+    refresh: gtk4::Button,
+    feedback: gtk4::Label,
+    confirmation: gtk4::Box,
+    cancel_remove: gtk4::Button,
+    confirm_remove: gtk4::Button,
+    configured: Rc<Cell<bool>>,
+    pending: Rc<Cell<bool>>,
+    known: Rc<Cell<bool>>,
+    busy: Rc<Cell<bool>>,
+    confirming: Rc<Cell<bool>>,
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+impl OpenAiKeyManagementControls {
+    fn set_feedback(&self, text: &str) {
+        self.feedback.set_text(text);
+        set_accessible_label_description(&self.feedback, "OpenAI API key status", text);
+    }
+
+    fn sync_actions(&self) {
+        let idle = !self.busy.get();
+        let available = self.known.get() && !self.pending.get();
+        let configured = self.configured.get();
+        let confirming = self.confirming.get();
+        self.manage.set_label(if configured {
+            "Replace…"
+        } else {
+            "Add API key…"
+        });
+        set_accessible_label_description(
+            &self.manage,
+            if configured {
+                "Replace your OpenAI API key"
+            } else {
+                "Add your OpenAI API key"
+            },
+            "Opens a separate protected Goblins OS window. Settings never receives or displays the key.",
+        );
+        self.manage.set_sensitive(idle && available && !confirming);
+        self.remove.set_visible(self.known.get() && configured);
+        self.remove
+            .set_sensitive(idle && available && configured && !confirming);
+        self.refresh.set_sensitive(idle && !confirming);
+        self.cancel_remove.set_sensitive(idle && confirming);
+        self.confirm_remove.set_label("Remove");
+        self.confirm_remove.set_sensitive(idle && confirming);
+    }
+
+    fn set_busy(&self, busy: bool) {
+        self.busy.set(busy);
+        self.sync_actions();
+    }
+
+    fn set_confirming(&self, confirming: bool) {
+        self.confirming.set(confirming);
+        self.confirmation.set_visible(confirming);
+        self.sync_actions();
+    }
+
+    fn apply_status(&self, status: &OpenAiKeyStatus, engines: &SettingsEngineControls) {
+        self.known.set(true);
+        self.configured.set(status.configured);
+        self.pending.set(status.key_change_pending);
+        self.status_title.set_text(openai_key_status_title(status));
+        self.status_detail
+            .set_text(&openai_key_status_detail(status));
+        set_accessible_label_description(
+            &self.status_title,
+            openai_key_status_title(status),
+            &openai_key_status_detail(status),
+        );
+        engines.apply_openai_key_status(status);
+        self.sync_actions();
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn run_openai_key_management(
+    action: OpenAiKeyManagementAction,
+    core: CoreClient,
+    controls: OpenAiKeyManagementControls,
+    engines: SettingsEngineControls,
+    engine_feedback: gtk4::Label,
+    error_focus: gtk4::Button,
+) {
+    use gtk4::prelude::*;
+
+    if !engines.begin_account_action() {
+        controls.set_feedback("Wait for the current AI engine action to finish, then try again.");
+        error_focus.grab_focus();
+        return;
+    }
+    controls.set_busy(true);
+    match action {
+        OpenAiKeyManagementAction::Add | OpenAiKeyManagementAction::Rotate => {
+            controls.manage.set_label("Opening…");
+        }
+        OpenAiKeyManagementAction::Remove => controls.confirm_remove.set_label("Opening…"),
+    }
+    controls.set_feedback("Opening the separate protected Goblins OS window…");
+
+    let controls_after = controls.clone();
+    let engines_after = engines.clone();
+    run_settings_action(
+        move || request_openai_key_management(&core, action),
+        move |outcome| {
+            controls_after.set_busy(false);
+            match outcome {
+                Ok(Some(status)) => {
+                    controls_after.set_confirming(false);
+                    controls_after.apply_status(&status, &engines_after);
+                    engines_after.finish_account_action();
+                    controls_after
+                        .set_feedback(openai_key_management_finished_copy(action, &status));
+                    if status.key_change_pending {
+                        controls_after.refresh.grab_focus();
+                    } else {
+                        controls_after.manage.grab_focus();
+                    }
+                    engine_feedback.set_text(engine_active_copy(&status.engine));
+                }
+                Ok(None) => {
+                    engines_after.finish_account_action();
+                    controls_after.set_confirming(false);
+                    controls_after.set_feedback(&format!(
+                        "{} Settings could not refresh the non-secret status; choose Refresh status.",
+                        openai_key_management_started_copy(action)
+                    ));
+                    controls_after.refresh.grab_focus();
+                }
+                Err(error) => {
+                    engines_after.finish_account_action();
+                    controls_after.set_feedback(&error);
+                    error_focus.grab_focus();
+                }
+            }
+        },
+    );
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn append_openai_key_management_controls(
+    panel: &gtk4::Box,
+    status: Option<&OpenAiKeyStatus>,
+    core: &CoreClient,
+    engines: &SettingsEngineControls,
+    engine_feedback: &gtk4::Label,
+) {
+    use gtk4::prelude::*;
+
+    let card = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    card.add_css_class("gos-row");
+    let status_title = label(
+        status
+            .map(openai_key_status_title)
+            .unwrap_or("OpenAI API key · status unavailable"),
+        &["gos-row-title"],
+    );
+    let initial_detail = status
+        .map(openai_key_status_detail)
+        .unwrap_or_else(|| {
+            "Settings could not refresh API key readiness. Reconnect to Goblins OS and choose Refresh status. No key value is available to Settings."
+                .to_string()
+        });
+    let status_detail = label(&initial_detail, &["gos-row-copy"]);
+    card.append(&status_title);
+    card.append(&status_detail);
+
+    let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let configured = status.is_some_and(|status| status.configured);
+    let pending = status.is_some_and(|status| status.key_change_pending);
+    let manage = button(
+        if configured {
+            "Replace…"
+        } else {
+            "Add API key…"
+        },
+        &["gos-permission-action"],
+    );
+    let remove = button("Remove…", &["gos-destructive-action"]);
+    let refresh = button("Refresh status", &["gos-permission-action"]);
+    set_accessible_label_description(
+        &manage,
+        if configured {
+            "Replace your OpenAI API key"
+        } else {
+            "Add your OpenAI API key"
+        },
+        "Opens a separate protected Goblins OS window. Settings never receives or displays the key.",
+    );
+    set_accessible_label_description(
+        &remove,
+        "Remove your OpenAI API key",
+        "Opens a confirmation before launching the separate protected removal window.",
+    );
+    set_accessible_label_description(
+        &refresh,
+        "Refresh OpenAI API key status",
+        "Reads only whether a key is available for this account and which engine is selected.",
+    );
+    actions.append(&manage);
+    actions.append(&remove);
+    actions.append(&refresh);
+    card.append(&actions);
+
+    let feedback = label("", &["gos-row-copy"]);
+    feedback.set_visible(true);
+    card.append(&feedback);
+
+    let confirmation = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    confirmation.set_visible(false);
+    confirmation.append(&label(
+        "Remove this API key from your account on this device? If it is active, Goblins OS will select on-device GPT-OSS before removal.",
+        &["gos-row-copy"],
+    ));
+    let confirmation_actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let cancel_remove = button("Cancel", &["gos-permission-action"]);
+    let confirm_remove = button("Remove", &["gos-destructive-action"]);
+    set_accessible_label_description(
+        &cancel_remove,
+        "Cancel removing the OpenAI API key",
+        "Closes this confirmation without changing anything.",
+    );
+    set_accessible_label_description(
+        &confirm_remove,
+        "Continue removing the OpenAI API key",
+        "Opens a separate protected Goblins OS window where removal must be confirmed.",
+    );
+    confirmation_actions.append(&cancel_remove);
+    confirmation_actions.append(&confirm_remove);
+    confirmation.append(&confirmation_actions);
+    card.append(&confirmation);
+
+    let controls = OpenAiKeyManagementControls {
+        status_title,
+        status_detail,
+        manage,
+        remove,
+        refresh,
+        feedback,
+        confirmation,
+        cancel_remove,
+        confirm_remove,
+        configured: Rc::new(Cell::new(configured)),
+        pending: Rc::new(Cell::new(pending)),
+        known: Rc::new(Cell::new(status.is_some())),
+        busy: Rc::new(Cell::new(false)),
+        confirming: Rc::new(Cell::new(false)),
+    };
+    if let Some(status) = status {
+        controls.apply_status(status, engines);
+    } else {
+        controls.sync_actions();
+    }
+
+    {
+        let controls = controls.clone();
+        let core = core.clone();
+        let engines = engines.clone();
+        let engine_feedback = engine_feedback.clone();
+        let manage = controls.manage.clone();
+        manage.connect_clicked(move |manage| {
+            let action = if controls.configured.get() {
+                OpenAiKeyManagementAction::Rotate
+            } else {
+                OpenAiKeyManagementAction::Add
+            };
+            run_openai_key_management(
+                action,
+                core.clone(),
+                controls.clone(),
+                engines.clone(),
+                engine_feedback.clone(),
+                manage.clone(),
+            );
+        });
+    }
+    {
+        let controls = controls.clone();
+        let remove = controls.remove.clone();
+        remove.connect_clicked(move |_| {
+            controls.set_confirming(true);
+            controls.cancel_remove.grab_focus();
+        });
+    }
+    {
+        let controls = controls.clone();
+        let cancel_remove = controls.cancel_remove.clone();
+        cancel_remove.connect_clicked(move |_| {
+            controls.set_confirming(false);
+            controls.remove.grab_focus();
+        });
+    }
+    {
+        let controls = controls.clone();
+        let core = core.clone();
+        let engines = engines.clone();
+        let engine_feedback = engine_feedback.clone();
+        let confirm_remove = controls.confirm_remove.clone();
+        confirm_remove.connect_clicked(move |confirm| {
+            run_openai_key_management(
+                OpenAiKeyManagementAction::Remove,
+                core.clone(),
+                controls.clone(),
+                engines.clone(),
+                engine_feedback.clone(),
+                confirm.clone(),
+            );
+        });
+    }
+    {
+        let controls = controls.clone();
+        let core = core.clone();
+        let engines = engines.clone();
+        let engine_feedback = engine_feedback.clone();
+        let refresh = controls.refresh.clone();
+        refresh.connect_clicked(move |refresh| {
+            if !engines.begin_account_action() {
+                controls
+                    .set_feedback("Wait for the current AI engine action to finish, then refresh.");
+                refresh.grab_focus();
+                return;
+            }
+            controls.set_busy(true);
+            controls.set_feedback("Refreshing the non-secret API key status…");
+            let controls_after = controls.clone();
+            let engines_after = engines.clone();
+            let engine_feedback = engine_feedback.clone();
+            let refresh = refresh.clone();
+            let core = core.clone();
+            run_settings_action(
+                move || get_core_json::<OpenAiKeyStatus>(&core, "/v1/models/openai-key"),
+                move |outcome| {
+                    controls_after.set_busy(false);
+                    match outcome {
+                        Ok(status) => {
+                            controls_after.apply_status(&status, &engines_after);
+                            engines_after.finish_account_action();
+                            controls_after.set_feedback(if status.key_change_pending {
+                                "A protected API key window is still open. Finish or cancel there, then refresh again."
+                            } else {
+                                "API key status refreshed."
+                            });
+                            engine_feedback.set_text(engine_active_copy(&status.engine));
+                        }
+                        Err(error) => {
+                            engines_after.finish_account_action();
+                            controls_after.set_feedback(&format!(
+                                "Settings could not refresh API key status: {error}. Reconnect to Goblins OS and try again."
+                            ));
+                        }
+                    }
+                    refresh.grab_focus();
+                },
+            );
+        });
+    }
+
+    set_accessible_label_description(
+        &card,
+        status
+            .map(openai_key_status_title)
+            .unwrap_or("OpenAI API key status unavailable"),
+        &initial_detail,
+    );
+    panel.append(&card);
 }
 
 /// The Codex sign-in row beneath the engine selector. When Codex is ready but
@@ -20506,7 +24893,9 @@ fn append_codex_settings(
 
     match &state.codex {
         Some(codex) if codex.authenticated => {
-            panel.append(&system_row("Codex · signed in", &codex.detail));
+            let account_surface =
+                CodexAccountSurface::new("OpenAI account · signed in through Codex", &codex.detail);
+            panel.append(&account_surface.row);
             let signout = button("Sign out of Codex…", &["gos-destructive-action"]);
             set_accessible_label_description(
                 &signout,
@@ -20516,7 +24905,7 @@ fn append_codex_settings(
             let confirmation = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
             confirmation.set_visible(false);
             confirmation.append(&label(
-                "Sign out of Codex on this device? Goblins OS will switch to on-device GPT-OSS before Codex removes its account credentials.",
+                "Sign out of Codex on this device? Goblins OS will switch to on-device GPT-OSS before the bundled Codex CLI removes the local OpenAI sign-in.",
                 &["gos-row-copy"],
             ));
             let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
@@ -20548,6 +24937,7 @@ fn append_codex_settings(
                 let core = config_core(state);
                 let cancel = cancel.clone();
                 let engine_controls = engine_controls.clone();
+                let account_surface = account_surface.clone();
                 confirm.connect_clicked(move |confirm| {
                     if engine_controls
                         .as_ref()
@@ -20560,7 +24950,7 @@ fn append_codex_settings(
                     confirm.set_label("Signing out…");
                     cancel.set_sensitive(false);
                     feedback.set_text(
-                        "Signing out of Codex and returning Goblins AI to on-device GPT-OSS.",
+                        "Signing your OpenAI account out of Codex and returning Goblins AI to on-device GPT-OSS.",
                     );
 
                     let signout = signout.clone();
@@ -20570,6 +24960,7 @@ fn append_codex_settings(
                     let cancel = cancel.clone();
                     let core = core.clone();
                     let engine_controls = engine_controls.clone();
+                    let account_surface = account_surface.clone();
                     run_settings_action(
                         move || forget_codex_account(&core),
                         move |outcome| {
@@ -20584,8 +24975,12 @@ fn append_codex_settings(
                                 Ok(()) => {
                                     confirmation.set_visible(false);
                                     signout.set_visible(false);
+                                    account_surface.update(
+                                        "OpenAI account · signed out",
+                                        "Codex is disconnected on this device. Sign in again any time to reconnect your OpenAI account.",
+                                    );
                                     feedback.set_text(
-                                        "Signed out of Codex. Goblins AI is using on-device GPT-OSS; reopen Settings to refresh account controls.",
+                                        "Your OpenAI account is signed out of Codex. Goblins AI is now using on-device GPT-OSS.",
                                     );
                                 }
                                 Err(error) => {
@@ -20607,15 +25002,27 @@ fn append_codex_settings(
             true
         }
         Some(codex) if codex.installed => {
-            panel.append(&system_row("Codex · sign in", &codex.detail));
+            let account_surface = CodexAccountSurface::new(
+                if codex.sign_in_in_progress {
+                    "OpenAI account · sign-in in progress"
+                } else {
+                    "OpenAI account · sign in through Codex"
+                },
+                &codex.detail,
+            );
+            panel.append(&account_surface.row);
             let signin = button(
-                "Sign in with your OpenAI account",
+                if codex.sign_in_in_progress {
+                    "Continue sign-in"
+                } else {
+                    "Sign in with your OpenAI account"
+                },
                 &["gos-permission-action"],
             );
             set_accessible_label_description(
                 &signin,
-                "Sign in to Codex with your OpenAI account",
-                "Asks Goblins OS to start codex login and opens the browser. The credential stays with the OS service, never the session.",
+                "Sign in with your OpenAI account through Codex",
+                "Asks Goblins OS to start the bundled Codex CLI sign-in and opens the browser. The credential stays with the OS service, never the session.",
             );
             let feedback = feedback.clone();
             let core = config_core(state);
@@ -20630,58 +25037,58 @@ fn append_codex_settings(
                 }
                 signin.set_sensitive(false);
                 signin.set_label("Starting sign-in…");
-                feedback.set_text("Starting Codex sign-in through OS-owned private storage.");
+                feedback.set_text(
+                    "Starting OpenAI sign-in through the bundled Codex CLI and OS-owned private storage.",
+                );
 
                 let signin = signin.clone();
                 let feedback = feedback.clone();
                 let core = core.clone();
                 let engine_controls = engine_controls.clone();
+                let account_surface = account_surface.clone();
+                let worker_core = core.clone();
                 run_settings_action(
-                    move || start_codex_login(&core),
+                    move || start_codex_login(&worker_core),
                     move |outcome| {
-                        if let Some(controls) = engine_controls.as_ref() {
-                            if matches!(&outcome, Ok(CodexLoginOutcome::Ready)) {
-                                controls.set_codex_available(true);
-                            }
-                            controls.finish_account_action();
-                        }
                         match outcome {
                             Ok(CodexLoginOutcome::OpenUrl(url)) => {
-                                signin.set_label("Sign-in in progress");
-                                if gtk4::gio::AppInfo::launch_default_for_uri(
+                                open_codex_sign_in_url(
+                                    signin,
+                                    feedback,
+                                    core,
+                                    engine_controls,
+                                    account_surface,
                                     &url,
-                                    None::<&gtk4::gio::AppLaunchContext>,
-                                )
-                                .is_ok()
-                                {
-                                    feedback.set_text(
-                                        "Opening Codex sign-in — finish in the browser, then reopen Settings.",
-                                    );
-                                } else {
-                                    feedback.set_text(
-                                        "Codex sign-in started, but the desktop could not open its browser page. Reopen Settings to try the handoff again.",
-                                    );
-                                    signin.set_label("Open sign-in again");
-                                    signin.set_sensitive(true);
-                                }
-                            }
-                            Ok(CodexLoginOutcome::Started) => {
-                                signin.set_label("Sign-in in progress");
-                                feedback.set_text(
-                                    "Codex sign-in started — finish in the browser, then reopen Settings.",
                                 );
                             }
-                            Ok(CodexLoginOutcome::AlreadyRunning) => {
-                                signin.set_label("Sign-in in progress");
-                                feedback.set_text(
-                                    "Codex sign-in is already in progress — finish in the browser, then reopen Settings.",
+                            Ok(CodexLoginOutcome::Started)
+                            | Ok(CodexLoginOutcome::AlreadyRunning) => {
+                                wait_for_codex_browser_handoff(
+                                    signin,
+                                    feedback,
+                                    core,
+                                    engine_controls,
+                                    account_surface,
                                 );
                             }
                             Ok(CodexLoginOutcome::Ready) => {
+                                if let Some(controls) = engine_controls.as_ref() {
+                                    controls.set_codex_available(true);
+                                    controls.finish_account_action();
+                                }
                                 signin.set_label("Signed in");
-                                feedback.set_text("Codex is already signed in and ready.");
+                                account_surface.update(
+                                    "OpenAI account · signed in through Codex",
+                                    "Your OpenAI account is signed in through the bundled Codex CLI.",
+                                );
+                                feedback.set_text(
+                                    "Your OpenAI account is signed in through Codex. Goblins AI can use it now.",
+                                );
                             }
                             Err(error) => {
+                                if let Some(controls) = engine_controls.as_ref() {
+                                    controls.finish_account_action();
+                                }
                                 signin.set_label("Sign in with your OpenAI account");
                                 signin.set_sensitive(true);
                                 feedback.set_text(&format!(
@@ -20697,10 +25104,271 @@ fn append_codex_settings(
             true
         }
         Some(codex) => {
-            panel.append(&system_row("Codex · not included", &codex.detail));
+            panel.append(&system_row(
+                "OpenAI account · Codex CLI not included",
+                &codex.detail,
+            ));
             false
         }
         None => false,
+    }
+}
+
+/// Open the account handoff in the user's browser, then keep Settings live while
+/// the OS-owned Codex process finishes. No credential or browser callback ever
+/// crosses into the desktop session; this watches only the core's booleans and
+/// user-facing status detail.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn open_codex_sign_in_url(
+    signin: gtk4::Button,
+    feedback: gtk4::Label,
+    core: CoreClient,
+    engine_controls: Option<SettingsEngineControls>,
+    account_surface: CodexAccountSurface,
+    url: &str,
+) {
+    if gtk4::gio::AppInfo::launch_default_for_uri(url, None::<&gtk4::gio::AppLaunchContext>)
+        .is_err()
+    {
+        if let Some(controls) = engine_controls.as_ref() {
+            controls.finish_account_action();
+        }
+        signin.set_label("Open sign-in again");
+        signin.set_sensitive(true);
+        feedback.set_text(
+            "Codex sign-in started, but the browser could not open. Choose Open sign-in again to retry the handoff.",
+        );
+        return;
+    }
+
+    signin.set_label("Waiting for browser…");
+    account_surface.update(
+        "OpenAI account · waiting for browser",
+        "Finish signing in in your browser. Settings will update automatically when your account is ready.",
+    );
+    feedback.set_text(
+        "Finish signing in in your browser. Settings will update automatically when your account is ready.",
+    );
+    monitor_codex_sign_in(signin, feedback, core, engine_controls, account_surface);
+}
+
+/// Codex can need a moment to print its browser URL. Keep that short handoff in
+/// a worker too, then launch the URL on GTK's main thread.
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn wait_for_codex_browser_handoff(
+    signin: gtk4::Button,
+    feedback: gtk4::Label,
+    core: CoreClient,
+    engine_controls: Option<SettingsEngineControls>,
+    account_surface: CodexAccountSurface,
+) {
+    signin.set_label("Preparing browser…");
+    feedback.set_text("Codex sign-in started. Preparing the secure browser handoff…");
+    let worker_core = core.clone();
+    run_settings_action(
+        move || await_codex_handoff(&worker_core, Duration::from_secs(20)),
+        move |outcome| match outcome {
+            Ok(CodexHandoffOutcome::Ready(status)) => {
+                finish_codex_sign_in(
+                    &signin,
+                    &feedback,
+                    engine_controls.as_ref(),
+                    &account_surface,
+                    status,
+                );
+            }
+            Ok(CodexHandoffOutcome::OpenUrl(url)) => {
+                open_codex_sign_in_url(
+                    signin,
+                    feedback,
+                    core,
+                    engine_controls,
+                    account_surface,
+                    &url,
+                );
+            }
+            Ok(CodexHandoffOutcome::Stopped(status)) => {
+                finish_codex_sign_in_retry(
+                    &signin,
+                    &feedback,
+                    engine_controls.as_ref(),
+                    &status.detail,
+                );
+            }
+            Ok(CodexHandoffOutcome::TimedOut) => {
+                finish_codex_sign_in_retry(
+                    &signin,
+                    &feedback,
+                    engine_controls.as_ref(),
+                    "The browser handoff is taking longer than expected. Choose Refresh sign-in status to continue without restarting Settings.",
+                );
+            }
+            Err(error) => {
+                finish_codex_sign_in_retry(
+                    &signin,
+                    &feedback,
+                    engine_controls.as_ref(),
+                    &format!("Settings could not check the Codex sign-in handoff: {error}."),
+                );
+            }
+        },
+    );
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn monitor_codex_sign_in(
+    signin: gtk4::Button,
+    feedback: gtk4::Label,
+    core: CoreClient,
+    engine_controls: Option<SettingsEngineControls>,
+    account_surface: CodexAccountSurface,
+) {
+    run_settings_action(
+        move || await_codex_sign_in(&core, Duration::from_secs(5 * 60)),
+        move |outcome| match outcome {
+            Ok(CodexSignInCompletion::Ready(status)) => {
+                finish_codex_sign_in(
+                    &signin,
+                    &feedback,
+                    engine_controls.as_ref(),
+                    &account_surface,
+                    status,
+                );
+            }
+            Ok(CodexSignInCompletion::Stopped(status)) => {
+                finish_codex_sign_in_retry(
+                    &signin,
+                    &feedback,
+                    engine_controls.as_ref(),
+                    &status.detail,
+                );
+            }
+            Ok(CodexSignInCompletion::TimedOut) => {
+                finish_codex_sign_in_retry(
+                    &signin,
+                    &feedback,
+                    engine_controls.as_ref(),
+                    "The browser sign-in is still open. Finish there, then choose Refresh sign-in status.",
+                );
+            }
+            Err(error) => {
+                finish_codex_sign_in_retry(
+                    &signin,
+                    &feedback,
+                    engine_controls.as_ref(),
+                    &format!("Settings could not refresh Codex sign-in status: {error}."),
+                );
+            }
+        },
+    );
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn finish_codex_sign_in(
+    signin: &gtk4::Button,
+    feedback: &gtk4::Label,
+    engine_controls: Option<&SettingsEngineControls>,
+    account_surface: &CodexAccountSurface,
+    status: CodexStatus,
+) {
+    if let Some(controls) = engine_controls {
+        controls.set_codex_available(true);
+        controls.finish_account_action();
+    }
+    signin.set_label("Signed in");
+    signin.set_sensitive(false);
+    account_surface.update("OpenAI account · signed in through Codex", &status.detail);
+    feedback.set_text(&status.detail);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn finish_codex_sign_in_retry(
+    signin: &gtk4::Button,
+    feedback: &gtk4::Label,
+    engine_controls: Option<&SettingsEngineControls>,
+    detail: &str,
+) {
+    if let Some(controls) = engine_controls {
+        controls.finish_account_action();
+    }
+    signin.set_label("Refresh sign-in status");
+    signin.set_sensitive(true);
+    feedback.set_text(detail);
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn await_codex_handoff(
+    core: &CoreClient,
+    timeout: Duration,
+) -> Result<CodexHandoffOutcome, CoreFetchError> {
+    let deadline = Instant::now() + timeout;
+    let mut last_error = None;
+    loop {
+        let status = match get_core_json::<CodexStatus>(core, "/v1/codex/status") {
+            Ok(status) => Some(status),
+            Err(error) => {
+                last_error = Some(error);
+                None
+            }
+        };
+        if let Some(status) = status.as_ref() {
+            if status.authenticated {
+                return Ok(CodexHandoffOutcome::Ready(status.clone()));
+            }
+        }
+
+        match get_core_json::<CodexLoginUrl>(core, "/v1/codex/login/url") {
+            Ok(handoff) if handoff.authenticated => {
+                let status = status.unwrap_or(CodexStatus {
+                    installed: true,
+                    authenticated: true,
+                    sign_in_in_progress: false,
+                    detail: "Your OpenAI account is signed in through Codex.".to_string(),
+                });
+                return Ok(CodexHandoffOutcome::Ready(status));
+            }
+            Ok(handoff) => {
+                if let Some(url) = handoff.auth_url {
+                    return Ok(CodexHandoffOutcome::OpenUrl(url));
+                }
+            }
+            Err(error) => last_error = Some(error),
+        }
+
+        if let Some(status) = status {
+            if !status.sign_in_in_progress {
+                return Ok(CodexHandoffOutcome::Stopped(status));
+            }
+        }
+        if Instant::now() >= deadline {
+            return if let Some(error) = last_error {
+                Err(error)
+            } else {
+                Ok(CodexHandoffOutcome::TimedOut)
+            };
+        }
+        thread::sleep(Duration::from_millis(750));
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "native-desktop"))]
+fn await_codex_sign_in(
+    core: &CoreClient,
+    timeout: Duration,
+) -> Result<CodexSignInCompletion, CoreFetchError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let status = get_core_json::<CodexStatus>(core, "/v1/codex/status")?;
+        if status.authenticated {
+            return Ok(CodexSignInCompletion::Ready(status));
+        }
+        if !status.sign_in_in_progress {
+            return Ok(CodexSignInCompletion::Stopped(status));
+        }
+        if Instant::now() >= deadline {
+            return Ok(CodexSignInCompletion::TimedOut);
+        }
+        thread::sleep(Duration::from_millis(1_250));
     }
 }
 
@@ -20793,6 +25461,14 @@ fn http_delete_response(core: &CoreClient, path: &str) -> Result<HttpResponse, C
 fn settings_request_timeout(path: &str) -> Duration {
     match path {
         "/v1/ai/settings-context" => LONG_CORE_JOB_TIMEOUT,
+        "/v1/system/image/action" => Duration::from_secs(50 * 60),
+        "/v1/snapshots/restore" => Duration::from_secs(16 * 60),
+        "/v1/snapshots/status" | "/v1/snapshots/browse" => Duration::from_secs(25),
+        "/v1/bluetooth/scan" => Duration::from_secs(15),
+        "/v1/bluetooth/device" => Duration::from_secs(50),
+        // Core performs bounded live-state/permission reads before and after a
+        // bridge-owned modeset that may itself take 30 seconds.
+        "/v1/displays/apply" => Duration::from_secs(55),
         "/v1/network/wifi/connect" | "/v1/local-models/install" => Duration::from_secs(30),
         _ => Duration::from_secs(5),
     }
@@ -20941,9 +25617,8 @@ window.gos-settings-window {
   margin: 6px 0;
 }
 
-/* The main content pane gets the SAME slim macOS scrollbar as the sidebar — it
-   was falling through to the stock Adwaita scrollbar. A hover darkens the slider
-   the way macOS does. */
+/* The main content pane uses the same slim scrollbar as the sidebar instead of
+   falling through to the stock style. Hover darkens the slider consistently. */
 .gos-settings-root .gos-side-scroll scrollbar.vertical slider,
 .gos-settings-root .gos-main-scroll scrollbar.vertical slider {
   min-height: 44px;
@@ -21070,9 +25745,9 @@ window.gos-settings-window {
   min-height: 30px;
 }
 
-/* Colored rounded category tiles — the macOS-kit "system settings" signature.
-   A white glyph on a saturated, lightly-glossed tile; the tint class resolves to
-   a @gos_tint_* token so light and dark both stay vivid. */
+/* Goblins category tiles use a white glyph on a saturated, lightly-glossed
+   surface. The tint class resolves to a @gos_tint_* token so light and dark both
+   stay vivid. */
 .gos-side-icon-well {
   min-width: 26px;
   min-height: 26px;
@@ -21334,11 +26009,10 @@ window.gos-settings-window {
   padding: 4px 16px;
 }
 
-/* Native macOS push button: accent text on a borderless tinted fill, not a
-   gray-bordered rectangle. Scoped under the root (two classes) so it beats the
-   shared single-class .gos-permission-action base/hover/focus that follows it
-   in source order. The hue lives in a soft wash so the row stays calm in light
-   and dark. */
+/* Primary Goblins handoff action. Scoped under the root (two classes) so it
+   beats the shared single-class .gos-permission-action base/hover/focus that
+   follows it in source order. The hue lives in a soft wash so the row stays calm
+   in light and dark. */
 .gos-settings-root .gos-device-handoff-action {
   color: @gos_on_primary;
   border: 1px solid @gos_primary_border;
@@ -21724,8 +26398,8 @@ window.gos-settings-window {
   color: @gos_label_secondary;
   font-size: 13px;
   font-weight: 500;
-  /* Tabular figures so versions, percentages, counts, and volumes never wobble
-     as their digits change — the macOS standard for any data readout. */
+  /* Tabular figures keep versions, percentages, counts, and volumes from
+     shifting as their digits change. */
   font-feature-settings: "tnum" 1;
   font-variant-numeric: tabular-nums;
 }
@@ -21861,6 +26535,7 @@ fn test_openai_key_status(configured: bool, engine: &str) -> OpenAiKeyStatus {
         model: "gpt-5.6".to_string(),
         engine_selected: engine == "openai-api",
         engine: engine.to_string(),
+        key_change_pending: false,
         storage: "OS-owned private storage".to_string(),
     }
 }
@@ -21870,12 +26545,14 @@ fn test_codex_status(installed: bool, authenticated: bool) -> CodexStatus {
     CodexStatus {
         installed,
         authenticated,
+        sign_in_in_progress: false,
         detail: if !installed {
-            "Codex account support is not included in this build.".to_string()
+            "OpenAI account access through the bundled Codex CLI is not included in this build."
+                .to_string()
         } else if authenticated {
-            "Codex is signed in and ready.".to_string()
+            "Your OpenAI account is signed in through the bundled Codex CLI.".to_string()
         } else {
-            "Codex account support is ready but not signed in.".to_string()
+            "The bundled Codex CLI is ready for your OpenAI account sign-in.".to_string()
         },
     }
 }
@@ -21955,6 +26632,14 @@ fn test_resident_status(
             ready: engine_ready,
             provider,
             locality,
+            local_ready: engine_ready && selected_engine == ResidentEngineSelection::LocalGptOss,
+            local_detail: if engine_ready && selected_engine == ResidentEngineSelection::LocalGptOss
+            {
+                "On-device GPT-OSS is ready through the local model runtime.".to_string()
+            } else {
+                "On-device GPT-OSS is not ready. Add a compatible local model, then retry after its runtime starts."
+                    .to_string()
+            },
             cloud_relay_configured,
             local_relay_configured,
             relay_contract: relay_contract.to_string(),
@@ -22209,7 +26894,9 @@ fn test_policy_status(profile: &str, locked: bool) -> PolicyStatus {
         profile: profile.to_string(),
         locked,
         data_boundary: format!("{profile} policy keeps data boundaries explicit."),
-        secret_boundary: "Secrets stay in OS-owned services or server-side relays.".to_string(),
+        secret_boundary:
+            "OpenAI credentials stay in protected Goblins OS services or a managed organization service."
+                .to_string(),
         controls: vec![
             PolicyControl {
                 id: "cloud-openai".to_string(),
@@ -22356,8 +27043,11 @@ fn test_accessibility_status(
         },
         visual: VisualAccessibilityStatus {
             schema_available: assistive_schema_available,
+            reduce_transparency_schema_available: assistive_schema_available,
             high_contrast: Some(false),
+            reduce_transparency: Some(false),
             detail: String::new(),
+            reduce_transparency_detail: String::new(),
         },
         typing: TypingAccessibilityStatus {
             schema_available: assistive_schema_available,
@@ -22431,9 +27121,12 @@ fn test_input_status(
             schema_available: touchpad_schema_available,
             speed: Some(-0.24),
             tap_to_click: Some(true),
+            tap_and_drag: Some(true),
+            tap_and_drag_lock: Some(false),
             natural_scroll: Some(true),
             two_finger_scrolling_enabled: Some(true),
             disable_while_typing: Some(true),
+            click_method: Some("fingers".to_string()),
             detail: if gsettings_available && touchpad_schema_available {
                 "Trackpad preferences are ready.".to_string()
             } else {
@@ -22640,39 +27333,41 @@ mod tests {
         audio_volume_detail, audio_volume_label, audio_volume_title,
         background_picture_option_detail, background_shading_detail, bluetooth_adapter_detail,
         bluetooth_adapter_state_detail, bluetooth_power_detail, bluetooth_power_label,
-        bluetooth_power_outcome, camera_access_detail, cleanup_temp_detail, cleanup_trash_detail,
-        codex_login_outcome_from_response, days_label, desktop_privacy_outcome,
-        display_output_detail, display_output_title, engine_selection_success_copy,
-        facility_state_is_ready, facility_state_label, facility_user_detail, hotspot_client_title,
-        hotspot_connected_clients_detail, hotspot_connected_clients_label, hotspot_settings_inputs,
-        hotspot_toggle_outcome, input_feedback_sounds_detail, interface_sounds_detail,
-        key_repeat_detail, local_account_identity_detail, local_account_type_detail,
-        lock_screen_notifications_detail, magnifier_detail, magnifier_lens_mode_detail,
-        magnifier_zoom_label, microphone_access_detail, milliseconds_label,
-        motion_preference_detail, night_light_detail, night_light_schedule_detail,
-        night_light_temperature_label, normalized_appearance_theme, normalized_audio_volume,
-        normalized_background_picture_option, normalized_background_shading,
-        normalized_keyboard_delay, normalized_keyboard_repeat_interval, normalized_magnifier_zoom,
+        bluetooth_power_outcome, build_language_region_presentation, camera_access_detail,
+        cleanup_temp_detail, cleanup_trash_detail, codex_login_outcome_from_response, days_label,
+        desktop_privacy_outcome, display_output_detail, display_output_title,
+        engine_selection_success_copy, facility_state_is_ready, facility_state_label,
+        facility_user_detail, hotspot_client_title, hotspot_connected_clients_detail,
+        hotspot_connected_clients_label, hotspot_settings_inputs, hotspot_toggle_outcome,
+        input_feedback_sounds_detail, interface_sounds_detail, key_repeat_detail,
+        local_account_identity_detail, local_account_type_detail, locale_environment_snapshot,
+        locale_separator_name, lock_screen_notifications_detail, magnifier_detail,
+        magnifier_lens_mode_detail, magnifier_zoom_label, microphone_access_detail,
+        milliseconds_label, motion_preference_detail, night_light_detail,
+        night_light_schedule_detail, night_light_temperature_label, normalized_appearance_theme,
+        normalized_audio_volume, normalized_background_picture_option,
+        normalized_background_shading, normalized_keyboard_delay,
+        normalized_keyboard_repeat_interval, normalized_magnifier_zoom,
         normalized_night_light_temperature, normalized_old_files_age, normalized_proxy_mode,
         normalized_text_scale, normalized_unit_speed, notification_app_children_detail,
         notification_app_enable_detail, notification_app_expand_detail,
         notification_app_lock_screen_detail, notification_app_lock_screen_details_detail,
         notification_app_sound_detail, notification_banners_detail,
         notification_preference_outcome, openai_account_detail,
-        openai_login_destination_from_response, pointer_speed_label,
+        openai_login_destination_from_response, parse_locale_identity, pointer_speed_label,
         privacy_control_waiting_detail, privacy_state_label, proxy_auto_config_detail,
         proxy_endpoint_detail, proxy_ignore_hosts_detail, proxy_mode_detail, proxy_mode_outcome,
-        recent_files_detail, screen_keyboard_detail, screen_reader_detail,
-        settings_request_timeout, sidebar_keyboard_target, sidebar_movement_from_key_name,
-        sound_output_access_detail, sound_preference_outcome, sound_theme_detail,
-        storage_capacity_detail, storage_capacity_percent_text, storage_used_fraction,
-        storage_used_gb, text_scale_percent, usb_protection_detail, volume_boost_detail,
-        wallpaper_color_detail, wallpaper_placement_outcome, wallpaper_shading_outcome,
-        wallpaper_uri_detail, wifi_connect_outcome, AudioDeviceStatus, AudioEndpointStatus,
-        BluetoothAdapterStatus, CodexLoginOutcome, CoreFetchError, DisplayOutputStatus,
-        DisplaysStatus, HotspotClient, HotspotStatus, HttpResponse, LocalAccountSummary,
-        LocalModelInstallOutcome, OpenAIAuthStatus, SettingsPanel, SidebarMovement, SystemFacility,
-        LONG_CORE_JOB_TIMEOUT,
+        recent_files_detail, reduce_transparency_detail, screen_keyboard_detail,
+        screen_reader_detail, settings_request_timeout, sidebar_keyboard_target,
+        sidebar_movement_from_key_name, sound_output_access_detail, sound_preference_outcome,
+        sound_theme_detail, storage_capacity_detail, storage_capacity_percent_text,
+        storage_used_fraction, storage_used_gb, text_scale_percent, usb_protection_detail,
+        volume_boost_detail, wallpaper_color_detail, wallpaper_placement_outcome,
+        wallpaper_shading_outcome, wallpaper_uri_detail, wifi_connect_outcome, AudioDeviceStatus,
+        AudioEndpointStatus, BluetoothAdapterStatus, CodexLoginOutcome, CoreFetchError,
+        DisplayOutputStatus, DisplaysStatus, HotspotClient, HotspotStatus, HttpResponse,
+        LocalAccountSummary, LocalModelInstallOutcome, NativeLocaleFacts, OpenAIAuthStatus,
+        SettingsPanel, SidebarMovement, SystemFacility, LONG_CORE_JOB_TIMEOUT,
     };
 
     #[test]
@@ -22747,6 +27442,133 @@ mod tests {
             SettingsPanel::from_args(["--panel=wacom".to_string()].into_iter()),
             SettingsPanel::DrawingTablet
         ));
+    }
+
+    #[test]
+    fn locale_environment_uses_real_process_precedence_and_sanitizes_values() {
+        let snapshot = locale_environment_snapshot(
+            Some("de_DE.UTF-8\nignored"),
+            Some("en_US.UTF-8"),
+            Some("de:en\rignored"),
+        );
+        assert_eq!(snapshot.requested_locale, "de_DE.UTF-8");
+        assert_eq!(snapshot.requested_locale_source, "LC_ALL");
+        assert_eq!(snapshot.interface_language.as_deref(), Some("de:en"));
+
+        let fallback = locale_environment_snapshot(None, Some("en_US.UTF-8"), None);
+        assert_eq!(fallback.requested_locale, "en_US.UTF-8");
+        assert_eq!(fallback.requested_locale_source, "LANG");
+        assert_eq!(fallback.interface_language, None);
+    }
+
+    #[test]
+    fn locale_identity_parses_language_region_encoding_and_modifier() {
+        let german = parse_locale_identity("de_DE.UTF-8@euro");
+        assert_eq!(german.language, "de");
+        assert_eq!(german.region.as_deref(), Some("DE"));
+        assert_eq!(german.encoding.as_deref(), Some("UTF-8"));
+
+        let fallback = parse_locale_identity("C.UTF-8");
+        assert_eq!(fallback.language, "C");
+        assert_eq!(fallback.region, None);
+        assert_eq!(fallback.encoding.as_deref(), Some("UTF-8"));
+    }
+
+    #[test]
+    fn language_region_copy_exposes_live_formats_without_claiming_translation() {
+        let baseline_environment = locale_environment_snapshot(None, Some("C.UTF-8"), None);
+        let german_environment = locale_environment_snapshot(None, Some("de_DE.UTF-8"), Some("de"));
+        let baseline = build_language_region_presentation(
+            &baseline_environment,
+            &NativeLocaleFacts {
+                active_messages_locale: "C.UTF-8".to_string(),
+                active_time_locale: "C.UTF-8".to_string(),
+                active_numeric_locale: "C.UTF-8".to_string(),
+                date_pattern: "%m/%d/%y".to_string(),
+                date_now: "07/21/26".to_string(),
+                time_now: "14:30:00".to_string(),
+                decimal_separator: ".".to_string(),
+                grouping_separator: String::new(),
+                encoding: "UTF-8".to_string(),
+            },
+        );
+        let german = build_language_region_presentation(
+            &german_environment,
+            &NativeLocaleFacts {
+                active_messages_locale: "de_DE.UTF-8".to_string(),
+                active_time_locale: "de_DE.UTF-8".to_string(),
+                active_numeric_locale: "de_DE.UTF-8".to_string(),
+                date_pattern: "%d.%m.%Y".to_string(),
+                date_now: "21.07.2026".to_string(),
+                time_now: "14:30:00".to_string(),
+                decimal_separator: ",".to_string(),
+                grouping_separator: ".".to_string(),
+                encoding: "UTF-8".to_string(),
+            },
+        );
+
+        assert_eq!(baseline.facts.len(), 5);
+        assert_eq!(german.facts.len(), 5);
+        let changed = baseline
+            .facts
+            .iter()
+            .zip(&german.facts)
+            .filter(|(before, after)| before.value != after.value || before.detail != after.detail)
+            .count();
+        let longer = baseline
+            .facts
+            .iter()
+            .zip(&german.facts)
+            .filter(|(before, after)| after.accessible_label.len() > before.accessible_label.len())
+            .count();
+        assert!(changed >= 4);
+        assert!(longer >= 1);
+
+        let interface = &german.facts[0];
+        assert_eq!(interface.value, "German");
+        assert_eq!(
+            interface.detail,
+            "Goblins OS interface text is currently available in English."
+        );
+        assert!(interface
+            .accessible_label
+            .starts_with("Requested interface language: German."));
+        assert_eq!(german.facts[1].value, "German (Germany)");
+        assert_eq!(german.facts[2].value, "21.07.2026 · 14:30:00");
+        assert_eq!(
+            german.facts[3].value,
+            "Decimal comma · thousands separator period"
+        );
+        assert_eq!(german.facts[4].value, "Unicode (UTF-8)");
+        for fact in &german.facts {
+            let user_facing = format!(
+                "{} {} {} {}",
+                fact.title, fact.value, fact.detail, fact.accessible_label
+            );
+            for machine_term in [
+                "LANGUAGE=",
+                "LC_TIME",
+                "LC_NUMERIC",
+                "de_DE.UTF-8",
+                "%d.%m.%Y",
+                "translation catalog",
+                "locale fact",
+            ] {
+                assert!(!user_facing.contains(machine_term), "{machine_term}");
+            }
+        }
+    }
+
+    #[test]
+    fn locale_separator_names_are_readable_without_hiding_empty_grouping() {
+        assert_eq!(locale_separator_name("", "not available"), "not available");
+        assert_eq!(locale_separator_name(".", "not available"), "period");
+        assert_eq!(locale_separator_name(",", "not available"), "comma");
+        assert_eq!(locale_separator_name(" ", "not available"), "space");
+        assert_eq!(
+            locale_separator_name("\u{202f}", "not available"),
+            "narrow no-break space"
+        );
     }
 
     #[test]
@@ -23259,8 +28081,8 @@ mod tests {
         assert!(nav_group_block.contains("text-transform: none;"));
         assert!(!nav_group_block.contains("uppercase"));
         assert!(css.contains(".gos-side-nav-list {\n  padding: 0 3px 12px;"));
-        // Colored category tiles (the macOS-kit "system settings" signature):
-        // the tint classes are wired and the glyph reads white on the tile.
+        // Goblins category tint classes are wired and the glyph reads white on
+        // each tile.
         assert!(css.contains(".gos-side-icon-well.gos-tint-blue"));
         assert!(css.contains(".gos-side-icon-well.gos-tint-graphite"));
         assert!(css.contains("color: @gos_on_tint;"));
@@ -23304,8 +28126,8 @@ mod tests {
             )
         );
         assert!(css.contains(".gos-settings-root .gos-status-pill {\n  padding: 4px 9px;"));
-        // Status states render as plain trailing text (no chip): neutral, ready, and
-        // attention differ by color + weight only, matching macOS System Settings.
+        // Status states render as plain trailing text (no chip): neutral, ready,
+        // and attention differ by color and weight.
         assert!(css.contains(
             ".gos-settings-root .gos-ready {\n  color: @gos_ready;\n  background: transparent;"
         ));
@@ -23580,7 +28402,7 @@ mod tests {
     fn descriptive_values_rest_in_the_neutral_pill_not_green() {
         // A configured measurement or percentage is a descriptive value, not an
         // affirmative health state — it must read as the calm neutral pill so green
-        // stays reserved for genuinely-good status (macOS reserves green likewise).
+        // stays reserved for genuinely good status.
         for quiet in [
             "500 ms",
             "30 ms",
@@ -24136,12 +28958,31 @@ mod tests {
         let codex = super::codex_account_summary_spec(Some(&super::CodexStatus {
             installed: true,
             authenticated: false,
-            detail: "Codex account support is ready but not signed in.".to_string(),
+            sign_in_in_progress: false,
+            detail: "The bundled Codex CLI is ready for your OpenAI account sign-in.".to_string(),
         }));
         assert_eq!(codex.title, "Codex");
         assert_eq!(codex.state, "sign in");
         assert!(!codex.ready);
-        assert!(codex.detail.contains("not signed in"));
+        assert!(codex.detail.contains("OpenAI account sign-in"));
+
+        let signing_in = super::CodexStatus {
+            installed: true,
+            authenticated: false,
+            sign_in_in_progress: true,
+            detail: "OpenAI account sign-in is in progress.".to_string(),
+        };
+        let codex = super::codex_account_summary_spec(Some(&signing_in));
+        assert_eq!(codex.state, "signing in");
+        assert!(!codex.ready);
+        let access = super::openai_access_summary_spec(None, Some(&signing_in));
+        assert_eq!(access.state, "signing in");
+        assert!(!access.ready);
+
+        let legacy: super::CodexStatus =
+            serde_json::from_str(r#"{"installed":true,"authenticated":false,"detail":"Sign in."}"#)
+                .expect("legacy Codex status remains readable");
+        assert!(!legacy.sign_in_in_progress);
     }
 
     #[test]
@@ -24312,6 +29153,8 @@ mod tests {
         assert!(magnifier_detail(false).contains("off"));
         assert!(magnifier_lens_mode_detail(true).contains("Lens mode"));
         assert!(magnifier_lens_mode_detail(false).contains("full-screen"));
+        assert!(reduce_transparency_detail(true).contains("solid, non-blurred"));
+        assert!(reduce_transparency_detail(false).contains("translucent"));
         assert_eq!(normalized_magnifier_zoom(0.1), 1.0);
         assert_eq!(normalized_magnifier_zoom(2.13), 2.25);
         assert_eq!(normalized_magnifier_zoom(f64::NAN), 2.0);
@@ -24557,6 +29400,66 @@ mod tests {
     }
 
     #[test]
+    fn proxy_editor_builds_one_complete_non_secret_payload() {
+        let payload = super::proxy_settings_payload(
+            "manual",
+            " https://proxy.example/proxy.pac ",
+            "localhost, 127.0.0.0/8",
+            [
+                ("HTTP", "proxy.example", "8080"),
+                ("HTTPS", "secure-proxy.example", "8443"),
+                ("FTP", "", ""),
+                ("SOCKS", "", ""),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(payload.mode, "manual");
+        assert_eq!(
+            payload.autoconfig_url.as_deref(),
+            Some("https://proxy.example/proxy.pac")
+        );
+        assert_eq!(payload.ignore_hosts, ["localhost", "127.0.0.0/8"]);
+        assert_eq!(payload.http.host.as_deref(), Some("proxy.example"));
+        assert_eq!(payload.http.port, Some(8080));
+        assert_eq!(payload.ftp.host, None);
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(!json.contains("password"));
+        assert!(!json.contains("authentication"));
+    }
+
+    #[test]
+    fn proxy_editor_rejects_partial_or_out_of_range_endpoints_before_posting() {
+        let missing_port = super::proxy_settings_payload(
+            "manual",
+            "",
+            "",
+            [
+                ("HTTP", "proxy.example", ""),
+                ("HTTPS", "", ""),
+                ("FTP", "", ""),
+                ("SOCKS", "", ""),
+            ],
+        )
+        .unwrap_err();
+        assert!(missing_port.contains("HTTP proxy needs a port"));
+
+        let invalid_port = super::proxy_settings_payload(
+            "manual",
+            "",
+            "",
+            [
+                ("HTTP", "proxy.example", "65536"),
+                ("HTTPS", "", ""),
+                ("FTP", "", ""),
+                ("SOCKS", "", ""),
+            ],
+        )
+        .unwrap_err();
+        assert!(invalid_port.contains("between 1 and 65535"));
+    }
+
+    #[test]
     fn network_summary_tiles_use_networkmanager_state_without_inventing_success() {
         let online = super::NetworkStatus {
             source: "networkmanager".to_string(),
@@ -24572,6 +29475,7 @@ mod tests {
                 gsettings_available: true,
                 schema_available: true,
                 mode_available: true,
+                editor_available: true,
                 mode: "none".to_string(),
                 autoconfig_url: None,
                 ignore_hosts: Vec::new(),
@@ -24986,8 +29890,11 @@ mod tests {
             },
             visual: super::VisualAccessibilityStatus {
                 schema_available: true,
+                reduce_transparency_schema_available: true,
                 high_contrast: Some(false),
+                reduce_transparency: Some(false),
                 detail: String::new(),
+                reduce_transparency_detail: String::new(),
             },
             typing: super::TypingAccessibilityStatus {
                 schema_available: true,
@@ -25084,8 +29991,11 @@ mod tests {
             },
             visual: super::VisualAccessibilityStatus {
                 schema_available: false,
+                reduce_transparency_schema_available: false,
                 high_contrast: None,
+                reduce_transparency: None,
                 detail: String::new(),
+                reduce_transparency_detail: String::new(),
             },
             typing: super::TypingAccessibilityStatus {
                 schema_available: false,
@@ -25325,6 +30235,7 @@ mod tests {
             mutter_display_apply_allowed: true,
             display_config_serial: Some(42),
             outputs: Vec::new(),
+            logical_monitors: Vec::new(),
             detail: "Display configuration is reachable.".to_string(),
         };
 
@@ -25334,6 +30245,7 @@ mod tests {
             primary: true,
             current_mode: Some("2560x1440".to_string()),
             position: Some("+0+0".to_string()),
+            modes: Vec::new(),
             detail: "eDP-1 is the primary display at 2560x1440.".to_string(),
         };
         assert_eq!(display_output_title(&output), "eDP-1 · primary");
@@ -25346,6 +30258,7 @@ mod tests {
             primary: false,
             current_mode: None,
             position: None,
+            modes: Vec::new(),
             detail: "HDMI-1 is disconnected.".to_string(),
         };
         assert!(display_output_detail(&disconnected).contains("disconnected outputs"));
@@ -25399,6 +30312,7 @@ mod tests {
             mutter_display_apply_allowed: false,
             display_config_serial: None,
             outputs: Vec::new(),
+            logical_monitors: Vec::new(),
             detail: "A desktop display handle is visible, but monitor configuration could not be queried from this session.".to_string(),
         };
         let query = super::display_query_summary_spec(Some(&limited));
@@ -25429,8 +30343,11 @@ mod tests {
             },
             visual: super::VisualAccessibilityStatus {
                 schema_available: true,
+                reduce_transparency_schema_available: true,
                 high_contrast: Some(false),
+                reduce_transparency: Some(false),
                 detail: String::new(),
+                reduce_transparency_detail: String::new(),
             },
             typing: super::TypingAccessibilityStatus {
                 schema_available: true,
@@ -25945,7 +30862,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshots_helpers_keep_restore_read_only_until_core_proves_it() {
+    fn snapshots_helpers_enable_only_non_overwriting_file_recovery() {
         let unavailable = super::SnapshotsStatus {
             available: false,
             snapper_available: false,
@@ -25984,7 +30901,20 @@ mod tests {
             super::snapshots_restore_state(&available),
             ("read-only", false)
         );
-        assert!(super::snapshots_restore_detail(&available).contains("CI/qemu-gated"));
+        assert!(
+            super::snapshots_restore_detail(&available).contains("No recoverable local snapshot")
+        );
+
+        let mut recoverable = available.clone();
+        recoverable.restore_ready = true;
+        recoverable.executes_restore = true;
+        assert_eq!(
+            super::snapshots_restore_state(&recoverable),
+            ("ready", true)
+        );
+        let recovery_detail = super::snapshots_restore_detail(&recoverable);
+        assert!(recovery_detail.contains("new copy"));
+        assert!(recovery_detail.contains("never overwritten"));
 
         let mut empty = available.clone();
         empty.snapshots.clear();
@@ -26022,7 +30952,7 @@ mod tests {
         assert!(!detail.contains("system-root"));
         assert!(!detail.contains("mounted at /"));
         assert!(detail.contains("90% used"));
-        assert!(detail.contains("Model cache has 24GB free"));
+        assert!(detail.contains("Local model storage has 24GB free"));
         assert!(!detail.contains("/var/lib/goblins-os/models"));
         assert!(!detail.contains("clean"));
     }
@@ -26034,7 +30964,7 @@ mod tests {
         let system = super::test_settings_system("localhost/goblins-os:test", true, true, true);
         let detail = super::storage_overall_pressure_detail(None, None, Some(&system));
         assert!(detail.contains("Mounted-volume capacity is waiting"));
-        assert!(detail.contains("Model-cache capacity is waiting"));
+        assert!(detail.contains("Local model storage is waiting"));
     }
 
     #[test]
@@ -26047,7 +30977,7 @@ mod tests {
         assert!(ready.contains(&open_disk_usage));
         assert!(ready.contains("automatic Trash and temporary-file cleanup controls"));
         assert!(!ready.contains("old Trash"));
-        assert!(ready.contains("Review model-cache capacity"));
+        assert!(ready.contains("Review local model storage"));
         assert!(ready.contains(&open_disks));
 
         let waiting = super::storage_pressure_plan_detail("unknown", false, false, false, false);
@@ -26055,7 +30985,7 @@ mod tests {
         assert!(waiting
             .contains("Automatic Trash and temporary-file cleanup controls are not available"));
         assert!(!waiting.contains("old Trash"));
-        assert!(waiting.contains("Model-cache capacity is still waiting"));
+        assert!(waiting.contains("Local model storage is still waiting"));
 
         let forbidden_desktop_copy = ["needs", "GNOME"].join(" ");
         assert!(!ready.contains(&forbidden_desktop_copy));
@@ -26098,10 +31028,10 @@ mod tests {
         assert!(pressure.detail.contains("System volume"));
         assert!(!pressure.detail.contains("system-root"));
         assert!(!pressure.detail.contains("/var/lib/goblins-os/models"));
-        assert!(pressure.detail.contains("Model cache has"));
+        assert!(pressure.detail.contains("Local model storage has"));
 
         let cache = super::model_cache_summary_spec(Some(&catalog), Some(&system));
-        assert_eq!(cache.title, "Model cache");
+        assert_eq!(cache.title, "Local model storage");
         assert_eq!(cache.state, "available");
         assert!(cache.ready);
         assert!(cache.detail.contains("24GB free"));
@@ -26282,7 +31212,7 @@ mod tests {
         let access = super::openai_access_summary_spec(Some(&key), Some(&codex));
         assert_eq!(access.state, "sign in");
         assert!(!access.ready);
-        assert!(access.detail.contains("not signed in"));
+        assert!(access.detail.contains("OpenAI account sign-in"));
 
         let vision = super::vision_model_summary_spec(Some(&vision));
         assert_eq!(vision.state, "add model");
@@ -26300,6 +31230,40 @@ mod tests {
         assert!(voice
             .detail
             .contains("Background wake listening is not ready"));
+    }
+
+    #[test]
+    fn settings_context_review_names_route_and_exact_data_boundary() {
+        let local = super::test_resident_status(
+            super::ResidentProcessState::Online,
+            super::ResidentEngineSelection::LocalGptOss,
+            true,
+            Some(2),
+        );
+        let local_route = super::context_submission_route(Some(&local));
+        assert!(!local_route.hosted);
+        assert!(super::context_route_disclosure(&local_route).contains("stays"));
+
+        let hosted = super::test_resident_status(
+            super::ResidentProcessState::Online,
+            super::ResidentEngineSelection::Codex,
+            true,
+            Some(2),
+        );
+        let hosted_route = super::context_submission_route(Some(&hosted));
+        assert!(hosted_route.hosted);
+        assert!(hosted_route.engine_name.contains("Codex"));
+        assert!(super::context_route_disclosure(&hosted_route).contains("confirm"));
+
+        let review = super::settings_context_review_copy(
+            &hosted_route,
+            "Sound",
+            "Why is output quiet?",
+            "Panel: Sound. Output volume: 25 percent.",
+        );
+        assert!(review.contains("Exact question: Why is output quiet?"));
+        assert!(review.contains("Bounded OS status summary"));
+        assert!(review.contains("No files, screenshots"));
     }
 
     #[test]
@@ -26547,6 +31511,8 @@ mod tests {
                 "ready": true,
                 "provider": "gpt-oss-local-runtime",
                 "locality": "on-device",
+                "local_ready": true,
+                "local_detail": "On-device GPT-OSS is ready through the local model runtime.",
                 "cloud_relay_configured": false,
                 "local_relay_configured": true,
                 "relay_contract": "On-device GPT-OSS through the local model runtime."
@@ -26577,7 +31543,13 @@ mod tests {
             super::ResidentCapabilityState::Ready
         );
 
-        for field in ["ready", "provider", "locality"] {
+        for field in [
+            "ready",
+            "provider",
+            "locality",
+            "local_ready",
+            "local_detail",
+        ] {
             let mut missing = exact.clone();
             missing["engine"]
                 .as_object_mut()
@@ -26636,7 +31608,7 @@ mod tests {
             "local only"
         );
         assert!(policy.data_boundary.contains("local-only"));
-        assert!(policy.secret_boundary.contains("server-side"));
+        assert!(policy.secret_boundary.contains("protected Goblins OS"));
         assert!(super::policy_profile_summary_detail(&policy).contains("test-generated-at"));
 
         let mut debug_generated_at = policy.clone();
@@ -26964,11 +31936,14 @@ mod tests {
             powered: Some(true),
             discoverable: Some(false),
             pairable: Some(true),
+            discovering: Some(false),
             adapter: Some(BluetoothAdapterStatus {
                 name: Some("hci0".to_string()),
                 alias: Some("Goblins Workstation".to_string()),
                 address: "00:11:22:33:44:55".to_string(),
             }),
+            devices_available: true,
+            devices: Vec::new(),
             detail: "Bluetooth is active and available.".to_string(),
         };
 
@@ -27008,7 +31983,10 @@ mod tests {
             powered: None,
             discoverable: None,
             pairable: None,
+            discovering: None,
             adapter: None,
+            devices_available: false,
+            devices: Vec::new(),
             detail: "Bluetooth support is unavailable.".to_string(),
         };
 
@@ -27084,8 +32062,8 @@ mod tests {
             "configured"
         );
         assert!(super::bootc_image_detail(&ready).contains("update image configured"));
-        assert!(super::bootc_update_actions_detail(&ready).contains("Read-only for now"));
-        assert!(super::bootc_update_actions_detail(&ready).contains("secure update actions"));
+        assert!(super::bootc_update_actions_detail(&ready).contains("prerequisites are ready"));
+        assert!(super::bootc_update_actions_detail(&ready).contains("Protected controls"));
 
         let blocked = super::test_settings_system("unconfigured", false, false, false);
         assert!(!super::bootc_image_configured(
@@ -27133,7 +32111,7 @@ mod tests {
         assert_eq!(update.state, "ready");
         assert!(update.ready);
         assert!(update.detail.contains("update system is ready"));
-        assert!(update.detail.contains("secure update actions"));
+        assert!(update.detail.contains("Protected controls"));
 
         let session = super::desktop_session_summary_spec(Some(&ready));
         assert_eq!(session.state, "configured");
@@ -27189,7 +32167,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_copy_groups_checks_and_keeps_actions_disabled_truthfully() {
+    fn recovery_copy_groups_checks_and_routes_real_recovery_actions() {
         let ready = super::test_recovery_status(&["ready", "ready", "ready"]);
         let ready_counts = super::recovery_counts(&ready.checks);
         assert_eq!(
@@ -27202,8 +32180,10 @@ mod tests {
         );
         assert_eq!(super::recovery_summary_label(ready_counts), "ready");
         assert!(super::recovery_summary_detail(&ready).contains("3/3 recovery checks are ready"));
-        assert!(super::recovery_actions_detail(Some(&ready)).contains("Read-only for now"));
-        assert!(super::recovery_actions_detail(Some(&ready)).contains("secure recovery actions"));
+        let ready_actions = super::recovery_actions_detail(Some(&ready));
+        assert!(ready_actions.contains("Recover individual files"));
+        assert!(ready_actions.contains("immutable image actions"));
+        assert!(ready_actions.contains("explicit reinstall"));
         let mut debug_generated_at = ready.clone();
         debug_generated_at.generated_at = "SystemTime { tv_sec: 1, tv_nsec: 2 }".to_string();
         let generated_detail = super::recovery_summary_detail(&debug_generated_at);
@@ -27230,10 +32210,10 @@ mod tests {
         );
         assert!(super::recovery_summary_detail(&blocked).contains("2 still need attention"));
         let detail = super::recovery_actions_detail(Some(&blocked));
-        assert!(detail.contains("Disabled"));
+        assert!(detail.contains("Resolve these recovery checks"));
         assert!(detail.contains("Recovery services"));
         assert!(detail.contains("OpenAI secret storage"));
-        assert!(super::recovery_actions_detail(None).contains("waiting for recovery status"));
+        assert!(super::recovery_actions_detail(None).contains("Waiting for recovery status"));
     }
 
     #[test]
@@ -27298,6 +32278,73 @@ mod tests {
         assert!(engine_selection_success_copy("codex").contains("Codex"));
         assert!(engine_selection_success_copy("openai-api").contains("hosted models"));
         assert!(super::engine_active_copy("cloud-openai").contains("leave this device"));
+    }
+
+    #[test]
+    fn openai_key_management_request_contains_only_the_fixed_action() {
+        let expected = ["add", "rotate", "remove"];
+        for (action, expected_action) in super::OpenAiKeyManagementAction::ALL
+            .into_iter()
+            .zip(expected)
+        {
+            let body: serde_json::Value =
+                serde_json::from_str(&super::openai_key_management_body(action))
+                    .expect("management request JSON");
+            let object = body.as_object().expect("management request object");
+            assert_eq!(object.len(), 1);
+            assert_eq!(
+                object.get("action").and_then(serde_json::Value::as_str),
+                Some(expected_action)
+            );
+        }
+    }
+
+    #[test]
+    fn openai_key_status_copy_is_secret_blind_and_tracks_pending_state() {
+        let mut status = super::test_openai_key_status(true, "openai-api");
+        status.storage = "do-not-render-this-private-location".to_string();
+        let detail = super::openai_key_status_detail(&status);
+        assert!(detail.contains("key never enters Settings"));
+        assert!(!detail.contains(&status.storage));
+        assert!(super::openai_key_status_title(&status).contains("ready"));
+
+        status.key_change_pending = true;
+        assert!(super::openai_key_status_title(&status).contains("change open"));
+        assert!(super::openai_key_status_detail(&status).contains("separate protected"));
+        assert!(super::openai_key_management_finished_copy(
+            super::OpenAiKeyManagementAction::Rotate,
+            &status,
+        )
+        .contains("still open"));
+    }
+
+    #[test]
+    fn openai_key_management_uses_only_secret_blind_core_routes() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn request_openai_key_management(")
+            .expect("API key management helper");
+        let remainder = &source[start..];
+        let end = remainder
+            .find("/// Select which engine powers")
+            .expect("API key management helper end");
+        let helper = &remainder[..end];
+
+        assert!(helper.contains("/v1/models/openai-key/manage"));
+        assert!(helper.contains("/v1/models/openai-key"));
+        assert!(helper.contains("openai_key_management_body(action)"));
+        for forbidden in [
+            "PasswordEntry",
+            "api_key",
+            "key_prefix",
+            "key_suffix",
+            "fingerprint",
+        ] {
+            assert!(
+                !helper.contains(forbidden),
+                "forbidden key data in Settings helper: {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -27427,6 +32474,168 @@ mod tests {
             outcome.text,
             "Goblins OS could not join that network.".to_string()
         );
+    }
+
+    #[test]
+    fn bluetooth_device_outcomes_preserve_core_state_without_device_invention() {
+        let scan = super::bluetooth_scan_outcome(
+            br#"{"ok":true,"devices":[{"address":"AA:BB:CC:DD:EE:FF","name":"Headphones","paired":true,"trusted":true,"connected":false}],"text":"Discovery finished."}"#,
+        )
+        .unwrap();
+        assert!(scan.ok);
+        assert_eq!(scan.devices.len(), 1);
+        assert_eq!(scan.devices[0].name, "Headphones");
+        assert_eq!(
+            super::bluetooth_device_detail(&scan.devices[0]),
+            "Paired · trusted · AA:BB:CC:DD:EE:FF"
+        );
+        let unknown = super::BluetoothDeviceStatus {
+            address: "11:22:33:44:55:66".to_string(),
+            name: "Unknown device".to_string(),
+            paired: None,
+            trusted: None,
+            connected: None,
+        };
+        assert_eq!(
+            super::bluetooth_device_detail(&unknown),
+            "Pairing status unavailable · 11:22:33:44:55:66"
+        );
+
+        let action = super::bluetooth_device_action_outcome(
+            br#"{"ok":false,"address":"AA:BB:CC:DD:EE:FF","action":"connect","text":"Device is unavailable."}"#,
+        )
+        .unwrap();
+        assert!(!action.ok);
+        assert_eq!(action.text, "Device is unavailable.");
+    }
+
+    #[test]
+    fn display_layout_helpers_keep_one_primary_and_safe_relative_positions() {
+        let outputs = vec![
+            super::DisplayOutputStatus {
+                name: "eDP-1".to_string(),
+                connected: true,
+                primary: true,
+                current_mode: Some("2560 × 1440 · 60 Hz".to_string()),
+                position: Some("+0+0".to_string()),
+                modes: vec![
+                    super::DisplayModeStatus {
+                        id: "2560x1440@60.000".to_string(),
+                        label: "2560 × 1440 · 60 Hz".to_string(),
+                        width: 2560,
+                        height: 1440,
+                        refresh_hz: 60.0,
+                        preferred: true,
+                        current: true,
+                        supported_scales: vec![1.0, 1.25, 2.0],
+                    },
+                    super::DisplayModeStatus {
+                        id: "1920x1080@60.000".to_string(),
+                        label: "1920 × 1080 · 60 Hz".to_string(),
+                        width: 1920,
+                        height: 1080,
+                        refresh_hz: 60.0,
+                        preferred: false,
+                        current: false,
+                        supported_scales: vec![1.0, 1.5],
+                    },
+                ],
+                detail: "Primary display.".to_string(),
+            },
+            super::DisplayOutputStatus {
+                name: "HDMI-1".to_string(),
+                connected: true,
+                primary: false,
+                current_mode: Some("1920 × 1080 · 60 Hz".to_string()),
+                position: Some("+2048+0".to_string()),
+                modes: vec![super::DisplayModeStatus {
+                    id: "1920x1080@60.000".to_string(),
+                    label: "1920 × 1080 · 60 Hz".to_string(),
+                    width: 1920,
+                    height: 1080,
+                    refresh_hz: 60.0,
+                    preferred: true,
+                    current: true,
+                    supported_scales: vec![1.0],
+                }],
+                detail: "Connected display.".to_string(),
+            },
+        ];
+        let mut layout = vec![
+            super::DisplayLogicalMonitorStatus {
+                x: 0,
+                y: 0,
+                scale: 1.25,
+                transform: 0,
+                primary: true,
+                monitors: vec![super::DisplayMonitorConfig {
+                    connector: "eDP-1".to_string(),
+                    mode_id: "2560x1440@60.000".to_string(),
+                }],
+            },
+            super::DisplayLogicalMonitorStatus {
+                x: 2048,
+                y: 0,
+                scale: 1.0,
+                transform: 0,
+                primary: false,
+                monitors: vec![super::DisplayMonitorConfig {
+                    connector: "HDMI-1".to_string(),
+                    mode_id: "1920x1080@60.000".to_string(),
+                }],
+            },
+        ];
+
+        super::display_layout_make_primary(&mut layout, 1);
+        assert_eq!(layout.iter().filter(|monitor| monitor.primary).count(), 1);
+        assert!(layout[1].primary);
+        super::display_layout_set_placement(&mut layout, &outputs, 0, "left");
+        assert!(layout[0].x < layout[1].x);
+        assert_eq!(
+            super::display_layout_placement(&layout, &outputs, 0),
+            "left"
+        );
+        assert_eq!(
+            super::display_scale_options_for_logical(&outputs, &layout[0]),
+            vec![1.0, 1.25, 2.0]
+        );
+        assert!(super::display_layout_set_mode(
+            &mut layout,
+            &outputs,
+            0,
+            "1920x1080@60.000"
+        ));
+        assert_eq!(
+            super::display_scale_options_for_logical(&outputs, &layout[0]),
+            vec![1.0, 1.5]
+        );
+        assert_eq!(layout[0].scale, 1.0);
+
+        let mut mirrored = vec![super::DisplayLogicalMonitorStatus {
+            x: 0,
+            y: 0,
+            scale: 1.0,
+            transform: 0,
+            primary: true,
+            monitors: vec![
+                super::DisplayMonitorConfig {
+                    connector: "eDP-1".to_string(),
+                    mode_id: "1920x1080@60.000".to_string(),
+                },
+                super::DisplayMonitorConfig {
+                    connector: "HDMI-1".to_string(),
+                    mode_id: "1920x1080@60.000".to_string(),
+                },
+            ],
+        }];
+        let before = serde_json::to_string(&mirrored).unwrap();
+        assert!(!super::display_layout_set_mode(
+            &mut mirrored,
+            &outputs,
+            0,
+            "2560x1440@60.000"
+        ));
+        assert_eq!(serde_json::to_string(&mirrored).unwrap(), before);
     }
 
     #[cfg(all(target_os = "linux", feature = "native-desktop"))]

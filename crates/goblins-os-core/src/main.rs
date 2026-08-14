@@ -10,6 +10,8 @@ mod bluetooth;
 mod boot_lock;
 mod bounded;
 mod codex;
+mod codex_containment;
+mod context_consent;
 mod control_plane;
 mod credentials;
 mod displays;
@@ -31,6 +33,7 @@ mod network;
 mod notifications;
 mod ocr;
 mod openai_key;
+mod openai_key_provisioning;
 mod policy;
 mod preview;
 mod privacy;
@@ -44,6 +47,8 @@ mod shortcuts;
 mod snapshots;
 mod sound_recognition;
 mod studio;
+mod studio_container;
+mod studio_runtime;
 mod switch_control;
 mod system;
 mod system_image;
@@ -83,9 +88,12 @@ use crate::{
         forget_openai_auth_session, openai_auth_callback, openai_auth_device_poll,
         openai_auth_device_start, openai_auth_refresh, openai_auth_start, openai_auth_status,
     },
-    bluetooth::{bluetooth_status, set_bluetooth_power},
+    bluetooth::{
+        bluetooth_status, change_bluetooth_device, scan_bluetooth_devices, set_bluetooth_power,
+    },
     boot_lock::boot_lock_status,
     codex::{codex_login_start, codex_login_url, codex_logout, codex_status},
+    context_consent::{broker_fetch_review, broker_submit_decision},
     displays::{apply_displays, displays_status},
     encryption::encryption_status,
     fingerprint::fingerprint_status,
@@ -102,9 +110,14 @@ use crate::{
         migration_sources, migration_start,
     },
     model_manager::{install_local_model, local_model_catalog},
-    network::{network_status, set_proxy_mode, wifi_connect, wifi_scan},
+    network::{network_status, set_proxy_settings, wifi_connect, wifi_scan},
     notifications::{notifications_status, set_notification_preference},
     openai_key::{openai_key_status, set_resident_engine},
+    openai_key_provisioning::{
+        broker_claim as openai_key_broker_claim, broker_commit as openai_key_broker_commit,
+        broker_decision as openai_key_broker_decision,
+        request_management as request_openai_key_management,
+    },
     policy::{configure_policy, grant_permission, policy_status},
     preview::{open_preview, preview_status},
     privacy::{privacy_status, set_desktop_privacy, set_privacy},
@@ -114,18 +127,61 @@ use crate::{
     session_gate::{session_gate_status, unlock_session},
     settings::{recovery_status, settings_system},
     shortcuts::{set_modifier_remap, set_shortcut_binding, shortcuts_status},
-    snapshots::{restore_snapshot, snapshots_status},
-    studio::{studio_file, studio_session, studio_sessions, studio_turn},
+    snapshots::{browse_snapshot, restore_snapshot, snapshots_status},
+    studio::{
+        recover_all_studio_transactions, studio_containerize, studio_export, studio_file,
+        studio_project, studio_run, studio_session, studio_sessions, studio_turn, undo_studio_turn,
+    },
     system::{health, system_services},
-    system_image::system_image_status,
+    system_image::{system_image_action, system_image_status},
     voice::{voice_converse, voice_dictate, voice_status, voice_storage_release_proof},
     window_management::{set_hot_corner, window_management_status},
 };
 
 const TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES: usize = 64 * 1024;
+const SETTINGS_DEVICE_REQUEST_LIMIT_BYTES: usize = 16 * 1024;
+const OPENAI_KEY_ACTION_REQUEST_LIMIT_BYTES: usize = 1024;
+const OPENAI_KEY_BROKER_REQUEST_LIMIT_BYTES: usize = 160 * 1024;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // This is deliberately the first runtime action, before Tokio creates
+    // worker threads and before configuration, credentials, or logs are read.
+    disable_core_dumpability()?;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
+
+#[cfg(target_os = "linux")]
+fn disable_core_dumpability() -> std::io::Result<()> {
+    let no_core = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: setrlimit receives a valid local rlimit pointer, and prctl uses
+    // integer-only operations with the required zero padding.
+    if unsafe { libc::setrlimit(libc::RLIMIT_CORE, &no_core) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "core process dumpability could not be disabled",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn disable_core_dumpability() -> std::io::Result<()> {
+    Ok(())
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -137,6 +193,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Voice workspaces are intentionally persistent only as a parent
     // capability. Remove crash/power-loss leftovers before any route can run.
     voice::purge_stale_voice_workspaces()?;
+    // A Studio turn atomically stages workspace and session state behind a
+    // durable rollback journal. Recover any power-loss interruption before a
+    // client can observe the canonical session or workspace trees.
+    recover_all_studio_transactions()?;
 
     // Refresh the OS-owned OpenAI account session before expiry without ever
     // handing refresh tokens to a desktop client. The task is generation-gated
@@ -176,6 +236,8 @@ fn private_router() -> Router {
         .route("/health", get(health))
         .route("/v1/readiness", get(readiness))
         .route("/v1/boot-lock", get(boot_lock_status))
+        .route("/v1/consent/review", post(broker_fetch_review))
+        .route("/v1/consent/decision", post(broker_submit_decision))
         .route("/v1/ai/actions", get(ai_action_catalog))
         .route("/v1/ai/action-history", get(ai_action_history))
         .route("/v1/ai/safe-setting-change", post(change_safe_setting))
@@ -199,8 +261,16 @@ fn private_router() -> Router {
         .route("/v1/settings/system", get(settings_system))
         .route("/v1/system/hardware", get(hardware_status))
         .route("/v1/system/image", get(system_image_status))
+        .route(
+            "/v1/system/image/action",
+            post(system_image_action)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/displays/status", get(displays_status))
-        .route("/v1/displays/apply", post(apply_displays))
+        .route(
+            "/v1/displays/apply",
+            post(apply_displays).layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/system/services", get(system_services))
         .route("/v1/installer/install-targets", get(install_target_status))
         .route(
@@ -214,7 +284,15 @@ fn private_router() -> Router {
         .route("/v1/recovery/status", get(recovery_status))
         .route("/v1/security/encryption", get(encryption_status))
         .route("/v1/snapshots/status", get(snapshots_status))
-        .route("/v1/snapshots/restore", post(restore_snapshot))
+        .route(
+            "/v1/snapshots/browse",
+            post(browse_snapshot).layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/snapshots/restore",
+            post(restore_snapshot)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/session/gate", get(session_gate_status))
         .route("/v1/session/unlock", post(unlock_session))
         .route("/v1/installer/readiness", get(installer_readiness))
@@ -240,21 +318,43 @@ fn private_router() -> Router {
         .route("/v1/network/status", get(network_status))
         .route("/v1/network/wifi/scan", get(wifi_scan))
         .route("/v1/network/wifi/connect", post(wifi_connect))
-        .route("/v1/network/proxy/mode", post(set_proxy_mode))
+        .route(
+            "/v1/network/proxy/settings",
+            post(set_proxy_settings)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/notifications/status", get(notifications_status))
         .route(
             "/v1/notifications/preference",
             post(set_notification_preference),
         )
         .route("/v1/bluetooth/status", get(bluetooth_status))
-        .route("/v1/bluetooth/power", post(set_bluetooth_power))
+        .route(
+            "/v1/bluetooth/power",
+            post(set_bluetooth_power)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/bluetooth/scan",
+            post(scan_bluetooth_devices)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/bluetooth/device",
+            post(change_bluetooth_device)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/audio/status", get(audio_status))
         .route("/v1/audio/volume", post(set_audio_volume))
         .route("/v1/audio/mute", post(set_audio_mute))
         .route("/v1/audio/default-device", post(set_audio_default_device))
         .route("/v1/audio/preference", post(set_sound_preference))
         .route("/v1/input/status", get(input_status))
-        .route("/v1/input/preference", post(set_input_preference))
+        .route(
+            "/v1/input/preference",
+            post(set_input_preference)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/input/sources", post(set_input_sources))
         .route("/v1/input/source", post(add_input_source))
         .route("/v1/input/switch-next", post(switch_to_next_input_source))
@@ -358,8 +458,16 @@ fn private_router() -> Router {
         .route("/v1/window-management/hot-corner", post(set_hot_corner))
         .route("/v1/shortcuts/status", get(shortcuts::shortcuts_status))
         .route("/v1/keyboard/shortcuts/status", get(shortcuts_status))
-        .route("/v1/keyboard/shortcuts/binding", post(set_shortcut_binding))
-        .route("/v1/keyboard/modifier-remap", post(set_modifier_remap))
+        .route(
+            "/v1/keyboard/shortcuts/binding",
+            post(set_shortcut_binding)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/keyboard/modifier-remap",
+            post(set_modifier_remap)
+                .layer(DefaultBodyLimit::max(SETTINGS_DEVICE_REQUEST_LIMIT_BYTES)),
+        )
         .route(
             "/v1/migration/capabilities",
             get(migration::migration_capabilities),
@@ -374,9 +482,14 @@ fn private_router() -> Router {
             post(migration_preference_plan),
         )
         .route("/v1/studio/turn", post(studio_turn))
+        .route("/v1/studio/turn/undo", post(undo_studio_turn))
         .route("/v1/studio/sessions", get(studio_sessions))
         .route("/v1/studio/session", get(studio_session))
         .route("/v1/studio/file", get(studio_file))
+        .route("/v1/studio/project", get(studio_project))
+        .route("/v1/studio/run", post(studio_run))
+        .route("/v1/studio/export", post(studio_export))
+        .route("/v1/studio/containerize", post(studio_containerize))
         .route("/v1/codex/status", get(codex_status))
         .route(
             "/v1/codex/login",
@@ -384,6 +497,26 @@ fn private_router() -> Router {
         )
         .route("/v1/codex/login/url", get(codex_login_url))
         .route("/v1/models/openai-key", get(openai_key_status))
+        .route(
+            "/v1/models/openai-key/manage",
+            post(request_openai_key_management)
+                .layer(DefaultBodyLimit::max(OPENAI_KEY_ACTION_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/openai-key-broker/claim",
+            post(openai_key_broker_claim)
+                .layer(DefaultBodyLimit::max(OPENAI_KEY_ACTION_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/openai-key-broker/commit",
+            post(openai_key_broker_commit)
+                .layer(DefaultBodyLimit::max(OPENAI_KEY_BROKER_REQUEST_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/openai-key-broker/decision",
+            post(openai_key_broker_decision)
+                .layer(DefaultBodyLimit::max(OPENAI_KEY_ACTION_REQUEST_LIMIT_BYTES)),
+        )
         .route("/v1/models/engine", post(set_resident_engine))
         .route("/v1/policy/status", get(policy_status))
         .route("/v1/policy/configure", post(configure_policy))
@@ -446,6 +579,35 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{private_router, TEXT_SHORTCUTS_REQUEST_LIMIT_BYTES};
+
+    #[test]
+    fn core_disables_dumps_before_constructing_the_async_runtime() {
+        let source = include_str!("main.rs");
+        let hardening = source
+            .find("disable_core_dumpability()?;")
+            .expect("core startup hardening");
+        let runtime = source
+            .find("tokio::runtime::Builder::new_multi_thread()")
+            .expect("Tokio runtime construction");
+        assert!(hardening < runtime);
+        assert!(source.contains("libc::PR_SET_DUMPABLE, 0"));
+        assert!(source.contains("libc::RLIMIT_CORE"));
+    }
+
+    #[test]
+    fn system_services_keep_core_nondumpable_and_model_cache_out_of_secrets() {
+        let core = include_str!("../../../os/systemd/goblins-os-core.service");
+        assert_eq!(
+            core.lines().filter(|line| *line == "LimitCORE=0").count(),
+            1
+        );
+        assert!(core.lines().any(|line| line == "NoNewPrivileges=yes"));
+        assert!(core.lines().any(|line| line == "ProtectSystem=strict"));
+
+        let cache = include_str!("../../../os/systemd/goblins-os-model-cache.service");
+        assert!(!cache.contains("goblins-os/secrets"));
+        assert!(!cache.contains("/var/lib/goblins-os/secrets"));
+    }
 
     #[tokio::test]
     async fn text_shortcuts_route_rejects_bodies_above_its_private_table_envelope() {

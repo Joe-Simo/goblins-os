@@ -9,7 +9,7 @@ export const metadata: Metadata = {
     template: "%s | Goblins OS",
   },
   description:
-    "Goblins OS is an open AI-native desktop for building local software on Fedora bootc.",
+    "Goblins OS is an open AI-native Linux desktop for building local software.",
   alternates: {
     canonical: "/",
   },
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Goblins OS",
     description:
-      "An open AI-native desktop for building local software on Fedora bootc.",
+      "An open AI-native Linux desktop for building local software.",
     url: "https://goblinsos.com",
     siteName: "Goblins OS",
     images: [
@@ -38,7 +38,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Goblins OS",
     description:
-      "An open AI-native desktop for building local software on Fedora bootc.",
+      "An open AI-native Linux desktop for building local software.",
     images: ["/screenshots/home.png"],
   },
 };
@@ -46,8 +46,11 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  colorScheme: "light",
-  themeColor: "#ffffff",
+  colorScheme: "light dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#18181b" },
+  ],
 };
 
 export default function RootLayout({

@@ -213,6 +213,21 @@ stop_core() {
   return 1
 }
 
+# GPT-OSS is selectable only when the local runtime contract is present.
+# Session unlock does not create that contract. Use the same loopback runtime
+# the ISO and hardware-gate fixtures publish so the real selector is sensitive.
+configure_local_engine_route_for_proof() {
+  export GOBLINS_OS_LOCAL_RUNTIME_URL="${GOBLINS_OS_LOCAL_RUNTIME_URL:-http://127.0.0.1:41134}"
+  export GOBLINS_OS_LOCAL_MODEL="${GOBLINS_OS_LOCAL_MODEL:-llama3.2:1b}"
+  stop_core
+  start_core
+  if ! core_proof_curl -sSf "$CORE_PROOF_URL/v1/ai/runtime/status" \
+    | jq -e '.engine.local_ready == true' >/dev/null; then
+    echo "RENDER-FAILED on-device GPT-OSS route was not ready after configuring the local runtime contract" >&2
+    return 1
+  fi
+}
+
 seed_first_boot_profile() {
   local mode="$1"
 
@@ -389,6 +404,64 @@ capture_window_region_with_popovers() {
   mv "$parent_capture" "$OUT/$out"
   chmod 0644 "$OUT/$out"
   echo "RENDERED $out ($title, composited_transients=$transient_count) wid=$wid"
+}
+
+largest_overlapping_transient() {
+  local parent_wid="$1" geometry x y width height parent_pid candidate
+  local candidate_geometry candidate_x candidate_y candidate_width candidate_height
+  local best="" best_area=0 area
+
+  geometry="$(xdotool getwindowgeometry --shell "$parent_wid" 2>/dev/null)" || return 1
+  x="$(printf '%s\n' "$geometry" | awk -F= '$1 == "X" { print $2; exit }')"
+  y="$(printf '%s\n' "$geometry" | awk -F= '$1 == "Y" { print $2; exit }')"
+  width="$(printf '%s\n' "$geometry" | awk -F= '$1 == "WIDTH" { print $2; exit }')"
+  height="$(printf '%s\n' "$geometry" | awk -F= '$1 == "HEIGHT" { print $2; exit }')"
+  parent_pid="$(xdotool getwindowpid "$parent_wid" 2>/dev/null || true)"
+  if [[ ! "$x" =~ ^-?[0-9]+$ || ! "$y" =~ ^-?[0-9]+$ \
+      || ! "$width" =~ ^[1-9][0-9]*$ || ! "$height" =~ ^[1-9][0-9]*$ \
+      || ! "$parent_pid" =~ ^[1-9][0-9]*$ ]]; then
+    return 1
+  fi
+
+  while read -r candidate; do
+    [ "$candidate" = "$parent_wid" ] && continue
+    candidate_geometry="$(xdotool getwindowgeometry --shell "$candidate" 2>/dev/null || true)"
+    candidate_x="$(printf '%s\n' "$candidate_geometry" | awk -F= '$1 == "X" { print $2; exit }')"
+    candidate_y="$(printf '%s\n' "$candidate_geometry" | awk -F= '$1 == "Y" { print $2; exit }')"
+    candidate_width="$(printf '%s\n' "$candidate_geometry" | awk -F= '$1 == "WIDTH" { print $2; exit }')"
+    candidate_height="$(printf '%s\n' "$candidate_geometry" | awk -F= '$1 == "HEIGHT" { print $2; exit }')"
+    if [[ ! "$candidate_x" =~ ^-?[0-9]+$ || ! "$candidate_y" =~ ^-?[0-9]+$ \
+        || ! "$candidate_width" =~ ^[1-9][0-9]*$ || ! "$candidate_height" =~ ^[1-9][0-9]*$ ]]; then
+      continue
+    fi
+    if (( candidate_x + candidate_width <= x || candidate_x >= x + width \
+          || candidate_y + candidate_height <= y || candidate_y >= y + height )); then
+      continue
+    fi
+    area=$((candidate_width * candidate_height))
+    if [ "$area" -gt "$best_area" ]; then
+      best="$candidate"
+      best_area="$area"
+    fi
+  done < <(xdotool search --onlyvisible --pid "$parent_pid" 2>/dev/null || true)
+
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
+}
+
+click_window_fraction() {
+  local wid="$1" x_percent="$2" y_percent="$3" geometry width height click_x click_y
+
+  geometry="$(xdotool getwindowgeometry --shell "$wid" 2>/dev/null)" || return 1
+  width="$(printf '%s\n' "$geometry" | awk -F= '$1 == "WIDTH" { print $2; exit }')"
+  height="$(printf '%s\n' "$geometry" | awk -F= '$1 == "HEIGHT" { print $2; exit }')"
+  if [[ ! "$width" =~ ^[1-9][0-9]*$ || ! "$height" =~ ^[1-9][0-9]*$ ]]; then
+    return 1
+  fi
+  click_x=$((width * x_percent / 100))
+  click_y=$((height * y_percent / 100))
+  xdotool mousemove --window "$wid" "$click_x" "$click_y"
+  xdotool click 1
 }
 
 start_interaction_window() {
@@ -781,24 +854,35 @@ capture_settings_polish_interactions() {
 
   # Load authoritative engine state first, then stop the real core and invoke the
   # real selector. This proves the product error state without treating a missing
-  # status response as evidence that GPT-OSS is active.
+  # status response as evidence that GPT-OSS is active. The GPT-OSS segment stays
+  # disabled until the local runtime contract is present, so configure that
+  # contract before opening Settings. A disabled control swallows the click.
+  core_proof_curl -sSf -X POST "$CORE_PROOF_URL/v1/session/unlock" \
+    -H 'content-type: application/json' -d '{"mode":"local-gpt-oss"}' >/dev/null
   start_interaction_window goblins-os-settings "Goblins OS Settings - AI & Models" --panel=models
   width="$(interaction_window_size "$INTERACTION_WID" WIDTH 1055)"
   height="$(interaction_window_size "$INTERACTION_WID" HEIGHT 840)"
   xdotool mousemove 2 2
   capture_existing_window "$INTERACTION_WID" .settings-models-engine-online.png "Settings Models online comparison"
   stop_core
-  # The selected on-device segment occupies the left half of the selector near
-  # the top of the Models pane. Click its stable center so the real action—not
-  # nearby explanatory copy—is exercised after the core goes offline.
-  xdotool mousemove --window "$INTERACTION_WID" $((width * 49 / 100)) $((height * 41 / 100))
-  xdotool click 1
-  sleep 1.0
-  xdotool mousemove 2 2
-  capture_existing_window "$INTERACTION_WID" 126-settings-models-engine-offline-error.png "Settings Models engine selection while core is offline"
-  offline_difference="$(image_absolute_error_pixels \
-    "$OUT/.settings-models-engine-online.png" \
-    "$OUT/126-settings-models-engine-offline-error.png")"
+  # On the 1055x840 Models surface the GPT-OSS segment is the left half of the
+  # engine row at y=306-344, x=368-662. Percentages below hit the center of
+  # that segment; nearby rows are only tried if the first click is a miss.
+  click_x=$((width * 49 / 100))
+  offline_difference=0
+  for click_y in $((height * 39 / 100)) $((height * 37 / 100)) $((height * 41 / 100)); do
+    xdotool mousemove --window "$INTERACTION_WID" "$click_x" "$click_y"
+    xdotool click 1
+    sleep 1.0
+    xdotool mousemove 2 2
+    capture_existing_window "$INTERACTION_WID" 126-settings-models-engine-offline-error.png "Settings Models engine selection while core is offline"
+    offline_difference="$(image_absolute_error_pixels \
+      "$OUT/.settings-models-engine-online.png" \
+      "$OUT/126-settings-models-engine-offline-error.png")"
+    if [ "$offline_difference" -ge 100 ]; then
+      break
+    fi
+  done
   rm -f "$OUT/.settings-models-engine-online.png"
   if [ "$offline_difference" -lt 100 ]; then
     echo "RENDER-FAILED Settings offline engine selection did not produce a visible error state (changed_pixels=$offline_difference)" >&2
@@ -813,7 +897,7 @@ capture_settings_polish_interactions() {
 }
 
 capture_studio_polish_interactions() {
-  local width height picker_x picker_y option_x option_y menu_difference closed_error_difference dark_menu_difference
+  local width height picker_x picker_y popover_wid menu_open_difference menu_difference closed_error_difference dark_menu_difference
 
   export GOBLINS_OS_THEME=light
   seed_first_boot_profile cloud-openai
@@ -822,25 +906,35 @@ capture_studio_polish_interactions() {
   start_interaction_window goblins-os-shell "Goblins OS" --studio
   width="$(interaction_window_size "$INTERACTION_WID" WIDTH 940)"
   height="$(interaction_window_size "$INTERACTION_WID" HEIGHT 700)"
-  # The engine picker is anchored in the lower-left of the right-side composer.
-  picker_x=$((width * 63 / 100))
-  picker_y=$((height * 83 / 100))
+  # On the 940x700 Studio surface the GPT-OSS MenuButton is the left control
+  # in the composer card (x=370-480, y=527-560), not the empty card interior.
+  picker_x=$((width * 45 / 100))
+  picker_y=$((height * 78 / 100))
   xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" .studio-engine-menu-closed.png "Studio engine menu closed comparison"
+  # Stop core before opening the popover. Stopping it while the menu is open
+  # destroys that transient and collapses the proof back to the closed frame.
+  stop_core
   xdotool mousemove --window "$INTERACTION_WID" "$picker_x" "$picker_y"
   xdotool click 1
   sleep 0.8
-  xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" 127-studio-engine-menu.png "Studio explicit engine menu"
+  menu_open_difference="$(image_absolute_error_pixels \
+    "$OUT/.studio-engine-menu-closed.png" \
+    "$OUT/127-studio-engine-menu.png")"
+  if [ "$menu_open_difference" -lt 100 ]; then
+    echo "RENDER-FAILED Studio engine menu did not visibly open (changed_pixels=$menu_open_difference)" >&2
+    return 1
+  fi
 
-  stop_core
-  # The popover opens above the lower composer. Exercise its first enabled,
-  # on-device option directly; keyboard traversal from a MenuButton closes the
-  # popover before entering this plain vertical button list on GTK 4.
-  option_x="$picker_x"
-  option_y=$((picker_y - height * 34 / 100))
-  xdotool mousemove --window "$INTERACTION_WID" "$option_x" "$option_y"
-  xdotool click 1
+  # Click the first enabled on-device option on the real popover surface.
+  # Parent-relative guesses land outside that transient and GTK dismisses it.
+  popover_wid="$(largest_overlapping_transient "$INTERACTION_WID" || true)"
+  if [ -z "$popover_wid" ]; then
+    echo "RENDER-FAILED Studio engine popover was not a visible transient window" >&2
+    return 1
+  fi
+  click_window_fraction "$popover_wid" 50 40
   sleep 1.0
   xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" 128-studio-engine-offline-error.png "Studio engine switch while core is offline"
@@ -868,8 +962,8 @@ capture_studio_polish_interactions() {
   start_interaction_window goblins-os-shell "Goblins OS" --studio
   width="$(interaction_window_size "$INTERACTION_WID" WIDTH 940)"
   height="$(interaction_window_size "$INTERACTION_WID" HEIGHT 700)"
-  picker_x=$((width * 63 / 100))
-  picker_y=$((height * 83 / 100))
+  picker_x=$((width * 45 / 100))
+  picker_y=$((height * 78 / 100))
   xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" .studio-dark-engine-menu-closed.png "Studio dark engine menu closed comparison"
   xdotool mousemove --window "$INTERACTION_WID" "$picker_x" "$picker_y"
@@ -1016,6 +1110,88 @@ capture_reduced_motion_polish_interactions() {
   REDUCED_MOTION_DIFFERENCE="$reduced_difference"
 }
 
+capture_reduced_transparency_polish_interactions() {
+  local previous_value changed_pixels trigger_path ready_path
+
+  previous_value="$(desktop_gsettings get org.goblins.os.a11y.visual reduce-transparency)"
+  trigger_path=/tmp/goblins-os-render-reduce-transparency.trigger
+  ready_path=/tmp/goblins-os-render-reduce-transparency.ready
+  rm -f "$trigger_path" "$ready_path"
+
+  export GOBLINS_OS_THEME=light
+  export GOBLINS_OS_RENDER_HOLD_WINDOW=1
+  export GOBLINS_OS_RENDER_QUERY=settings
+  cleanup_app_windows
+  # Keep the preference writer and launcher on one real desktop D-Bus session.
+  # The second frame is captured from the same window after Gio delivers the
+  # GSettings change, proving the shared backdrop reacts without an app restart.
+  desktop_user_command dbus-run-session -- bash -eu -c '
+    schema="$1"
+    key="$2"
+    trigger_path="$3"
+    ready_path="$4"
+    gsettings set "$schema" "$key" false
+    test "$(gsettings get "$schema" "$key")" = false
+    /usr/libexec/goblins-os/goblins-os-launcher &
+    app_pid=$!
+    cleanup() {
+      kill "$app_pid" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+    while [ ! -e "$trigger_path" ]; do
+      sleep 0.05
+    done
+    gsettings set "$schema" "$key" true
+    test "$(gsettings get "$schema" "$key")" = true
+    touch "$ready_path"
+    wait "$app_pid"
+  ' _ org.goblins.os.a11y.visual reduce-transparency "$trigger_path" "$ready_path" &
+
+  INTERACTION_WID="$(wait_for_exact_title "Goblins OS Launcher" || true)"
+  sleep 2.5
+  if [ -z "$INTERACTION_WID" ]; then
+    echo "RENDER-FAILED reduced-transparency launcher window was not visible" >&2
+    cleanup_app_windows
+    return 1
+  fi
+  xdotool windowactivate "$INTERACTION_WID" 2>/dev/null || true
+  xdotool windowfocus "$INTERACTION_WID" 2>/dev/null || true
+  xdotool mousemove 2 2
+  capture_existing_window "$INTERACTION_WID" 138a-launcher-standard-material.png "Launcher standard material"
+
+  touch "$trigger_path"
+  for _ in $(seq 1 40); do
+    [ -e "$ready_path" ] && break
+    sleep 0.1
+  done
+  if [ ! -e "$ready_path" ]; then
+    echo "RENDER-FAILED the real reduced-transparency preference did not become active" >&2
+    cleanup_app_windows
+    return 1
+  fi
+  sleep 0.8
+  xdotool mousemove 2 2
+  capture_existing_window "$INTERACTION_WID" 138b-launcher-reduced-transparency.png "Launcher reduced-transparency material"
+  changed_pixels="$(image_absolute_error_pixels \
+    "$OUT/138a-launcher-standard-material.png" \
+    "$OUT/138b-launcher-reduced-transparency.png")"
+  if [ "$changed_pixels" -lt 100 ]; then
+    echo "RENDER-FAILED reduced transparency did not produce a visible material change (changed_pixels=$changed_pixels)" >&2
+    cleanup_app_windows
+    return 1
+  fi
+
+  cleanup_app_windows
+  rm -f "$trigger_path" "$ready_path"
+  desktop_gsettings set org.goblins.os.a11y.visual reduce-transparency "$previous_value"
+  unset GOBLINS_OS_RENDER_QUERY
+  unset GOBLINS_OS_RENDER_HOLD_WINDOW
+
+  REDUCED_TRANSPARENCY_DIFFERENCE="$changed_pixels"
+  REDUCED_TRANSPARENCY_STANDARD_VALUE=false
+  REDUCED_TRANSPARENCY_ACTIVE_VALUE=true
+}
+
 capture_first_boot_offline_codex_if_supported() {
   local codex_status network_status
 
@@ -1051,6 +1227,9 @@ write_polish_interactions_proof() {
     "${STUDIO_DARK_MENU_DIFFERENCE:?}" \
     "${FIRST_APP_OFFLINE_ERROR_DIFFERENCE:?}" \
     "${REDUCED_MOTION_DIFFERENCE:?}" \
+    "${REDUCED_TRANSPARENCY_DIFFERENCE:?}" \
+    "${REDUCED_TRANSPARENCY_STANDARD_VALUE:?}" \
+    "${REDUCED_TRANSPARENCY_ACTIVE_VALUE:?}" \
     "${FIRST_BOOT_OFFLINE_CODEX_SUPPORTED:?}" \
     "${FIRST_BOOT_OFFLINE_CODEX_CAPTURED:?}" <<'PY'
 import hashlib
@@ -1068,8 +1247,11 @@ studio_closed_difference = int(sys.argv[6])
 studio_dark_difference = int(sys.argv[7])
 first_app_offline_difference = int(sys.argv[8])
 reduced_difference = int(sys.argv[9])
-first_boot_offline_codex_supported = sys.argv[10] == "true"
-first_boot_offline_codex_captured = sys.argv[11] == "true"
+reduced_transparency_difference = int(sys.argv[10])
+reduced_transparency_standard_value = sys.argv[11] == "true"
+reduced_transparency_active_value = sys.argv[12] == "true"
+first_boot_offline_codex_supported = sys.argv[13] == "true"
+first_boot_offline_codex_captured = sys.argv[14] == "true"
 screenshots = [
     "124-settings-models-advanced-collapsed.png",
     "125-settings-models-advanced-expanded.png",
@@ -1085,6 +1267,8 @@ screenshots = [
     "135-install-progress-reduced-motion-b.png",
     "136-settings-models-advanced-expanded-dark.png",
     "137-studio-engine-menu-dark.png",
+    "138a-launcher-standard-material.png",
+    "138b-launcher-reduced-transparency.png",
 ]
 if first_boot_offline_codex_captured:
     screenshots.append("138-first-boot-codex-offline.png")
@@ -1129,6 +1313,13 @@ proof = {
     "accessibility": {
         "proof": "source-gated",
         "account_backed_at_spi": "external",
+        "reduce_transparency": {
+            "schema": "org.goblins.os.a11y.visual",
+            "key": "reduce-transparency",
+            "same_live_window": True,
+            "standard_value": reduced_transparency_standard_value,
+            "active_value": reduced_transparency_active_value,
+        },
     },
     "comparisons": {
         "settings_expanded_changed_pixels": settings_difference,
@@ -1140,11 +1331,17 @@ proof = {
         "first_app_offline_error_changed_pixels": first_app_offline_difference,
         "reduced_motion_changed_pixels": reduced_difference,
         "reduced_motion_zero_difference": reduced_difference == 0,
+        "reduced_transparency_changed_pixels": reduced_transparency_difference,
+        "reduced_transparency_visible_difference": reduced_transparency_difference >= 100,
     },
     "screenshots": [png_evidence(name) for name in screenshots],
 }
 if not proof["comparisons"]["reduced_motion_zero_difference"]:
     raise SystemExit("RENDER-FAILED reduced-motion comparison was not zero")
+if reduced_transparency_standard_value or not reduced_transparency_active_value:
+    raise SystemExit("RENDER-FAILED reduced-transparency proof did not use false then true")
+if not proof["comparisons"]["reduced_transparency_visible_difference"]:
+    raise SystemExit("RENDER-FAILED reduced transparency did not visibly change the material")
 if first_boot_offline_codex_supported != first_boot_offline_codex_captured:
     raise SystemExit("RENDER-FAILED supported first-boot offline Codex state was not captured")
 (output / "139-polish-interactions-proof.json").write_text(
@@ -1162,13 +1359,18 @@ capture_polish_interactions() {
   STUDIO_DARK_MENU_DIFFERENCE=""
   FIRST_APP_OFFLINE_ERROR_DIFFERENCE=""
   REDUCED_MOTION_DIFFERENCE=""
+  REDUCED_TRANSPARENCY_DIFFERENCE=""
+  REDUCED_TRANSPARENCY_STANDARD_VALUE=""
+  REDUCED_TRANSPARENCY_ACTIVE_VALUE=""
   FIRST_BOOT_OFFLINE_CODEX_SUPPORTED=""
   FIRST_BOOT_OFFLINE_CODEX_CAPTURED=""
 
+  configure_local_engine_route_for_proof
   capture_settings_polish_interactions
   capture_studio_polish_interactions
   capture_first_app_polish_interactions
   capture_reduced_motion_polish_interactions
+  capture_reduced_transparency_polish_interactions
   capture_first_boot_offline_codex_if_supported
   write_polish_interactions_proof
   unset GOBLINS_OS_THEME
@@ -1224,6 +1426,17 @@ capture_chrome_surface() {
   unset GOBLINS_OS_THEME
 }
 
+capture_consent_surface() {
+  # Render-only broker mode is intentionally decision-incapable: it never
+  # claims core review state or submits a decision, and the visible copy says
+  # sharing is disabled. The installed setgid entrypoint and shared GTK theme
+  # are still exercised exactly as shipped.
+  capture goblins-os-consent-broker "Goblins OS Hosted AI Review" \
+    140-hosted-context-review.png --render-proof=light
+  capture goblins-os-consent-broker "Goblins OS Hosted AI Review" \
+    141-hosted-context-review-dark.png --render-proof=dark
+}
+
 if [ "$RENDER_SCOPE" = "polish-interactions" ]; then
   capture_polish_interactions
   kill "$XVFB_PID" "$CORE_PID" "$RES_PID" 2>/dev/null || true
@@ -1250,6 +1463,14 @@ fi
 
 if [ "$RENDER_SCOPE" = "chrome" ]; then
   capture_chrome_surface
+  kill "$XVFB_PID" "$CORE_PID" "$RES_PID" 2>/dev/null || true
+  echo "=== captured artifacts ==="
+  ls -la "$OUT"
+  exit 0
+fi
+
+if [ "$RENDER_SCOPE" = "consent" ]; then
+  capture_consent_surface
   kill "$XVFB_PID" "$CORE_PID" "$RES_PID" 2>/dev/null || true
   echo "=== captured artifacts ==="
   ls -la "$OUT"
@@ -1363,6 +1584,7 @@ export GOBLINS_OS_THEME=dark
 capture goblins-os-login     "Goblins OS Login"    25-login-dark.png
 unset GOBLINS_OS_THEME
 capture_settings_light_surface
+capture_consent_surface
 
 # Unlock the session in local-only mode so the shell renders the real desktop
 # (launcher + workspace + resident strip), not just the first-boot lock screen.

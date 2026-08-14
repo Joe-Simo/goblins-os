@@ -610,75 +610,113 @@ mod native {
         tile
     }
 
-    /// A two-segment AI mode switch. The active segment reflects the OS core's
-    /// current mode; clicking a segment posts the switch (the core validates
-    /// account requirements, and only a 2xx moves the highlight).
+    /// A compact three-engine switch. The panel receives readiness metadata,
+    /// never credentials; key setup remains in the fixed protected broker
+    /// reached through Settings.
     fn engine_switch(core: &CoreClient) -> gtk::Box {
         let current = current_engine(core);
+        let group = gtk::Box::new(gtk::Orientation::Vertical, 8);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         row.add_css_class("gos-cc-engine");
         row.set_homogeneous(true);
 
-        let local = gtk::Button::with_label("On-device · GPT-OSS");
+        let local = gtk::Button::with_label("GPT-OSS");
         local.add_css_class("gos-cc-seg");
-        let codex = gtk::Button::with_label("OpenAI · Codex");
+        let codex = gtk::Button::with_label("Codex");
         codex.add_css_class("gos-cc-seg");
-        // Honest three-way: highlight on-device only for local-gpt-oss, codex only
-        // for codex, and neither for the hosted openai-api engine or an unreachable
-        // core (None) — never optimistically claim local.
-        if current.as_deref() == Some("local-gpt-oss") {
-            local.add_css_class("is-active");
-        } else if current.as_deref() == Some("codex") {
-            codex.add_css_class("is-active");
-        }
-        update_engine_accessibility(&local, &codex, current.as_deref());
+        let api_key = gtk::Button::with_label("API key");
+        api_key.add_css_class("gos-cc-seg");
+        let feedback = gtk::Label::new(None);
+        feedback.add_css_class("gos-cc-note");
+        feedback.set_xalign(0.0);
+        feedback.set_wrap(true);
 
-        let wire = |button: &gtk::Button,
-                    engine: &'static str,
-                    sibling: &gtk::Button,
-                    core: CoreClient| {
-            let button_weak = button.downgrade();
-            let sibling_weak = sibling.downgrade();
+        update_engine_switch(&local, &codex, &api_key, current.as_ref());
+        let wire = |button: &gtk::Button, engine: &'static str, core: CoreClient| {
+            let local = local.clone();
+            let codex = codex.clone();
+            let api_key = api_key.clone();
+            let feedback = feedback.clone();
             button.connect_clicked(move |_| {
+                feedback.set_text("Switching Goblins AI engine…");
                 if set_engine(&core, engine) {
-                    if let (Some(button), Some(sibling)) =
-                        (button_weak.upgrade(), sibling_weak.upgrade())
-                    {
-                        button.add_css_class("is-active");
-                        sibling.remove_css_class("is-active");
-                        if engine == "codex" {
-                            update_engine_accessibility(&sibling, &button, Some(engine));
-                        } else {
-                            update_engine_accessibility(&button, &sibling, Some(engine));
-                        }
+                    if let Some(status) = current_engine(&core) {
+                        update_engine_switch(&local, &codex, &api_key, Some(&status));
+                        feedback.set_text(match engine {
+                            "local-gpt-oss" => "GPT-OSS is now active on this device.",
+                            "codex" => "Your OpenAI account through Codex is now active.",
+                            "openai-api" => {
+                                "Hosted OpenAI using your stored API key is now active."
+                            }
+                            _ => "The Goblins AI engine changed.",
+                        });
+                    } else {
+                        feedback.set_text(
+                            "The engine changed, but its current state could not be refreshed.",
+                        );
                     }
+                } else {
+                    feedback.set_text(
+                        "That engine is not ready. Open AI Settings to finish setup or retry.",
+                    );
                 }
             });
         };
-        wire(&local, "local-gpt-oss", &codex, core.clone());
-        wire(&codex, "codex", &local, core.clone());
+        wire(&local, "local-gpt-oss", core.clone());
+        wire(&codex, "codex", core.clone());
+        wire(&api_key, "openai-api", core.clone());
 
         row.append(&local);
         row.append(&codex);
-        row
+        row.append(&api_key);
+        group.append(&row);
+        group.append(&feedback);
+        group
     }
 
-    fn update_engine_accessibility(
+    fn update_engine_switch(
         local: &gtk::Button,
         codex: &gtk::Button,
-        selected: Option<&str>,
+        api_key: &gtk::Button,
+        status: Option<&EngineStatus>,
     ) {
-        // Each segment is "current" only for its own engine; openai-api / None
-        // (unreachable core) report neither segment as current.
-        let local_current = selected == Some("local-gpt-oss");
-        let codex_current = selected == Some("codex");
+        let selected = status.map(|status| status.engine.as_str());
+        for (button, engine) in [
+            (local, "local-gpt-oss"),
+            (codex, "codex"),
+            (api_key, "openai-api"),
+        ] {
+            if selected == Some(engine) {
+                button.add_css_class("is-active");
+            } else {
+                button.remove_css_class("is-active");
+            }
+        }
+        let core_available = status.is_some();
+        local.set_sensitive(core_available);
+        codex.set_sensitive(core_available);
+        api_key.set_sensitive(status.is_some_and(|status| status.configured));
         set_segment_accessibility(
             local,
             "Use on-device GPT-OSS",
             "on-device GPT-OSS",
-            local_current,
+            selected == Some("local-gpt-oss"),
         );
-        set_segment_accessibility(codex, "Use OpenAI Codex", "OpenAI Codex", codex_current);
+        set_segment_accessibility(
+            codex,
+            "Use your OpenAI account through Codex",
+            "your OpenAI account through Codex",
+            selected == Some("codex"),
+        );
+        let api_description = if !core_available {
+            "Goblins OS core is unavailable"
+        } else if status.is_some_and(|status| status.configured) {
+            "Switch to hosted OpenAI using your protected API key"
+        } else {
+            "Add your API key in AI Settings before selecting this engine"
+        };
+        set_accessible_label_description(api_key, "Use your OpenAI API key", api_description);
+        api_key.set_tooltip_text(Some(api_description));
     }
 
     fn set_segment_accessibility(
@@ -950,16 +988,15 @@ mod native {
     #[derive(Deserialize)]
     struct EngineStatus {
         engine: String,
+        configured: bool,
     }
 
-    fn current_engine(core: &CoreClient) -> Option<String> {
+    fn current_engine(core: &CoreClient) -> Option<EngineStatus> {
         let response = core.get("/v1/models/openai-key", CORE_READ_TIMEOUT).ok()?;
         if !response.is_success() {
             return None;
         }
-        serde_json::from_slice::<EngineStatus>(&response.body)
-            .ok()
-            .map(|status| status.engine)
+        serde_json::from_slice::<EngineStatus>(&response.body).ok()
     }
 
     fn ai_action_availability(core: &CoreClient, id: &str) -> AiActionAvailability {
@@ -1014,7 +1051,11 @@ mod tests {
         assert!(source.contains("Goblins AI"));
         assert!(source.contains("set_accessible_label_description"));
         assert!(source.contains("Use on-device GPT-OSS"));
-        assert!(source.contains("Use OpenAI Codex"));
+        assert!(source.contains("Use your OpenAI account through Codex"));
+        assert!(source.contains("Use your OpenAI API key"));
+        assert!(source.contains("Add your API key in AI Settings"));
+        let secret_entry_widget = ["Password", "Entry"].concat();
+        assert!(!source.contains(&secret_entry_widget));
         assert!(source.contains("Volume"));
         assert!(source.contains("percent_description"));
         assert!(source.contains("Display brightness"));

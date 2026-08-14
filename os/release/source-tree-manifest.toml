@@ -75,7 +75,6 @@ paths = [
 description = "Local compiler, container, and editor output that must not be treated as source"
 paths = [
   ".ci-target/",
-  ".ci-target-amd64/",
   "target/",
   "libpod/",
   ".claude/",
@@ -88,6 +87,6 @@ paths = [
 [policy]
 base = "Fedora bootc"
 font_stack = "Inter with Noto fallback"
-architectures = ["aarch64", "x86_64"]
+architectures = ["aarch64"]
 secrets = "Server-side/OS-owned relay only; no client-side secrets."
 trade_dress = "Goblins-owned UI; Apple references are quality references only."

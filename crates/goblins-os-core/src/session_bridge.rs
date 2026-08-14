@@ -1,9 +1,9 @@
 use std::{
     env,
     ffi::CString,
-    io::{self, Read, Write},
+    io::{self, IoSlice, Read, Write},
     net::Shutdown,
-    os::fd::AsRawFd,
+    os::fd::{AsRawFd, BorrowedFd},
     os::unix::{
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
         net::UnixStream,
@@ -16,17 +16,32 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use goblins_os_textshortcuts_engine::{
     sanitize_shortcuts, text_shortcuts_table_is_within_size_limit, TextShortcut,
 };
+use rustix::net::{sendmsg, SendAncillaryBuffer, SendAncillaryMessage, SendFlags};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use socket2::{Domain, SockAddr, Socket, Type};
 
 const DEFAULT_SOCKET: &str = "/run/goblins-os-session/session-bridge.sock";
 const DESKTOP_SESSION_USER: &str = "goblin";
-const MAX_REQUEST_BYTES: usize = 24 * 1024 * 1024;
+// A 20 MiB Studio archive expands to just under 27 MiB when base64 encoded.
+// Keep the transport ceiling narrowly above that encoded payload plus JSON.
+const MAX_REQUEST_BYTES: usize = 28 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const BRIDGE_IO_TIMEOUT: Duration = Duration::from_millis(2_000);
+// Reads are bounded at five seconds in the desktop bridge. A real multi-monitor
+// modeset has a separate 30-second bridge bound; keep the client beyond that
+// deadline so it never abandons a bridge-owned gdbus child first.
+const DISPLAY_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(8);
+const DISPLAY_CONFIG_APPLY_TIMEOUT: Duration = Duration::from_secs(35);
 const VOICE_STATUS_TIMEOUT: Duration = Duration::from_secs(8);
 const VOICE_CAPTURE_TIMEOUT: Duration = Duration::from_secs(35);
 const VOICE_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(130);
+const HOSTED_CONSENT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(8);
+const OPENAI_KEY_BROKER_LAUNCH_TIMEOUT: Duration = Duration::from_secs(8);
+const SNAPSHOT_RECOVERY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const STUDIO_EXPORT_TIMEOUT: Duration = Duration::from_secs(15);
+const STUDIO_WEB_PREVIEW_TIMEOUT: Duration = Duration::from_secs(12);
+const MAX_STUDIO_EXPORT_BYTES: usize = 20 * 1024 * 1024;
 const MAX_CAPTURE_WAV_BYTES: usize = 512 * 1024;
 const MAX_PLAYBACK_WAV_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CAPTURE_DURATION_SECONDS: u64 = 7;
@@ -81,6 +96,21 @@ pub(crate) enum TextShortcutsBridgeResult {
     Unavailable,
     Success(Vec<TextShortcut>),
     Rejected,
+    InvalidResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SnapshotRecoveryCopy {
+    pub(crate) destination_path: String,
+    pub(crate) bytes_copied: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SnapshotRecoveryBridgeResult {
+    Unavailable,
+    Success(SnapshotRecoveryCopy),
+    Failed(String),
     InvalidResponse,
 }
 
@@ -154,6 +184,8 @@ enum BridgeRequest<'a> {
     VoicePlayback {
         wav_base64: String,
     },
+    LaunchHostedConsentBroker,
+    LaunchOpenAiKeyBroker,
     PermissionStoreDelete {
         table: &'a str,
         id: &'a str,
@@ -171,6 +203,21 @@ enum BridgeRequest<'a> {
     TextShortcutsRead,
     TextShortcutsWrite {
         shortcuts: &'a [TextShortcut],
+    },
+    RecoverSnapshotFile {
+        snapshot_id: &'a str,
+        snapshot_subvolume: &'a str,
+        source_path: &'a str,
+        destination_directory: &'a str,
+        source_bytes: u64,
+    },
+    SaveStudioExport {
+        suggested_name: &'a str,
+        archive_base64: String,
+        sha256: &'a str,
+    },
+    OpenStudioWebPreview {
+        url: &'a str,
     },
 }
 
@@ -208,6 +255,113 @@ pub(crate) fn open_preview(path: &Path, kind: &'static str) -> SessionBridgeResu
         path: path.display().to_string(),
         kind,
     })
+}
+
+pub(crate) fn recover_snapshot_file(
+    snapshot_id: &str,
+    snapshot_subvolume: &str,
+    source_path: &str,
+    destination_directory: &str,
+    source: &std::fs::File,
+    source_bytes: u64,
+) -> SnapshotRecoveryBridgeResult {
+    let request = BridgeRequest::RecoverSnapshotFile {
+        snapshot_id,
+        snapshot_subvolume,
+        source_path,
+        destination_directory,
+        source_bytes,
+    };
+    match call_bridge_detailed_with_fd(&request, source) {
+        DetailedBridgeResult::Unavailable | DetailedBridgeResult::TransportUnavailable(_) => {
+            SnapshotRecoveryBridgeResult::Unavailable
+        }
+        DetailedBridgeResult::Rejected(detail) => SnapshotRecoveryBridgeResult::Failed(detail),
+        DetailedBridgeResult::ProtocolFailure(_) => SnapshotRecoveryBridgeResult::InvalidResponse,
+        DetailedBridgeResult::Success(raw) => {
+            let Ok(copy) = serde_json::from_str::<SnapshotRecoveryCopy>(&raw) else {
+                return SnapshotRecoveryBridgeResult::InvalidResponse;
+            };
+            if copy.destination_path.is_empty() || copy.bytes_copied > 8 * 1024 * 1024 * 1024 {
+                return SnapshotRecoveryBridgeResult::InvalidResponse;
+            }
+            SnapshotRecoveryBridgeResult::Success(copy)
+        }
+    }
+}
+
+pub(crate) fn save_studio_export(
+    suggested_name: &str,
+    archive: &[u8],
+    sha256: &str,
+) -> SessionBridgeResult {
+    if archive.len() > MAX_STUDIO_EXPORT_BYTES
+        || !valid_studio_export_name(suggested_name)
+        || !valid_sha256(sha256)
+    {
+        return SessionBridgeResult::Failed(
+            "The Studio export did not match the protected export contract.".to_string(),
+        );
+    }
+    let actual_sha256 = format!("{:x}", Sha256::digest(archive));
+    if actual_sha256 != sha256 {
+        return SessionBridgeResult::Failed(
+            "The Studio export digest did not match its archive.".to_string(),
+        );
+    }
+    call_bridge(&BridgeRequest::SaveStudioExport {
+        suggested_name,
+        archive_base64: BASE64_STANDARD.encode(archive),
+        sha256,
+    })
+}
+
+pub(crate) fn open_studio_web_preview(url: &str) -> SessionBridgeResult {
+    if !valid_studio_web_preview_url(url) {
+        return SessionBridgeResult::Failed(
+            "The Studio preview URL did not match the protected loopback contract.".to_string(),
+        );
+    }
+    call_bridge(&BridgeRequest::OpenStudioWebPreview { url })
+}
+
+fn valid_studio_web_preview_url(url: &str) -> bool {
+    const PREFIX: &str = "http://127.0.0.1:";
+    if url.len() > 160 || !url.is_ascii() {
+        return false;
+    }
+    let Some(authority_and_path) = url.strip_prefix(PREFIX) else {
+        return false;
+    };
+    let Some((port, token_with_slash)) = authority_and_path.split_once('/') else {
+        return false;
+    };
+    let Ok(port) = port.parse::<u16>() else {
+        return false;
+    };
+    port >= 1024
+        && token_with_slash.len() == 65
+        && token_with_slash.ends_with('/')
+        && token_with_slash[..64]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_studio_export_name(name: &str) -> bool {
+    name.len() <= 104
+        && name.len() > 4
+        && name.ends_with(".tar")
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_sha256(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub(crate) fn wpctl(args: &[&str]) -> SessionBridgeResult {
@@ -284,6 +438,23 @@ pub(crate) fn voice_playback(wav: &[u8]) -> VoiceBridgeResult<()> {
         DetailedBridgeResult::ProtocolFailure(_) => VoiceBridgeResult::InvalidResponse,
         DetailedBridgeResult::Success(_) => VoiceBridgeResult::Success(()),
     }
+}
+
+/// Ask the desktop session to launch the fixed trusted broker. No review id,
+/// content, lease, or other authority crosses this user-owned bridge. The
+/// broker atomically claims the core's sole pending review for its
+/// kernel-authenticated desktop UID through its own protected capability after
+/// launch.
+pub(crate) fn launch_hosted_consent_broker() -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::LaunchHostedConsentBroker)
+}
+
+/// Ask the authenticated desktop session to launch the fixed credential-entry
+/// broker. No user ID, operation, lease, key, ciphertext, or other authority
+/// crosses the user-owned bridge. The broker claims the core's sole pending
+/// operation for its kernel-authenticated desktop UID after launch.
+pub(crate) fn launch_openai_key_broker() -> SessionBridgeResult {
+    call_bridge(&BridgeRequest::LaunchOpenAiKeyBroker)
 }
 
 fn valid_pcm_wave(
@@ -432,6 +603,20 @@ enum DetailedBridgeResult {
 }
 
 fn call_bridge_detailed(request: &BridgeRequest<'_>) -> DetailedBridgeResult {
+    call_bridge_detailed_inner(request, None)
+}
+
+fn call_bridge_detailed_with_fd(
+    request: &BridgeRequest<'_>,
+    source: &std::fs::File,
+) -> DetailedBridgeResult {
+    call_bridge_detailed_inner(request, Some(source))
+}
+
+fn call_bridge_detailed_inner(
+    request: &BridgeRequest<'_>,
+    source: Option<&std::fs::File>,
+) -> DetailedBridgeResult {
     let socket = socket_path();
     if !socket.exists() {
         return DetailedBridgeResult::Unavailable;
@@ -444,6 +629,14 @@ fn call_bridge_detailed(request: &BridgeRequest<'_>) -> DetailedBridgeResult {
         BridgeRequest::VoiceAudioStatus => VOICE_STATUS_TIMEOUT,
         BridgeRequest::VoiceCapture => VOICE_CAPTURE_TIMEOUT,
         BridgeRequest::VoicePlayback { .. } => VOICE_PLAYBACK_TIMEOUT,
+        BridgeRequest::LaunchHostedConsentBroker => HOSTED_CONSENT_LAUNCH_TIMEOUT,
+        BridgeRequest::LaunchOpenAiKeyBroker => OPENAI_KEY_BROKER_LAUNCH_TIMEOUT,
+        BridgeRequest::RecoverSnapshotFile { .. } => SNAPSHOT_RECOVERY_TIMEOUT,
+        BridgeRequest::SaveStudioExport { .. } => STUDIO_EXPORT_TIMEOUT,
+        BridgeRequest::OpenStudioWebPreview { .. } => STUDIO_WEB_PREVIEW_TIMEOUT,
+        BridgeRequest::DisplayConfigGetCurrentState
+        | BridgeRequest::DisplayConfigGetApplyAllowed => DISPLAY_CONFIG_READ_TIMEOUT,
+        BridgeRequest::DisplayConfigApplyMonitors { .. } => DISPLAY_CONFIG_APPLY_TIMEOUT,
         _ => BRIDGE_IO_TIMEOUT,
     };
     let request = match serde_json::to_vec(request) {
@@ -476,7 +669,11 @@ fn call_bridge_detailed(request: &BridgeRequest<'_>) -> DetailedBridgeResult {
             "Goblins OS session bridge peer authentication failed.".to_string(),
         );
     }
-    if let Err(error) = write_all_before(&mut stream, &request, deadline) {
+    let write_result = match source {
+        Some(source) => write_all_with_fd_before(&mut stream, &request, source, deadline),
+        None => write_all_before(&mut stream, &request, deadline),
+    };
+    if let Err(error) = write_result {
         return DetailedBridgeResult::TransportUnavailable(format!(
             "Goblins OS session bridge request failed: {error}"
         ));
@@ -507,6 +704,35 @@ fn call_bridge_detailed(request: &BridgeRequest<'_>) -> DetailedBridgeResult {
             "Goblins OS session bridge returned an invalid response.".to_string(),
         ),
     }
+}
+
+fn write_all_with_fd_before(
+    stream: &mut UnixStream,
+    bytes: &[u8],
+    source: &std::fs::File,
+    deadline: Instant,
+) -> io::Result<()> {
+    stream.set_write_timeout(Some(remaining_before(deadline)?))?;
+    let source_fd = [source.as_raw_fd()];
+    // SAFETY: `source` owns this live descriptor for the duration of sendmsg.
+    let borrowed = [unsafe { BorrowedFd::borrow_raw(source_fd[0]) }];
+    let mut space = [std::mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = SendAncillaryBuffer::new(&mut space);
+    if !control.push(SendAncillaryMessage::ScmRights(&borrowed)) {
+        return Err(io::Error::other(
+            "bridge descriptor control buffer is too small",
+        ));
+    }
+    let written = sendmsg(
+        &*stream,
+        &[IoSlice::new(bytes)],
+        &mut control,
+        SendFlags::empty(),
+    )?;
+    if written == 0 {
+        return Err(io::Error::new(io::ErrorKind::WriteZero, "bridge closed"));
+    }
+    write_all_before(stream, &bytes[written..], deadline)
 }
 
 fn connect_before(path: &Path, deadline: Instant) -> io::Result<UnixStream> {
@@ -747,12 +973,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::connect_before;
     use super::{
-        gsettings, monotonic_now_ns, read_to_end_before, text_shortcuts_result,
-        text_shortcuts_runtime_status_result, valid_pcm_wave, wpctl, BridgeRequest,
-        DetailedBridgeResult, PcmFormat, SessionBridgeResult, TextShortcutsBridgeResult,
-        TextShortcutsRuntimeStatusResult, CAPTURE_PCM_FORMAT, MAX_CAPTURE_DURATION_SECONDS,
-        MAX_PLAYBACK_DURATION_SECONDS, TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS,
-        TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA,
+        gsettings, monotonic_now_ns, read_to_end_before, save_studio_export, text_shortcuts_result,
+        text_shortcuts_runtime_status_result, valid_pcm_wave, valid_studio_web_preview_url, wpctl,
+        BridgeRequest, DetailedBridgeResult, PcmFormat, SessionBridgeResult,
+        TextShortcutsBridgeResult, TextShortcutsRuntimeStatusResult, CAPTURE_PCM_FORMAT,
+        MAX_CAPTURE_DURATION_SECONDS, MAX_PLAYBACK_DURATION_SECONDS,
+        TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS, TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA,
     };
     use std::{
         io::Write,
@@ -802,6 +1028,66 @@ mod tests {
         );
         for forbidden in ["path", "command", "args", "device"] {
             assert!(playback.get(forbidden).is_none());
+        }
+    }
+
+    #[test]
+    fn studio_web_preview_request_accepts_only_exact_tokenized_loopback_urls() {
+        let token = "0123456789abcdef".repeat(4);
+        let url = format!("http://127.0.0.1:49152/{token}/");
+        assert!(valid_studio_web_preview_url(&url));
+        assert_eq!(
+            serde_json::to_value(BridgeRequest::OpenStudioWebPreview { url: &url }).unwrap(),
+            serde_json::json!({"op": "open-studio-web-preview", "url": url})
+        );
+        for rejected in [
+            format!("https://127.0.0.1:49152/{token}/"),
+            format!("http://localhost:49152/{token}/"),
+            format!("http://127.0.0.1:80/{token}/"),
+            format!("http://127.0.0.1:49152/{token}"),
+            format!("http://127.0.0.1:49152/{token}/?next=https://example.com"),
+            format!("http://127.0.0.1:49152/{token}/extra"),
+            "http://127.0.0.1:49152/not-a-token/".to_string(),
+        ] {
+            assert!(!valid_studio_web_preview_url(&rejected), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn studio_export_rejects_a_mismatched_digest_before_bridge_transport() {
+        assert!(matches!(
+            save_studio_export("tiny-world.tar", b"archive", &"0".repeat(64)),
+            SessionBridgeResult::Failed(detail) if detail.contains("digest")
+        ));
+    }
+
+    #[test]
+    fn consent_launch_request_exposes_no_review_capability() {
+        let launch = serde_json::to_value(BridgeRequest::LaunchHostedConsentBroker).unwrap();
+        assert_eq!(
+            launch,
+            serde_json::json!({"op": "launch-hosted-consent-broker"})
+        );
+        for forbidden in ["review_id", "lease_id", "ticket", "content"] {
+            assert!(launch.get(forbidden).is_none());
+        }
+    }
+
+    #[test]
+    fn key_broker_launch_request_exposes_no_credential_capability() {
+        let launch = serde_json::to_value(BridgeRequest::LaunchOpenAiKeyBroker).unwrap();
+        assert_eq!(
+            launch,
+            serde_json::json!({"op": "launch-open-ai-key-broker"})
+        );
+        for forbidden in [
+            "user_id",
+            "operation",
+            "lease_id",
+            "credential",
+            "encrypted_credential",
+        ] {
+            assert!(launch.get(forbidden).is_none());
         }
     }
 

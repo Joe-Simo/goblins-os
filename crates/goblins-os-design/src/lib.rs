@@ -260,12 +260,9 @@ const LIGHT_TOKENS: &str = r#"
 @define-color gos_studio_send_text    #ffffff;
 /* Studio tool chrome stays in the label/fill system instead of turning into a
    terminal palette. Tool labels and diffs read in ink weights (added = strong
-   ink, removed = faint), and the working/done dots are muted-ink -> solid-ink. */
+   ink, removed = faint); status itself is carried by visible text badges. */
 @define-color gos_studio_diff_add     #2f2f34;
 @define-color gos_studio_diff_del     #8a8a92;
-@define-color gos_studio_dot_working  #6e6e77;
-@define-color gos_studio_dot_done     #1a1a1f;
-@define-color gos_studio_dot_active   #1a1a1f;
 
 /* ── Elevation ink (scheme-aware shadows) ─────────────────────────────────────
    Light surfaces use soft drop shadows; dark surfaces use hairlines + a top
@@ -420,12 +417,9 @@ const DARK_TOKENS: &str = r#"
 @define-color gos_studio_send_hover   rgba(92, 184, 255, 1);
 @define-color gos_studio_send_text    #ffffff;
 /* Same label/fill discipline inverted for dark. Added = bright ink, removed =
-   faint; working = muted, done = bright. */
+   faint; visible status badges inherit the adaptive Studio label roles. */
 @define-color gos_studio_diff_add     #ededf0;
 @define-color gos_studio_diff_del     #8d8d97;
-@define-color gos_studio_dot_working  #9a9aa2;
-@define-color gos_studio_dot_done     #ededf0;
-@define-color gos_studio_dot_active   #ededf0;
 
 /* Elevation ink, inverted for night: the window keeps a real drop shadow so it
    separates from the desktop, grouped cards lean on hairlines + sheen, and the
@@ -466,7 +460,13 @@ pub const GOBLINS_NATIVE_CSS: &str = r#"
   font-family: "Inter", "Noto Sans", sans-serif;
   font-weight: 400;
   letter-spacing: 0;
+}
+
+/* One keyboard-only focus treatment for every native control. Surface-specific
+   rules can refine the shadow, but no new focusable widget starts invisible. */
+*:focus:focus-visible {
   outline: none;
+  box-shadow: 0 0 0 3px @gos_focus;
 }
 
 window {
@@ -543,55 +543,47 @@ window.gos-windowed .gos-root {
 }
 
 .gos-window-control {
-  min-width: 12px;
-  min-height: 12px;
+  min-width: 34px;
+  min-height: 34px;
   padding: 0;
-  border-radius: 999px;
-  border: 1px solid @gos_hairline_strong;
-  color: transparent;
-  box-shadow: 0 1px 0 alpha(@gos_material_sheen, 0.55) inset,
-              0 2px 5px rgba(13, 13, 12, 0.10);
+  border-radius: 10px;
+  border: 1px solid transparent;
+  color: @gos_ink_muted;
+  background: transparent;
+  box-shadow: none;
   transition: color 140ms cubic-bezier(0.32, 0.72, 0, 1),
               background 140ms cubic-bezier(0.32, 0.72, 0, 1),
               border 140ms cubic-bezier(0.32, 0.72, 0, 1),
               box-shadow 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-.gos-window-close {
-  background: #ff5f57;
-  border-color: rgba(122, 20, 24, 0.22);
+.gos-window-control:hover {
+  color: @gos_ink;
+  background: @gos_fill_primary;
+  border-color: @gos_hairline_strong;
+  box-shadow: 0 1px 0 alpha(@gos_material_sheen, 0.55) inset;
 }
 
-.gos-window-minimize {
-  background: #ffbd2e;
-  border-color: rgba(116, 76, 9, 0.24);
-}
-
-.gos-window-zoom {
-  background: #28c840;
-  border-color: rgba(26, 98, 33, 0.24);
-}
-
-/* The whole window-control cluster reveals its glyphs together the instant the
-   pointer enters the group, so hovering the group lights the whole set. */
-.gos-window-controls:hover .gos-window-control {
-  color: rgba(0, 0, 0, 0.58);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset,
-              0 4px 10px rgba(13, 13, 12, 0.16);
+/* Destruction is communicated by the close glyph at rest and a semantic hover
+   treatment on intent — never by a permanently decorative traffic-light dot. */
+.gos-window-close:hover {
+  color: @gos_on_tint;
+  background: @gos_system_red;
+  border-color: @gos_system_red;
 }
 
 .gos-window-control:active {
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.48) inset;
+  background: @gos_fill_secondary;
+  box-shadow: 0 1px 2px @gos_shadow_raise inset;
 }
 
-/* Inactive window (focus is on another window): controls drain to one uniform
-   gray with the glyphs hidden, so a backgrounded window reads unmistakably
-   unfocused. The titlebar fill softens with it. GTK sets :backdrop on every
-   widget of an unfocused toplevel. */
+/* Inactive window (focus is on another window): controls soften to one uniform
+   ink, so a backgrounded window reads unmistakably unfocused without hiding its
+   available actions. GTK sets :backdrop on every widget of an unfocused toplevel. */
 .gos-window-control:backdrop {
-  background: @gos_fill_primary;
-  border-color: @gos_hairline;
-  color: transparent;
+  background: transparent;
+  border-color: transparent;
+  color: @gos_ink_faint;
   box-shadow: none;
 }
 
@@ -1223,8 +1215,8 @@ button:active {
      the bottom margin keeps the action pair reading as one group. */
   margin-top: 28px;
   margin-bottom: 14px;
-  color: @gos_ink_faint;
-  font-size: 13px;
+  color: @gos_ink_muted;
+  font-size: 14px;
 }
 
 /* ── Command-Space home (the shell desktop) ──────────────────────────────
@@ -1356,8 +1348,8 @@ button:active {
 
 .gos-home-status {
   margin-top: 14px;
-  color: @gos_ink_faint;
-  font-size: 13px;
+  color: @gos_ink_muted;
+  font-size: 14px;
   font-weight: 400;
 }
 
@@ -1401,27 +1393,27 @@ button:active {
 
 .gos-home-app-meta {
   color: @gos_ink_muted;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
 }
 
 .gos-home-app-time {
-  color: @gos_ink_faint;
-  font-size: 12px;
+  color: @gos_ink_muted;
+  font-size: 13px;
   font-weight: 500;
 }
 
 .gos-home-app-more {
   margin-top: 4px;
-  color: @gos_ink_faint;
-  font-size: 12px;
+  color: @gos_ink_muted;
+  font-size: 13px;
   font-weight: 500;
 }
 
 .gos-home-empty {
   margin-top: 40px;
-  color: @gos_ink_faint;
-  font-size: 13px;
+  color: @gos_ink_muted;
+  font-size: 14px;
   font-weight: 400;
 }
 
@@ -1593,8 +1585,8 @@ button:active {
 .gos-studio-section {
   margin-top: 16px;
   margin-bottom: 6px;
-  color: @gos_studio_text_faint;
-  font-size: 10px;
+  color: @gos_studio_text_muted;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.2px;
   text-transform: uppercase;
@@ -1613,6 +1605,10 @@ button:active {
 
 .gos-studio-project:hover {
   background: @gos_studio_hover;
+}
+
+.gos-studio-project.is-active {
+  background: @gos_studio_active;
 }
 
 .gos-studio-thread-item {
@@ -1637,8 +1633,8 @@ button:active {
 }
 
 .gos-studio-time {
-  color: @gos_studio_text_faint;
-  font-size: 11px;
+  color: @gos_studio_text_muted;
+  font-size: 12px;
 }
 
 /* On the selected row the hover tint eats faint-text contrast — lift the
@@ -1647,23 +1643,22 @@ button:active {
   color: @gos_studio_text_muted;
 }
 
-.gos-studio-dot {
-  min-width: 8px;
-  min-height: 8px;
+.gos-studio-status {
+  min-height: 20px;
+  padding: 0 6px;
   border-radius: 999px;
-  background: @gos_studio_text_faint;
+  border: 1px solid @gos_studio_border;
+  color: @gos_studio_text_muted;
+  background: @gos_studio_input;
+  font-size: 11px;
+  font-weight: 700;
 }
 
-.gos-studio-dot.is-working {
-  background: @gos_studio_dot_working;
-}
-
-.gos-studio-dot.is-done {
-  background: @gos_studio_dot_done;
-}
-
-.gos-studio-dot.is-active {
-  background: @gos_studio_dot_active;
+.gos-studio-status.is-open {
+  border-radius: 6px;
+  border-color: @gos_focus;
+  color: @gos_studio_text;
+  background: @gos_studio_active;
 }
 
 .gos-studio-add {
@@ -1781,6 +1776,54 @@ button:active {
   color: @gos_studio_text_muted;
   font-family: monospace;
   font-size: 12px;
+}
+
+.gos-studio-file-button {
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: @gos_studio_text;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.gos-studio-file-button:hover,
+.gos-studio-file-button:focus:focus-visible {
+  color: @gos_studio_text;
+  background: @gos_studio_hover;
+}
+
+.gos-studio-file-button:focus:focus-visible {
+  box-shadow: 0 0 0 3px @gos_focus;
+}
+
+.gos-studio-inspector {
+  min-height: 220px;
+  margin: 0 22px 2px 22px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid @gos_studio_border;
+  background: @gos_studio_panel;
+}
+
+.gos-studio-inspector notebook,
+.gos-studio-inspector notebook > stack,
+.gos-studio-inspector scrolledwindow {
+  background: @gos_studio_input;
+  border-color: @gos_studio_border_soft;
+}
+
+.gos-studio-code {
+  padding: 12px;
+  color: @gos_studio_text;
+  background: @gos_studio_input;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.gos-studio-code text {
+  color: @gos_studio_text;
+  background: @gos_studio_input;
 }
 
 /* Composer: the input with a model/reasoning/mode/access control row and a round
@@ -2453,6 +2496,11 @@ button:active {
   padding: 8px 14px 8px 16px;
 }
 
+.gos-launcher-field:focus-within {
+  border-color: @gos_focus;
+  box-shadow: 0 0 0 3px @gos_focus;
+}
+
 .gos-launcher-glyph {
   color: @gos_ink_muted;
   /* Matches .gos-launcher-entry (20px) so the glyph and the field text sit on one
@@ -2496,8 +2544,8 @@ button:active {
 
 .gos-launcher-section {
   margin: 10px 12px 2px 12px;
-  color: @gos_ink_faint;
-  font-size: 10px;
+  color: @gos_ink_muted;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.2px;
   text-transform: uppercase;
@@ -2547,7 +2595,7 @@ button:active {
 }
 .gos-launcher-row.is-selected .gos-launcher-row-title { color: @gos_ink; }
 
-.gos-launcher-row-sub { color: @gos_ink_muted; font-size: 12px; }
+.gos-launcher-row-sub { color: @gos_ink_secondary; font-size: 13px; }
 .gos-launcher-row.is-selected .gos-launcher-row-sub { color: @gos_ink_secondary; }
 
 .gos-launcher-kind {
@@ -2555,7 +2603,7 @@ button:active {
   border-radius: 999px;
   border: 1px solid @gos_material_border;
   color: @gos_ink_muted;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.6px;
   text-transform: uppercase;
@@ -2578,8 +2626,8 @@ button:active {
 
 .gos-launcher-empty {
   margin: 16px 12px;
-  color: @gos_ink_faint;
-  font-size: 13px;
+  color: @gos_ink_muted;
+  font-size: 14px;
 }
 
 /* ── Control center (menu-bar quick settings) ────────────────────────────────
@@ -2896,7 +2944,8 @@ mod tests {
         assert!(GOBLINS_NATIVE_CSS.contains("@gos_label_secondary"));
         assert!(GOBLINS_NATIVE_CSS.contains("@gos_fill_tertiary"));
         assert!(GOBLINS_NATIVE_CSS.contains("border-radius: 16px"));
-        assert!(GOBLINS_NATIVE_CSS.contains(".gos-window-zoom"));
+        assert!(GOBLINS_NATIVE_CSS.contains(".gos-window-control"));
+        assert!(GOBLINS_NATIVE_CSS.contains(".gos-window-close:hover"));
         assert!(GOBLINS_NATIVE_CSS.contains("Inter"));
         for forbidden in ["SFPro", "SF Pro", "San Francisco"] {
             assert!(
@@ -3182,6 +3231,37 @@ mod tests {
             "no 2px focus ring may remain — the canonical ring is 3px"
         );
         assert!(GOBLINS_NATIVE_CSS.contains("0 0 0 3px @gos_focus"));
+        assert!(GOBLINS_NATIVE_CSS.contains("*:focus:focus-visible"));
+        assert!(GOBLINS_NATIVE_CSS.contains(".gos-launcher-field:focus-within"));
+    }
+
+    #[test]
+    fn window_controls_use_goblins_chrome_and_accessible_targets() {
+        let control = GOBLINS_NATIVE_CSS
+            .split(".gos-window-control {")
+            .nth(1)
+            .and_then(|block| block.split('}').next())
+            .expect("window control rule");
+        assert!(control.contains("min-width: 34px;"));
+        assert!(control.contains("min-height: 34px;"));
+        assert!(control.contains("border-radius: 10px;"));
+        assert!(GOBLINS_NATIVE_CSS.contains(".gos-window-close:hover"));
+        for traffic_light_color in ["#ff5f57", "#ffbd2e", "#28c840"] {
+            assert!(
+                !GOBLINS_NATIVE_CSS.contains(traffic_light_color),
+                "window chrome must not reproduce traffic-light color {traffic_light_color}"
+            );
+        }
+    }
+
+    #[test]
+    fn studio_status_is_textual_and_not_color_only() {
+        assert!(GOBLINS_NATIVE_CSS.contains(".gos-studio-status"));
+        assert!(GOBLINS_NATIVE_CSS.contains(".gos-studio-status.is-open"));
+        assert!(
+            !GOBLINS_NATIVE_CSS.contains(".gos-studio-dot"),
+            "Studio state must be readable as text instead of an unlabeled dot"
+        );
     }
 
     #[test]

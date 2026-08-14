@@ -2,10 +2,10 @@
 
 Use one file per run, and append a timestamped section for each attempt.
 
-Current release runs use Docker on native Linux runners for each target
-architecture. Older dated entries below may mention Podman because they are
-historical proof records; do not treat those entries as current run
-instructions.
+Current release runs use Docker on a native aarch64 Linux runner, followed by
+Apple Silicon/HVF display proof and its signed attestation. Older dated entries
+below may mention x86_64, other architectures, or Podman because they are
+historical proof records; do not treat those entries as current instructions.
 
 ## Run: YYYY-MM-DD
 - Runner/device:
@@ -17,10 +17,12 @@ instructions.
   - rust: pass/fail
   - image: pass/fail
   - installer-iso: pass/fail
- - Host/VM screenshot capture path: `os/screenshots/hardware-gate/<arch>/YYYY-MM-DD/`
+- Host/VM screenshot capture path: `os/screenshots/hardware-gate/aarch64/YYYY-MM-DD/`
 - Canonical evidence bundle path/SHA256:
-- Exact evidence workflow artifact/run attempt:
-- Local aarch64/HVF signed attestation run (aarch64 only):
+- Native aarch64 packaging workflow artifact/run attempt:
+- Local aarch64/HVF authority record and detached CMS signature:
+- Display authority certificate SHA256:
+- Signed verification ISO and complete screenshot-manifest SHA256 bindings:
 - Verify command output:
 - Verify result (`blocked=0`): pass/fail
 - Self-test command output:
@@ -48,7 +50,7 @@ instructions.
 - Screenshot(s): `10-settings.png`, `11-settings-models.png`, `12-settings-dark.png`
 
 5) Real Build Studio run (real engine)
-- Engine mode used: local model path | BYO OpenAI relay | Codex
+- Engine mode used: on-device GPT-OSS | your OpenAI API key | OpenAI account through Codex
 - Prompt used:
 - Result: pass/fail
 - Screenshot(s): `13-studio-before.png`, `14-studio-running.png`, `15-studio-app-detail.png`,
@@ -69,7 +71,7 @@ instructions.
 8) Install storage, bootloader, and dual-boot proof
 - Installation Destination explicitly selected: yes/no
 - Formatting/storage summary reviewed before write: yes/no
-- Existing Windows/macOS/Linux install preserved in manual storage path: yes/no
+- Existing OS, APFS/data, recovery, vendor, and EFI partitions preserved in manual storage path: yes/no
 - Bootloader/EFI target reviewed: yes/no
 - Screenshot(s): `25-install-destination.png`, `26-install-storage-summary.png`,
   `27-dual-boot-preserve-existing-os.png`, `28-bootloader-efi-summary.png`
@@ -78,17 +80,16 @@ instructions.
 - Release evidence manifest generated for this architecture: yes/no
 - Cargo package TSV generated from `Cargo.lock`: yes/no
 - RPM package TSV generated from the built image RPM database: yes/no
-- Evidence path: `os/signoff-proofs/sbom/<arch>/`
+- Evidence path: `os/signoff-proofs/sbom/aarch64/`
 
 10) Canonical display-evidence integrity
-- `evidence-bundle.json` recomputed against all 32 uniform-dimension PNGs and every required JSON: yes/no
-- Exact x86_64 capture artifact file matched the successful workflow run: yes/no/not-applicable
-- Exact aarch64 seal and record matched the successful GitHub-hosted attestation run: yes/no/not-applicable
-- GitHub artifact attestation verified against the exact aarch64 signer workflow and candidate commit: yes/no/not-applicable
+- `evidence-bundle.json` recomputed against all 42 uniform-dimension PNGs and every required JSON: yes/no
+- Capture-host authority record and detached CMS signature verified with the exact candidate's pinned certificate: yes/no
+- Signed candidate, image digest, verification ISO SHA256, and complete screenshot-manifest SHA256 matched the recomputed evidence: yes/no
 
 ### Runtime engine setup
-- Engine path configured: local model | BYO OpenAI relay | BYO Codex
-- Engine config source: `os-settings` / local model folder path / relay
+- Engine path configured: on-device GPT-OSS | your OpenAI API key | OpenAI account through Codex
+- Engine config source: Settings / protected local model location / protected OS service
 - Provision artifacts validated: yes/no
 - First real Studio build run produced a built artifact: yes/no
 - Built app path/URL: 

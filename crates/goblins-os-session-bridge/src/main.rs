@@ -1,33 +1,61 @@
 use std::{
     env,
-    ffi::CString,
+    ffi::{CString, OsStr},
     fs::{self, OpenOptions},
-    io::{self, Read, Write},
-    os::fd::AsRawFd,
+    io::{self, IoSliceMut, Read, Write},
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     os::unix::{
         fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStrExt as _;
+
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::{
+    ambient_authority,
+    fs::{
+        Dir, MetadataExt as _, OpenOptions as CapOpenOptions, OpenOptionsExt as _,
+        PermissionsExt as _,
+    },
+};
 use goblins_os_textshortcuts_engine::{TableLoadStatus, TextShortcut, TextShortcutTableStore};
+use rustix::net::{recvmsg, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const DEFAULT_SOCKET: &str = "/run/goblins-os-session/session-bridge.sock";
 const SOCKET_GROUP: &str = "goblins-session-bridge";
 const CORE_SERVICE_USER: &str = "goblins-os";
-const MAX_REQUEST_BYTES: usize = 24 * 1024 * 1024;
+// A 20 MiB Studio archive expands to just under 27 MiB when base64 encoded.
+// Keep the transport ceiling narrowly above that encoded payload plus JSON.
+const MAX_REQUEST_BYTES: usize = 28 * 1024 * 1024;
 const MAX_CAPTURE_WAV_BYTES: usize = 512 * 1024;
 const MAX_PLAYBACK_WAV_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CAPTURE_DURATION_SECONDS: u64 = 7;
 const MAX_PLAYBACK_DURATION_SECONDS: u64 = 90;
 const VOICE_CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 const VOICE_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(120);
+const HOSTED_CONSENT_BROKER: &str = "/usr/libexec/goblins-os/goblins-os-consent-broker";
+const HOSTED_CONSENT_BROKER_GROUP: &str = "goblins-core-consent-broker";
+const HOSTED_CONSENT_PROCESS_TIMEOUT: Duration = Duration::from_secs(315);
+const OPENAI_KEY_BROKER: &str = "/usr/libexec/goblins-os/goblins-os-openai-key-broker";
+const OPENAI_KEY_BROKER_GROUP: &str = "goblins-core-openai-key-broker";
+// Covers claim (5s), the full entry window (180s), encryption (15s), commit
+// (5s), and a short bounded failure-notice window while remaining below the
+// core's five-minute operation lease.
+const OPENAI_KEY_BROKER_PROCESS_TIMEOUT: Duration = Duration::from_secs(240);
+const MAX_RECOVERY_FILE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_STUDIO_EXPORT_BYTES: usize = 20 * 1024 * 1024;
+const STUDIO_WEB_PREVIEW_TIMEOUT: Duration = Duration::from_secs(8);
+const XDG_OPEN_PATH: &str = "/usr/bin/xdg-open";
 const TEXT_SHORTCUTS_RUNTIME_STATUS_PATH: &str =
     "/run/goblins-os-session/text-shortcuts-runtime-status.json";
 const TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA: &str = "goblins-os.text-shortcuts-runtime-status.v1";
@@ -46,11 +74,17 @@ const A11Y_INTERFACE_SCHEMA: &str = "org.gnome.desktop.a11y.interface";
 const A11Y_KEYBOARD_SCHEMA: &str = "org.gnome.desktop.a11y.keyboard";
 const A11Y_MAGNIFIER_SCHEMA: &str = "org.gnome.desktop.a11y.magnifier";
 const A11Y_MOUSE_SCHEMA: &str = "org.gnome.desktop.a11y.mouse";
+const GOBLINS_VISUAL_A11Y_SCHEMA: &str = "org.goblins.os.a11y.visual";
 const COLOR_SCHEMA: &str = "org.gnome.settings-daemon.plugins.color";
 const FOCUS_SCHEMA: &str = "org.goblins.os.focus";
 const NOTIFICATIONS_SCHEMA: &str = "org.gnome.desktop.notifications";
 const NOTIFICATION_APPLICATION_SCHEMA: &str = "org.gnome.desktop.notifications.application";
 const NOTIFICATION_APPLICATION_BASE_PATH: &str = "/org/gnome/desktop/notifications/application/";
+const PROXY_SCHEMA: &str = "org.gnome.system.proxy";
+const HTTP_PROXY_SCHEMA: &str = "org.gnome.system.proxy.http";
+const HTTPS_PROXY_SCHEMA: &str = "org.gnome.system.proxy.https";
+const FTP_PROXY_SCHEMA: &str = "org.gnome.system.proxy.ftp";
+const SOCKS_PROXY_SCHEMA: &str = "org.gnome.system.proxy.socks";
 const WM_SCHEMA: &str = "org.goblins.shell.extensions.wm";
 const PERMISSION_STORE_DEST: &str = "org.freedesktop.impl.portal.PermissionStore";
 const PERMISSION_STORE_PATH: &str = "/org/freedesktop/impl/portal/PermissionStore";
@@ -68,6 +102,8 @@ const DEFAULT_SOURCE: &str = "@DEFAULT_AUDIO_SOURCE@";
 const GSETTINGS_TIMEOUT: Duration = Duration::from_millis(1_500);
 const WPCTL_TIMEOUT: Duration = Duration::from_millis(1_500);
 const IBUS_TIMEOUT: Duration = Duration::from_millis(1_500);
+const GDBUS_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const GDBUS_DISPLAY_APPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 const KEYBOARD_KEYS: &[&str] = &[
     "repeat",
@@ -84,9 +120,12 @@ const MOUSE_KEYS: &[&str] = &[
 const TOUCHPAD_KEYS: &[&str] = &[
     "speed",
     "tap-to-click",
+    "tap-and-drag",
+    "tap-and-drag-lock",
     "natural-scroll",
     "two-finger-scrolling-enabled",
     "disable-while-typing",
+    "click-method",
 ];
 const INPUT_SOURCE_KEYS: &[&str] = &["sources", "current", "xkb-options"];
 const INTERFACE_KEYS: &[&str] = &["enable-animations", "text-scaling-factor"];
@@ -104,11 +143,14 @@ const A11Y_KEYBOARD_KEYS: &[&str] = &[
 ];
 const A11Y_MAGNIFIER_KEYS: &[&str] = &["mag-factor", "lens-mode"];
 const A11Y_MOUSE_KEYS: &[&str] = &["dwell-click-enabled"];
+const GOBLINS_VISUAL_A11Y_KEYS: &[&str] = &["reduce-transparency"];
 const COLOR_KEYS: &[&str] = &[
     "night-light-enabled",
     "night-light-schedule-automatic",
     "night-light-temperature",
 ];
+const PROXY_KEYS: &[&str] = &["mode", "autoconfig-url", "ignore-hosts"];
+const PROXY_ENDPOINT_KEYS: &[&str] = &["host", "port"];
 const FOCUS_KEYS: &[&str] = &[
     "active-mode",
     "modes",
@@ -174,6 +216,8 @@ enum BridgeRequest {
     VoicePlayback {
         wav_base64: String,
     },
+    LaunchHostedConsentBroker {},
+    LaunchOpenAiKeyBroker {},
     PermissionStoreDelete {
         table: String,
         id: String,
@@ -192,6 +236,27 @@ enum BridgeRequest {
     TextShortcutsWrite {
         shortcuts: Vec<TextShortcut>,
     },
+    RecoverSnapshotFile {
+        snapshot_id: String,
+        snapshot_subvolume: String,
+        source_path: String,
+        destination_directory: String,
+        source_bytes: u64,
+    },
+    SaveStudioExport {
+        suggested_name: String,
+        archive_base64: String,
+        sha256: String,
+    },
+    OpenStudioWebPreview {
+        url: String,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotRecoveryCopy {
+    destination_path: String,
+    bytes_copied: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -297,7 +362,7 @@ fn handle_stream(stream: &mut UnixStream) -> BridgeResponse {
         Ok(uid) => uid,
         Err(()) => return failure("session bridge peer authentication failed."),
     };
-    let body = match read_to_end_before(
+    let (body, source_fd) = match read_request_with_optional_fd_before(
         stream,
         MAX_REQUEST_BYTES,
         Instant::now() + STREAM_REQUEST_TIMEOUT,
@@ -314,18 +379,27 @@ fn handle_stream(stream: &mut UnixStream) -> BridgeResponse {
             return failure("session bridge request did not match an allowlisted operation.");
         }
     };
-    handle_request(request, peer_uid)
+    handle_request(request, peer_uid, source_fd)
 }
 
-fn handle_request(request: BridgeRequest, peer_uid: u32) -> BridgeResponse {
+fn handle_request(
+    request: BridgeRequest,
+    peer_uid: u32,
+    mut source_fd: Option<std::fs::File>,
+) -> BridgeResponse {
     if matches!(
         &request,
         BridgeRequest::VoiceAudioStatus {}
             | BridgeRequest::VoiceCapture {}
             | BridgeRequest::VoicePlayback { .. }
+            | BridgeRequest::LaunchHostedConsentBroker {}
+            | BridgeRequest::LaunchOpenAiKeyBroker {}
+            | BridgeRequest::RecoverSnapshotFile { .. }
+            | BridgeRequest::SaveStudioExport { .. }
+            | BridgeRequest::OpenStudioWebPreview { .. }
     ) && resolve_user_id(CORE_SERVICE_USER) != Some(peer_uid)
     {
-        return failure("voice operations require the authenticated core service peer.");
+        return failure("This operation requires the authenticated core service peer.");
     }
     match request {
         BridgeRequest::Ping => success("pong".to_string()),
@@ -335,6 +409,8 @@ fn handle_request(request: BridgeRequest, peer_uid: u32) -> BridgeResponse {
         BridgeRequest::VoiceAudioStatus {} => voice_audio_status_response(),
         BridgeRequest::VoiceCapture {} => voice_capture_response(),
         BridgeRequest::VoicePlayback { wav_base64 } => voice_playback_response(&wav_base64),
+        BridgeRequest::LaunchHostedConsentBroker {} => launch_hosted_consent_broker_response(),
+        BridgeRequest::LaunchOpenAiKeyBroker {} => launch_openai_key_broker_response(),
         BridgeRequest::PermissionStoreDelete { table, id, app } => {
             permission_store_delete_response(&table, &id, &app)
         }
@@ -349,7 +425,720 @@ fn handle_request(request: BridgeRequest, peer_uid: u32) -> BridgeResponse {
         BridgeRequest::TextShortcutsRuntimeStatus {} => text_shortcuts_runtime_status_response(),
         BridgeRequest::TextShortcutsRead {} => text_shortcuts_read_response(),
         BridgeRequest::TextShortcutsWrite { shortcuts } => text_shortcuts_write_response(shortcuts),
+        BridgeRequest::RecoverSnapshotFile {
+            snapshot_id,
+            snapshot_subvolume,
+            source_path,
+            destination_directory,
+            source_bytes,
+        } => recover_snapshot_file_response(
+            &snapshot_id,
+            &snapshot_subvolume,
+            &source_path,
+            &destination_directory,
+            source_fd.take(),
+            source_bytes,
+        ),
+        BridgeRequest::SaveStudioExport {
+            suggested_name,
+            archive_base64,
+            sha256,
+        } => save_studio_export_response(&suggested_name, &archive_base64, &sha256),
+        BridgeRequest::OpenStudioWebPreview { url } => studio_web_preview_response(&url),
     }
+}
+
+fn studio_web_preview_response(url: &str) -> BridgeResponse {
+    if !valid_studio_web_preview_url(url) {
+        return failure("The Studio preview URL is not an allowlisted loopback preview.");
+    }
+    let mut command = Command::new(XDG_OPEN_PATH);
+    command.arg(url);
+    configure_studio_preview_environment(&mut command);
+    match bounded_success_of(command, STUDIO_WEB_PREVIEW_TIMEOUT) {
+        Ok(true) => success("opened".to_string()),
+        Ok(false) => failure("The desktop session could not open the Studio preview."),
+        Err(BoundedCommandError::Missing) => {
+            failure("The desktop preview opener is not installed in this system image.")
+        }
+        Err(BoundedCommandError::TimedOut) => {
+            failure("The desktop preview opener did not finish before its safety deadline.")
+        }
+        Err(BoundedCommandError::Failed) => {
+            failure("The desktop session could not start the Studio preview opener.")
+        }
+    }
+}
+
+fn valid_studio_web_preview_url(url: &str) -> bool {
+    const PREFIX: &str = "http://127.0.0.1:";
+    if url.len() > 160 || !url.is_ascii() {
+        return false;
+    }
+    let Some(authority_and_path) = url.strip_prefix(PREFIX) else {
+        return false;
+    };
+    let Some((port, token_with_slash)) = authority_and_path.split_once('/') else {
+        return false;
+    };
+    let Ok(port) = port.parse::<u16>() else {
+        return false;
+    };
+    port >= 1024
+        && token_with_slash.len() == 65
+        && token_with_slash.ends_with('/')
+        && token_with_slash[..64]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn recover_snapshot_file_response(
+    snapshot_id: &str,
+    snapshot_subvolume: &str,
+    source_path: &str,
+    destination_directory: &str,
+    source: Option<std::fs::File>,
+    source_bytes: u64,
+) -> BridgeResponse {
+    let Some(source) = source else {
+        return failure("Snapshot recovery requires one authenticated source descriptor.");
+    };
+    match recover_snapshot_file(
+        snapshot_id,
+        snapshot_subvolume,
+        source_path,
+        destination_directory,
+        source,
+        source_bytes,
+    ) {
+        Ok(copy) => match serde_json::to_string(&copy) {
+            Ok(copy) => success(copy),
+            Err(_) => failure("The recovered-file result could not be encoded."),
+        },
+        Err(detail) => failure(detail),
+    }
+}
+
+fn save_studio_export_response(
+    suggested_name: &str,
+    archive_base64: &str,
+    expected_sha256: &str,
+) -> BridgeResponse {
+    match save_studio_export(suggested_name, archive_base64, expected_sha256) {
+        Ok(path) => success(path),
+        Err(detail) => failure(detail),
+    }
+}
+
+fn save_studio_export(
+    suggested_name: &str,
+    archive_base64: &str,
+    expected_sha256: &str,
+) -> Result<String, &'static str> {
+    let home = verified_desktop_home()?;
+    save_studio_export_in_home(&home, suggested_name, archive_base64, expected_sha256)
+}
+
+fn save_studio_export_in_home(
+    home: &Path,
+    suggested_name: &str,
+    archive_base64: &str,
+    expected_sha256: &str,
+) -> Result<String, &'static str> {
+    if !valid_studio_export_name(suggested_name) || !valid_sha256(expected_sha256) {
+        return Err("The Studio export name or digest is invalid.");
+    }
+    let archive = BASE64_STANDARD
+        .decode(archive_base64)
+        .map_err(|_| "The Studio export archive is not valid base64.")?;
+    if archive.len() > MAX_STUDIO_EXPORT_BYTES {
+        return Err("The Studio export exceeds the 20 MiB safety limit.");
+    }
+    let actual_sha256 = format!("{:x}", Sha256::digest(&archive));
+    if actual_sha256 != expected_sha256 {
+        return Err("The Studio export digest did not match its archive.");
+    }
+
+    verify_desktop_home_path(home)?;
+    let home_dir = open_absolute_directory_nofollow(home)
+        .map_err(|_| "The logged-in home folder could not be opened safely.")?;
+    let downloads = match home_dir.open_dir_nofollow("Downloads") {
+        Ok(downloads) => downloads,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            home_dir
+                .create_dir("Downloads")
+                .map_err(|_| "The Downloads folder could not be created safely.")?;
+            home_dir
+                .set_permissions("Downloads", cap_std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| "The Downloads folder permissions could not be secured.")?;
+            home_dir
+                .open_dir_nofollow("Downloads")
+                .map_err(|_| "The Downloads folder could not be opened safely.")?
+        }
+        Err(_) => return Err("The Downloads folder could not be opened safely."),
+    };
+    let downloads_metadata = downloads
+        .dir_metadata()
+        .map_err(|_| "The Downloads folder ownership could not be verified.")?;
+    if !directory_is_owned_by(&downloads_metadata, effective_user_id()) {
+        return Err("The Downloads folder is not owned by the logged-in desktop user.");
+    }
+
+    for suffix in 0..=99 {
+        let candidate = if suffix == 0 {
+            suggested_name.to_string()
+        } else {
+            format!("{}-{suffix}.tar", suggested_name.trim_end_matches(".tar"))
+        };
+        let mut options = CapOpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .follow(FollowSymlinks::No);
+        let mut output = match downloads.open_with(&candidate, &options) {
+            Ok(output) => output,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err("The Studio export could not be created in Downloads."),
+        };
+        if output.write_all(&archive).is_err() || output.sync_all().is_err() {
+            drop(output);
+            let _ = downloads.remove_file(&candidate);
+            return Err(
+                "The Studio export could not be committed. Its incomplete file was removed.",
+            );
+        }
+        drop(output);
+        if sync_directory(&downloads).is_err() {
+            let _ = downloads.remove_file(&candidate);
+            let _ = sync_directory(&downloads);
+            return Err("The Downloads folder could not commit the Studio export.");
+        }
+        return Ok(home
+            .join("Downloads")
+            .join(candidate)
+            .to_string_lossy()
+            .into_owned());
+    }
+    Err("Downloads already contains every safe Studio export name from this series.")
+}
+
+fn directory_is_owned_by(metadata: &cap_std::fs::Metadata, expected_uid: u32) -> bool {
+    metadata.is_dir() && metadata.uid() == expected_uid
+}
+
+fn valid_studio_export_name(name: &str) -> bool {
+    name.len() <= 104
+        && name.len() > 4
+        && name.ends_with(".tar")
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_sha256(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn verified_desktop_home() -> Result<PathBuf, &'static str> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .ok_or("The logged-in home folder is unavailable.")?;
+    verify_desktop_home_path(&home)?;
+    Ok(home)
+}
+
+fn verify_desktop_home_path(home: &Path) -> Result<(), &'static str> {
+    if !home.is_absolute() {
+        return Err("The logged-in home folder is unavailable.");
+    }
+    let metadata = fs::symlink_metadata(home)
+        .map_err(|_| "The logged-in home folder could not be verified.")?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != effective_user_id()
+    {
+        return Err("The logged-in home folder failed its ownership check.");
+    }
+    Ok(())
+}
+
+fn recover_snapshot_file(
+    snapshot_id: &str,
+    snapshot_subvolume: &str,
+    source_path: &str,
+    destination_directory: &str,
+    source: std::fs::File,
+    source_bytes: u64,
+) -> Result<SnapshotRecoveryCopy, &'static str> {
+    let home = verified_desktop_home()?;
+    recover_snapshot_file_in_home(
+        &home,
+        snapshot_id,
+        snapshot_subvolume,
+        source_path,
+        destination_directory,
+        source,
+        source_bytes,
+    )
+}
+
+fn recover_snapshot_file_in_home(
+    home: &Path,
+    snapshot_id: &str,
+    snapshot_subvolume: &str,
+    source_path: &str,
+    destination_directory: &str,
+    source: std::fs::File,
+    source_bytes: u64,
+) -> Result<SnapshotRecoveryCopy, &'static str> {
+    if snapshot_id.is_empty() || !snapshot_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("Choose a real Snapper snapshot before recovery.");
+    }
+    let snapshot_subvolume = Path::new(snapshot_subvolume);
+    let logical_source = Path::new(source_path);
+    let destination = Path::new(destination_directory);
+    if snapshot_subvolume.as_os_str().len() > 4 * 1024
+        || logical_source.as_os_str().len() > 4 * 1024
+        || destination.as_os_str().len() > 4 * 1024
+    {
+        return Err("The recovery path exceeds the fixed safety limit.");
+    }
+    if !snapshot_subvolume.is_absolute()
+        || !logical_source.is_absolute()
+        || !destination.is_absolute()
+    {
+        return Err("Choose an absolute source file and destination folder.");
+    }
+    verify_desktop_home_path(home)?;
+    if !home.starts_with(snapshot_subvolume) {
+        return Err("The snapshot source does not contain the logged-in home folder.");
+    }
+    if !logical_source.starts_with(home) {
+        return Err("The source file must be inside your home folder.");
+    }
+    let relative = logical_source
+        .strip_prefix(snapshot_subvolume)
+        .map_err(|_| "The source file must be inside the configured snapshot source.")?;
+    validate_relative_file_path(relative)?;
+    if !destination.starts_with(home) {
+        return Err("Choose a destination folder inside your home folder.");
+    }
+
+    let source_metadata = source
+        .metadata()
+        .map_err(|_| "The selected snapshot file descriptor could not be verified.")?;
+    if !source_metadata.is_file()
+        || source_metadata.len() > MAX_RECOVERY_FILE_BYTES
+        || source_metadata.len() != source_bytes
+    {
+        return Err("Recovery supports regular files up to 8 GiB, not folders or special files.");
+    }
+    let mut source_file = source;
+
+    let destination_dir = open_absolute_directory_nofollow(destination)
+        .map_err(|_| "The selected destination folder could not be opened safely.")?;
+    let destination_name = logical_source
+        .file_name()
+        .ok_or("Choose one source file inside your home folder.")?;
+    let destination_path = destination.join(destination_name);
+    let bytes_copied = publish_recovered_copy(
+        &destination_dir,
+        destination,
+        destination_name,
+        &mut source_file,
+        source_metadata.len(),
+        source_metadata.mode() & 0o777,
+    )?;
+    Ok(SnapshotRecoveryCopy {
+        destination_path: destination_path.to_string_lossy().into_owned(),
+        bytes_copied,
+    })
+}
+
+/// Copy into an inode that has no directory name, then atomically publish the
+/// completed inode under the requested name. This makes partial recovery data
+/// unobservable and makes `EEXIST` the kernel-enforced no-overwrite boundary.
+#[cfg(target_os = "linux")]
+fn publish_recovered_copy(
+    destination_dir: &Dir,
+    _destination_path: &Path,
+    destination_name: &OsStr,
+    source: &mut std::fs::File,
+    expected_bytes: u64,
+    mode: u32,
+) -> Result<u64, &'static str> {
+    let current_directory = c".";
+    let destination_name = CString::new(destination_name.as_bytes())
+        .map_err(|_| "The recovered copy name is invalid.")?;
+    // SAFETY: the held directory descriptor was opened no-follow, the path is
+    // a static NUL-terminated dot, and ownership of a successful descriptor is
+    // immediately moved into `File`.
+    let descriptor = unsafe {
+        libc::openat(
+            destination_dir.as_raw_fd(),
+            current_directory.as_ptr(),
+            libc::O_TMPFILE | libc::O_WRONLY | libc::O_CLOEXEC,
+            mode as libc::mode_t,
+        )
+    };
+    if descriptor < 0 {
+        return Err(
+            "The destination filesystem cannot create a private staged recovery copy. Nothing was published.",
+        );
+    }
+    // SAFETY: `openat` returned a new owned descriptor.
+    let mut staged = unsafe { std::fs::File::from_raw_fd(descriptor) };
+    let copied = io::copy(source, &mut staged)
+        .map_err(|_| "The recovered copy could not be completed. Nothing was published.")?;
+    if copied != expected_bytes {
+        return Err("The recovered copy changed length while copying. Nothing was published.");
+    }
+    staged
+        .sync_all()
+        .map_err(|_| "The recovered copy could not be committed. Nothing was published.")?;
+    let proc_path = CString::new(format!("/proc/self/fd/{}", staged.as_raw_fd()))
+        .map_err(|_| "The private recovery staging descriptor is invalid.")?;
+    let proc_metadata = fs::symlink_metadata(Path::new(OsStr::from_bytes(proc_path.to_bytes())))
+        .map_err(|_| "The protected procfs descriptor path is unavailable.")?;
+    if !proc_metadata.file_type().is_symlink() {
+        return Err(
+            "The protected procfs descriptor path is not a symlink. Nothing was published.",
+        );
+    }
+    // SAFETY: the source is the procfs link to the still-held staged inode;
+    // AT_SYMLINK_FOLLOW is the documented unprivileged O_TMPFILE publication
+    // path. The held destination directory and link(2) EEXIST behavior make
+    // publication atomic and no-replace.
+    let published = unsafe {
+        libc::linkat(
+            libc::AT_FDCWD,
+            proc_path.as_ptr(),
+            destination_dir.as_raw_fd(),
+            destination_name.as_ptr(),
+            libc::AT_SYMLINK_FOLLOW,
+        )
+    };
+    if published != 0 {
+        return if io::Error::last_os_error().kind() == io::ErrorKind::AlreadyExists {
+            Err("A file with that name already exists in the destination. Choose another folder; recovered files are never overwritten.")
+        } else {
+            Err("The completed recovery copy could not be published. Nothing was overwritten.")
+        };
+    }
+    sync_directory(destination_dir).map_err(|_| {
+        "The recovered copy was published, but storage durability could not be confirmed. Check the destination before trying again."
+    })?;
+    Ok(copied)
+}
+
+/// The shipped OS is Linux. This portable path exists so the workspace and
+/// focused tests remain runnable on developer hosts; it uses a random private
+/// staging file and the platform's atomic no-clobber persistence primitive.
+#[cfg(not(target_os = "linux"))]
+fn publish_recovered_copy(
+    destination_dir: &Dir,
+    destination_path: &Path,
+    destination_name: &OsStr,
+    source: &mut std::fs::File,
+    expected_bytes: u64,
+    mode: u32,
+) -> Result<u64, &'static str> {
+    let mut staged = tempfile::Builder::new()
+        .prefix(".goblins-recovery-")
+        .tempfile_in(destination_path)
+        .map_err(|_| "The recovered copy could not be staged privately.")?;
+    staged
+        .as_file()
+        .set_permissions(fs::Permissions::from_mode(mode))
+        .map_err(|_| "The recovered copy permissions could not be set.")?;
+    let copied = io::copy(source, staged.as_file_mut())
+        .map_err(|_| "The recovered copy could not be completed. Nothing was published.")?;
+    if copied != expected_bytes {
+        return Err("The recovered copy changed length while copying. Nothing was published.");
+    }
+    staged
+        .as_file()
+        .sync_all()
+        .map_err(|_| "The recovered copy could not be committed. Nothing was published.")?;
+    let final_path = destination_path.join(destination_name);
+    staged.persist_noclobber(&final_path).map_err(|error| {
+        if error.error.kind() == io::ErrorKind::AlreadyExists {
+            "A file with that name already exists in the destination. Choose another folder; recovered files are never overwritten."
+        } else {
+            "The completed recovery copy could not be published. Nothing was overwritten."
+        }
+    })?;
+    sync_directory(destination_dir).map_err(|_| {
+        "The recovered copy was published, but storage durability could not be confirmed. Check the destination before trying again."
+    })?;
+    Ok(copied)
+}
+
+fn read_request_with_optional_fd_before(
+    stream: &mut UnixStream,
+    limit: usize,
+    deadline: Instant,
+) -> io::Result<(Vec<u8>, Option<std::fs::File>)> {
+    stream.set_read_timeout(Some(remaining_before(deadline)?))?;
+    let mut first = vec![0_u8; 16 * 1024];
+    let mut iov = [IoSliceMut::new(&mut first)];
+    let mut space = [std::mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+    let mut control = RecvAncillaryBuffer::new(&mut space);
+    #[cfg(target_os = "linux")]
+    let recv_flags = RecvFlags::CMSG_CLOEXEC;
+    #[cfg(not(target_os = "linux"))]
+    let recv_flags = RecvFlags::empty();
+    let message = recvmsg(&*stream, &mut iov, &mut control, recv_flags)?;
+    if message.bytes > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bridge request exceeded its fixed size limit",
+        ));
+    }
+    let mut received = Vec::<OwnedFd>::new();
+    for ancillary in control.drain() {
+        if let RecvAncillaryMessage::ScmRights(fds) = ancillary {
+            received.extend(fds);
+        }
+    }
+    if received.len() > 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bridge request carried too many descriptors",
+        ));
+    }
+    let source = received.pop().map(|fd| {
+        // SAFETY: ownership is transferred from OwnedFd into File exactly once.
+        unsafe { std::fs::File::from_raw_fd(std::os::fd::IntoRawFd::into_raw_fd(fd)) }
+    });
+    first.truncate(message.bytes);
+    let mut rest = read_to_end_before(stream, limit.saturating_sub(first.len()), deadline)?;
+    first.append(&mut rest);
+    Ok((first, source))
+}
+
+fn sync_directory(directory: &Dir) -> io::Result<()> {
+    // cap-std holds Linux directories with O_PATH. Re-open the held directory
+    // capability as a normal read-only descriptor before fsync; cloning the
+    // O_PATH descriptor itself would make every durable export/recovery publish
+    // fail with EBADF.
+    directory.open(Path::new("."))?.into_std().sync_all()
+}
+
+fn validate_relative_file_path(path: &Path) -> Result<(), &'static str> {
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("The source path contains an unsafe component.");
+    }
+    Ok(())
+}
+
+fn open_absolute_directory_nofollow(path: &Path) -> io::Result<Dir> {
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "directory path must be absolute",
+        ));
+    }
+    let mut directory = Dir::open_ambient_dir(Path::new("/"), ambient_authority())?;
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => directory = directory.open_dir_nofollow(name)?,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "directory path contains an unsafe component",
+                ))
+            }
+        }
+    }
+    Ok(directory)
+}
+
+fn launch_hosted_consent_broker_response() -> BridgeResponse {
+    if validate_hosted_consent_broker(Path::new(HOSTED_CONSENT_BROKER)).is_err() {
+        return failure("The trusted hosted-context review surface is unavailable.");
+    }
+
+    let mut command = Command::new(HOSTED_CONSENT_BROKER);
+    configure_hosted_consent_environment(&mut command);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => return failure("The trusted hosted-context review could not start."),
+    };
+
+    // Reap the detached review process and cap its lifetime. The decision does
+    // not travel through this process or socket; the broker posts it directly
+    // through its dedicated core capability.
+    thread::spawn(move || {
+        let deadline = Instant::now() + HOSTED_CONSENT_PROCESS_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Ok(None) | Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+            }
+        }
+    });
+    success("launched".to_string())
+}
+
+fn launch_openai_key_broker_response() -> BridgeResponse {
+    if validate_openai_key_broker(Path::new(OPENAI_KEY_BROKER)).is_err() {
+        return failure("The protected credential entry surface is unavailable.");
+    }
+
+    let mut command = Command::new(OPENAI_KEY_BROKER);
+    configure_hosted_consent_environment(&mut command);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => return failure("The protected credential entry surface could not start."),
+    };
+
+    // Reap the fixed broker and cap its lifetime. No operation details or
+    // decisions return through this process or socket; the broker talks only to
+    // its already-authenticated core capability.
+    thread::spawn(move || {
+        let deadline = Instant::now() + OPENAI_KEY_BROKER_PROCESS_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Ok(None) | Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+            }
+        }
+    });
+    success("launched".to_string())
+}
+
+fn configure_hosted_consent_environment(command: &mut Command) {
+    command.env_clear();
+    command.env("PATH", "/usr/local/bin:/usr/bin:/bin");
+    command.env("XDG_DATA_DIRS", "/usr/local/share:/usr/share");
+    for name in [
+        "DBUS_SESSION_BUS_ADDRESS",
+        "HOME",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_MESSAGES",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_TYPE",
+    ] {
+        if let Some(value) = env::var_os(name)
+            .filter(|value| !value.is_empty() && value.to_string_lossy().chars().count() <= 4096)
+        {
+            command.env(name, value);
+        }
+    }
+}
+
+fn configure_studio_preview_environment(command: &mut Command) {
+    configure_hosted_consent_environment(command);
+    for name in [
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "XDG_SESSION_DESKTOP",
+    ] {
+        if let Some(value) = env::var_os(name)
+            .filter(|value| !value.is_empty() && value.to_string_lossy().chars().count() <= 4096)
+        {
+            command.env(name, value);
+        }
+    }
+}
+
+fn validate_hosted_consent_broker(path: &Path) -> Result<(), ()> {
+    if path != Path::new(HOSTED_CONSENT_BROKER) {
+        return Err(());
+    }
+    for directory in [
+        Path::new("/usr"),
+        Path::new("/usr/libexec"),
+        Path::new("/usr/libexec/goblins-os"),
+    ] {
+        let metadata = fs::symlink_metadata(directory).map_err(|_| ())?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(());
+        }
+    }
+    let expected_group = resolve_group_id(HOSTED_CONSENT_BROKER_GROUP).ok_or(())?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.gid() != expected_group
+        || metadata.mode() & 0o7777 != 0o2755
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn validate_openai_key_broker(path: &Path) -> Result<(), ()> {
+    if path != Path::new(OPENAI_KEY_BROKER) {
+        return Err(());
+    }
+    for directory in [
+        Path::new("/usr"),
+        Path::new("/usr/libexec"),
+        Path::new("/usr/libexec/goblins-os"),
+    ] {
+        let metadata = fs::symlink_metadata(directory).map_err(|_| ())?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(());
+        }
+    }
+    let expected_group = resolve_group_id(OPENAI_KEY_BROKER_GROUP).ok_or(())?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.gid() != expected_group
+        || metadata.mode() & 0o7777 != 0o2755
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 fn unix_peer_uid(stream: &UnixStream) -> Result<u32, ()> {
@@ -413,6 +1202,29 @@ fn resolve_user_id(name: &str) -> Option<u32> {
     }
     // SAFETY: getpwnam_r returned success and initialized our record storage.
     Some(unsafe { record.assume_init() }.pw_uid)
+}
+
+fn resolve_group_id(name: &str) -> Option<u32> {
+    let name = CString::new(name).ok()?;
+    let mut record = std::mem::MaybeUninit::<libc::group>::uninit();
+    let mut result = std::ptr::null_mut();
+    let mut buffer = vec![0u8; 16 * 1024];
+    // SAFETY: every pointer references valid writable storage of the supplied
+    // size, and name is NUL-terminated for the lifetime of the call.
+    let status = unsafe {
+        libc::getgrnam_r(
+            name.as_ptr(),
+            record.as_mut_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 || result.is_null() {
+        return None;
+    }
+    // SAFETY: getgrnam_r returned success and initialized our record storage.
+    Some(unsafe { record.assume_init() }.gr_gid)
 }
 
 fn text_shortcuts_runtime_status_response() -> BridgeResponse {
@@ -933,6 +1745,7 @@ fn display_config_get_current_state_response() -> BridgeResponse {
         ],
         "gdbus is unavailable in this desktop session.",
         "the desktop session could not read display configuration.",
+        GDBUS_READ_TIMEOUT,
     )
 }
 
@@ -952,6 +1765,7 @@ fn display_config_apply_allowed_response() -> BridgeResponse {
         ],
         "gdbus is unavailable in this desktop session.",
         "the desktop session could not read display apply permission.",
+        GDBUS_READ_TIMEOUT,
     )
 }
 
@@ -989,6 +1803,7 @@ fn display_config_apply_monitors_response(
         ],
         "gdbus is unavailable in this desktop session.",
         "the desktop session could not apply display configuration.",
+        GDBUS_DISPLAY_APPLY_TIMEOUT,
     )
 }
 
@@ -996,18 +1811,20 @@ fn gdbus_session_response(
     args: &[&str],
     missing_message: &'static str,
     generic_message: &'static str,
+    timeout: Duration,
 ) -> BridgeResponse {
-    match Command::new("gdbus")
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-    {
+    let mut command = Command::new("gdbus");
+    command.args(args).stdin(Stdio::null());
+    match bounded_output_of(command, timeout) {
         Ok(output) if output.status.success() => {
             success(String::from_utf8_lossy(&output.stdout).trim().to_string())
         }
         Ok(output) => failure(command_error_detail(&output.stderr, &output.stdout)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => failure(missing_message),
-        Err(_) => failure(generic_message),
+        Err(BoundedCommandError::Missing) => failure(missing_message),
+        Err(BoundedCommandError::TimedOut) => {
+            failure("the desktop display service did not answer before its safety deadline.")
+        }
+        Err(BoundedCommandError::Failed) => failure(generic_message),
     }
 }
 
@@ -1069,7 +1886,9 @@ fn validate_gsettings_args(args: &[String]) -> Result<(), String> {
         [command, schema] if command == "list-recursively" => {
             validate_list_recursively_schema(schema)
         }
-        [command, schema, key] if command == "get" => validate_schema_key(schema, key),
+        [command, schema, key] if command == "get" || command == "writable" => {
+            validate_schema_key(schema, key)
+        }
         [command, schema, key] if command == "reset" => {
             let (base_schema, path) = validate_schema_arg(schema)?;
             if !path.is_empty() {
@@ -1084,7 +1903,7 @@ fn validate_gsettings_args(args: &[String]) -> Result<(), String> {
         }
         [command, schema, key, value] if command == "set" => {
             validate_schema_key(schema, key)?;
-            validate_gsettings_value(value)
+            validate_gsettings_set_value(schema, key, value)
         }
         _ => Err("unsupported session bridge gsettings operation.".to_string()),
     }
@@ -1103,10 +1922,15 @@ fn validate_schema_key(schema_arg: &str, key: &str) -> Result<(), String> {
         A11Y_KEYBOARD_SCHEMA => A11Y_KEYBOARD_KEYS,
         A11Y_MAGNIFIER_SCHEMA => A11Y_MAGNIFIER_KEYS,
         A11Y_MOUSE_SCHEMA => A11Y_MOUSE_KEYS,
+        GOBLINS_VISUAL_A11Y_SCHEMA => GOBLINS_VISUAL_A11Y_KEYS,
         COLOR_SCHEMA => COLOR_KEYS,
         FOCUS_SCHEMA => FOCUS_KEYS,
         NOTIFICATIONS_SCHEMA => NOTIFICATION_KEYS,
         NOTIFICATION_APPLICATION_SCHEMA => NOTIFICATION_APPLICATION_KEYS,
+        PROXY_SCHEMA => PROXY_KEYS,
+        HTTP_PROXY_SCHEMA | HTTPS_PROXY_SCHEMA | FTP_PROXY_SCHEMA | SOCKS_PROXY_SCHEMA => {
+            PROXY_ENDPOINT_KEYS
+        }
         SOUND_SCHEMA => SOUND_KEYS,
         WM_SCHEMA => WM_KEYS,
         _ => return Err(format!("{schema} is not an allowlisted session schema.")),
@@ -1144,10 +1968,16 @@ fn validate_list_keys_schema(schema: &str) -> Result<(), String> {
         | A11Y_KEYBOARD_SCHEMA
         | A11Y_MAGNIFIER_SCHEMA
         | A11Y_MOUSE_SCHEMA
+        | GOBLINS_VISUAL_A11Y_SCHEMA
         | COLOR_SCHEMA
         | FOCUS_SCHEMA
         | NOTIFICATIONS_SCHEMA
         | NOTIFICATION_APPLICATION_SCHEMA
+        | PROXY_SCHEMA
+        | HTTP_PROXY_SCHEMA
+        | HTTPS_PROXY_SCHEMA
+        | FTP_PROXY_SCHEMA
+        | SOCKS_PROXY_SCHEMA
         | SOUND_SCHEMA
         | WM_SCHEMA => Ok(()),
         _ => Err(format!(
@@ -1157,6 +1987,19 @@ fn validate_list_keys_schema(schema: &str) -> Result<(), String> {
 }
 
 fn validate_list_recursively_schema(schema: &str) -> Result<(), String> {
+    if matches!(
+        schema,
+        PROXY_SCHEMA
+            | HTTP_PROXY_SCHEMA
+            | HTTPS_PROXY_SCHEMA
+            | FTP_PROXY_SCHEMA
+            | SOCKS_PROXY_SCHEMA
+    ) {
+        return Err(
+            "gsettings list-recursively is not allowed for proxy schemas; use the exact keys."
+                .to_string(),
+        );
+    }
     validate_list_keys_schema(schema)
         .map_err(|error| error.replace("list-keys", "list-recursively"))
 }
@@ -1185,9 +2028,15 @@ fn validate_schema_arg(schema_arg: &str) -> Result<(&str, &str), String> {
         | A11Y_KEYBOARD_SCHEMA
         | A11Y_MAGNIFIER_SCHEMA
         | A11Y_MOUSE_SCHEMA
+        | GOBLINS_VISUAL_A11Y_SCHEMA
         | COLOR_SCHEMA
         | FOCUS_SCHEMA
         | NOTIFICATIONS_SCHEMA
+        | PROXY_SCHEMA
+        | HTTP_PROXY_SCHEMA
+        | HTTPS_PROXY_SCHEMA
+        | FTP_PROXY_SCHEMA
+        | SOCKS_PROXY_SCHEMA
         | SOUND_SCHEMA
         | WM_SCHEMA => {
             if path.is_empty() {
@@ -1227,6 +2076,126 @@ fn validate_gsettings_value(value: &str) -> Result<(), String> {
     }
     if value.chars().any(|ch| ch.is_control() && ch != '\t') {
         return Err("gsettings values cannot contain control characters.".to_string());
+    }
+    Ok(())
+}
+
+fn validate_gsettings_set_value(schema_arg: &str, key: &str, value: &str) -> Result<(), String> {
+    validate_gsettings_value(value)?;
+    let (schema, path) = validate_schema_arg(schema_arg)?;
+    if !path.is_empty() {
+        return Ok(());
+    }
+    match (schema, key) {
+        (PROXY_SCHEMA, "mode") => match value {
+            "'none'" | "'auto'" | "'manual'" => Ok(()),
+            _ => Err("proxy mode must be exactly 'none', 'auto', or 'manual'.".to_string()),
+        },
+        (PROXY_SCHEMA, "autoconfig-url")
+        | (
+            HTTP_PROXY_SCHEMA | HTTPS_PROXY_SCHEMA | FTP_PROXY_SCHEMA | SOCKS_PROXY_SCHEMA,
+            "host",
+        ) => validate_single_quoted_gvariant_string(value),
+        (PROXY_SCHEMA, "ignore-hosts") => validate_gvariant_string_array(value),
+        (
+            HTTP_PROXY_SCHEMA | HTTPS_PROXY_SCHEMA | FTP_PROXY_SCHEMA | SOCKS_PROXY_SCHEMA,
+            "port",
+        ) => value
+            .parse::<u16>()
+            .map(|_| ())
+            .map_err(|_| "proxy ports must be decimal values from 0 through 65535.".to_string()),
+        _ => Ok(()),
+    }
+}
+
+fn validate_single_quoted_gvariant_string(value: &str) -> Result<(), String> {
+    let Some(inner) = value
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+    else {
+        return Err("proxy text values must use one quoted GVariant string.".to_string());
+    };
+    let mut escaped = false;
+    for character in inner.chars() {
+        if escaped {
+            if !matches!(character, '\\' | '\'') {
+                return Err("proxy text values contain an unsupported escape.".to_string());
+            }
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '\'' {
+            return Err("proxy text values must escape embedded quotes.".to_string());
+        }
+    }
+    if escaped {
+        return Err("proxy text values cannot end with an incomplete escape.".to_string());
+    }
+    Ok(())
+}
+
+fn validate_gvariant_string_array(value: &str) -> Result<(), String> {
+    let Some(inner) = value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    else {
+        return Err("proxy bypass entries must use a GVariant string array.".to_string());
+    };
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return Ok(());
+    }
+    let bytes = inner.as_bytes();
+    let mut cursor = 0;
+    let mut entries = 0;
+    while cursor < bytes.len() {
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b'\'' {
+            return Err("proxy bypass entries must be quoted strings.".to_string());
+        }
+        let start = cursor;
+        cursor += 1;
+        let mut escaped = false;
+        let mut closed = false;
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                b'\\' if !escaped => escaped = true,
+                b'\'' if !escaped => {
+                    cursor += 1;
+                    closed = true;
+                    break;
+                }
+                b'\\' | b'\'' if escaped => escaped = false,
+                _ if escaped => {
+                    return Err("proxy bypass entries contain an unsupported escape.".to_string());
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        if !closed {
+            return Err("proxy bypass entries contain an unterminated string.".to_string());
+        }
+        validate_single_quoted_gvariant_string(&inner[start..cursor])?;
+        entries += 1;
+        if entries > 64 {
+            return Err("proxy bypass entries exceed the fixed entry limit.".to_string());
+        }
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor == bytes.len() {
+            break;
+        }
+        if bytes[cursor] != b',' {
+            return Err("proxy bypass entries must be comma-separated.".to_string());
+        }
+        cursor += 1;
+        if cursor == bytes.len() {
+            return Err("proxy bypass entries cannot end with a comma.".to_string());
+        }
     }
     Ok(())
 }
@@ -1468,6 +2437,41 @@ fn bounded_output_of(
     })
 }
 
+fn bounded_success_of(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<bool, BoundedCommandError> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                BoundedCommandError::Missing
+            } else {
+                BoundedCommandError::Failed
+            }
+        })?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.success()),
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(BoundedCommandError::TimedOut);
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(BoundedCommandError::Failed);
+            }
+        }
+    }
+}
+
 fn bounded_input_output_of(
     mut command: Command,
     input: Vec<u8>,
@@ -1696,6 +2700,12 @@ fn self_test() -> Result<(), String> {
     ])?;
     validate_gsettings_args(&[
         "set".to_string(),
+        GOBLINS_VISUAL_A11Y_SCHEMA.to_string(),
+        "reduce-transparency".to_string(),
+        "true".to_string(),
+    ])?;
+    validate_gsettings_args(&[
+        "set".to_string(),
         KEYBOARD_SCHEMA.to_string(),
         "repeat".to_string(),
         "true".to_string(),
@@ -1716,6 +2726,23 @@ fn self_test() -> Result<(), String> {
         "get".to_string(),
         SOUND_SCHEMA.to_string(),
         "event-sounds".to_string(),
+    ])?;
+    validate_gsettings_args(&[
+        "writable".to_string(),
+        PROXY_SCHEMA.to_string(),
+        "mode".to_string(),
+    ])?;
+    validate_gsettings_args(&[
+        "set".to_string(),
+        PROXY_SCHEMA.to_string(),
+        "mode".to_string(),
+        "'manual'".to_string(),
+    ])?;
+    validate_gsettings_args(&[
+        "set".to_string(),
+        HTTP_PROXY_SCHEMA.to_string(),
+        "port".to_string(),
+        "8080".to_string(),
     ])?;
     validate_gsettings_args(&[
         "set".to_string(),
@@ -1828,25 +2855,319 @@ mod tests {
             ffi::OsStrExt,
             fs::{symlink, MetadataExt, PermissionsExt},
         },
-        path::Path,
+        path::{Path, PathBuf},
         time::{Duration, Instant},
     };
 
+    use base64::Engine as _;
+    use cap_std::{ambient_authority, fs::Dir};
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn consent_launch_protocol_rejects_requester_supplied_capabilities() {
+        assert!(
+            serde_json::from_value::<super::BridgeRequest>(serde_json::json!({
+                "op": "launch-hosted-consent-broker"
+            }))
+            .is_ok()
+        );
+        for forbidden in ["review_id", "lease_id", "ticket", "content"] {
+            assert!(
+                serde_json::from_value::<super::BridgeRequest>(serde_json::json!({
+                    "op": "launch-hosted-consent-broker",
+                    (forbidden): "attacker-controlled"
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn key_broker_launch_protocol_rejects_requester_supplied_capabilities() {
+        assert!(
+            serde_json::from_value::<super::BridgeRequest>(serde_json::json!({
+                "op": "launch-open-ai-key-broker"
+            }))
+            .is_ok()
+        );
+        for forbidden in [
+            "user_id",
+            "operation",
+            "lease_id",
+            "credential",
+            "encrypted_credential",
+        ] {
+            assert!(
+                serde_json::from_value::<super::BridgeRequest>(serde_json::json!({
+                    "op": "launch-open-ai-key-broker",
+                    (forbidden): "attacker-controlled"
+                }))
+                .is_err()
+            );
+        }
+    }
+
     use super::{
-        effective_user_id, encode_display_config_logical_monitors, handle_stream, monotonic_now_ns,
-        read_text_shortcuts_runtime_status, read_to_end_before, valid_pcm_wave,
-        validate_display_config_logical_monitors, validate_gsettings_args,
-        validate_permission_store_delete, validate_schema_arg,
+        directory_is_owned_by, effective_user_id, encode_display_config_logical_monitors,
+        handle_stream, monotonic_now_ns, read_text_shortcuts_runtime_status, read_to_end_before,
+        recover_snapshot_file_in_home, save_studio_export_in_home, valid_pcm_wave,
+        valid_studio_web_preview_url, validate_display_config_logical_monitors,
+        validate_gsettings_args, validate_permission_store_delete, validate_schema_arg,
         validate_text_shortcuts_runtime_status, validate_text_shortcuts_runtime_status_metadata,
         validate_wpctl_args, BridgeRequest, DisplayConfigLogicalMonitor, DisplayConfigMonitor,
-        PcmFormat, TextShortcutsRuntimeStatus, DEFAULT_SINK, DEFAULT_SOURCE, FOCUS_SCHEMA,
-        INPUT_SOURCES_SCHEMA, KEYBOARD_SCHEMA, MAX_CAPTURE_DURATION_SECONDS,
-        MAX_PLAYBACK_DURATION_SECONDS, MAX_REQUEST_BYTES, MOUSE_SCHEMA,
-        NOTIFICATION_APPLICATION_BASE_PATH, NOTIFICATION_APPLICATION_SCHEMA, SOUND_SCHEMA,
+        PcmFormat, TextShortcutsRuntimeStatus, BASE64_STANDARD, DEFAULT_SINK, DEFAULT_SOURCE,
+        FOCUS_SCHEMA, FTP_PROXY_SCHEMA, GOBLINS_VISUAL_A11Y_SCHEMA, HTTPS_PROXY_SCHEMA,
+        HTTP_PROXY_SCHEMA, INPUT_SOURCES_SCHEMA, KEYBOARD_SCHEMA, MAX_CAPTURE_DURATION_SECONDS,
+        MAX_PLAYBACK_DURATION_SECONDS, MAX_REQUEST_BYTES, MAX_STUDIO_EXPORT_BYTES, MOUSE_SCHEMA,
+        NOTIFICATION_APPLICATION_BASE_PATH, NOTIFICATION_APPLICATION_SCHEMA, PROXY_ENDPOINT_KEYS,
+        PROXY_KEYS, PROXY_SCHEMA, SOCKS_PROXY_SCHEMA, SOUND_SCHEMA,
         TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_AGE_NS, TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_BYTES,
         TEXT_SHORTCUTS_RUNTIME_STATUS_MAX_FUTURE_NS, TEXT_SHORTCUTS_RUNTIME_STATUS_SCHEMA,
         TOUCHPAD_SCHEMA, WM_SCHEMA,
     };
+
+    struct RecoveryFixture {
+        _temp: tempfile::TempDir,
+        mount: PathBuf,
+        home: PathBuf,
+        source: PathBuf,
+        snapshot_source: PathBuf,
+        destination: PathBuf,
+    }
+
+    fn recovery_fixture() -> RecoveryFixture {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let mount = root.join("var-home");
+        let home = mount.join("goblin");
+        let source = home.join("Documents/report.txt");
+        let snapshot_source = mount.join(".snapshots/7/snapshot/goblin/Documents/report.txt");
+        let destination = home.join("Recovered");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(snapshot_source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(&source, b"current version").unwrap();
+        fs::write(&snapshot_source, b"snapshot version").unwrap();
+        RecoveryFixture {
+            _temp: temp,
+            mount,
+            home,
+            source,
+            snapshot_source,
+            destination,
+        }
+    }
+
+    fn path_text(path: &Path) -> &str {
+        path.to_str().unwrap()
+    }
+
+    fn studio_digest(archive: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(archive))
+    }
+
+    #[test]
+    fn studio_web_preview_protocol_is_core_only_and_exactly_loopback() {
+        let token = "0123456789abcdef".repeat(4);
+        let url = format!("http://127.0.0.1:49152/{token}/");
+        assert!(valid_studio_web_preview_url(&url));
+        assert!(matches!(
+            serde_json::from_value::<BridgeRequest>(serde_json::json!({
+                "op": "open-studio-web-preview",
+                "url": url,
+            }))
+            .unwrap(),
+            BridgeRequest::OpenStudioWebPreview { .. }
+        ));
+        for rejected in [
+            format!("https://127.0.0.1:49152/{token}/"),
+            format!("http://localhost:49152/{token}/"),
+            format!("http://127.0.0.1:80/{token}/"),
+            format!("http://127.0.0.1:49152/{token}/?redirect=https://example.com"),
+            format!("http://127.0.0.1:49152/{token}/extra"),
+        ] {
+            assert!(!valid_studio_web_preview_url(&rejected), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn studio_export_is_create_new_durable_and_collision_safe() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let home = root.join("goblin");
+        fs::create_dir(&home).unwrap();
+        let archive = b"deterministic studio archive";
+        let encoded = BASE64_STANDARD.encode(archive);
+        let digest = studio_digest(archive);
+
+        let first = save_studio_export_in_home(&home, "tiny-world.tar", &encoded, &digest)
+            .expect("first export");
+        assert_eq!(Path::new(&first), home.join("Downloads/tiny-world.tar"));
+        assert_eq!(fs::read(&first).unwrap(), archive);
+        assert_eq!(fs::metadata(&first).unwrap().mode() & 0o777, 0o600);
+
+        let second = save_studio_export_in_home(&home, "tiny-world.tar", &encoded, &digest)
+            .expect("collision-safe export");
+        assert_eq!(Path::new(&second), home.join("Downloads/tiny-world-1.tar"));
+        assert_eq!(fs::read(&first).unwrap(), archive);
+        assert_eq!(fs::read(&second).unwrap(), archive);
+
+        let downloads = Dir::open_ambient_dir(home.join("Downloads"), ambient_authority()).unwrap();
+        let metadata = downloads.dir_metadata().unwrap();
+        assert!(directory_is_owned_by(&metadata, effective_user_id()));
+        assert!(!directory_is_owned_by(
+            &metadata,
+            effective_user_id().wrapping_add(1)
+        ));
+    }
+
+    #[test]
+    fn directory_sync_reopens_linux_capability_handles() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = Dir::open_ambient_dir(temp.path(), ambient_authority()).unwrap();
+
+        super::sync_directory(&directory).expect("durable directory");
+    }
+
+    #[test]
+    fn studio_export_rejects_digest_mismatch_and_oversize_archive() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let home = root.join("goblin");
+        fs::create_dir(&home).unwrap();
+        let archive = b"studio archive";
+        let encoded = BASE64_STANDARD.encode(archive);
+        let mismatch = "0".repeat(64);
+        let error = save_studio_export_in_home(&home, "world.tar", &encoded, &mismatch)
+            .expect_err("digest mismatch must fail");
+        assert!(error.contains("digest"));
+        assert!(!home.join("Downloads/world.tar").exists());
+
+        let oversize = vec![0_u8; MAX_STUDIO_EXPORT_BYTES + 1];
+        let encoded = BASE64_STANDARD.encode(&oversize);
+        let digest = studio_digest(&oversize);
+        let error = save_studio_export_in_home(&home, "world.tar", &encoded, &digest)
+            .expect_err("oversize archive must fail");
+        assert!(error.contains("20 MiB"));
+        assert!(!home.join("Downloads/world.tar").exists());
+    }
+
+    #[test]
+    fn studio_export_rejects_traversal_and_symlinked_downloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let home = root.join("goblin");
+        let outside = root.join("outside");
+        fs::create_dir(&home).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let archive = b"studio archive";
+        let encoded = BASE64_STANDARD.encode(archive);
+        let digest = studio_digest(archive);
+
+        let error = save_studio_export_in_home(&home, "../world.tar", &encoded, &digest)
+            .expect_err("traversal name must fail");
+        assert!(error.contains("name"));
+        assert!(!outside.join("world.tar").exists());
+
+        symlink(&outside, home.join("Downloads")).unwrap();
+        let error = save_studio_export_in_home(&home, "world.tar", &encoded, &digest)
+            .expect_err("symlinked Downloads must fail");
+        assert!(error.contains("Downloads folder"));
+        assert!(!outside.join("world.tar").exists());
+    }
+
+    #[test]
+    fn snapshot_recovery_creates_a_new_copy_without_overwriting() {
+        let fixture = recovery_fixture();
+        let source = fs::File::open(&fixture.snapshot_source).unwrap();
+        let source_bytes = source.metadata().unwrap().len();
+        let recovered = recover_snapshot_file_in_home(
+            &fixture.home,
+            "7",
+            path_text(&fixture.mount),
+            path_text(&fixture.source),
+            path_text(&fixture.destination),
+            source,
+            source_bytes,
+        )
+        .expect("snapshot recovery");
+        assert_eq!(
+            Path::new(&recovered.destination_path),
+            fixture.destination.join("report.txt")
+        );
+        assert_eq!(recovered.bytes_copied, 16);
+        assert_eq!(
+            fs::read(&recovered.destination_path).unwrap(),
+            b"snapshot version"
+        );
+
+        fs::write(&recovered.destination_path, b"keep this copy").unwrap();
+        let source = fs::File::open(&fixture.snapshot_source).unwrap();
+        let source_bytes = source.metadata().unwrap().len();
+        let error = recover_snapshot_file_in_home(
+            &fixture.home,
+            "7",
+            path_text(&fixture.mount),
+            path_text(&fixture.source),
+            path_text(&fixture.destination),
+            source,
+            source_bytes,
+        )
+        .expect_err("an existing destination must never be overwritten");
+        assert!(error.contains("never overwritten"));
+        assert_eq!(
+            fs::read(&recovered.destination_path).unwrap(),
+            b"keep this copy"
+        );
+    }
+
+    #[test]
+    fn snapshot_recovery_rejects_traversal_and_symlinks() {
+        let fixture = recovery_fixture();
+        let traversing_source = fixture.home.join("../outside.txt");
+        let source = fs::File::open(&fixture.snapshot_source).unwrap();
+        let source_bytes = source.metadata().unwrap().len();
+        let error = recover_snapshot_file_in_home(
+            &fixture.home,
+            "7",
+            path_text(&fixture.mount),
+            path_text(&traversing_source),
+            path_text(&fixture.destination),
+            source,
+            source_bytes,
+        )
+        .expect_err("parent traversal must fail");
+        assert!(error.contains("unsafe component"));
+
+        let source = fs::File::open(fixture.snapshot_source.parent().unwrap()).unwrap();
+        let error = recover_snapshot_file_in_home(
+            &fixture.home,
+            "7",
+            path_text(&fixture.mount),
+            path_text(&fixture.source),
+            path_text(&fixture.destination),
+            source,
+            0,
+        )
+        .expect_err("a directory descriptor must fail");
+        assert!(error.contains("regular files"));
+
+        let linked_destination = fixture.home.join("LinkedRecovery");
+        symlink(&fixture.destination, &linked_destination).unwrap();
+        let source = fs::File::open(&fixture.snapshot_source).unwrap();
+        let source_bytes = source.metadata().unwrap().len();
+        let error = recover_snapshot_file_in_home(
+            &fixture.home,
+            "7",
+            path_text(&fixture.mount),
+            path_text(&fixture.source),
+            path_text(&linked_destination),
+            source,
+            source_bytes,
+        )
+        .expect_err("destination symlink must fail");
+        assert!(error.contains("destination folder"));
+    }
 
     fn pcm_wave(format: PcmFormat, data_bytes: usize) -> Vec<u8> {
         assert!(data_bytes <= u32::MAX as usize);
@@ -2360,6 +3681,18 @@ mod tests {
             "mission-control".to_string(),
         ])
         .is_ok());
+        assert!(validate_gsettings_args(&[
+            "set".to_string(),
+            GOBLINS_VISUAL_A11Y_SCHEMA.to_string(),
+            "reduce-transparency".to_string(),
+            "true".to_string(),
+        ])
+        .is_ok());
+        assert!(validate_gsettings_args(&[
+            "list-keys".to_string(),
+            GOBLINS_VISUAL_A11Y_SCHEMA.to_string(),
+        ])
+        .is_ok());
     }
 
     #[test]
@@ -2376,6 +3709,106 @@ mod tests {
             INPUT_SOURCES_SCHEMA.to_string(),
             "sources".to_string(),
             "bad\nvalue".to_string(),
+        ])
+        .is_err());
+        assert!(validate_gsettings_args(&[
+            "set".to_string(),
+            GOBLINS_VISUAL_A11Y_SCHEMA.to_string(),
+            "blur-radius".to_string(),
+            "0".to_string(),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn gsettings_proxy_allowlist_is_exact_and_credential_free() {
+        for (schema, keys) in [
+            (PROXY_SCHEMA, PROXY_KEYS),
+            (HTTP_PROXY_SCHEMA, PROXY_ENDPOINT_KEYS),
+            (HTTPS_PROXY_SCHEMA, PROXY_ENDPOINT_KEYS),
+            (FTP_PROXY_SCHEMA, PROXY_ENDPOINT_KEYS),
+            (SOCKS_PROXY_SCHEMA, PROXY_ENDPOINT_KEYS),
+        ] {
+            assert!(
+                validate_gsettings_args(&["list-keys".to_string(), schema.to_string()]).is_ok()
+            );
+            for key in keys {
+                assert!(validate_gsettings_args(&[
+                    "get".to_string(),
+                    schema.to_string(),
+                    (*key).to_string(),
+                ])
+                .is_ok());
+                assert!(validate_gsettings_args(&[
+                    "writable".to_string(),
+                    schema.to_string(),
+                    (*key).to_string(),
+                ])
+                .is_ok());
+            }
+        }
+
+        for (schema, key, value) in [
+            (PROXY_SCHEMA, "mode", "'none'"),
+            (PROXY_SCHEMA, "mode", "'auto'"),
+            (PROXY_SCHEMA, "mode", "'manual'"),
+            (
+                PROXY_SCHEMA,
+                "autoconfig-url",
+                "'https://proxy.example/proxy.pac'",
+            ),
+            (
+                PROXY_SCHEMA,
+                "ignore-hosts",
+                "['localhost', '127.0.0.0/8', 'it\\'s-local']",
+            ),
+            (HTTP_PROXY_SCHEMA, "host", "'proxy.example'"),
+            (HTTP_PROXY_SCHEMA, "port", "0"),
+            (HTTPS_PROXY_SCHEMA, "host", "''"),
+            (HTTPS_PROXY_SCHEMA, "port", "443"),
+            (FTP_PROXY_SCHEMA, "host", "'ftp-proxy.example'"),
+            (FTP_PROXY_SCHEMA, "port", "21"),
+            (SOCKS_PROXY_SCHEMA, "host", "'socks.example'"),
+            (SOCKS_PROXY_SCHEMA, "port", "65535"),
+        ] {
+            assert!(validate_gsettings_args(&[
+                "set".to_string(),
+                schema.to_string(),
+                key.to_string(),
+                value.to_string(),
+            ])
+            .is_ok());
+        }
+
+        for forbidden in [
+            "use-authentication",
+            "authentication-user",
+            "authentication-password",
+        ] {
+            assert!(validate_gsettings_args(&[
+                "get".to_string(),
+                HTTP_PROXY_SCHEMA.to_string(),
+                forbidden.to_string(),
+            ])
+            .is_err());
+        }
+        assert!(validate_gsettings_args(&[
+            "list-recursively".to_string(),
+            PROXY_SCHEMA.to_string(),
+        ])
+        .is_err());
+        assert!(validate_gsettings_args(&[
+            "set".to_string(),
+            PROXY_SCHEMA.to_string(),
+            "mode".to_string(),
+            "'invalid'".to_string(),
+        ])
+        .is_err());
+        assert!(validate_gsettings_args(&[
+            "set".to_string(),
+            HTTP_PROXY_SCHEMA.to_string(),
+            "port".to_string(),
+            "65536".to_string(),
         ])
         .is_err());
     }

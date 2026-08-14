@@ -9,13 +9,14 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use axum::{http::StatusCode, Json};
+use axum::{extract::Extension, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
     ai::{audit_ai_action, AiActionOutcome},
     policy::{policy_state_for_control, PolicyControlState},
+    resident::ContextGenerationError,
 };
 
 const DEFAULT_APPS_DIR: &str = "/var/lib/goblins-os/apps";
@@ -49,6 +50,9 @@ pub struct AppBuilderCatalog {
 #[derive(Deserialize)]
 pub struct AppBuildRequest {
     intent: String,
+    /// Set only by a trusted UI when an app request is derived from selected
+    /// file metadata. Generic typed intents do not claim a file context.
+    context_kind: Option<String>,
 }
 
 /// An OS-owned application built from intent by the Goblins AI runtime. In Goblins OS
@@ -70,9 +74,14 @@ pub struct AppList {
     apps: Vec<BuiltApp>,
 }
 
-pub async fn app_builder_catalog() -> Json<AppBuilderCatalog> {
+pub async fn app_builder_catalog(
+    Extension(client): Extension<crate::control_plane::RequestClient>,
+) -> Json<AppBuilderCatalog> {
     let policy = policy_state_for_control("app-builder");
-    let builder = builder_status_for_policy(policy, crate::resident::active_engine_locality());
+    let builder = builder_status_for_policy(
+        policy,
+        crate::resident::active_engine_locality(Some(client.user_id())),
+    );
 
     Json(AppBuilderCatalog {
         model: "gpt-oss-builds-apps-not-installs",
@@ -120,9 +129,11 @@ pub async fn list_apps() -> Json<AppList> {
 /// resident engine, so the body runs on the blocking pool instead of pinning an
 /// async runtime worker.
 pub async fn create_app_build(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
     Json(payload): Json<AppBuildRequest>,
 ) -> (StatusCode, Json<BuildOutcome>) {
-    crate::bounded::run_blocking(move || create_app_build_blocking(payload))
+    let client = client.map(|Extension(client)| client);
+    crate::bounded::run_blocking(move || create_app_build_blocking(payload, client))
         .await
         .unwrap_or_else(|_| {
             outcome(
@@ -133,7 +144,10 @@ pub async fn create_app_build(
         })
 }
 
-fn create_app_build_blocking(payload: AppBuildRequest) -> (StatusCode, Json<BuildOutcome>) {
+fn create_app_build_blocking(
+    payload: AppBuildRequest,
+    client: Option<crate::control_plane::RequestClient>,
+) -> (StatusCode, Json<BuildOutcome>) {
     let intent = payload.intent.trim();
     if intent.is_empty() || intent.chars().count() > MAX_INTENT_CHARS {
         return outcome(
@@ -147,10 +161,66 @@ fn create_app_build_blocking(payload: AppBuildRequest) -> (StatusCode, Json<Buil
         return outcome(StatusCode::FORBIDDEN, detail.to_string(), None);
     }
 
-    let (plan, source) = match design_app_plan(intent) {
+    let context_kind = payload.context_kind.as_deref().map(str::trim);
+    if context_kind.is_some_and(|kind| kind != "file-metadata") {
+        audit_ai_action("build-app", Some("files"), AiActionOutcome::Blocked);
+        return outcome(
+            StatusCode::BAD_REQUEST,
+            "That app-building context type is not supported. No context was sent.".to_string(),
+            None,
+        );
+    }
+    let file_metadata_context = context_kind == Some("file-metadata");
+    let prompt = build_prompt(intent);
+    let request_binding = serde_json::to_vec(&(intent, context_kind)).unwrap_or_default();
+    let plan = crate::resident::resident_generate_protected_context(
+        client,
+        if file_metadata_context {
+            "apps.builds.file-metadata"
+        } else {
+            "apps.builds.intent"
+        },
+        if file_metadata_context {
+            "Build an app from selected-item metadata"
+        } else {
+            "Build an app from this description"
+        },
+        &prompt,
+        &request_binding,
+        if file_metadata_context {
+            "only the selected item's name, type, and size metadata; file contents are not read or sent"
+        } else {
+            "the exact app description and the OS builder instructions"
+        },
+    );
+    let (plan, source) = match plan {
         Ok(plan) => plan,
-        Err(detail) => {
+        Err(ContextGenerationError::Cancelled) => {
+            audit_ai_action("build-app", Some("launcher"), AiActionOutcome::Denied);
+            return outcome(
+                StatusCode::FORBIDDEN,
+                "Nothing was shared. The hosted app build was cancelled.".to_string(),
+                None,
+            );
+        }
+        Err(ContextGenerationError::TimedOut) => {
             audit_ai_action("build-app", Some("launcher"), AiActionOutcome::Blocked);
+            return outcome(
+                StatusCode::REQUEST_TIMEOUT,
+                "Nothing was shared because the hosted app-build review expired.".to_string(),
+                None,
+            );
+        }
+        Err(ContextGenerationError::Unavailable(detail)) => {
+            audit_ai_action(
+                "build-app",
+                Some(if file_metadata_context {
+                    "files"
+                } else {
+                    "launcher"
+                }),
+                AiActionOutcome::Blocked,
+            );
             return outcome(
                 StatusCode::SERVICE_UNAVAILABLE,
                 format!("Goblins OS could not design the app: {detail}."),
@@ -236,16 +306,12 @@ fn outcome(
 
 fn build_prompt(intent: &str) -> String {
     format!(
-        "You are the app builder for Goblins OS, a Fedora bootc Linux OS whose apps are \
+        "You are the app builder for Goblins OS, an image-based Linux OS whose apps are \
          generated from intent rather than installed. Design a single, focused application for \
          this user intent. Reply with a short, concrete plan: the app name on the first line, \
          then what it does, its main screens and actions, and how the active Goblins AI runtime \
          powers it. Keep it practical and calm.\n\nUser intent: {intent}"
     )
-}
-
-fn design_app_plan(intent: &str) -> Result<(String, &'static str), &'static str> {
-    crate::resident::resident_generate_with_engine(&build_prompt(intent))
 }
 
 fn build_app_record(intent: &str, plan: &str, source: &'static str) -> BuiltApp {
@@ -543,7 +609,7 @@ mod tests {
     fn build_prompt_keeps_goblins_product_framing() {
         let prompt = build_prompt("a reminders app");
         assert!(prompt.contains("Goblins OS"));
-        assert!(prompt.contains("Fedora bootc Linux OS"));
+        assert!(prompt.contains("image-based Linux OS"));
         let old_product_frame = ["OpenAI-centered", "Linux OS"].join(" ");
         assert!(!prompt.contains(&old_product_frame));
     }

@@ -147,6 +147,7 @@ pub async fn grant_permission(Json(request): Json<GrantPermissionRequest>) -> im
         )
             .into_response();
     }
+    crate::resident::bump_hosted_authority_generation();
 
     Json(GrantPermissionResponse {
         ok: true,
@@ -187,6 +188,7 @@ pub async fn configure_policy(Json(request): Json<ConfigurePolicyRequest>) -> im
         )
             .into_response();
     }
+    crate::resident::bump_hosted_authority_generation();
 
     Json(ConfigurePolicyResponse {
         ok: true,

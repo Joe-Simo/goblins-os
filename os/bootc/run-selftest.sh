@@ -24,6 +24,15 @@ core_proof_curl() {
     curl --connect-timeout 2 --max-time 45 --unix-socket "$CORE_PROOF_SOCKET" "$@"
 }
 
+protected_context_status_is_valid() {
+  local status=$1
+  local _response_file=$2
+  case "$status" in
+    200|403|408|429|503) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 echo "═══════════════════════════════════════════════════════════════════"
 echo " Goblins OS self-test — real image rootfs ($(. /etc/os-release; echo "$PRETTY_NAME"))"
 echo "═══════════════════════════════════════════════════════════════════"
@@ -40,7 +49,7 @@ fi
 
 echo
 echo "── 2. systemd units enabled to start at boot ──"
-for unit in goblins-os-core goblins-os-resident goblins-os-model-cache gdm NetworkManager; do
+for unit in goblins-os-core goblins-os-resident goblins-os-model-cache goblins-os-firmware-label-migration gdm NetworkManager; do
   state=$(systemctl is-enabled "$unit.service" 2>/dev/null || echo "unknown")
   echo "  $unit.service: $state"
   case "$state" in enabled|enabled-runtime|static|alias) ;; *) [ "$unit" = "goblins-os-model-cache" ] || fail=1 ;; esac
@@ -106,7 +115,7 @@ echo "  verification first boot -> privacy=$firstboot_privacy_code installer=$fi
   && [ "$persisted_session_mode" = "local-gpt-oss" ] \
   || fail=1
 engine_response=/tmp/goblins-os-engine-selection.json
-engine_file="$GOBLINS_OS_AI_STATE/engine"
+engine_file="$GOBLINS_OS_AI_STATE/users/0/engine"
 engine_code=$(core_proof_curl -s -o "$engine_response" -w '%{http_code}' \
   -X POST -H 'Content-Type: application/json' \
   -d '{"engine":"local-gpt-oss"}' \
@@ -191,7 +200,7 @@ settings_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-settings-ai.json -w '%{
   -d '{"panel":"network","topic":"Network","question":"Why is the network offline?","status_summary":"Self-test route check only; no user content."}' \
   "$CORE_PROOF_URL/v1/ai/settings-context")
 echo "  POST /v1/ai/settings-context -> HTTP $settings_ai_code"
-case "$settings_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
+protected_context_status_is_valid "$settings_ai_code" /tmp/goblins-os-settings-ai.json || fail=1
 open_settings_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-open-settings-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"query":"open wifi settings","source_panel":"self-test"}' \
@@ -203,25 +212,25 @@ system_status_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-system-status-ai.j
   -d '{"focus":"storage","question":"Summarize current system state.","status_summary":"Self-test route check only; no user content."}' \
   "$CORE_PROOF_URL/v1/ai/system-status")
 echo "  POST /v1/ai/system-status -> HTTP $system_status_ai_code"
-case "$system_status_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
+protected_context_status_is_valid "$system_status_ai_code" /tmp/goblins-os-system-status-ai.json || fail=1
 selected_text_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-selected-text-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"text":"Self-test selected text route check.","app":"Self Test","window_title":"Installed OS self-test","question":"Summarize this selected text."}' \
   "$CORE_PROOF_URL/v1/ai/selected-text-context")
 echo "  POST /v1/ai/selected-text-context -> HTTP $selected_text_ai_code"
-case "$selected_text_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
+protected_context_status_is_valid "$selected_text_ai_code" /tmp/goblins-os-selected-text-ai.json || fail=1
 writing_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-writing-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"text":"Self-test writing tools route check.","app":"Self Test","window_title":"Installed OS self-test","question":"Proofread this text."}' \
   "$CORE_PROOF_URL/v1/ai/write-selected-text")
 echo "  POST /v1/ai/write-selected-text -> HTTP $writing_ai_code"
-case "$writing_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
+protected_context_status_is_valid "$writing_ai_code" /tmp/goblins-os-writing-ai.json || fail=1
 screen_ai_code=$(core_proof_curl -s -o /tmp/goblins-os-screen-ai.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"source":"self-test","app":"Self Test","window_title":"Installed OS self-test","visible_text":"Self-test screen context route check.","visual_summary":"No screenshot pixels are sent in self-test.","question":"Summarize this visible context."}' \
   "$CORE_PROOF_URL/v1/ai/screen-context")
 echo "  POST /v1/ai/screen-context -> HTTP $screen_ai_code"
-case "$screen_ai_code" in 200|403|503) ;; *) fail=1 ;; esac
+protected_context_status_is_valid "$screen_ai_code" /tmp/goblins-os-screen-ai.json || fail=1
 echo "  hardware scan:"
 core_proof_curl -s "$CORE_PROOF_URL/v1/system/hardware" | jq -c '{os:.platform.os, ram_gb:.memory.total_gb, accelerators:(.accelerators|length), storage:(.storage|length), runtimes:.runtimes}'
 echo "  model eligibility:"

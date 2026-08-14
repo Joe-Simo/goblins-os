@@ -11,6 +11,7 @@ shipping verification so textual lookalikes cannot satisfy a proof gate.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import stat
@@ -33,9 +34,19 @@ COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 IMAGE_REF = re.compile(
     r"ghcr\.io/[a-z0-9][a-z0-9._/-]*[a-z0-9]@sha256:[0-9a-f]{64}"
 )
-WORKFLOW_RUN = re.compile(r"https://github\.com/Joe-Simo/goblins-os/actions/runs/[1-9][0-9]*")
+GITHUB_RUN_URL = re.compile(r"https://github\.com/Joe-Simo/goblins-os/actions/runs/[1-9][0-9]*")
+QEMU_VERSION_RE = re.compile(r"QEMU emulator version [^\x00-\x1f\x7f]{1,192}")
 
-MANIFEST_FIXED_VALUES: Final[dict[str, str]] = {
+CAPTURE_ENVIRONMENT_FIXED_VALUES: Final[dict[str, str]] = {
+    "host_os": "Darwin",
+    "host_architecture": "arm64",
+    "accelerator": "hvf",
+    "qemu_binary": "qemu-system-aarch64",
+    "qemu_machine": "virt,accel=hvf,gic-version=max",
+    "qemu_cpu": "host",
+}
+
+MANIFEST_FIXED_VALUES: Final[dict[str, object]] = {
     "verification_iso_manifest": "verification-iso-manifest.json",
     "verification_bib_manifest": "verification-bib-manifest.json",
     "verification_release_evidence_manifest": "verification-release-evidence-manifest.json",
@@ -56,9 +67,48 @@ MANIFEST_FIXED_VALUES: Final[dict[str, str]] = {
     "preview_open_render_proof": "preview-open-render-proof.json",
     "audio_output_proof": "audio-output-proof.json",
     "runtime_build_proof": "runtime-build-proof.json",
+    "accessibility_adaptivity_proof": "accessibility-adaptivity-proof.json",
+    "capture_canvas_width": 5120,
+    "capture_canvas_height": 2880,
+    "capture_canvas_normalization": "centered padding without resampling",
     "capture_method": (
         "display-backed qemu VM, software GPU/audio substrate "
         "(lavapipe/gamescope/pipewire), honestly labeled"
+    ),
+}
+
+ACCESSIBILITY_SCREENSHOT_BINDINGS: Final[dict[str, tuple[str, str]]] = {
+    "text_scale_screenshot": (
+        "text_scale_screenshot_sha256",
+        "33-accessibility-text-scaling.png",
+    ),
+    "high_contrast_screenshot": (
+        "high_contrast_screenshot_sha256",
+        "34-accessibility-high-contrast.png",
+    ),
+    "reduce_transparency_screenshot": (
+        "reduce_transparency_screenshot_sha256",
+        "35-accessibility-reduced-transparency.png",
+    ),
+    "reduce_motion_screenshot": (
+        "reduce_motion_screenshot_sha256",
+        "36-accessibility-reduced-motion.png",
+    ),
+    "locale_expansion_screenshot": (
+        "locale_expansion_screenshot_sha256",
+        "37-accessibility-localization-expansion.png",
+    ),
+    "orca_atspi_screenshot": (
+        "orca_atspi_screenshot_sha256",
+        "38-accessibility-orca-atspi.png",
+    ),
+    "keyboard_focus_screenshot": (
+        "keyboard_focus_screenshot_sha256",
+        "39-accessibility-keyboard-focus.png",
+    ),
+    "window_resize_screenshot": (
+        "window_resize_screenshot_sha256",
+        "40-accessibility-window-resize.png",
     ),
 }
 
@@ -519,6 +569,104 @@ PROOF_SCHEMAS: Final[dict[str, ProofSchema]] = {
             "response_bytes": POSITIVE_INTEGER,
         },
     ),
+    "accessibility-adaptivity": schema(
+        "accessibility-adaptivity",
+        exact(
+            status="pass",
+            architecture="aarch64",
+            status_route="/v1/accessibility/status",
+            preference_route="/v1/accessibility/preference",
+            gsettings_available="true",
+            interface_schema_available="true",
+            visual_schema_available="true",
+            reduce_transparency_schema_available="true",
+            text_scale_schema="org.gnome.desktop.interface",
+            text_scale_key="text-scaling-factor",
+            text_scale_target="1.25",
+            text_scale_http="200",
+            text_scale_ok="true",
+            text_scale_readback="1.25",
+            text_scale_screenshot="33-accessibility-text-scaling.png",
+            high_contrast_schema="org.gnome.desktop.a11y.interface",
+            high_contrast_key="high-contrast",
+            high_contrast_http="200",
+            high_contrast_ok="true",
+            high_contrast_readback="true",
+            high_contrast_screenshot="34-accessibility-high-contrast.png",
+            reduce_transparency_schema="org.goblins.os.a11y.visual",
+            reduce_transparency_key="reduce-transparency",
+            reduce_transparency_http="200",
+            reduce_transparency_ok="true",
+            reduce_transparency_readback="true",
+            reduce_transparency_screenshot="35-accessibility-reduced-transparency.png",
+            reduce_motion_schema="org.gnome.desktop.interface",
+            reduce_motion_key="enable-animations",
+            reduce_motion_http="200",
+            reduce_motion_ok="true",
+            reduce_motion_readback="true",
+            reduce_motion_screenshot="36-accessibility-reduced-motion.png",
+            locale_expansion_surface="goblins-os-settings-language-region",
+            locale_expansion_requested_locale="de_DE.UTF-8",
+            locale_expansion_language_request="de",
+            locale_expansion_runtime="Goblins-Settings-AT-SPI",
+            locale_expansion_process_environment="true",
+            locale_expansion_active_time_locale="true",
+            locale_expansion_active_numeric_locale="true",
+            locale_expansion_translation_claimed="false",
+            locale_expansion_goblins_copy_language="English",
+            locale_expansion_regional_content_present="true",
+            locale_expansion_fact_count="5",
+            locale_expansion_date_format_changed="true",
+            locale_expansion_number_format_changed="true",
+            locale_expansion_clipped_visible_node_count="0",
+            locale_expansion_layout_bounds_checked="true",
+            locale_expansion_screenshot="37-accessibility-localization-expansion.png",
+            screen_reader_schema="org.gnome.desktop.a11y.applications",
+            screen_reader_key="screen-reader-enabled",
+            screen_reader_http="200",
+            screen_reader_ok="true",
+            screen_reader_readback="true",
+            orca_process_active="true",
+            atspi_bus="org.a11y.Bus",
+            atspi_bus_ready="true",
+            atspi_settings_window_present="true",
+            orca_atspi_screenshot="38-accessibility-orca-atspi.png",
+            keyboard_input_driver="qmp-keyboard",
+            keyboard_focus_key="Tab",
+            keyboard_focused="true",
+            keyboard_focus_screenshot="39-accessibility-keyboard-focus.png",
+            resize_action="AT-SPI-Zoom",
+            resize_action_invoked="true",
+            window_resize_observed="true",
+            framebuffer_width="5120",
+            framebuffer_height="2880",
+            window_resize_screenshot="40-accessibility-window-resize.png",
+            uniform_framebuffer="true",
+            screenshot_capture_ack="true",
+            roundtrip_restored="true",
+        ),
+        {
+            "text_scale_screenshot_sha256": HEX_SHA256,
+            "high_contrast_screenshot_sha256": HEX_SHA256,
+            "reduce_transparency_screenshot_sha256": HEX_SHA256,
+            "reduce_motion_screenshot_sha256": HEX_SHA256,
+            "locale_expansion_accessible_name": SAFE_TEXT,
+            "locale_expansion_changed_name_count": POSITIVE_INTEGER,
+            "locale_expansion_longer_name_count": POSITIVE_INTEGER,
+            "locale_expansion_visible_named_node_count": POSITIVE_INTEGER,
+            "locale_expansion_screenshot_sha256": HEX_SHA256,
+            "atspi_node_count": POSITIVE_INTEGER,
+            "orca_atspi_screenshot_sha256": HEX_SHA256,
+            "keyboard_focus_role": SAFE_TEXT,
+            "keyboard_focus_name": SAFE_TEXT,
+            "keyboard_focus_screenshot_sha256": HEX_SHA256,
+            "window_maximized_width": POSITIVE_INTEGER,
+            "window_maximized_height": POSITIVE_INTEGER,
+            "window_resized_width": POSITIVE_INTEGER,
+            "window_resized_height": POSITIVE_INTEGER,
+            "window_resize_screenshot_sha256": HEX_SHA256,
+        },
+    ),
 }
 
 PATTERN_SELF_TEST_VALUES: Final[dict[str, str]] = {
@@ -541,6 +689,25 @@ PATTERN_SELF_TEST_VALUES: Final[dict[str, str]] = {
     "built_artifact_id": "focus-timer",
     "built_artifact_name": "Focus Timer",
     "response_bytes": "1024",
+    "text_scale_screenshot_sha256": "1" * 64,
+    "high_contrast_screenshot_sha256": "2" * 64,
+    "reduce_transparency_screenshot_sha256": "3" * 64,
+    "reduce_motion_screenshot_sha256": "4" * 64,
+    "locale_expansion_accessible_name": "Regional format: German (Germany)",
+    "locale_expansion_changed_name_count": "4",
+    "locale_expansion_longer_name_count": "2",
+    "locale_expansion_visible_named_node_count": "24",
+    "locale_expansion_screenshot_sha256": "5" * 64,
+    "atspi_node_count": "64",
+    "orca_atspi_screenshot_sha256": "6" * 64,
+    "keyboard_focus_role": "push button",
+    "keyboard_focus_name": "Text size",
+    "keyboard_focus_screenshot_sha256": "7" * 64,
+    "window_maximized_width": "1920",
+    "window_maximized_height": "1080",
+    "window_resized_width": "1200",
+    "window_resized_height": "800",
+    "window_resize_screenshot_sha256": "8" * 64,
 }
 
 
@@ -671,10 +838,89 @@ def validate_proof(path: Path, schema_name: str) -> None:
     if schema_name == "multi-display-apply":
         if payload["stale_serial"] == payload["serial"]:
             raise ProofValidationError("stale display serial equals the current serial")
+    if schema_name == "accessibility-adaptivity":
+        if int(payload["atspi_node_count"]) < 8:
+            raise ProofValidationError("AT-SPI accessibility tree is implausibly small")
+        if int(payload["window_maximized_width"]) <= int(payload["window_resized_width"]):
+            raise ProofValidationError("window width did not shrink after the AT-SPI Zoom action")
+        if int(payload["window_maximized_height"]) <= int(payload["window_resized_height"]):
+            raise ProofValidationError("window height did not shrink after the AT-SPI Zoom action")
+        hashes = [payload[sha_field] for sha_field, _ in ACCESSIBILITY_SCREENSHOT_BINDINGS.values()]
+        if len(set(hashes)) != len(hashes):
+            raise ProofValidationError("accessibility proof reuses a screenshot hash")
+
+
+def hash_stable_regular_file(path: Path, maximum_bytes: int = 64 * 1024 * 1024) -> str:
+    try:
+        before = path.lstat()
+    except OSError as error:
+        raise ProofValidationError(f"cannot stat screenshot: {error}") from error
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size <= 0
+        or before.st_size > maximum_bytes
+    ):
+        raise ProofValidationError("screenshot must be a bounded single-link regular file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ProofValidationError(f"cannot securely open screenshot: {error}") from error
+    digest = hashlib.sha256()
+    try:
+        opened = os.fstat(descriptor)
+        stable = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(before, field) != getattr(opened, field) for field in stable):
+            raise ProofValidationError("screenshot changed before it was opened")
+        remaining = opened.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise ProofValidationError("screenshot was truncated while hashing")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise ProofValidationError("screenshot grew while hashing")
+        after = os.fstat(descriptor)
+        if any(getattr(opened, field) != getattr(after, field) for field in stable):
+            raise ProofValidationError("screenshot changed while hashing")
+    finally:
+        os.close(descriptor)
+    return digest.hexdigest()
+
+
+def validate_proof_screenshots(schema_name: str, proof_path: Path, run_dir: Path) -> None:
+    if schema_name != "accessibility-adaptivity":
+        raise ProofValidationError("screenshot binding is not defined for this proof schema")
+    try:
+        canonical_run_dir = run_dir.resolve(strict=True)
+        canonical_proof = proof_path.resolve(strict=True)
+    except OSError as error:
+        raise ProofValidationError(f"cannot resolve screenshot proof path: {error}") from error
+    if canonical_proof.parent != canonical_run_dir:
+        raise ProofValidationError("proof and screenshots must share the exact dated run directory")
+    if canonical_proof.name != "accessibility-adaptivity-proof.json":
+        raise ProofValidationError("unexpected accessibility proof filename")
+    validate_proof(canonical_proof, schema_name)
+    payload = load_bounded_json(canonical_proof)
+    if not isinstance(payload, dict):
+        raise ProofValidationError("accessibility proof root must be an object")
+    observed_hashes: list[str] = []
+    for name_field, (sha_field, expected_name) in ACCESSIBILITY_SCREENSHOT_BINDINGS.items():
+        if payload.get(name_field) != expected_name:
+            raise ProofValidationError(f"unexpected screenshot binding for {name_field}")
+        observed = hash_stable_regular_file(canonical_run_dir / expected_name)
+        if payload.get(sha_field) != observed:
+            raise ProofValidationError(f"screenshot SHA256 mismatch for {expected_name}")
+        observed_hashes.append(observed)
+    if len(set(observed_hashes)) != len(observed_hashes):
+        raise ProofValidationError("accessibility screenshots are not byte-distinct")
 
 
 def validate_run_directory(path: Path, repository: Path, architecture: str) -> str:
-    if architecture not in {"aarch64", "x86_64"}:
+    if architecture != "aarch64":
         raise ProofValidationError("unsupported hardware-gate architecture")
     try:
         repository = repository.resolve(strict=True)
@@ -722,6 +968,27 @@ def validate_run_directory(path: Path, repository: Path, architecture: str) -> s
     return str(candidate.relative_to(repository))
 
 
+def validate_capture_environment(value: object) -> dict[str, str]:
+    expected_keys = set(CAPTURE_ENVIRONMENT_FIXED_VALUES) | {
+        "qemu_binary_sha256",
+        "qemu_version",
+    }
+    if type(value) is not dict or set(value) != expected_keys:
+        raise ProofValidationError(
+            "capture environment must contain the exact Darwin/arm64/HVF QEMU fields"
+        )
+    if not all(type(key) is str and type(item) is str for key, item in value.items()):
+        raise ProofValidationError("capture environment fields must be strings")
+    for key, expected in CAPTURE_ENVIRONMENT_FIXED_VALUES.items():
+        if value[key] != expected:
+            raise ProofValidationError(f"unexpected capture environment value for {key}")
+    if HEX_SHA256.fullmatch(value["qemu_binary_sha256"]) is None:
+        raise ProofValidationError("capture QEMU executable SHA256 is invalid")
+    if QEMU_VERSION_RE.fullmatch(value["qemu_version"]) is None:
+        raise ProofValidationError("capture QEMU version is invalid")
+    return value
+
+
 def validate_manifest(
     path: Path,
     architecture: str,
@@ -730,7 +997,7 @@ def validate_manifest(
     iso_path: str,
     screenshot_run_dir: str,
 ) -> dict[str, object]:
-    if architecture not in {"aarch64", "x86_64"}:
+    if architecture != "aarch64":
         raise ProofValidationError("unsupported manifest architecture")
     if COMMIT_SHA.fullmatch(candidate_commit) is None:
         raise ProofValidationError("candidate commit is not lowercase 40-hex")
@@ -758,6 +1025,7 @@ def validate_manifest(
     expected_keys = set(MANIFEST_FIXED_VALUES) | {
         "architecture",
         "candidate_commit",
+        "capture_environment",
         "image_ref",
         "iso",
         "iso_sha256",
@@ -766,6 +1034,8 @@ def validate_manifest(
         "capture_workflow_run",
         "capture_workflow_run_attempt",
         "native_packaging_gate_proof",
+        "native_packaging_gate_run",
+        "native_packaging_gate_run_attempt",
         "verification_release_evidence_manifest_sha256",
         "text_shortcuts_live_ibus_runtime_render_screenshot_sha256",
     }
@@ -776,6 +1046,7 @@ def validate_manifest(
     for key, value in MANIFEST_FIXED_VALUES.items():
         if payload.get(key) != value:
             raise ProofValidationError(f"unexpected manifest value for {key}")
+    validate_capture_environment(payload.get("capture_environment"))
     expected = {
         "architecture": architecture,
         "candidate_commit": candidate_commit,
@@ -799,17 +1070,81 @@ def validate_manifest(
     workflow_run = payload.get("capture_workflow_run")
     workflow_attempt = payload.get("capture_workflow_run_attempt")
     native_proof = payload.get("native_packaging_gate_proof")
+    native_run = payload.get("native_packaging_gate_run")
+    native_attempt = payload.get("native_packaging_gate_run_attempt")
     if type(workflow_attempt) is not int:
         raise ProofValidationError("capture workflow attempt must be an integer")
-    if architecture == "x86_64":
-        if not isinstance(workflow_run, str) or WORKFLOW_RUN.fullmatch(workflow_run) is None:
-            raise ProofValidationError("x86_64 manifest lacks a canonical capture workflow run")
-        if workflow_attempt < 1 or native_proof != "":
-            raise ProofValidationError("x86_64 workflow/native proof fields are inconsistent")
-    else:
-        expected_native = f"{screenshot_run_dir}/native-packaging-gate.json"
-        if workflow_run != "" or workflow_attempt != 0 or native_proof != expected_native:
-            raise ProofValidationError("aarch64 workflow/native proof fields are inconsistent")
+    expected_native = f"{screenshot_run_dir}/native-packaging-gate.json"
+    if (
+        workflow_run != ""
+        or workflow_attempt != 0
+        or native_proof != expected_native
+        or not isinstance(native_run, str)
+        or GITHUB_RUN_URL.fullmatch(native_run) is None
+        or type(native_attempt) is not int
+        or native_attempt < 1
+    ):
+        raise ProofValidationError("aarch64 workflow/native proof fields are inconsistent")
+
+    native_path = path.parent / "native-packaging-gate.json"
+    native_payload = load_bounded_json(native_path)
+    if not isinstance(native_payload, dict):
+        raise ProofValidationError("native packaging gate root must be an object")
+    native_expected_keys = {
+        "schema",
+        "architecture",
+        "candidate_commit",
+        "image_ref",
+        "image_digest_pinned",
+        "source_verifier",
+        "installed_root_verifier",
+        "services_selftest",
+        "verification_iso_sha256",
+        "iso_manifest_sha256",
+        "bib_manifest_sha256",
+        "release_evidence_manifest_sha256",
+        "runner_os",
+        "runner_architecture",
+        "native_runner",
+        "source_repository",
+        "workflow_run",
+        "workflow_run_attempt",
+    }
+    if set(native_payload) != native_expected_keys:
+        raise ProofValidationError("native packaging gate key set is not exact")
+    native_expected = {
+        "schema": "goblins-os-native-packaging-gate-v1",
+        "architecture": "aarch64",
+        "candidate_commit": candidate_commit,
+        "image_ref": image_ref,
+        "image_digest_pinned": True,
+        "source_verifier": "pass",
+        "installed_root_verifier": "pass",
+        "services_selftest": "pass",
+        "verification_iso_sha256": payload["iso_sha256"],
+        "iso_manifest_sha256": hash_stable_regular_file(
+            path.parent / "verification-iso-manifest.json", MAX_PROOF_BYTES
+        ),
+        "bib_manifest_sha256": hash_stable_regular_file(
+            path.parent / "verification-bib-manifest.json", MAX_PROOF_BYTES
+        ),
+        "release_evidence_manifest_sha256": hash_stable_regular_file(
+            path.parent / "verification-release-evidence-manifest.json", MAX_PROOF_BYTES
+        ),
+        "runner_os": "Linux",
+        "runner_architecture": "aarch64",
+        "native_runner": True,
+        "source_repository": "https://github.com/Joe-Simo/goblins-os",
+        "workflow_run": native_run,
+        "workflow_run_attempt": native_attempt,
+    }
+    if any(native_payload.get(key) != value for key, value in native_expected.items()):
+        raise ProofValidationError("native packaging gate does not bind the exact capture inputs")
+    if (
+        native_payload["release_evidence_manifest_sha256"]
+        != payload["verification_release_evidence_manifest_sha256"]
+    ):
+        raise ProofValidationError("native packaging gate release evidence hash disagrees")
     return payload
 
 
@@ -866,27 +1201,71 @@ def run_self_test() -> None:
             raise ProofValidationError("symlinked proof regression was accepted")
 
         repository = root / "repo"
-        run_dir = repository / "os/screenshots/hardware-gate/x86_64/2026-07-21"
+        run_dir = repository / "os/screenshots/hardware-gate/aarch64/2026-07-21"
         run_dir.mkdir(parents=True)
         relative_run_dir = validate_run_directory(
-            Path("os/screenshots/hardware-gate/x86_64/2026-07-21"),
+            Path("os/screenshots/hardware-gate/aarch64/2026-07-21"),
             repository,
-            "x86_64",
+            "aarch64",
         )
+        verification_files = {
+            "verification-iso-manifest.json": b'{"kind":"iso"}\n',
+            "verification-bib-manifest.json": b'{"kind":"bib"}\n',
+            "verification-release-evidence-manifest.json": b'{"kind":"evidence"}\n',
+        }
+        verification_hashes = {}
+        for name, data in verification_files.items():
+            (run_dir / name).write_bytes(data)
+            verification_hashes[name] = hashlib.sha256(data).hexdigest()
+        native_run = "https://github.com/Joe-Simo/goblins-os/actions/runs/123456789"
+        native_attempt = 2
+        native_gate = {
+            "schema": "goblins-os-native-packaging-gate-v1",
+            "architecture": "aarch64",
+            "candidate_commit": "1" * 40,
+            "image_ref": f"ghcr.io/joe-simo/goblins-os@sha256:{'2' * 64}",
+            "image_digest_pinned": True,
+            "source_verifier": "pass",
+            "installed_root_verifier": "pass",
+            "services_selftest": "pass",
+            "verification_iso_sha256": "3" * 64,
+            "iso_manifest_sha256": verification_hashes["verification-iso-manifest.json"],
+            "bib_manifest_sha256": verification_hashes["verification-bib-manifest.json"],
+            "release_evidence_manifest_sha256": verification_hashes[
+                "verification-release-evidence-manifest.json"
+            ],
+            "runner_os": "Linux",
+            "runner_architecture": "aarch64",
+            "native_runner": True,
+            "source_repository": "https://github.com/Joe-Simo/goblins-os",
+            "workflow_run": native_run,
+            "workflow_run_attempt": native_attempt,
+        }
+        native_gate_path = run_dir / "native-packaging-gate.json"
+        native_gate_path.write_text(json.dumps(native_gate), encoding="utf-8")
         manifest = dict(MANIFEST_FIXED_VALUES)
         manifest.update(
             {
-                "architecture": "x86_64",
+                "architecture": "aarch64",
                 "candidate_commit": "1" * 40,
+                "capture_environment": {
+                    **CAPTURE_ENVIRONMENT_FIXED_VALUES,
+                    "qemu_binary_sha256": "6" * 64,
+                    "qemu_version": "QEMU emulator version 10.0.3",
+                },
                 "image_ref": f"ghcr.io/joe-simo/goblins-os@sha256:{'2' * 64}",
-                "iso": "os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso",
+                "iso": "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso",
                 "iso_sha256": "3" * 64,
                 "captured_at": "2026-07-21T00:00:00Z",
                 "screenshot_run_dir": relative_run_dir,
-                "capture_workflow_run": "https://github.com/Joe-Simo/goblins-os/actions/runs/1",
-                "capture_workflow_run_attempt": 1,
-                "native_packaging_gate_proof": "",
-                "verification_release_evidence_manifest_sha256": "4" * 64,
+                "capture_workflow_run": "",
+                "capture_workflow_run_attempt": 0,
+                "native_packaging_gate_proof": f"{relative_run_dir}/native-packaging-gate.json",
+                "native_packaging_gate_run": native_run,
+                "native_packaging_gate_run_attempt": native_attempt,
+                "verification_release_evidence_manifest_sha256": verification_hashes[
+                    "verification-release-evidence-manifest.json"
+                ],
                 "text_shortcuts_live_ibus_runtime_render_screenshot_sha256": "5" * 64,
             }
         )
@@ -894,12 +1273,94 @@ def run_self_test() -> None:
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         validate_manifest(
             manifest_path,
-            "x86_64",
+            "aarch64",
             "1" * 40,
             f"ghcr.io/joe-simo/goblins-os@sha256:{'2' * 64}",
-            "os/iso/output/x86_64/bootiso/goblins-os-x86_64.iso",
+            "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso",
             relative_run_dir,
         )
+        for field, invalid in (
+            ("native_packaging_gate_run", "https://github.com/Joe-Simo/goblins-os/actions/runs/999"),
+            ("native_packaging_gate_run_attempt", native_attempt + 1),
+        ):
+            invalid_manifest = json.loads(json.dumps(manifest))
+            invalid_manifest[field] = invalid
+            manifest_path.write_text(json.dumps(invalid_manifest), encoding="utf-8")
+            try:
+                validate_manifest(
+                    manifest_path,
+                    "aarch64",
+                    "1" * 40,
+                    f"ghcr.io/joe-simo/goblins-os@sha256:{'2' * 64}",
+                    "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso",
+                    relative_run_dir,
+                )
+            except ProofValidationError:
+                pass
+            else:
+                raise ProofValidationError(f"mismatched manifest {field} was accepted")
+        for field, invalid in (
+            ("workflow_run", "https://github.com/Joe-Simo/goblins-os/actions/runs/999"),
+            ("workflow_run_attempt", native_attempt + 1),
+            ("runner_architecture", "x86_64"),
+        ):
+            invalid_gate = json.loads(json.dumps(native_gate))
+            invalid_gate[field] = invalid
+            native_gate_path.write_text(json.dumps(invalid_gate), encoding="utf-8")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            try:
+                validate_manifest(
+                    manifest_path,
+                    "aarch64",
+                    "1" * 40,
+                    f"ghcr.io/joe-simo/goblins-os@sha256:{'2' * 64}",
+                    "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso",
+                    relative_run_dir,
+                )
+            except ProofValidationError:
+                pass
+            else:
+                raise ProofValidationError(f"mismatched native gate {field} was accepted")
+        native_gate_path.write_text(json.dumps(native_gate), encoding="utf-8")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        for field, invalid in (
+            ("host_os", "Linux"),
+            ("host_architecture", "aarch64"),
+            ("accelerator", "kvm"),
+            ("qemu_binary", "qemu-system-x86_64"),
+            ("qemu_binary_sha256", "not-a-sha256"),
+            ("qemu_version", "QEMU 10.0.3"),
+            ("qemu_machine", "virt,accel=kvm,gic-version=max"),
+            ("qemu_cpu", "max"),
+        ):
+            invalid_manifest = json.loads(json.dumps(manifest))
+            invalid_manifest["capture_environment"][field] = invalid
+            manifest_path.write_text(json.dumps(invalid_manifest), encoding="utf-8")
+            try:
+                validate_manifest(
+                    manifest_path,
+                    "aarch64",
+                    "1" * 40,
+                    f"ghcr.io/joe-simo/goblins-os@sha256:{'2' * 64}",
+                    "os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso",
+                    relative_run_dir,
+                )
+            except ProofValidationError:
+                pass
+            else:
+                raise ProofValidationError(
+                    f"invalid capture environment field {field!r} was accepted"
+                )
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        for unsupported in ("x86_64", "amd64", "arm64", "riscv64"):
+            try:
+                validate_run_directory(Path(relative_run_dir), repository, unsupported)
+            except ProofValidationError:
+                pass
+            else:
+                raise ProofValidationError(
+                    f"non-canonical architecture {unsupported!r} was accepted"
+                )
 
 
 def main(arguments: list[str]) -> int:
@@ -910,6 +1371,9 @@ def main(arguments: list[str]) -> int:
             return 0
         if len(arguments) == 3 and arguments[0] == "--proof":
             validate_proof(Path(arguments[2]), arguments[1])
+            return 0
+        if len(arguments) == 4 and arguments[0] == "--proof-screenshots":
+            validate_proof_screenshots(arguments[1], Path(arguments[2]), Path(arguments[3]))
             return 0
         if len(arguments) == 4 and arguments[0] == "--run-directory":
             print(validate_run_directory(Path(arguments[1]), Path(arguments[2]), arguments[3]))
@@ -926,6 +1390,7 @@ def main(arguments: list[str]) -> int:
             return 0
         raise ProofValidationError(
             "usage: proof_validation.py --proof SCHEMA FILE | "
+            "--proof-screenshots SCHEMA PROOF RUN_DIR | "
             "--manifest FILE ARCH COMMIT IMAGE_REF ISO RUN_DIR | "
             "--run-directory DIR REPOSITORY ARCH | --self-test"
         )

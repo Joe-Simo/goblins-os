@@ -83,6 +83,8 @@ static GLOBAL: OnceLock<Arc<SharedConnection>> = OnceLock::new();
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientKind {
     ControlCenter,
+    ConsentBroker,
+    OpenAiKeyBroker,
     Dictate,
     FileBuilder,
     FocusTick,
@@ -105,6 +107,8 @@ impl ClientKind {
     pub const fn slug(self) -> &'static str {
         match self {
             Self::ControlCenter => "control-center",
+            Self::ConsentBroker => "consent-broker",
+            Self::OpenAiKeyBroker => "openai-key-broker",
             Self::Dictate => "dictate",
             Self::FileBuilder => "file-builder",
             Self::FocusTick => "focus-tick",
@@ -133,6 +137,8 @@ impl ClientKind {
     const fn user_agent(self) -> &'static str {
         match self {
             Self::ControlCenter => "goblins-os-control-center",
+            Self::ConsentBroker => "goblins-os-consent-broker",
+            Self::OpenAiKeyBroker => "goblins-os-openai-key-broker",
             Self::Dictate => "goblins-os-dictate",
             Self::FileBuilder => "goblins-os-file-builder",
             Self::FocusTick => "goblins-os-focus-tick",
@@ -155,6 +161,8 @@ impl ClientKind {
     const fn executable_name(self) -> &'static str {
         match self {
             Self::ControlCenter => "goblins-os-control-center",
+            Self::ConsentBroker => "goblins-os-consent-broker",
+            Self::OpenAiKeyBroker => "goblins-os-openai-key-broker",
             Self::Dictate => "goblins-os-dictate",
             Self::FileBuilder => "goblins-os-file-builder",
             Self::FocusTick => "goblins-os-focus-tick",
@@ -178,11 +186,20 @@ impl ClientKind {
         PathBuf::from(DESKTOP_PAYLOAD_ROOT).join(self.executable_name())
     }
 
-    /// Only the non-interactive Resident service may enable no-new-privileges.
-    /// Desktop clients need later setgid execs to open other Goblins OS apps.
+    /// The resident begins as an ordinary service process rather than through a
+    /// setgid desktop capability entrypoint.
+    #[must_use]
+    #[cfg(target_os = "linux")]
+    const fn is_service_client(self) -> bool {
+        matches!(self, Self::Resident)
+    }
+
+    /// Resident never cross-launches. The key broker is also terminal: after it
+    /// consumes and drops its one setgid capability, it must not gain privilege
+    /// or launch another Goblins OS capability entrypoint.
     #[must_use]
     pub const fn requires_no_new_privs(self) -> bool {
-        matches!(self, Self::Resident)
+        matches!(self, Self::Resident | Self::OpenAiKeyBroker)
     }
 }
 
@@ -356,7 +373,7 @@ pub fn initialize(kind: ClientKind) -> Result<CoreClient, Error> {
 #[cfg(target_os = "linux")]
 fn initialize_linux(kind: ClientKind) -> Result<CoreClient, Error> {
     let ids = process_ids().map_err(Error::Initialization)?;
-    if !kind.requires_no_new_privs() && ids.real == ids.effective && ids.effective == ids.saved {
+    if !kind.is_service_client() && ids.real == ids.effective && ids.effective == ids.saved {
         return initialize_linux_desktop_payload(kind, ids);
     }
 
@@ -370,7 +387,7 @@ fn initialize_linux_capability_entry(
 ) -> Result<CoreClient, Error> {
     validate_initial_groups(kind, ids)?;
     let real_groups = supplementary_groups().map_err(Error::Initialization)?;
-    if !kind.requires_no_new_privs() && real_groups.contains(&ids.effective) {
+    if !kind.is_service_client() && real_groups.contains(&ids.effective) {
         return Err(Error::PrivilegeContract(
             "the desktop user must not be a member of the core capability group",
         ));
@@ -382,7 +399,7 @@ fn initialize_linux_capability_entry(
     verify_socket_path(kind, &socket_path, ids, &real_groups)?;
     verify_peer_owner(&stream, &socket_path).map_err(Error::Initialization)?;
 
-    if !kind.requires_no_new_privs() {
+    if !kind.is_service_client() {
         permanently_drop_group(ids.real).map_err(Error::Initialization)?;
         harden_process(kind).map_err(Error::Initialization)?;
         return reexec_desktop_payload(kind, stream).map_err(Error::Initialization);
@@ -922,6 +939,18 @@ fn sanitize_environment() {
 
 fn sanitized_environment_name(name: &str) -> bool {
     dangerous_environment_name(name)
+        || matches!(
+            name,
+            "OPENAI_API_KEY"
+                | "AI_GATEWAY_API_KEY"
+                | "AZURE_OPENAI_API_KEY"
+                | "OPENAI_ACCOUNT_CLIENT_SECRET"
+                | "OPENAI_ACCOUNT_ACCESS_TOKEN"
+                | "OPENAI_ACCOUNT_AUTH_TOKEN"
+                | "OPENAI_CREDENTIAL_FILE"
+                | "CODEX_HOME"
+                | "GOBLINS_OS_RESIDENT_RELAY_TOKEN"
+        )
         || name.starts_with("GOBLINS_OS_CORE_")
         || name.starts_with("OPENAI_OS_CORE_")
 }
@@ -1172,14 +1201,14 @@ fn verify_stream_socket(stream: &UnixStream) -> io::Result<()> {
 
 #[cfg(target_os = "linux")]
 fn validate_initial_groups(kind: ClientKind, ids: ProcessIds) -> Result<(), Error> {
-    let valid = if kind.requires_no_new_privs() {
+    let valid = if kind.is_service_client() {
         ids.real == ids.effective && ids.effective == ids.saved
     } else {
         ids.real != ids.effective && ids.effective == ids.saved
     };
     valid
         .then_some(())
-        .ok_or(Error::PrivilegeContract(if kind.requires_no_new_privs() {
+        .ok_or(Error::PrivilegeContract(if kind.is_service_client() {
             "resident must start with identical real, effective, and saved group IDs"
         } else {
             "desktop clients must start setgid with matching effective and saved group IDs"
@@ -1239,7 +1268,7 @@ fn verify_socket_path(
             "core capability socket must be a non-symlink socket in mode 0660 owned by the effective group",
         ));
     }
-    if !kind.requires_no_new_privs()
+    if !kind.is_service_client()
         && writable_by_real_user(&socket_metadata, ids.uid, ids.real, real_groups)
     {
         return Err(Error::PrivilegeContract(
@@ -1340,10 +1369,10 @@ fn harden_process(kind: ClientKind) -> io::Result<()> {
     // SAFETY: these getter operations have no pointer arguments.
     let no_new_privs = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
     let expected_no_new_privs = i32::from(kind.requires_no_new_privs());
-    // Desktop applications deliberately retain NNP=0: they have already
-    // consumed and permanently dropped their own capability, but must still be
-    // able to exec a different setgid Goblins OS application. Resident never
-    // cross-launches and is the sole client hardened with NNP=1.
+    // Ordinary desktop applications deliberately retain NNP=0: they have
+    // already consumed and permanently dropped their own capability, but must
+    // still be able to exec a different setgid Goblins OS application. Resident
+    // and the terminal credential broker never cross-launch and require NNP=1.
     if dumpable != 0 || no_new_privs != expected_no_new_privs {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -1466,6 +1495,8 @@ mod tests {
     fn client_kind_paths_are_fixed_and_complete() {
         let cases = [
             (ClientKind::ControlCenter, "control-center"),
+            (ClientKind::ConsentBroker, "consent-broker"),
+            (ClientKind::OpenAiKeyBroker, "openai-key-broker"),
             (ClientKind::Dictate, "dictate"),
             (ClientKind::FileBuilder, "file-builder"),
             (ClientKind::FocusTick, "focus-tick"),
@@ -1490,8 +1521,10 @@ mod tests {
             );
         }
         assert!(ClientKind::Resident.requires_no_new_privs());
+        assert!(ClientKind::OpenAiKeyBroker.requires_no_new_privs());
         for desktop in [
             ClientKind::ControlCenter,
+            ClientKind::ConsentBroker,
             ClientKind::Dictate,
             ClientKind::FileBuilder,
             ClientKind::FocusTick,
@@ -1703,6 +1736,15 @@ mod tests {
             "OPENAI_OS_CORE_SOCKET",
             "OPENAI_OS_CORE_PORT",
             "OPENAI_OS_CORE_FUTURE_TRANSPORT",
+            "OPENAI_API_KEY",
+            "AI_GATEWAY_API_KEY",
+            "AZURE_OPENAI_API_KEY",
+            "OPENAI_ACCOUNT_CLIENT_SECRET",
+            "OPENAI_ACCOUNT_ACCESS_TOKEN",
+            "OPENAI_ACCOUNT_AUTH_TOKEN",
+            "OPENAI_CREDENTIAL_FILE",
+            "CODEX_HOME",
+            "GOBLINS_OS_RESIDENT_RELAY_TOKEN",
         ] {
             assert!(sanitized_environment_name(name), "{name}");
         }
@@ -1720,6 +1762,7 @@ mod tests {
             uid: 1000,
         };
         assert!(validate_initial_groups(ClientKind::Settings, desktop).is_ok());
+        assert!(validate_initial_groups(ClientKind::OpenAiKeyBroker, desktop).is_ok());
         assert!(validate_initial_groups(ClientKind::Resident, desktop).is_err());
 
         let resident = ProcessIds {

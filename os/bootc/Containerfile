@@ -2,27 +2,57 @@ FROM docker.io/library/rust:1.88 AS rust-build
 
 WORKDIR /src
 RUN case "$(uname -m)" in \
-      x86_64|aarch64) ;; \
-      *) echo "Goblins OS native builds support only x86_64 and aarch64; got $(uname -m)" >&2; exit 1 ;; \
+      aarch64) ;; \
+      *) echo "Goblins OS native builds require aarch64; got $(uname -m)" >&2; exit 1 ;; \
     esac \
-    && rustc -Vv | grep -Eq '^host: (x86_64|aarch64)-'
+    && rustc -Vv | grep -Eq '^host: aarch64-'
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
       libgtk-4-dev \
       pkg-config \
       sox \
       libsox-fmt-all \
     && rm -rf /var/lib/apt/lists/*
+ARG CODEX_VERSION=0.144.4
+ARG CODEX_AARCH64_SHA256=4d07243ef4ae6786b8b321d7aea3f9be4e1d2c597ae5407e7c1b9873334082b2
+ARG CODEX_LICENSE_SHA256=d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc
+ARG CODEX_NOTICE_SHA256=9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915
+RUN codex_archive="/tmp/codex-aarch64-unknown-linux-musl.tar.gz" \
+    && codex_license="/tmp/codex-LICENSE" \
+    && codex_notice="/tmp/codex-NOTICE" \
+    && curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --retry 5 --retry-all-errors \
+      "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-aarch64-unknown-linux-musl.tar.gz" \
+      --output "${codex_archive}" \
+    && printf '%s  %s\n' "${CODEX_AARCH64_SHA256}" "${codex_archive}" | sha256sum --check --strict - \
+    && curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --retry 5 --retry-all-errors \
+      "https://raw.githubusercontent.com/openai/codex/rust-v${CODEX_VERSION}/LICENSE" \
+      --output "${codex_license}" \
+    && printf '%s  %s\n' "${CODEX_LICENSE_SHA256}" "${codex_license}" | sha256sum --check --strict - \
+    && curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --retry 5 --retry-all-errors \
+      "https://raw.githubusercontent.com/openai/codex/rust-v${CODEX_VERSION}/NOTICE" \
+      --output "${codex_notice}" \
+    && printf '%s  %s\n' "${CODEX_NOTICE_SHA256}" "${codex_notice}" | sha256sum --check --strict - \
+    && tar --extract --gzip --file "${codex_archive}" --directory /tmp \
+    && install -D -m 0755 /tmp/codex-aarch64-unknown-linux-musl /out/usr/bin/codex \
+    && install -D -m 0644 "${codex_license}" /out/usr/share/licenses/openai-codex/LICENSE \
+    && install -D -m 0644 "${codex_notice}" /out/usr/share/licenses/openai-codex/NOTICE \
+    && test "$(/out/usr/bin/codex --version)" = "codex-cli ${CODEX_VERSION}" \
+    && rm -f "${codex_archive}" "${codex_license}" "${codex_notice}" /tmp/codex-aarch64-unknown-linux-musl
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-markup/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop goblins-os-today/native-desktop"
+RUN cargo build --release --workspace --features "goblins-os-installer/native-desktop goblins-os-login/native-desktop goblins-os-settings/native-desktop goblins-os-shell/native-desktop goblins-os-launcher/native-desktop goblins-os-control-center/native-desktop goblins-os-consent-broker/native-desktop goblins-os-openai-key-broker/native-desktop goblins-os-markup/native-desktop goblins-os-ui/native-desktop goblins-os-visual-lookup/native-desktop goblins-os-today/native-desktop goblins-os-snapshot-broker/linux-broker"
 RUN install -d /out/usr/libexec/goblins-os \
     && for binary in \
       goblins-os-color-picker \
       goblins-os-control-center \
+      goblins-os-consent-broker \
+      goblins-os-openai-key-broker \
       goblins-os-core \
       goblins-os-dictate \
       goblins-os-file-builder \
+      goblins-os-firmware-label \
       goblins-os-focus-tick \
       goblins-os-full-installer \
       goblins-os-install-game-launcher \
@@ -34,6 +64,7 @@ RUN install -d /out/usr/libexec/goblins-os \
       goblins-os-resident \
       goblins-os-screenshot-context \
       goblins-os-session-bridge \
+      goblins-os-snapshot-broker \
       goblins-os-settings \
       goblins-os-shell \
       goblins-os-today \
@@ -60,6 +91,10 @@ COPY os/systemd/goblins-os-model-cache.service /usr/lib/systemd/system/goblins-o
 COPY os/systemd-system/ /usr/lib/systemd/system/
 COPY --chmod=0755 os/bootc/goblins-os-firewall /usr/libexec/goblins-os/goblins-os-firewall
 COPY os/bootc/60-goblins-os-firewall.rules /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules
+COPY --chmod=0755 os/bootc/goblins-os-system-update /usr/libexec/goblins-os/goblins-os-system-update
+COPY os/bootc/60-goblins-os-system-update.rules /usr/share/polkit-1/rules.d/60-goblins-os-system-update.rules
+COPY --chmod=0755 os/bootc/goblins-os-snapshots-setup /usr/libexec/goblins-os/goblins-os-snapshots-setup
+COPY os/bootc/60-goblins-os-systemd-credentials.rules /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules
 COPY --chmod=0755 os/bootc/generate-preview-proof-fixtures.py /usr/libexec/goblins-os/generate-preview-proof-fixtures.py
 COPY os/session/goblins-os-session /usr/libexec/goblins-os/goblins-os-session
 COPY os/session/goblins-os.desktop /usr/share/wayland-sessions/goblins-os.desktop
@@ -71,9 +106,11 @@ COPY --chmod=0755 os/input/goblins-os-input-source-seed /usr/libexec/goblins-os/
 COPY --chmod=0755 os/sound-recognition/goblins-os-sound-listener /usr/libexec/goblins-os/goblins-os-sound-listener
 COPY os/systemd-user/ /usr/lib/systemd/user/
 COPY os/applications/ /usr/share/applications/
+COPY os/application-overrides/ /usr/lib/goblins-os/application-overrides/
 COPY os/glib-schemas/ /usr/share/glib-2.0/schemas/
 COPY os/tmpfiles/goblins-os-session.conf /usr/lib/tmpfiles.d/goblins-os-session.conf
 COPY os/tmpfiles/goblins-os-core.conf /usr/lib/tmpfiles.d/goblins-os-core.conf
+COPY os/tmpfiles/goblins-os-application-overrides.conf /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf
 COPY os/brand/ /usr/share/goblins-os/brand/
 COPY os/themes/ /usr/share/themes/
 COPY os/gnome-shell-extensions/ /usr/share/gnome-shell/extensions/
@@ -83,6 +120,7 @@ COPY os/codex/config.toml /usr/share/goblins-os/codex/config.toml
 COPY os/tmpfiles/goblins-os-codex.conf /usr/lib/tmpfiles.d/goblins-os-codex.conf
 COPY os/plymouth/goblins-os/ /usr/share/plymouth/themes/goblins-os/
 COPY os/icons/ /usr/share/icons/
+COPY os/brand/icons/goblins.svg /usr/share/icons/GoblinsOS/scalable/apps/goblins-os.svg
 COPY os/sounds/GoblinsOS/index.theme /usr/share/sounds/GoblinsOS/index.theme
 COPY os/brand/anaconda/sidebar-bg.png /usr/share/anaconda/pixmaps/sidebar-bg.png
 COPY os/brand/anaconda/sidebar-logo.png /usr/share/anaconda/pixmaps/sidebar-logo.png
@@ -93,26 +131,30 @@ COPY os/etc/goblins-os/openai-secrets.env /etc/goblins-os/openai-secrets.env
 COPY os/dconf/ /etc/dconf/
 COPY os/gdm/custom.conf /etc/gdm/custom.conf
 COPY os/accountsservice/goblin /var/lib/AccountsService/users/goblin
+COPY os/etc/issue /etc/issue
+COPY os/etc/issue.net /etc/issue.net
+COPY os/etc/system-release /etc/system-release
 
 FROM quay.io/fedora/fedora-bootc:44 AS goblins-os
 
 LABEL org.opencontainers.image.title="Goblins OS" \
-    org.opencontainers.image.description="Open AI-native desktop operating system for building local software on Fedora bootc" \
+    org.opencontainers.image.description="Goblins OS — an open AI-native Linux desktop for building local software" \
     org.opencontainers.image.source="https://github.com/Joe-Simo/goblins-os" \
     org.opencontainers.image.url="https://goblinsos.com" \
     org.opencontainers.image.documentation="https://github.com/Joe-Simo/goblins-os/blob/main/SHIP.md" \
     org.opencontainers.image.licenses="AGPL-3.0-or-later" \
-    org.goblins-os.supported-architectures="x86_64,aarch64"
+    org.goblins-os.base="Fedora bootc 44" \
+    org.goblins-os.supported-architectures="aarch64"
 
 RUN image_arch="$(rpm --eval '%{_arch}')" \
     && machine_arch="$(uname -m)" \
     && case "${machine_arch}" in \
-      x86_64|aarch64) ;; \
-      *) echo "Goblins OS native images support only x86_64 and aarch64; got ${machine_arch}" >&2; exit 1 ;; \
+      aarch64) ;; \
+      *) echo "Goblins OS native images require aarch64; got ${machine_arch}" >&2; exit 1 ;; \
     esac \
     && case "${image_arch}" in \
-      x86_64|aarch64) ;; \
-      *) echo "Fedora RPM architecture must be x86_64 or aarch64; got ${image_arch}" >&2; exit 1 ;; \
+      aarch64) ;; \
+      *) echo "Fedora RPM architecture must be aarch64; got ${image_arch}" >&2; exit 1 ;; \
     esac \
     && test "${machine_arch}" = "${image_arch}"
 
@@ -120,6 +162,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && dnf -y --setopt=retries=20 --setopt=timeout=600 --setopt=minrate=1 --setopt=install_weak_deps=False install \
       at-spi2-core \
       bolt \
+      bubblewrap \
+      busybox \
       dbus-daemon \
       dbus-tools \
       dmidecode \
@@ -147,6 +191,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       anaconda-live \
       anaconda-install-img-deps \
       desktop-file-utils \
+      glibc-langpack-de \
       gtk4 \
       ibus \
       ibus-libpinyin \
@@ -168,6 +213,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       NetworkManager-wifi \
       nm-connection-editor \
       dnsmasq \
+      efibootmgr \
+      efivar \
       ntfs-3g \
       exfatprogs \
       udisks2 \
@@ -197,6 +244,7 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       evtest \
       usbutils \
       xdg-utils \
+      libnotify \
       switcheroo-control \
       tuned-ppd \
       orca \
@@ -205,8 +253,10 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       wtype \
       gnome-shell-extension-gsconnect \
       snapper \
+      acl \
       btrfs-progs \
       libbtrfsutil \
+      policycoreutils \
       cryptsetup \
       tpm2-tss \
       deja-dup \
@@ -224,15 +274,25 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       tesseract-langpack-eng \
       leptonica \
       wl-clipboard \
+    && dnf -y --setopt=retries=20 --setopt=timeout=600 --setopt=minrate=1 swap \
+      fedora-logos \
+      generic-logos \
+    && rpm -q generic-logos \
+    && ! rpm -q fedora-logos >/dev/null 2>&1 \
     && rpm -q \
+      bubblewrap \
+      glibc-langpack-de \
       orca \
+      busybox \
       speech-dispatcher \
       espeak-ng \
       wtype \
       gnome-shell-extension-gsconnect \
       snapper \
+      acl \
       btrfs-progs \
       libbtrfsutil \
+      policycoreutils \
       cryptsetup \
       tpm2-tss \
       deja-dup \
@@ -281,9 +341,18 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
       evtest \
       usbutils \
       xdg-utils \
+      libnotify \
       rsms-inter-fonts \
       google-noto-sans-fonts \
     && command -v vulkaninfo \
+    && command -v bwrap \
+    && test -x /usr/bin/busybox.musl.static \
+    && /usr/bin/busybox.musl.static --list | grep -Fxq httpd \
+    && test -s /usr/share/doc/busybox/LICENSE \
+    && bwrap --help | grep -F -- '--bind-fd' \
+    && bwrap --help | grep -F -- '--ro-bind-fd' \
+    && bwrap --help | grep -F -- '--unshare-cgroup-try' \
+    && locale -a | grep -Eiq '^de_DE\.utf-?8$' \
     && command -v gamescope \
     && command -v gamemoderun \
     && command -v mangohud \
@@ -301,6 +370,8 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && command -v orca \
     && command -v firewall-cmd \
     && command -v dnsmasq \
+    && test -x /usr/sbin/efibootmgr \
+    && test -x /usr/bin/efivar \
     && command -v ntfs-3g \
     && command -v mount.ntfs-3g \
     && command -v fsck.exfat \
@@ -319,7 +390,11 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && test -x /usr/libexec/ibus-engine-hangul \
     && test -f /usr/lib64/gtk-4.0/4.0.0/immodules/libim-ibus.so \
     && command -v snapper \
+    && command -v getfacl \
     && command -v btrfs \
+    && test -x /usr/sbin/selinuxenabled \
+    && test -x /usr/sbin/restorecon \
+    && test -x /usr/sbin/matchpathcon \
     && command -v cryptsetup \
     && command -v systemd-cryptenroll \
     && test -f /usr/lib64/libtss2-esys.so.0 \
@@ -344,16 +419,27 @@ RUN kernel_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-core)" 
     && flatpak remotes --system | grep -q '^flathub' \
     && ! rpm -q steam >/dev/null 2>&1 \
     && ! rpm -q steam-devices >/dev/null 2>&1 \
+    && install -d -m 0755 /usr/share/goblins-os/studio-container \
+    && dnf -y --setopt=retries=20 --setopt=timeout=600 --setopt=minrate=1 download \
+      --srpm \
+      --destdir=/usr/share/goblins-os/studio-container \
+      "busybox-$(rpm -q --qf '%{EVR}' busybox)" \
+    && test "$(find /usr/share/goblins-os/studio-container -maxdepth 1 -type f -name 'busybox-*.src.rpm' | wc -l)" -eq 1 \
+    && busybox_source="$(find /usr/share/goblins-os/studio-container -maxdepth 1 -type f -name 'busybox-*.src.rpm' -print -quit)" \
+    && rpmkeys --checksig "$busybox_source" | grep -Fq 'digests signatures OK' \
+    && chmod 0444 "$busybox_source" \
     && dnf clean all
 
 RUN for client in \
-      control-center dictate file-builder focus-tick installer launcher login markup open release-proof resident \
+      control-center consent-broker openai-key-broker dictate file-builder focus-tick installer launcher login markup open release-proof resident \
       screenshot-context settings shell today visual-lookup voice-control; do \
       groupadd --system "goblins-core-${client}"; \
     done \
     && groupadd --system goblins-session-bridge \
+    && groupadd --system goblins-snapshots \
+    && groupadd --system goblins-snapshot-readers \
     && useradd --system --home-dir /var/lib/goblins-os --create-home --shell /usr/sbin/nologin goblins-os \
-    && usermod -aG goblins-session-bridge,goblins-core-resident goblins-os \
+    && usermod -aG goblins-session-bridge,goblins-snapshot-readers,goblins-core-resident goblins-os \
     && useradd --system --no-user-group --gid goblins-core-resident --home-dir /var/lib/goblins-os/resident --shell /usr/sbin/nologin goblins-resident \
     && install -d -m 0710 -o goblins-os -g goblins-core-resident /var/lib/goblins-os \
     && install -d -m 0750 -o goblins-resident -g goblins-core-resident /var/lib/goblins-os/resident \
@@ -363,6 +449,8 @@ RUN for client in \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/ai \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/models \
     && install -d -o goblins-os -g goblins-os /var/lib/goblins-os/apps /var/lib/goblins-os/apps/codex-work \
+    && install -d -m 0700 -o root -g root /var/lib/goblins-os-snapshot-layout \
+    && install -m 0400 -o root -g root /dev/null /var/lib/goblins-os-snapshot-layout/initialize-home-v1 \
     && install -d -m 0750 -o goblins-os -g goblins-os /var/lib/goblins-os/voice /var/lib/goblins-os/voice/stt /var/lib/goblins-os/voice/tts \
     && install -d -m 0700 -o goblins-os -g goblins-os /var/lib/goblins-os/voice/work \
     && install -d -o goblins-os -g goblins-os -m 0700 /var/lib/goblins-os/codex \
@@ -394,9 +482,30 @@ RUN install -d /var/home \
 
 COPY --from=rust-build /out/ /
 COPY --from=os-assets / /
+
+# Fedora bootc ships /usr/local as a writable directory during derivation and
+# may already have files there. Goblins OS is the final appliance: move that
+# tree into persistent /var/usrlocal and expose it through the OSTree link.
+RUN install -d -m 0755 /var/usrlocal \
+    && if [ -L /usr/local ]; then \
+         test "$(readlink /usr/local)" = "../var/usrlocal"; \
+       else \
+         if [ -d /usr/local ]; then \
+           cp -a /usr/local/. /var/usrlocal/; \
+           rm -rf /usr/local; \
+         else \
+           rm -f /usr/local; \
+         fi; \
+         ln -s ../var/usrlocal /usr/local; \
+       fi \
+    && test -L /usr/local \
+    && test "$(readlink /usr/local)" = "../var/usrlocal"
+
 RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && for binding in \
       control-center:goblins-os-control-center \
+      consent-broker:goblins-os-consent-broker \
+      openai-key-broker:goblins-os-openai-key-broker \
       dictate:goblins-os-dictate \
       file-builder:goblins-os-file-builder \
       focus-tick:goblins-os-focus-tick \
@@ -425,6 +534,8 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && getent group goblins-core-release-proof >/dev/null \
     && test -f /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /run/goblins-os-core/settings 2750 goblins-os goblins-core-settings -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
+    && grep -Fq 'd /run/goblins-os-core/consent-broker 2750 goblins-os goblins-core-consent-broker -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
+    && grep -Fq 'd /run/goblins-os-core/openai-key-broker 2750 goblins-os goblins-core-openai-key-broker -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /run/goblins-os-core/release-proof 2750 goblins-os goblins-core-release-proof -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && grep -Fq 'd /var/lib/goblins-os/voice/work 0700 goblins-os goblins-os -' /usr/lib/tmpfiles.d/goblins-os-core.conf \
     && test -x /usr/libexec/goblins-os/goblins-os-full-installer \
@@ -436,7 +547,7 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && test -f /usr/lib/tmpfiles.d/goblins-os-session.conf \
     && grep -Fq 'd /run/goblins-os-session 0770 goblin goblins-session-bridge -' /usr/lib/tmpfiles.d/goblins-os-session.conf \
     && grep -Fq 'Wants=org.goblins.OS.SessionBridge.service' /usr/lib/systemd/user/gnome-session@goblins-os.target.d/goblins-os.session.conf \
-    && grep -Fq 'SupplementaryGroups=goblins-session-bridge goblins-core-resident' /usr/lib/systemd/system/goblins-os-core.service \
+    && grep -Fq 'SupplementaryGroups=goblins-session-bridge goblins-snapshot-readers goblins-core-resident' /usr/lib/systemd/system/goblins-os-core.service \
     && grep -Fq 'User=goblins-resident' /usr/lib/systemd/system/goblins-os-resident.service \
     && grep -Fq 'Group=goblins-core-resident' /usr/lib/systemd/system/goblins-os-resident.service \
     && ! grep -Fq 'goblins-os/resident' /usr/lib/systemd/system/goblins-os-model-cache.service \
@@ -450,6 +561,27 @@ RUN install -d -m 0755 -o root -g root /usr/libexec/goblins-os/ui \
     && command -v setpriv \
     && command -v sha256sum \
     && command -v rpm \
+    && command -v codex \
+    && test "$(codex --version)" = "codex-cli 0.144.4" \
+    && test -r /usr/share/licenses/openai-codex/LICENSE \
+    && test -r /usr/share/licenses/openai-codex/NOTICE \
+    && test ! -e /usr/bin/chatgpt && test ! -L /usr/bin/chatgpt \
+    && test ! -e /usr/lib/chatgpt && test ! -L /usr/lib/chatgpt \
+    && test ! -e /usr/share/applications/chatgpt.desktop && test ! -L /usr/share/applications/chatgpt.desktop \
+    && ! rpm -q chatgpt \
+    && command -v notify-send \
+    && test -L /usr/local && test "$(readlink /usr/local)" = "../var/usrlocal" \
+    && ! grep -q '^CODEX_HOME=' /etc/goblins-os/environment \
+    && grep -Fxq 'Environment=CODEX_HOME=/var/lib/goblins-os/codex' /usr/lib/systemd/system/goblins-os-core.service \
+    && desktop-file-validate /usr/lib/goblins-os/application-overrides/chatgpt.desktop \
+    && grep -Fxq 'Exec=/usr/libexec/goblins-os/goblins-os-open codex' /usr/lib/goblins-os/application-overrides/chatgpt.desktop \
+    && grep -Fxq 'NoDisplay=true' /usr/lib/goblins-os/application-overrides/chatgpt.desktop \
+    && grep -Fxq 'MimeType=x-scheme-handler/codex;' /usr/lib/goblins-os/application-overrides/chatgpt.desktop \
+    && grep -Fxq 'x-scheme-handler/codex=chatgpt.desktop' /usr/share/applications/mimeapps.list \
+    && grep -Fxq 'x-scheme-handler/codex=chatgpt.desktop;' /usr/share/applications/mimeapps.list \
+    && grep -Fxq 'd /var/usrlocal/share 0755 root root -' /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf \
+    && grep -Fxq 'd /var/usrlocal/share/applications 0755 root root -' /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf \
+    && grep -Fxq 'L+ /var/usrlocal/share/applications/chatgpt.desktop - - - - /usr/lib/goblins-os/application-overrides/chatgpt.desktop' /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && grep -q '^Exec=/usr/libexec/goblins-os/goblins-os-full-installer$' /usr/share/applications/org.goblins.OS.FullInstaller.desktop \
     && desktop-file-validate /usr/share/applications/org.goblins.OS.VisualLookup.desktop \
@@ -495,15 +627,39 @@ RUN grep -Fxq 'AutomaticLoginEnable=True' /etc/gdm/custom.conf \
     && grep -Fxq 'TimedLogin=goblin' /etc/gdm/custom.conf \
     && grep -Fxq 'TimedLoginDelay=0' /etc/gdm/custom.conf
 
-# Product identity: this is Goblins OS, not Fedora. Rebrand os-release (NAME /
-# PRETTY_NAME / VARIANT) while keeping ID=fedora + the version intact so dnf and
-# bootc still resolve the platform correctly.
-RUN sed -i \
-      -e 's/^NAME=.*/NAME="Goblins OS"/' \
-      -e 's/^PRETTY_NAME=.*/PRETTY_NAME="Goblins OS"/' \
-      -e '/^VARIANT=/d' -e '/^VARIANT_ID=/d' \
+# Product identity: user-facing OS metadata is exclusively Goblins OS. Keep the
+# compatibility identity (ID=fedora, VERSION_ID, PLATFORM_ID, and CPE_NAME) so
+# RPM, dnf, and bootc continue resolving the real base correctly; publish that
+# base separately in OCI metadata instead of presenting it as the product.
+RUN sed -i -E \
+      '/^(NAME|VERSION|PRETTY_NAME|VARIANT|VARIANT_ID|LOGO|ANSI_COLOR|DEFAULT_HOSTNAME|HOME_URL|DOCUMENTATION_URL|SUPPORT_URL|BUG_REPORT_URL|PRIVACY_POLICY_URL|IMAGE_ID|IMAGE_VERSION|REDHAT_BUGZILLA_PRODUCT|REDHAT_BUGZILLA_PRODUCT_VERSION|REDHAT_SUPPORT_PRODUCT|REDHAT_SUPPORT_PRODUCT_VERSION)=/d' \
       /usr/lib/os-release \
-    && printf 'VARIANT="Goblins OS"\nVARIANT_ID=goblins-os\n' >> /usr/lib/os-release
+    && printf '%s\n' \
+      'NAME="Goblins OS"' \
+      'VERSION="44"' \
+      'PRETTY_NAME="Goblins OS 44"' \
+      'VARIANT="Goblins OS"' \
+      'VARIANT_ID=goblins-os' \
+      'LOGO=goblins-os' \
+      'ANSI_COLOR="0;38;2;44;44;48"' \
+      'DEFAULT_HOSTNAME=goblins' \
+      'HOME_URL="https://goblinsos.com/"' \
+      'DOCUMENTATION_URL="https://github.com/Joe-Simo/goblins-os/blob/main/SHIP.md"' \
+      'SUPPORT_URL="https://github.com/Joe-Simo/goblins-os/issues"' \
+      'BUG_REPORT_URL="https://github.com/Joe-Simo/goblins-os/issues"' \
+      'IMAGE_ID=goblins-os' \
+      'IMAGE_VERSION=44' \
+      >> /usr/lib/os-release \
+    && grep -Fxq 'ID=fedora' /usr/lib/os-release \
+    && grep -Fxq 'PRETTY_NAME="Goblins OS 44"' /usr/lib/os-release \
+    && grep -Fxq 'LOGO=goblins-os' /usr/lib/os-release \
+    && ! grep -Eq '^(NAME|PRETTY_NAME|VARIANT|LOGO|DEFAULT_HOSTNAME|HOME_URL|DOCUMENTATION_URL|SUPPORT_URL|BUG_REPORT_URL)=.*(Fedora|fedoraproject|redhat)' /usr/lib/os-release \
+    && grep -Fxq 'Goblins OS 44 \n \l' /etc/issue \
+    && grep -Fxq 'Goblins OS 44' /etc/issue.net \
+    && grep -Fxq 'Goblins OS release 44' /etc/system-release \
+    && rpm -q generic-logos \
+    && ! rpm -q fedora-logos >/dev/null 2>&1 \
+    && test ! -e /usr/share/pixmaps/fedora-gdm-logo.png
 
 # Boot identity: the Goblins OS Plymouth splash replaces Fedora's. The mark is
 # the shipped Goblins mark; setting the default theme writes plymouthd.conf (the
@@ -686,6 +842,68 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && test -f /usr/lib/systemd/system/goblins-os-firewall@.service \
     && test -f /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules \
     && grep -Fq 'unit.match(/^goblins-os-firewall@(enable|disable)\.service$/)' /usr/share/polkit-1/rules.d/60-goblins-os-firewall.rules \
+    && test -x /usr/libexec/goblins-os/goblins-os-system-update \
+    && test -f /usr/lib/systemd/system/goblins-os-system-update@.service \
+    && test -f /usr/lib/systemd/system/goblins-os-system-reboot.service \
+    && test -f /usr/lib/systemd/system/goblins-os-system-reboot.timer \
+    && test -f /usr/share/polkit-1/rules.d/60-goblins-os-system-update.rules \
+    && grep -Fxq '#!/bin/sh' /usr/libexec/goblins-os/goblins-os-system-update \
+    && grep -Fq 'exec "$BOOTC" upgrade --apply' /usr/libexec/goblins-os/goblins-os-system-update \
+    && grep -Fq 'exec "$BOOTC" upgrade --from-downloaded --apply' /usr/libexec/goblins-os/goblins-os-system-update \
+    && grep -Fq 'exec /usr/bin/systemctl start --no-block goblins-os-system-reboot.timer' /usr/libexec/goblins-os/goblins-os-system-update \
+    && grep -Fxq 'OnActiveSec=5s' /usr/lib/systemd/system/goblins-os-system-reboot.timer \
+    && grep -Fq 'ExecStart=/usr/libexec/goblins-os/goblins-os-system-update %i' /usr/lib/systemd/system/goblins-os-system-update@.service \
+    && grep -Fq 'goblins-os-system-update@(check|download|apply|apply-downloaded|reboot|rollback)' /usr/share/polkit-1/rules.d/60-goblins-os-system-update.rules \
+    && test -x /usr/libexec/goblins-os/goblins-os-firmware-label \
+    && test -f /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'ExecStart=/usr/libexec/goblins-os/goblins-os-firmware-label' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'ConditionArchitecture=arm64' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'ReadWritePaths=/sys/firmware/efi/efivars' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'InaccessiblePaths=/boot /efi' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && grep -Fxq 'ProtectKernelTunables=yes' /usr/lib/systemd/system/goblins-os-firmware-label-migration.service \
+    && test -x /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && test -f /usr/lib/systemd/system/goblins-os-snapshots-setup.service \
+    && test -f /usr/lib/systemd/system/gdm.service.d/10-goblins-os-snapshots.conf \
+    && test -f /usr/lib/bootc/install/00-goblins-os.toml \
+    && grep -Fxq 'type = "btrfs"' /usr/lib/bootc/install/00-goblins-os.toml \
+    && sh -n /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fxq '#!/bin/sh' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'Existing XFS installs remain supported and are never converted in place.' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'if [ "$filesystem" != btrfs ]; then' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq '"$BTRFS" subvolume show "$subvolume"' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'FRESH_MARKER=$LAYOUT_STATE/initialize-home-v1' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq '"$BTRFS" subvolume create "$HOME_PATH"' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq '/usr/bin/cp -a --reflink=auto --one-file-system' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && test "$(stat -c '%u:%g:%a:%s' /var/lib/goblins-os-snapshot-layout/initialize-home-v1)" = '0:0:400:0' \
+    && grep -Fq 'filesystem_probe=/var' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq '/usr/sbin/matchpathcon -V "$HOME_PATH"' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && ! grep -Fq 'restorecon -RF /etc/snapper "$subvolume/.snapshots"' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'leaving Recovery unavailable' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq '"$SNAPPER" -c home create-config "$subvolume"' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'ALLOW_USERS=' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'ALLOW_GROUPS=' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && ! grep -Fq 'ALLOW_GROUPS=goblins-' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'SYNC_ACL=yes' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'getfacl --absolute-names --numeric --omit-header' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'stale Snapper desktop authority could not be revoked' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && ! grep -Eq 'mkfs|btrfs-convert' /usr/libexec/goblins-os/goblins-os-snapshots-setup \
+    && grep -Fq 'ExecStart=/usr/libexec/goblins-os/goblins-os-snapshots-setup' /usr/lib/systemd/system/goblins-os-snapshots-setup.service \
+    && grep -Fq 'ReadWritePaths=-/.snapshots -/etc/snapper -/etc/sysconfig/snapper -/var/.snapshots -/var/home -/var/home.goblins-os-seed-v1 -/var/lib/goblins-os-snapshot-layout -/var/lib/snapper' /usr/lib/systemd/system/goblins-os-snapshots-setup.service \
+    && grep -Fxq 'Requires=goblins-os-snapshots-setup.service' /usr/lib/systemd/system/gdm.service.d/10-goblins-os-snapshots.conf \
+    && grep -Fxq 'After=goblins-os-snapshots-setup.service' /usr/lib/systemd/system/gdm.service.d/10-goblins-os-snapshots.conf \
+    && test -x /usr/libexec/goblins-os/goblins-os-snapshot-broker \
+    && /usr/libexec/goblins-os/goblins-os-snapshot-broker --self-test \
+    && grep -Fq 'ExecStart=/usr/libexec/goblins-os/goblins-os-snapshot-broker' /usr/lib/systemd/system/goblins-os-snapshot-broker.service \
+    && grep -Fxq 'Group=goblins-snapshot-readers' /usr/lib/systemd/system/goblins-os-snapshot-broker.service \
+    && grep -Fxq 'SupplementaryGroups=goblins-snapshots' /usr/lib/systemd/system/goblins-os-snapshot-broker.service \
+    && ! id -nG goblin | tr ' ' '\n' | grep -Fxq goblins-snapshot-readers \
+    && ! id -nG goblin | tr ' ' '\n' | grep -Fxq goblins-snapshots \
+    && test -x /usr/bin/systemd-creds \
+    && test -f /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
+    && grep -Fq 'action.id !== "io.systemd.credentials.decrypt"' /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
+    && grep -Fq 'subject.system_unit === "goblins-os-core.service"' /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
+    && grep -Fq 'subject.no_new_privileges === true' /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
+    && grep -Fq 'return polkit.Result.NO;' /usr/share/polkit-1/rules.d/60-goblins-os-systemd-credentials.rules \
     && install -d -o goblin -g goblin /var/home/goblin/.local/share/nautilus/scripts \
     && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Build an app to open this" "/var/home/goblin/.local/share/nautilus/scripts/Build an app to open this" \
     && install -m 0755 "/usr/share/goblins-os/nautilus/scripts/Ask Goblin about this" "/var/home/goblin/.local/share/nautilus/scripts/Ask Goblin about this" \
@@ -716,5 +934,15 @@ RUN chmod 0755 /usr/libexec/goblins-os/goblins-os-session \
     && readlink /etc/systemd/system/display-manager.service | grep -Fq gdm.service \
     && systemctl enable goblins-os-model-cache.service \
     && systemctl enable goblins-os-core.service \
+    && systemctl enable goblins-os-firmware-label-migration.service \
+    && systemctl enable goblins-os-snapshots-setup.service \
+    && systemctl enable goblins-os-snapshot-broker.service \
+    && systemctl enable snapper-timeline.timer \
+    && systemctl enable snapper-cleanup.timer \
+    && test "$(systemctl is-enabled goblins-os-snapshots-setup.service)" = enabled \
+    && test "$(systemctl is-enabled goblins-os-firmware-label-migration.service)" = enabled \
+    && test "$(systemctl is-enabled goblins-os-snapshot-broker.service)" = enabled \
+    && test "$(systemctl is-enabled snapper-timeline.timer)" = enabled \
+    && test "$(systemctl is-enabled snapper-cleanup.timer)" = enabled \
     && systemctl enable goblins-os-resident.service \
     && bootc container lint

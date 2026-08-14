@@ -20,6 +20,8 @@ NATIVE_PACKAGING_GATE_PROOF="${GOBLINS_OS_NATIVE_PACKAGING_GATE_PROOF:-}"
 NATIVE_PACKAGING_GATE_RUN_URL="${GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_URL:-}"
 NATIVE_PACKAGING_GATE_RUN_ATTEMPT="${GOBLINS_OS_NATIVE_PACKAGING_GATE_RUN_ATTEMPT:-}"
 NATIVE_PACKAGING_GATE_STATUS="not used"
+VERIFICATION_ISO_ARTIFACT="not provided"
+VERIFICATION_ISO_ARTIFACT_FILE="not provided"
 SIGNOFF_ROW_OUTPUT="${SIGNOFF_ROW_OUTPUT:-}"
 REQUIRE_COMPLETE="${REQUIRE_COMPLETE:-0}"
 case "$REQUIRE_COMPLETE" in
@@ -32,7 +34,6 @@ esac
 normalize_arch() {
   case "$1" in
     aarch64|arm64) echo "aarch64" ;;
-    x86_64|amd64) echo "x86_64" ;;
     *) echo "unsupported" ;;
   esac
 }
@@ -51,7 +52,7 @@ sha256_file() {
 }
 ARCH="$(normalize_arch "${GOBLINS_OS_ARCH:-$(uname -m)}")"
 if [ "$ARCH" = "unsupported" ]; then
-  fail "Unsupported architecture '${GOBLINS_OS_ARCH:-$(uname -m)}'; expected aarch64 or x86_64."
+  fail "Unsupported architecture '${GOBLINS_OS_ARCH:-$(uname -m)}'; expected aarch64 (arm64 alias accepted)."
   exit 1
 fi
 CANDIDATE_COMMIT="${GOBLINS_OS_CANDIDATE_COMMIT:-${GITHUB_SHA:-}}"
@@ -107,12 +108,28 @@ TEXT_SHORTCUTS_SCREENSHOTS=(
   "31-text-shortcuts-candidate-bubble-render.png"
   "32-text-shortcuts-live-ibus-runtime-render.png"
 )
+ACCESSIBILITY_SCREENSHOTS=(
+  "33-accessibility-text-scaling.png"
+  "34-accessibility-high-contrast.png"
+  "35-accessibility-reduced-transparency.png"
+  "36-accessibility-reduced-motion.png"
+  "37-accessibility-localization-expansion.png"
+  "38-accessibility-orca-atspi.png"
+  "39-accessibility-keyboard-focus.png"
+  "40-accessibility-window-resize.png"
+)
+HOSTED_CONTEXT_REVIEW_SCREENSHOTS=(
+  "41-hosted-context-review.png"
+  "42-hosted-context-review-dark.png"
+)
 SCREENSHOT_REQUIRED=(
   "${BASE_SCREENSHOTS[@]}"
   "${GAMING_SCREENSHOTS[@]}"
   "${INSTALL_STORAGE_SCREENSHOTS[@]}"
   "${PREVIEW_SCREENSHOTS[@]}"
   "${TEXT_SHORTCUTS_SCREENSHOTS[@]}"
+  "${ACCESSIBILITY_SCREENSHOTS[@]}"
+  "${HOSTED_CONTEXT_REVIEW_SCREENSHOTS[@]}"
 )
 FIREWALL_LIVE_TOGGLE_PROOF="firewall-live-toggle-proof.json"
 TEXT_SHORTCUTS_SESSION_ENABLE_PROOF="text-shortcuts-session-enable-proof.json"
@@ -131,6 +148,7 @@ APP_PRIVACY_REVOKE_PROOF="app-privacy-revoke-proof.json"
 PREVIEW_OPEN_RENDER_PROOF="preview-open-render-proof.json"
 AUDIO_OUTPUT_PROOF="audio-output-proof.json"
 RUNTIME_BUILD_PROOF="runtime-build-proof.json"
+ACCESSIBILITY_ADAPTIVITY_PROOF="accessibility-adaptivity-proof.json"
 GAMING_SCREENSHOT_STATUS="not checked"
 GAMING_AUDIO_OUTPUT_STATUS="not checked"
 INSTALL_STORAGE_STATUS="not checked"
@@ -152,15 +170,19 @@ MULTI_DISPLAY_APPLY_STATUS="not checked"
 FOCUS_ARM_ROUNDTRIP_STATUS="not checked"
 APP_PRIVACY_REVOKE_STATUS="not checked"
 PREVIEW_OPEN_RENDER_STATUS="not checked"
+ACCESSIBILITY_ADAPTIVITY_STATUS="not checked"
+HOSTED_CONTEXT_REVIEW_STATUS="not checked"
 SCREENSHOT_ISO_SHA="not checked"
 EVIDENCE_BUNDLE_STATUS="not checked"
 EVIDENCE_BUNDLE_SHA256="not checked"
 EVIDENCE_BUNDLE_PATH="not provided"
 LOCAL_DISPLAY_ATTESTATION_STATUS="not required"
 LOCAL_DISPLAY_ATTESTATION_PATH="not provided"
-LOCAL_DISPLAY_ATTESTATION_RUN="not provided"
-LOCAL_DISPLAY_ATTESTATION_RUN_ATTEMPT="not provided"
-LOCAL_DISPLAY_ATTESTATION_ARTIFACT="not provided"
+LOCAL_DISPLAY_ATTESTATION_SIGNATURE="not provided"
+LOCAL_DISPLAY_AUTHORITY_CERTIFICATE_SHA256="not provided"
+LOCAL_DISPLAY_AUTHORITY_CA_CERTIFICATE_SHA256="not provided"
+LOCAL_DISPLAY_AUTHORITY_ISO_SHA256="not provided"
+LOCAL_DISPLAY_AUTHORITY_SCREENSHOT_MANIFEST_SHA256="not provided"
 ISO_CANDIDATE_STATUS="not checked"
 RUNTIME_ENGINE_MODE="${RUNTIME_ENGINE_MODE:-}"
 RUNTIME_ENGINE_SOURCE="${RUNTIME_ENGINE_SOURCE:-}"
@@ -202,8 +224,12 @@ SIGNOFF_RUNNER_VALUE="$(signoff_runner)"
 CI_RUST_URL="${CI_RUST_URL:-${CI_RUN_URL:-}}"
 CI_IMAGE_URL="${CI_IMAGE_URL:-${CI_RUN_URL:-}}"
 CI_INSTALLER_ISO_URL="${CI_INSTALLER_ISO_URL:-${CI_RUN_URL:-}}"
-CAPTURE_WORKFLOW_RUN_URL="${GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL:-${CI_RUN_URL:-}}"
-CAPTURE_WORKFLOW_RUN_ATTEMPT="${GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT:-${GITHUB_RUN_ATTEMPT:-0}}"
+CAPTURE_WORKFLOW_RUN_URL="${GOBLINS_OS_CAPTURE_WORKFLOW_RUN_URL:-}"
+CAPTURE_WORKFLOW_RUN_ATTEMPT="${GOBLINS_OS_CAPTURE_WORKFLOW_RUN_ATTEMPT:-0}"
+if [ -n "$CAPTURE_WORKFLOW_RUN_URL" ] || [ "$CAPTURE_WORKFLOW_RUN_ATTEMPT" != "0" ]; then
+  fail "aarch64 display evidence must use the local capture route and may not claim a capture-workflow run."
+  exit 2
+fi
 
 choose_runtime() {
   if command -v docker >/dev/null 2>&1; then
@@ -386,13 +412,15 @@ generate_image_release_evidence() {
 release_evidence_manifest_has_diligence_fields() {
   local manifest="$1"
   [ -f "$manifest" ] \
+    && grep -Fq '"schema": "goblins-os-release-evidence-v5"' "$manifest" \
     && grep -Fq '"candidate_commit": "'"$CANDIDATE_COMMIT"'"' "$manifest" \
     && grep -Fq '"image_ref": "'"$IMAGE_PROVENANCE_REF"'"' "$manifest" \
     && grep -Fq '"image_digest_pinned": true' "$manifest" \
     && grep -Fq '"asset_provenance": "os/release/asset-provenance.toml"' "$manifest" \
     && grep -Fq '"third_party_notices": "os/release/third-party-notices.toml"' "$manifest" \
     && grep -Fq '"trademark_posture": "os/release/trademark-posture.toml"' "$manifest" \
-    && grep -Fq '"source_tree_manifest": "os/release/source-tree-manifest.toml"' "$manifest"
+    && grep -Fq '"source_tree_manifest": "os/release/source-tree-manifest.toml"' "$manifest" \
+    && grep -Eq '"rpm_command_sha256": "[0-9a-f]{64}"' "$manifest"
 }
 
 release_evidence_complete() {
@@ -436,6 +464,15 @@ proof_json_passes() {
     --proof "$schema" "$proof"
 }
 
+accessibility_adaptivity_proof_passes() {
+  local proof="$1"
+  local run_dir="$(dirname "$proof")"
+
+  proof_json_passes "$proof" accessibility-adaptivity \
+    && python3 "$REPO_ROOT/os/hardware-gate/capture-harness/proof_validation.py" \
+      --proof-screenshots accessibility-adaptivity "$proof" "$run_dir"
+}
+
 evidence_bundle_passes() {
   local run_dir="$1"
   local run_date="${run_dir%/}"
@@ -459,6 +496,11 @@ local_display_attestation_fields() {
     verify-attestation \
     --seal "$run_dir/evidence-bundle.json" \
     --record "$run_dir/aarch64-local-display-attestation.json" \
+    --signature "$run_dir/aarch64-local-display-attestation.json.cms" \
+    --certificate "$REPO_ROOT/os/release/display-proof-authority2.pem" \
+    --certificate-sha256 "$REPO_ROOT/os/release/display-proof-authority2.sha256" \
+    --ca-certificate "$REPO_ROOT/os/release/display-proof-authority2-ca.pem" \
+    --ca-certificate-sha256 "$REPO_ROOT/os/release/display-proof-authority2-ca.sha256" \
     --candidate-commit "$CANDIDATE_COMMIT" \
     --image-ref "$IMAGE_PROVENANCE_REF" \
     --run-date "$run_date"
@@ -601,19 +643,6 @@ PY
   return "$result"
 }
 
-local_display_attestation_signature_passes() {
-  local seal="$1"
-
-  command -v gh >/dev/null 2>&1 || return 1
-  gh attestation verify "$seal" \
-    --repo Joe-Simo/goblins-os \
-    --signer-workflow Joe-Simo/goblins-os/.github/workflows/aarch64-local-display-attestation.yml \
-    --signer-digest "$CANDIDATE_COMMIT" \
-    --source-digest "$CANDIDATE_COMMIT" \
-    --deny-self-hosted-runners \
-    >/dev/null 2>&1
-}
-
 built_artifact_reference_is_real() {
   local value="$1"
 
@@ -677,6 +706,7 @@ screenshot_manifest_matches_iso() {
     && rg -q '"preview_open_render_proof"[[:space:]]*:[[:space:]]*"'"$PREVIEW_OPEN_RENDER_PROOF"'"' "$manifest" \
     && rg -q '"audio_output_proof"[[:space:]]*:[[:space:]]*"'"$AUDIO_OUTPUT_PROOF"'"' "$manifest" \
     && rg -q '"runtime_build_proof"[[:space:]]*:[[:space:]]*"'"$RUNTIME_BUILD_PROOF"'"' "$manifest" \
+    && rg -q '"accessibility_adaptivity_proof"[[:space:]]*:[[:space:]]*"'"$ACCESSIBILITY_ADAPTIVITY_PROOF"'"' "$manifest" \
     || return 1
   recorded_evidence_manifest_sha="$(awk -F'"' '/"verification_release_evidence_manifest_sha256"/ { print $4; exit }' "$manifest")"
   actual_evidence_manifest_sha="$(sha256_file "$verification_evidence_manifest")" || return 1
@@ -1341,7 +1371,7 @@ fi
 if release_evidence_complete "$SBOM_DIR"; then
   RELEASE_EVIDENCE_STATUS="yes (candidate $CANDIDATE_COMMIT, manifest, diligence links, Cargo TSV, and RPM TSV present in $SBOM_DIR)"
 else
-  warn "Release evidence incomplete for $ARCH candidate $CANDIDATE_COMMIT; expected a matching release-evidence-manifest.json with diligence links plus cargo-lock-packages.tsv and rpm-packages.tsv in $SBOM_DIR"
+  warn "Release evidence incomplete for $ARCH candidate $CANDIDATE_COMMIT; expected a matching v5 release-evidence-manifest.json with diligence links plus hash-bound cargo-lock-packages.tsv, rpm-packages.command, and rpm-packages.tsv in $SBOM_DIR"
 fi
 
 if [ -n "$SCREENSHOT_DIR" ]; then
@@ -1384,7 +1414,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     exit 1
   fi
   if ! semantic_screenshot_frames_are_distinct "$SCREENSHOT_DIR"; then
-    fail "Screenshot proof reuses a central application crop for named login/Home or Studio semantic states."
+    fail "Screenshot proof reuses a central application crop for named login/Home, Studio, or hosted-review semantic states."
     fail "Clock, top-bar, and pointer-only changes cannot satisfy release proof."
     exit 1
   fi
@@ -1402,7 +1432,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   EVIDENCE_BUNDLE_PATH="$SCREENSHOT_DIR/evidence-bundle.json"
   if EVIDENCE_BUNDLE_SHA256="$(evidence_bundle_passes "$SCREENSHOT_DIR")"; then
-    EVIDENCE_BUNDLE_STATUS="yes (canonical SHA256/size/dimension seal recomputed for all 32 PNGs and every required proof/verification JSON)"
+    EVIDENCE_BUNDLE_STATUS="yes (canonical SHA256/size/dimension seal recomputed for all 42 PNGs and every required proof/verification JSON)"
     log "Evidence bundle integrity passed: $EVIDENCE_BUNDLE_SHA256"
   else
     fail "Canonical evidence bundle is missing, unsafe, non-uniform, or no longer matches this screenshot run: $EVIDENCE_BUNDLE_PATH"
@@ -1410,32 +1440,13 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   fi
   if [ "$ARCH" = "aarch64" ]; then
     LOCAL_DISPLAY_ATTESTATION_PATH="$SCREENSHOT_DIR/aarch64-local-display-attestation.json"
+    LOCAL_DISPLAY_ATTESTATION_SIGNATURE="$SCREENSHOT_DIR/aarch64-local-display-attestation.json.cms"
     if ATTESTATION_FIELDS="$(local_display_attestation_fields "$SCREENSHOT_DIR")"; then
-      read -r LOCAL_DISPLAY_ATTESTATION_RUN LOCAL_DISPLAY_ATTESTATION_RUN_ATTEMPT LOCAL_DISPLAY_ATTESTATION_ARTIFACT <<<"$ATTESTATION_FIELDS"
-      if github_actions_run_is_successful \
-        "$LOCAL_DISPLAY_ATTESTATION_RUN" \
-        "$CANDIDATE_COMMIT" \
-        "$LOCAL_DISPLAY_ATTESTATION_RUN_ATTEMPT" \
-        ".github/workflows/aarch64-local-display-attestation.yml" \
-        && github_actions_artifact_file_matches \
-          "$LOCAL_DISPLAY_ATTESTATION_RUN" \
-          "$LOCAL_DISPLAY_ATTESTATION_ARTIFACT" \
-          "$EVIDENCE_BUNDLE_PATH" \
-          "evidence-bundle.json" \
-        && github_actions_artifact_file_matches \
-          "$LOCAL_DISPLAY_ATTESTATION_RUN" \
-          "$LOCAL_DISPLAY_ATTESTATION_ARTIFACT" \
-          "$LOCAL_DISPLAY_ATTESTATION_PATH" \
-          "aarch64-local-display-attestation.json" \
-        && local_display_attestation_signature_passes "$EVIDENCE_BUNDLE_PATH"; then
-        LOCAL_DISPLAY_ATTESTATION_STATUS="yes (successful exact-candidate GitHub run; byte-identical seal/record artifact; signed exact seal subject and signer/source digest verified)"
-      else
-        LOCAL_DISPLAY_ATTESTATION_STATUS="invalid (GitHub run, artifact bytes, or signed seal provenance did not verify)"
-        warn "The aarch64 local-display attestation did not pass its exact GitHub run, uploaded-byte, and signed-subject checks."
-      fi
+      read -r LOCAL_DISPLAY_AUTHORITY_CERTIFICATE_SHA256 LOCAL_DISPLAY_AUTHORITY_CA_CERTIFICATE_SHA256 LOCAL_DISPLAY_AUTHORITY_ISO_SHA256 LOCAL_DISPLAY_AUTHORITY_SCREENSHOT_MANIFEST_SHA256 <<<"$ATTESTATION_FIELDS"
+      LOCAL_DISPLAY_ATTESTATION_STATUS="yes (pinned Authority 2 leaf and CA verified the CMS signature over the exact seal, ISO digest, candidate, image, and complete screenshot manifest)"
     else
-      LOCAL_DISPLAY_ATTESTATION_STATUS="missing (dispatch aarch64-local-display-attestation.yml and hydrate its run-bound record)"
-      warn "The local aarch64/HVF seal still needs its GitHub-hosted signed attestation record before a complete signoff row can be written."
+      LOCAL_DISPLAY_ATTESTATION_STATUS="missing or invalid (Authority 2 record/signature did not verify with the repository-pinned leaf and CA)"
+      warn "The local aarch64/HVF evidence is not signed by the isolated Authority 2 private key. GitHub cannot substitute for this authority."
     fi
   fi
   SCREENSHOT_ISO_SHA="$(screenshot_manifest_iso_sha "$manifest" | tr '[:upper:]' '[:lower:]')"
@@ -1530,6 +1541,11 @@ if [ -n "$SCREENSHOT_DIR" ]; then
     fail "Expected /v1/audio/status output readiness plus a bounded pw-play/paplay test tone while 24-audio-output.png renders the Sound panel."
     exit 1
   fi
+  if ! accessibility_adaptivity_proof_passes "$SCREENSHOT_DIR/$ACCESSIBILITY_ADAPTIVITY_PROOF"; then
+    fail "Accessibility/adaptivity proof or one of its eight exact screenshot SHA256 bindings failed: $SCREENSHOT_DIR/$ACCESSIBILITY_ADAPTIVITY_PROOF"
+    fail "Expected protected-core readback, real GSettings, German (Germany) regional formats in Goblins Settings with English interface copy and AT-SPI bounds, Orca/AT-SPI, QMP keyboard focus, AT-SPI window resize, host capture acknowledgements, and full preference restoration."
+    exit 1
+  fi
   log "All required screenshot proof PNGs and proof manifest passed."
   log "Firewall live toggle proof passed."
   log "Text Shortcuts session-enable proof passed."
@@ -1547,6 +1563,7 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   log "App privacy revoke proof passed."
   log "Preview open/render proof passed."
   log "Audio output proof passed."
+  log "Accessibility/adaptivity proof and screenshot bindings passed."
   GAMING_SCREENSHOT_STATUS="yes (screenshots ${GAMING_SCREENSHOTS[*]} present)"
   INSTALL_STORAGE_STATUS="yes (screenshots ${INSTALL_STORAGE_SCREENSHOTS[*]} present)"
   MOTION_INTERACTIONS_STATUS="yes (light/dark screenshots present in proof dir)"
@@ -1567,6 +1584,8 @@ if [ -n "$SCREENSHOT_DIR" ]; then
   APP_PRIVACY_REVOKE_STATUS="yes ($APP_PRIVACY_REVOKE_PROOF: seeded app permission revoked through PermissionStore and prior state restored)"
   PREVIEW_OPEN_RENDER_STATUS="yes ($PREVIEW_OPEN_RENDER_PROOF: Papers PDF and Loupe image windows opened/rendered in display-backed VM)"
   GAMING_AUDIO_OUTPUT_STATUS="yes ($AUDIO_OUTPUT_PROOF + 24-audio-output.png: /v1/audio/status output ready and bounded local test tone played through PipeWire)"
+  ACCESSIBILITY_ADAPTIVITY_STATUS="yes ($ACCESSIBILITY_ADAPTIVITY_PROOF + screenshots 33-40: protected-core/GSettings state, German (Germany) regional formats with English Goblins copy and bounds, Orca/AT-SPI, keyboard focus, window resizing, framebuffer acknowledgements, and restoration proved)"
+  HOSTED_CONTEXT_REVIEW_STATUS="yes (screenshots ${HOSTED_CONTEXT_REVIEW_SCREENSHOTS[*]}: installed setgid broker, protected capability bootstrap, decision-incapable visual-proof state, and real light/dark GNOME Wayland frames present)"
 else
   warn "SCREENSHOT_DIR not set; proof screenshot presence check skipped."
 fi
@@ -1591,6 +1610,8 @@ if [ "$LOGIC_ONLY" -eq 1 ] \
   NATIVE_PACKAGING_GATE_RUN_DATE="${SCREENSHOT_DIR%/}"
   NATIVE_PACKAGING_GATE_RUN_DATE="${NATIVE_PACKAGING_GATE_RUN_DATE##*/}"
   NATIVE_PACKAGING_GATE_ARTIFACT="goblins-os-aarch64-native-packaging-gate-$CANDIDATE_COMMIT-$NATIVE_PACKAGING_GATE_RUN_DATE-attempt-$NATIVE_PACKAGING_GATE_RUN_ATTEMPT"
+  VERIFICATION_ISO_ARTIFACT="goblins-os-aarch64-verification-iso-$CANDIDATE_COMMIT-$NATIVE_PACKAGING_GATE_RUN_DATE-attempt-$NATIVE_PACKAGING_GATE_RUN_ATTEMPT"
+  VERIFICATION_ISO_ARTIFACT_FILE="$VERIFICATION_ISO_ARTIFACT/os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso"
   if native_packaging_gate_proof_passes \
     "$NATIVE_PACKAGING_GATE_PROOF" \
     "$NATIVE_PACKAGING_GATE_RUN_URL" \
@@ -1686,7 +1707,8 @@ if [ "$VERIFY_STATUS" = "pass" ] \
   && [ "$SELFTEST_STATUS" = "pass" ] \
   && [[ "$RELEASE_EVIDENCE_STATUS" == yes* ]] \
   && [[ "$EVIDENCE_BUNDLE_STATUS" == yes* ]] \
-  && { [ "$ARCH" != "aarch64" ] || [[ "$LOCAL_DISPLAY_ATTESTATION_STATUS" == yes* ]]; } \
+  && [ "$NATIVE_PACKAGING_GATE_ACCEPTED" -eq 1 ] \
+  && [[ "$LOCAL_DISPLAY_ATTESTATION_STATUS" == yes* ]] \
   && [[ "$GAMING_SCREENSHOT_STATUS" == yes* ]] \
   && [[ "$INSTALL_STORAGE_STATUS" == yes* ]] \
   && [[ "$MOTION_INTERACTIONS_STATUS" == yes* ]] \
@@ -1706,12 +1728,16 @@ if [ "$VERIFY_STATUS" = "pass" ] \
   && [[ "$FOCUS_ARM_ROUNDTRIP_STATUS" == yes* ]] \
   && [[ "$APP_PRIVACY_REVOKE_STATUS" == yes* ]] \
   && [[ "$PREVIEW_OPEN_RENDER_STATUS" == yes* ]] \
-	  && [[ "$GAMING_AUDIO_OUTPUT_STATUS" == yes* ]] \
+  && [[ "$GAMING_AUDIO_OUTPUT_STATUS" == yes* ]] \
+  && [[ "$ACCESSIBILITY_ADAPTIVITY_STATUS" == yes* ]] \
+  && [[ "$HOSTED_CONTEXT_REVIEW_STATUS" == yes* ]] \
   && [ "$ISO_PATH" != "not-found" ] \
   && [ "$ISO_SHA" != "not-found" ] \
   && [[ "$ISO_CANDIDATE_STATUS" == yes* ]] \
   && image_ref_is_digest_pinned "$IMAGE_PROVENANCE_REF" \
 	  && [ "$SCREENSHOT_ISO_SHA" = "$ISO_SHA" ] \
+	  && [ "$VERIFICATION_ISO_ARTIFACT" != "not provided" ] \
+	  && [ "$VERIFICATION_ISO_ARTIFACT_FILE" != "not provided" ] \
 	  && proof_field_is_real "$RUNTIME_ENGINE_MODE" \
   && proof_field_is_real "$RUNTIME_ENGINE_SOURCE" \
   && built_artifact_reference_is_real "$BUILT_ARTIFACT_PATH_URL"; then
@@ -1748,18 +1774,21 @@ cat > "$SIGNOFF_ROW_TEMP" <<EOF2
   - image: ${CI_IMAGE_URL:-not provided}
   - installer-iso: ${CI_INSTALLER_ISO_URL:-not provided}
 - Image: ${IMAGE}
-- ISO: ${ISO_PATH}
-- ISO SHA256: ${ISO_SHA}
-- Screenshot proof ISO SHA256: ${SCREENSHOT_ISO_SHA}
+- Verification ISO artifact: ${VERIFICATION_ISO_ARTIFACT}
+- Verification ISO artifact file: ${VERIFICATION_ISO_ARTIFACT_FILE}
+- Verification ISO SHA256: ${ISO_SHA}
+- Screenshot proof verification ISO SHA256: ${SCREENSHOT_ISO_SHA}
 - Evidence bundle: ${EVIDENCE_BUNDLE_PATH}
 - Evidence bundle SHA256: ${EVIDENCE_BUNDLE_SHA256}
 - Evidence bundle integrity checked: ${EVIDENCE_BUNDLE_STATUS}
 - Local display attestation: ${LOCAL_DISPLAY_ATTESTATION_PATH}
-- Local display attestation run: ${LOCAL_DISPLAY_ATTESTATION_RUN}
-- Local display attestation run attempt: ${LOCAL_DISPLAY_ATTESTATION_RUN_ATTEMPT}
-- Local display attestation artifact: ${LOCAL_DISPLAY_ATTESTATION_ARTIFACT}
+- Local display attestation signature: ${LOCAL_DISPLAY_ATTESTATION_SIGNATURE}
+- Local display authority certificate SHA256: ${LOCAL_DISPLAY_AUTHORITY_CERTIFICATE_SHA256}
+- Local display authority CA certificate SHA256: ${LOCAL_DISPLAY_AUTHORITY_CA_CERTIFICATE_SHA256}
+- Local display authority verification ISO SHA256: ${LOCAL_DISPLAY_AUTHORITY_ISO_SHA256}
+- Local display authority screenshot manifest SHA256: ${LOCAL_DISPLAY_AUTHORITY_SCREENSHOT_MANIFEST_SHA256}
 - Local display attestation checked: ${LOCAL_DISPLAY_ATTESTATION_STATUS}
-- ISO candidate binding checked: ${ISO_CANDIDATE_STATUS}
+- Verification ISO candidate binding checked: ${ISO_CANDIDATE_STATUS}
 - Rootfs verify command: \
   ${CONTAINER_RUNTIME:-docker} run --rm ${IMAGE} /usr/libexec/goblins-os/goblins-os-verify --installed-root /
 - Verify result (blocked=0): ${VERIFY_STATUS}
@@ -1793,6 +1822,8 @@ cat > "$SIGNOFF_ROW_TEMP" <<EOF2
 - App privacy revoke checked: ${APP_PRIVACY_REVOKE_STATUS}
 - Preview open/render checked: ${PREVIEW_OPEN_RENDER_STATUS}
 - Audio output checked: ${GAMING_AUDIO_OUTPUT_STATUS}
+- Accessibility/adaptivity checked: ${ACCESSIBILITY_ADAPTIVITY_STATUS}
+- Hosted-context review light/dark checked: ${HOSTED_CONTEXT_REVIEW_STATUS}
 - Gaming readiness checked: ${GAMING_SCREENSHOT_STATUS}
 - Install storage/bootloader/dual-boot checked: ${INSTALL_STORAGE_STATUS}
 - Current project completion status: ${PROJECT_COMPLETION_STATUS}
@@ -1804,6 +1835,12 @@ if [ "$REQUIRE_COMPLETE" = "1" ] && [ "$PROJECT_COMPLETION_STATUS" != "complete"
   exit 1
 fi
 
+if [ "$PROJECT_COMPLETION_STATUS" = "complete" ] && [ -z "$SIGNOFF_ROW_OUTPUT" ]; then
+  fail "Complete proof must be staged with SIGNOFF_ROW_OUTPUT and composed only after public-media validation."
+  rm -f "$SIGNOFF_ROW_TEMP"
+  exit 2
+fi
+
 if [ -n "$SIGNOFF_ROW_OUTPUT" ]; then
   EXPECTED_SIGNOFF_ROW_OUTPUT="${SCREENSHOT_DIR%/}/signoff-row.md"
   if [ -z "$SCREENSHOT_DIR" ] || [ "$SIGNOFF_ROW_OUTPUT" != "$EXPECTED_SIGNOFF_ROW_OUTPUT" ]; then
@@ -1811,14 +1848,32 @@ if [ -n "$SIGNOFF_ROW_OUTPUT" ]; then
     rm -f "$SIGNOFF_ROW_TEMP"
     exit 2
   fi
+  if [ -L "$SIGNOFF_ROW_OUTPUT" ]; then
+    fail "Refusing symlinked staged signoff-row destination: $SIGNOFF_ROW_OUTPUT"
+    rm -f "$SIGNOFF_ROW_TEMP"
+    exit 2
+  fi
+  mkdir -p "$(dirname "$SIGNOFF_ROW_OUTPUT")"
+  SIGNOFF_ROW_DEST_TEMP="$(mktemp "$(dirname "$SIGNOFF_ROW_OUTPUT")/.signoff-row.XXXXXX")"
+  cp "$SIGNOFF_ROW_TEMP" "$SIGNOFF_ROW_DEST_TEMP"
+  chmod 0644 "$SIGNOFF_ROW_DEST_TEMP"
+  mv -f "$SIGNOFF_ROW_DEST_TEMP" "$SIGNOFF_ROW_OUTPUT"
+  rm -f "$SIGNOFF_ROW_TEMP"
+  log "Staged architecture-scoped verification row at $SIGNOFF_ROW_OUTPUT"
+  log "Signoff notes remain untouched until compose-signoff-rows validates public media and the complete final gate."
+  exit 0
 fi
 
-cat "$SIGNOFF_ROW_TEMP" >> "$OUT"
-if [ -n "$SIGNOFF_ROW_OUTPUT" ]; then
-  mkdir -p "$(dirname "$SIGNOFF_ROW_OUTPUT")"
-  cp "$SIGNOFF_ROW_TEMP" "$SIGNOFF_ROW_OUTPUT"
-  log "Wrote architecture-scoped signoff row to $SIGNOFF_ROW_OUTPUT"
+if [ -L "$OUT" ]; then
+  fail "Refusing symlinked signoff notes destination: $OUT"
+  rm -f "$SIGNOFF_ROW_TEMP"
+  exit 2
 fi
+SIGNOFF_NOTES_TEMP="$(mktemp "$(dirname "$OUT")/.signoff-notes.XXXXXX")"
+cp "$OUT" "$SIGNOFF_NOTES_TEMP"
+cat "$SIGNOFF_ROW_TEMP" >> "$SIGNOFF_NOTES_TEMP"
+chmod 0644 "$SIGNOFF_NOTES_TEMP"
+mv -f "$SIGNOFF_NOTES_TEMP" "$OUT"
 rm -f "$SIGNOFF_ROW_TEMP"
 
-log "Appended signoff entry to $OUT"
+log "Atomically appended incomplete signoff entry to $OUT"

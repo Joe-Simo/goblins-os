@@ -7,7 +7,7 @@ text --non-interactive
 ostreecontainer --url=/run/install/repo/container --transport=oci
 clearpart --all --initlabel --disklabel=gpt
 reqpart --add-boot
-part / --fstype=xfs --label=root --grow
+part / --fstype=btrfs --label=root --grow
 lang en_US.UTF-8
 keyboard us
 timezone --utc Etc/UTC

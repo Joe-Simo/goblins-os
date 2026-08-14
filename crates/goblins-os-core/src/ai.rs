@@ -1,4 +1,4 @@
-use axum::{http::StatusCode, Json};
+use axum::{extract::Extension, http::StatusCode, Json};
 use goblins_os_ai::{action_registry, AiAction, AiConfirmation, AiEntrypoint, REGISTRY_VERSION};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,12 +11,18 @@ use std::{
 
 use crate::{
     policy::{policy_state_for_control, PolicyControlState},
-    resident::{active_engine_label, resident_engine_ready},
+    resident::{active_engine_label, resident_engine_ready, ContextGenerationError},
 };
 
 const DEFAULT_AI_STATE_DIR: &str = "/var/lib/goblins-os/ai";
 const MAX_HISTORY_EVENTS: usize = 80;
 const OPEN_SETTINGS_PANEL_ACTION_ID: &str = "open-settings-panel";
+
+fn request_client(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
+) -> Option<crate::control_plane::RequestClient> {
+    client.map(|Extension(client)| client)
+}
 
 #[derive(Serialize)]
 pub struct AiActionCatalog {
@@ -297,8 +303,10 @@ pub enum AiActionReadiness {
     Denied,
 }
 
-pub async fn ai_action_catalog() -> Json<AiActionCatalog> {
-    Json(build_ai_action_catalog())
+pub async fn ai_action_catalog(
+    Extension(client): Extension<crate::control_plane::RequestClient>,
+) -> Json<AiActionCatalog> {
+    Json(build_ai_action_catalog(Some(client.user_id())))
 }
 
 pub async fn ai_action_history() -> Json<AiActionHistory> {
@@ -309,9 +317,11 @@ pub async fn ai_action_history() -> Json<AiActionHistory> {
 /// with its 120s+ read timeout), so the body runs on the blocking pool instead
 /// of pinning an async runtime worker.
 pub async fn ask_file_context(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
     Json(request): Json<FileContextRequest>,
 ) -> (StatusCode, Json<FileContextResponse>) {
-    crate::bounded::run_blocking(move || ask_file_context_blocking(request))
+    let client = request_client(client);
+    crate::bounded::run_blocking(move || ask_file_context_blocking(request, client))
         .await
         .unwrap_or_else(|_| {
             file_context_outcome(
@@ -324,6 +334,7 @@ pub async fn ask_file_context(
 
 fn ask_file_context_blocking(
     request: FileContextRequest,
+    client: Option<crate::control_plane::RequestClient>,
 ) -> (StatusCode, Json<FileContextResponse>) {
     let selected = request.path.trim();
     if selected.is_empty() || selected.chars().count() > 4096 {
@@ -366,9 +377,25 @@ fn ask_file_context_blocking(
 
     let path = Path::new(selected);
     let context = summarize_selected_path(path);
+    let file_type = context.extension.as_deref().unwrap_or(context.kind);
+    let size = context
+        .size_bytes
+        .map(|bytes| format!("{bytes} bytes"))
+        .unwrap_or_else(|| "size unavailable".to_string());
+    let context_disclosure = format!(
+        "only the selected item's metadata: name '{}', type '{}', and {size}; file contents are not read or sent",
+        context.name, file_type
+    );
     let prompt = file_context_prompt(&context);
-    match crate::resident::resident_generate(&prompt) {
-        Ok(answer) => {
+    match crate::resident::resident_generate_protected_context(
+        client,
+        "ai.file-context",
+        "Ask Goblins AI about the selected item",
+        &prompt,
+        prompt.as_bytes(),
+        &context_disclosure,
+    ) {
+        Ok((answer, _)) => {
             audit_ai_action(
                 "ask-file-or-folder",
                 Some("files"),
@@ -376,17 +403,10 @@ fn ask_file_context_blocking(
             );
             file_context_outcome(StatusCode::OK, answer, Some(context))
         }
-        Err(detail) => {
-            audit_ai_action(
-                "ask-file-or-folder",
-                Some("files"),
-                AiActionOutcome::Blocked,
-            );
-            file_context_outcome(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can answer about the selected item: {detail}."),
-                Some(context),
-            )
+        Err(error) => {
+            let (status, text, outcome) = protected_context_failure(error);
+            audit_ai_action("ask-file-or-folder", Some("files"), outcome);
+            file_context_outcome(status, text, Some(context))
         }
     }
 }
@@ -395,9 +415,11 @@ fn ask_file_context_blocking(
 /// with its 120s+ read timeout), so the body runs on the blocking pool instead
 /// of pinning an async runtime worker.
 pub async fn ask_settings_context(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
     Json(request): Json<SettingsContextRequest>,
 ) -> (StatusCode, Json<SettingsContextResponse>) {
-    crate::bounded::run_blocking(move || ask_settings_context_blocking(request))
+    let client = request_client(client);
+    crate::bounded::run_blocking(move || ask_settings_context_blocking(request, client))
         .await
         .unwrap_or_else(|_| {
             settings_context_outcome(
@@ -410,6 +432,7 @@ pub async fn ask_settings_context(
 
 fn ask_settings_context_blocking(
     request: SettingsContextRequest,
+    client: Option<crate::control_plane::RequestClient>,
 ) -> (StatusCode, Json<SettingsContextResponse>) {
     let context = summarize_settings_context(&request);
     if context.panel.is_empty() {
@@ -454,23 +477,42 @@ fn ask_settings_context_blocking(
     }
 
     let action_id = settings_context_action_id(&context, request.question.as_deref());
+    let question_chars = request
+        .question
+        .as_deref()
+        .map(|question| sanitized_context_value(question, 480).chars().count())
+        .unwrap_or(0);
+    let status_chars = request
+        .status_summary
+        .as_deref()
+        .map(|summary| sanitized_context_value(summary, 900).chars().count())
+        .unwrap_or(0);
+    let context_disclosure = format!(
+        "Settings panel '{}', topic '{}', the exact question ({question_chars} characters), and the bounded OS status summary ({status_chars} characters); no files, screenshots, or secrets are included",
+        context.panel, context.topic
+    );
     let prompt = settings_context_prompt(
         &context,
         request.question.as_deref(),
         request.status_summary.as_deref(),
     );
-    match crate::resident::resident_generate(&prompt) {
-        Ok(answer) => {
+    let consent_action_id = format!("ai.settings-context:{action_id}");
+    match crate::resident::resident_generate_protected_context(
+        client,
+        &consent_action_id,
+        "Ask Goblins AI about this Settings panel",
+        &prompt,
+        prompt.as_bytes(),
+        &context_disclosure,
+    ) {
+        Ok((answer, _)) => {
             audit_ai_action(action_id, Some("settings"), AiActionOutcome::Succeeded);
             settings_context_outcome(StatusCode::OK, answer, Some(context))
         }
-        Err(detail) => {
-            audit_ai_action(action_id, Some("settings"), AiActionOutcome::Blocked);
-            settings_context_outcome(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can answer about this Settings panel: {detail}."),
-                Some(context),
-            )
+        Err(error) => {
+            let (status, text, outcome) = protected_context_failure(error);
+            audit_ai_action(action_id, Some("settings"), outcome);
+            settings_context_outcome(status, text, Some(context))
         }
     }
 }
@@ -528,9 +570,11 @@ fn audit_open_settings_panel(outcome: AiActionOutcome) {
 /// with its 120s+ read timeout), so the body runs on the blocking pool instead
 /// of pinning an async runtime worker.
 pub async fn ask_system_status(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
     Json(request): Json<SystemStatusContextRequest>,
 ) -> (StatusCode, Json<SystemStatusContextResponse>) {
-    crate::bounded::run_blocking(move || ask_system_status_blocking(request))
+    let client = request_client(client);
+    crate::bounded::run_blocking(move || ask_system_status_blocking(request, client))
         .await
         .unwrap_or_else(|_| {
             system_status_context_outcome(
@@ -543,6 +587,7 @@ pub async fn ask_system_status(
 
 fn ask_system_status_blocking(
     request: SystemStatusContextRequest,
+    client: Option<crate::control_plane::RequestClient>,
 ) -> (StatusCode, Json<SystemStatusContextResponse>) {
     let focus = request
         .focus
@@ -595,9 +640,35 @@ fn ask_system_status_blocking(
         question.as_deref(),
         caller_summary.as_deref(),
     );
+    let question_chars = question
+        .as_deref()
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    let caller_summary_chars = caller_summary
+        .as_deref()
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    let context_disclosure = format!(
+        "the OS-owned system snapshot ({} characters covering readiness, services, hardware, local models, and policy), the focus '{}', the exact question ({question_chars} characters), and the caller summary ({caller_summary_chars} characters); no files, screenshots, notifications, credentials, or secrets are included",
+        context.snapshot_chars, context.focus
+    );
+    let request_binding = serde_json::to_vec(&(
+        focus.as_str(),
+        question.as_deref(),
+        caller_summary.as_deref(),
+    ))
+    .unwrap_or_default();
+    let consent_action_id = format!("ai.system-status:{action_id}");
 
-    match crate::resident::resident_generate(&prompt) {
-        Ok(answer) => {
+    match crate::resident::resident_generate_protected_context(
+        client,
+        &consent_action_id,
+        "Ask Goblins AI about system status",
+        &prompt,
+        &request_binding,
+        &context_disclosure,
+    ) {
+        Ok((answer, _)) => {
             audit_ai_action(
                 action_id,
                 Some("troubleshooting"),
@@ -605,13 +676,10 @@ fn ask_system_status_blocking(
             );
             system_status_context_outcome(StatusCode::OK, answer, Some(context))
         }
-        Err(detail) => {
-            audit_ai_action(action_id, Some("troubleshooting"), AiActionOutcome::Blocked);
-            system_status_context_outcome(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can summarize system status: {detail}."),
-                Some(context),
-            )
+        Err(error) => {
+            let (status, text, outcome) = protected_context_failure(error);
+            audit_ai_action(action_id, Some("troubleshooting"), outcome);
+            system_status_context_outcome(status, text, Some(context))
         }
     }
 }
@@ -669,9 +737,11 @@ pub async fn change_safe_setting(
 /// with its 120s+ read timeout), so the body runs on the blocking pool instead
 /// of pinning an async runtime worker.
 pub async fn ask_selected_text_context(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
     Json(request): Json<SelectedTextContextRequest>,
 ) -> (StatusCode, Json<SelectedTextContextResponse>) {
-    crate::bounded::run_blocking(move || ask_selected_text_context_blocking(request))
+    let client = request_client(client);
+    crate::bounded::run_blocking(move || ask_selected_text_context_blocking(request, client))
         .await
         .unwrap_or_else(|_| {
             selected_text_context_outcome(
@@ -684,6 +754,7 @@ pub async fn ask_selected_text_context(
 
 fn ask_selected_text_context_blocking(
     request: SelectedTextContextRequest,
+    client: Option<crate::control_plane::RequestClient>,
 ) -> (StatusCode, Json<SelectedTextContextResponse>) {
     let selected = sanitized_context_value(&request.text, 6000);
     if selected.is_empty() {
@@ -720,10 +791,22 @@ fn ask_selected_text_context_blocking(
             .filter(|value| !value.is_empty()),
         text_chars: selected.chars().count(),
     };
+    let context_disclosure = format!(
+        "the selected text ({} characters), named app and window, and exact question ({} characters); no other screen content, clipboard history, files, credentials, or secrets are included",
+        context.text_chars,
+        request.question.as_deref().map(|value| sanitized_context_value(value, 480).chars().count()).unwrap_or(0)
+    );
     let prompt = selected_text_context_prompt(&selected, &context, request.question.as_deref());
 
-    match crate::resident::resident_generate(&prompt) {
-        Ok(answer) => {
+    match crate::resident::resident_generate_protected_context(
+        client,
+        "ai.selected-text-context",
+        "Ask Goblins AI about selected text",
+        &prompt,
+        prompt.as_bytes(),
+        &context_disclosure,
+    ) {
+        Ok((answer, _)) => {
             audit_ai_action(
                 "ask-selected-text",
                 Some("selected-text"),
@@ -731,17 +814,10 @@ fn ask_selected_text_context_blocking(
             );
             selected_text_context_outcome(StatusCode::OK, answer, Some(context))
         }
-        Err(detail) => {
-            audit_ai_action(
-                "ask-selected-text",
-                Some("selected-text"),
-                AiActionOutcome::Blocked,
-            );
-            selected_text_context_outcome(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can answer about selected text: {detail}."),
-                Some(context),
-            )
+        Err(error) => {
+            let (status, text, outcome) = protected_context_failure(error);
+            audit_ai_action("ask-selected-text", Some("selected-text"), outcome);
+            selected_text_context_outcome(status, text, Some(context))
         }
     }
 }
@@ -750,9 +826,11 @@ fn ask_selected_text_context_blocking(
 /// with its 120s+ read timeout), so the body runs on the blocking pool instead
 /// of pinning an async runtime worker.
 pub async fn write_selected_text_context(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
     Json(request): Json<SelectedTextContextRequest>,
 ) -> (StatusCode, Json<SelectedTextContextResponse>) {
-    crate::bounded::run_blocking(move || write_selected_text_context_blocking(request))
+    let client = request_client(client);
+    crate::bounded::run_blocking(move || write_selected_text_context_blocking(request, client))
         .await
         .unwrap_or_else(|_| {
             selected_text_context_outcome(
@@ -765,6 +843,7 @@ pub async fn write_selected_text_context(
 
 fn write_selected_text_context_blocking(
     request: SelectedTextContextRequest,
+    client: Option<crate::control_plane::RequestClient>,
 ) -> (StatusCode, Json<SelectedTextContextResponse>) {
     let selected = sanitized_context_value(&request.text, 6000);
     if selected.is_empty() {
@@ -801,10 +880,22 @@ fn write_selected_text_context_blocking(
             .filter(|value| !value.is_empty()),
         text_chars: selected.chars().count(),
     };
+    let context_disclosure = format!(
+        "the selected text ({} characters), named app and window, and exact writing request ({} characters); no other screen content, clipboard history, files, credentials, or secrets are included",
+        context.text_chars,
+        request.question.as_deref().map(|value| sanitized_context_value(value, 480).chars().count()).unwrap_or(0)
+    );
     let prompt = writing_tools_prompt(&selected, &context, request.question.as_deref());
 
-    match crate::resident::resident_generate(&prompt) {
-        Ok(answer) => {
+    match crate::resident::resident_generate_protected_context(
+        client,
+        "ai.write-selected-text",
+        "Use Goblins AI writing tools on selected text",
+        &prompt,
+        prompt.as_bytes(),
+        &context_disclosure,
+    ) {
+        Ok((answer, _)) => {
             audit_ai_action(
                 "write-with-goblins",
                 Some("selected-text"),
@@ -812,17 +903,10 @@ fn write_selected_text_context_blocking(
             );
             selected_text_context_outcome(StatusCode::OK, answer, Some(context))
         }
-        Err(detail) => {
-            audit_ai_action(
-                "write-with-goblins",
-                Some("selected-text"),
-                AiActionOutcome::Blocked,
-            );
-            selected_text_context_outcome(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can help write selected text: {detail}."),
-                Some(context),
-            )
+        Err(error) => {
+            let (status, text, outcome) = protected_context_failure(error);
+            audit_ai_action("write-with-goblins", Some("selected-text"), outcome);
+            selected_text_context_outcome(status, text, Some(context))
         }
     }
 }
@@ -831,9 +915,11 @@ fn write_selected_text_context_blocking(
 /// with its 120s+ read timeout), so the body runs on the blocking pool instead
 /// of pinning an async runtime worker.
 pub async fn ask_notification_context(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
     Json(request): Json<NotificationContextRequest>,
 ) -> (StatusCode, Json<NotificationContextResponse>) {
-    crate::bounded::run_blocking(move || ask_notification_context_blocking(request))
+    let client = request_client(client);
+    crate::bounded::run_blocking(move || ask_notification_context_blocking(request, client))
         .await
         .unwrap_or_else(|_| {
             notification_context_outcome(
@@ -846,6 +932,7 @@ pub async fn ask_notification_context(
 
 fn ask_notification_context_blocking(
     request: NotificationContextRequest,
+    client: Option<crate::control_plane::RequestClient>,
 ) -> (StatusCode, Json<NotificationContextResponse>) {
     let title = request
         .title
@@ -895,10 +982,30 @@ fn ask_notification_context_blocking(
         body_chars: body.chars().count(),
         action_label,
     };
-    let prompt = notification_context_prompt(&context, &title, &body, request.question.as_deref());
+    let question = request
+        .question
+        .as_deref()
+        .map(|value| sanitized_context_value(value, 480))
+        .filter(|value| !value.is_empty());
+    let question_chars = question
+        .as_deref()
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    let context_disclosure = format!(
+        "the invoked notification's app, title ({} characters), body ({} characters), chosen action label, and exact question ({question_chars} characters); no notification history, other notifications, files, screenshots, credentials, or secrets are included",
+        context.title_chars, context.body_chars
+    );
+    let prompt = notification_context_prompt(&context, &title, &body, question.as_deref());
 
-    match crate::resident::resident_generate(&prompt) {
-        Ok(answer) => {
+    match crate::resident::resident_generate_protected_context(
+        client,
+        "ai.notification-context",
+        "Ask Goblins AI about this notification",
+        &prompt,
+        prompt.as_bytes(),
+        &context_disclosure,
+    ) {
+        Ok((answer, _)) => {
             audit_ai_action(
                 "answer-notification",
                 Some("notifications"),
@@ -906,17 +1013,10 @@ fn ask_notification_context_blocking(
             );
             notification_context_outcome(StatusCode::OK, answer, Some(context))
         }
-        Err(detail) => {
-            audit_ai_action(
-                "answer-notification",
-                Some("notifications"),
-                AiActionOutcome::Blocked,
-            );
-            notification_context_outcome(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can answer about this notification: {detail}."),
-                Some(context),
-            )
+        Err(error) => {
+            let (status, text, outcome) = protected_context_failure(error);
+            audit_ai_action("answer-notification", Some("notifications"), outcome);
+            notification_context_outcome(status, text, Some(context))
         }
     }
 }
@@ -925,9 +1025,11 @@ fn ask_notification_context_blocking(
 /// with its 120s+ read timeout), so the body runs on the blocking pool instead
 /// of pinning an async runtime worker.
 pub async fn ask_screen_context(
+    client: Option<Extension<crate::control_plane::RequestClient>>,
     Json(request): Json<ScreenContextRequest>,
 ) -> (StatusCode, Json<ScreenContextResponse>) {
-    crate::bounded::run_blocking(move || ask_screen_context_blocking(request))
+    let client = request_client(client);
+    crate::bounded::run_blocking(move || ask_screen_context_blocking(request, client))
         .await
         .unwrap_or_else(|_| {
             screen_context_outcome(
@@ -940,6 +1042,7 @@ pub async fn ask_screen_context(
 
 fn ask_screen_context_blocking(
     request: ScreenContextRequest,
+    client: Option<crate::control_plane::RequestClient>,
 ) -> (StatusCode, Json<ScreenContextResponse>) {
     let visible_text = request
         .visible_text
@@ -994,6 +1097,15 @@ fn ask_screen_context_blocking(
         visible_text_chars: visible_text.chars().count(),
         visual_summary_chars: visual_summary.chars().count(),
     };
+    let question_chars = request
+        .question
+        .as_deref()
+        .map(|value| sanitized_context_value(value, 480).chars().count())
+        .unwrap_or(0);
+    let context_disclosure = format!(
+        "the provided visible text ({} characters), visual description ({} characters), named app and window, and exact question ({question_chars} characters); no live pixels, hidden windows, files, notifications, credentials, or secrets are included",
+        context.visible_text_chars, context.visual_summary_chars
+    );
     let prompt = screen_context_prompt(
         &context,
         &visible_text,
@@ -1001,8 +1113,15 @@ fn ask_screen_context_blocking(
         request.question.as_deref(),
     );
 
-    match crate::resident::resident_generate(&prompt) {
-        Ok(answer) => {
+    match crate::resident::resident_generate_protected_context(
+        client,
+        "ai.screen-context",
+        "Ask Goblins AI about visible screen context",
+        &prompt,
+        prompt.as_bytes(),
+        &context_disclosure,
+    ) {
+        Ok((answer, _)) => {
             audit_ai_action(
                 "summarize-screen",
                 Some("screenshot"),
@@ -1010,17 +1129,10 @@ fn ask_screen_context_blocking(
             );
             screen_context_outcome(StatusCode::OK, answer, Some(context))
         }
-        Err(detail) => {
-            audit_ai_action(
-                "summarize-screen",
-                Some("screenshot"),
-                AiActionOutcome::Blocked,
-            );
-            screen_context_outcome(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Goblins AI needs GPT-OSS, Codex sign-in, or your own OpenAI key before it can summarize the screen: {detail}."),
-                Some(context),
-            )
+        Err(error) => {
+            let (status, text, outcome) = protected_context_failure(error);
+            audit_ai_action("summarize-screen", Some("screenshot"), outcome);
+            screen_context_outcome(status, text, Some(context))
         }
     }
 }
@@ -1147,9 +1259,9 @@ pub(crate) fn dispatch_voice_safe_setting_change(
     )
 }
 
-pub(crate) fn build_ai_action_catalog() -> AiActionCatalog {
-    let engine_ready = resident_engine_ready();
-    let engine = active_engine_label();
+pub(crate) fn build_ai_action_catalog(user_id: Option<u32>) -> AiActionCatalog {
+    let engine_ready = resident_engine_ready(user_id);
+    let engine = active_engine_label(user_id);
     AiActionCatalog {
         generated_at: format!("{:?}", SystemTime::now()),
         source: "goblins-os-core",
@@ -1223,7 +1335,7 @@ fn readiness_reason(
             "Ready after the user reviews and confirms the exact action.".to_string()
         }
         AiActionReadiness::WaitingForEngine => {
-            "Set up on-device GPT-OSS, sign in to Codex, or ask a device administrator to install an OpenAI key to use Goblins AI."
+            "Set up on-device GPT-OSS, sign in with your OpenAI account through Codex, or add your own OpenAI API key in the protected key window to use Goblins AI."
                 .to_string()
         }
         AiActionReadiness::PermissionGated => format!(
@@ -1242,8 +1354,30 @@ fn engine_detail(engine: &str, ready: bool) -> String {
             "Goblins AI is ready with {engine} through a protected Goblins OS service."
         );
     }
-    "Goblins AI is waiting for GPT-OSS, Codex sign-in, or an administrator-installed OpenAI key."
+    "Goblins AI is waiting for GPT-OSS, your OpenAI account through Codex, or your own OpenAI API key from the protected key window."
         .to_string()
+}
+
+fn protected_context_failure(
+    error: ContextGenerationError,
+) -> (StatusCode, String, AiActionOutcome) {
+    match error {
+        ContextGenerationError::Cancelled => (
+            StatusCode::FORBIDDEN,
+            "Nothing was shared. The hosted request was cancelled.".to_string(),
+            AiActionOutcome::Denied,
+        ),
+        ContextGenerationError::TimedOut => (
+            StatusCode::REQUEST_TIMEOUT,
+            "Nothing was shared because the hosted review expired.".to_string(),
+            AiActionOutcome::Blocked,
+        ),
+        ContextGenerationError::Unavailable(detail) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("Nothing was shared because hosted AI is unavailable: {detail}."),
+            AiActionOutcome::Blocked,
+        ),
+    }
 }
 
 fn file_context_outcome(
@@ -1436,7 +1570,7 @@ fn summarize_selected_path(path: &Path) -> FileContextSummary {
         None => "item",
     };
     FileContextSummary {
-        name: display_path_name(path),
+        name: sanitized_context_value(&display_path_name(path), 240),
         kind,
         extension: path
             .extension()
@@ -2591,7 +2725,7 @@ mod tests {
 
     #[test]
     fn catalog_exposes_the_full_shared_registry() {
-        let catalog = build_ai_action_catalog();
+        let catalog = build_ai_action_catalog(None);
         assert_eq!(catalog.source, "goblins-os-core");
         assert!(catalog
             .actions

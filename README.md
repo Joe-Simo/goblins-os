@@ -1,36 +1,46 @@
 # Goblins OS
 
-Goblins OS is an open AI-native desktop for building local software. It is built
-on Fedora bootc, ships as architecture-specific release media, and keeps
-credentials out of the desktop image.
+Goblins OS is an open AI-native Linux desktop for building local software. It
+ships for 64-bit Arm (`aarch64`), supports image-based updates and rollback, and
+keeps credentials out of the desktop image.
 
 The project is open source. The code is licensed under AGPL-3.0-or-later. The
 Goblins OS name, marks, release identity, installer identity, desktop identity,
 icons, wallpapers, and associated trade dress are reserved.
 
-## Download
+## Published artifacts
 
-The current public release is available on the GitHub releases page:
+The public image channel and historical release records are available here:
 
 - [Goblins OS releases](https://github.com/Joe-Simo/goblins-os/releases)
 - [Website](https://goblinsos.com)
 
-Install media is built separately for each CPU family. Use the ISO that matches
-the target system:
+No current branded installer is published yet. The preserved July 2026
+`aarch64` alpha predates the current Goblins OS identity and experience updates
+and should not be used for a new installation. The next installer remains
+scoped to a UEFI aarch64 virtual machine; bare-metal Arm support is not claimed
+until an exact device model completes the hardware matrix. Apple Silicon is an
+HVF proof host, not a bare-metal Goblins OS install target. Intel and AMD
+`x86_64` systems are not supported.
 
-- `x86_64` for 64-bit Intel and AMD systems
-- `aarch64` for Arm systems and Arm virtual machines
+The `x86_64` files already attached to
+[`v0.1.0-alpha.20260703`](https://github.com/Joe-Simo/goblins-os/releases/tag/v0.1.0-alpha.20260703)
+are retained as immutable historical release records. They are not a supported
+or current Goblins OS target and must not be promoted into a current channel.
 
-Always verify the published SHA256 checksums before writing an installer image
-to USB or attaching it to a VM.
+The historical release keeps SHA256 checksums, manifests, and SBOMs for audit
+and provenance. A new installer will be listed as current only after its release
+gates pass.
 
 ## What it is
 
-- A Fedora bootc desktop OS with image-based updates and rollback.
+- A Goblins OS desktop with image-based updates and rollback.
 - A native desktop environment with Goblins OS branding and installer flows.
 - A local app-building surface where users describe software, review the
-  generated project, preview it locally, inspect files and logs, then export or
-  containerize it.
+  generated project, preview supported Python entrypoints in a networkless
+  sandbox or static web apps through a private CSP-sandboxed loopback snapshot,
+  inspect files and logs, export a deterministic source archive, and package
+  supported static projects as deterministic offline OCI image archives.
 - A project with explicit packaging, release, SBOM, and signoff checks.
 
 ## Scope
@@ -40,11 +50,21 @@ workflow, container-friendly release artifacts, and transparent verification.
 Credentials and API keys stay outside the OS image and are not shipped to the
 desktop as client-side secrets.
 
+## Architecture and upstream attribution
+
+Goblins OS 44 is built on Fedora bootc 44 and uses Fedora RPM packages. That is
+the technical base and package provenance, not the product identity. Goblins OS
+owns the visible desktop, installer, boot splash, system name, icons, wallpaper,
+and user experience; upstream components retain their required names, licenses,
+and notices.
+
 ## Containers
 
-The bootc container images are intended for Docker/Podman inspection,
-verification, automation, and derived-image workflows. Use the ISO when you want
-the full graphical desktop installer.
+The current `ghcr.io/joe-simo/goblins-os:aarch64` bootc container image is
+intended for Docker/Podman inspection, verification, automation, and
+derived-image workflows. A full graphical desktop installation requires a
+current branded ISO; none is published yet, so the historical July installer
+must not be presented as the current installation path.
 
 Container package visibility is tracked separately from the public source repo.
 If a `docker pull` or `podman pull` command asks for authentication, the GHCR

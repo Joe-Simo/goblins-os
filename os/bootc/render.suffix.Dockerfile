@@ -13,8 +13,8 @@ RUN dnf -y install \
       dejavu-sans-fonts \
     && dnf clean all
 ARG GOBLINS_OS_RENDER_SCOPE=all
-COPY --chmod=0755 os/bootc/render-screens.sh /usr/local/bin/render-screens.sh
-RUN GOBLINS_OS_RENDER_SCOPE="$GOBLINS_OS_RENDER_SCOPE" /usr/local/bin/render-screens.sh
+COPY --chmod=0755 os/bootc/render-screens.sh /usr/libexec/goblins-os-ci/render-screens
+RUN GOBLINS_OS_RENDER_SCOPE="$GOBLINS_OS_RENDER_SCOPE" /usr/libexec/goblins-os-ci/render-screens
 
 FROM scratch AS screenshots
 COPY --from=render /out/ /

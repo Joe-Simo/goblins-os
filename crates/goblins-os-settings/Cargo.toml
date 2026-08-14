@@ -8,9 +8,10 @@ rust-version.workspace = true
 
 [features]
 default = []
-native-desktop = ["dep:gtk4", "goblins-os-ui/native-desktop"]
+native-desktop = ["dep:gtk4", "dep:libc", "goblins-os-ui/native-desktop"]
 
 [dependencies]
+countries-iso3166 = { version = "1.7", features = ["small_keys", "std"] }
 goblins-os-core-client = { path = "../goblins-os-core-client" }
 goblins-os-ui = { path = "../goblins-os-ui" }
 serde = { version = "1", features = ["derive"] }
@@ -18,3 +19,4 @@ serde_json = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk4 = { version = "0.9", optional = true }
+libc = { version = "0.2", optional = true }

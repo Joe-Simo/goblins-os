@@ -1,0 +1,37 @@
+[Unit]
+Description=Finish the Goblins OS firmware boot-entry identity migration
+Documentation=man:efibootmgr(8) man:efivar(1)
+After=local-fs.target
+ConditionArchitecture=arm64
+ConditionPathIsMountPoint=/sys/firmware/efi/efivars
+ConditionPathExists=!/var/lib/goblins-os-firmware-label/migrated-v1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/goblins-os/goblins-os-firmware-label
+StateDirectory=goblins-os-firmware-label
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/sys/firmware/efi/efivars
+InaccessiblePaths=/boot /efi
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+UMask=0077
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

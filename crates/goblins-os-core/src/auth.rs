@@ -40,6 +40,7 @@ impl AuthLifecycle {
         self.generation = self.generation.wrapping_add(1);
         self.pending_auths.clear();
         self.device_auths.clear();
+        crate::resident::bump_hosted_authority_generation();
     }
 
     fn is_current(&self, generation: u64) -> bool {
@@ -569,6 +570,7 @@ fn persist_auth_session_if_current(
         return Ok(false);
     }
     persist_auth_session(token_response)?;
+    crate::resident::bump_hosted_authority_generation();
     Ok(true)
 }
 
@@ -1060,6 +1062,7 @@ fn persist_device_auth_if_current(
     }
     persist_auth_session(token)?;
     lifecycle.device_auths.remove(handle);
+    crate::resident::bump_hosted_authority_generation();
     Ok(true)
 }
 

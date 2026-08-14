@@ -9,15 +9,17 @@
 //! nor returned to any client. When NetworkManager is unavailable the surface
 //! degrades calmly rather than failing.
 
-use std::time::Duration;
+use std::{
+    sync::{Mutex, OnceLock},
+    time::Duration,
+};
 
 use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::bounded::{
-    bounded_command_output, bounded_session_command_output, probe_timeout, BoundedCommandError,
-};
+use crate::bounded::{bounded_command_output, probe_timeout, BoundedCommandError};
 use crate::policy::{policy_state_for_control, PolicyControlState};
+use crate::session_bridge::{self, SessionBridgeResult};
 
 const PROXY_SCHEMA: &str = "org.gnome.system.proxy";
 const HTTP_PROXY_SCHEMA: &str = "org.gnome.system.proxy.http";
@@ -78,6 +80,7 @@ pub struct ProxyStatus {
     gsettings_available: bool,
     schema_available: bool,
     mode_available: bool,
+    editor_available: bool,
     mode: String,
     autoconfig_url: Option<String>,
     ignore_hosts: Vec<String>,
@@ -94,9 +97,23 @@ pub struct ProxyEndpoint {
     port: Option<i32>,
 }
 
-#[derive(Deserialize)]
-pub struct SetProxyModeRequest {
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SetProxySettingsRequest {
     mode: String,
+    autoconfig_url: Option<String>,
+    ignore_hosts: Vec<String>,
+    http: ProxyEndpointRequest,
+    https: ProxyEndpointRequest,
+    ftp: ProxyEndpointRequest,
+    socks: ProxyEndpointRequest,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyEndpointRequest {
+    host: Option<String>,
+    port: Option<u16>,
 }
 
 #[derive(Serialize)]
@@ -105,6 +122,58 @@ pub struct ProxyModeOutcome {
     mode: String,
     text: String,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ValidatedProxySettings {
+    mode: &'static str,
+    autoconfig_url: String,
+    ignore_hosts: Vec<String>,
+    http: ValidatedProxyEndpoint,
+    https: ValidatedProxyEndpoint,
+    ftp: ValidatedProxyEndpoint,
+    socks: ValidatedProxyEndpoint,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ValidatedProxyEndpoint {
+    host: String,
+    port: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProxyKey {
+    Mode,
+    AutoconfigUrl,
+    IgnoreHosts,
+    HttpHost,
+    HttpPort,
+    HttpsHost,
+    HttpsPort,
+    FtpHost,
+    FtpPort,
+    SocksHost,
+    SocksPort,
+}
+
+const PROXY_KEYS: [ProxyKey; 11] = [
+    ProxyKey::Mode,
+    ProxyKey::AutoconfigUrl,
+    ProxyKey::IgnoreHosts,
+    ProxyKey::HttpHost,
+    ProxyKey::HttpPort,
+    ProxyKey::HttpsHost,
+    ProxyKey::HttpsPort,
+    ProxyKey::FtpHost,
+    ProxyKey::FtpPort,
+    ProxyKey::SocksHost,
+    ProxyKey::SocksPort,
+];
+
+const PROXY_URL_MAX_BYTES: usize = 2_048;
+const PROXY_HOST_MAX_BYTES: usize = 253;
+const PROXY_BYPASS_MAX_ENTRIES: usize = 64;
+const PROXY_BYPASS_ENTRY_MAX_BYTES: usize = 253;
+const PROXY_BYPASS_TOTAL_MAX_BYTES: usize = 4_096;
 
 enum NmcliError {
     /// NetworkManager's CLI is not present (e.g. a container or pre-NM stage).
@@ -115,7 +184,7 @@ enum NmcliError {
 
 enum GSettingsError {
     Missing,
-    Failed(String),
+    Failed,
 }
 
 /// NetworkManager's own connection-activation wait is 90 seconds, so connection
@@ -288,10 +357,13 @@ pub async fn wifi_connect(
     }
 }
 
-pub async fn set_proxy_mode(
-    Json(request): Json<SetProxyModeRequest>,
+pub async fn set_proxy_settings(
+    Json(request): Json<SetProxySettingsRequest>,
 ) -> (StatusCode, Json<ProxyModeOutcome>) {
-    set_proxy_mode_outcome(&request.mode)
+    match tokio::task::spawn_blocking(move || set_proxy_settings_outcome(request)).await {
+        Ok(outcome) => outcome,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
 }
 
 fn outcome(status: StatusCode, ssid: &str, text: &str) -> (StatusCode, Json<WifiConnectOutcome>) {
@@ -376,6 +448,11 @@ fn build_proxy_status() -> ProxyStatus {
     let gsettings_available = gsettings(&["list-schemas"]).is_ok();
     let schema_available = gsettings_available && schema_available(PROXY_SCHEMA);
     let mode_available = schema_available && key_available(PROXY_SCHEMA, "mode");
+    let editor_available = gsettings_available
+        && PROXY_KEYS
+            .iter()
+            .copied()
+            .all(|key| proxy_key_available(key) && proxy_key_writable(key));
     let mode = if mode_available {
         proxy_string(PROXY_SCHEMA, "mode")
             .map(|mode| normalize_proxy_mode(&mode).to_string())
@@ -388,60 +465,507 @@ fn build_proxy_status() -> ProxyStatus {
         gsettings_available,
         schema_available,
         mode_available,
+        editor_available,
         autoconfig_url: proxy_string(PROXY_SCHEMA, "autoconfig-url"),
         ignore_hosts: proxy_strv(PROXY_SCHEMA, "ignore-hosts").unwrap_or_default(),
         http: proxy_endpoint(HTTP_PROXY_SCHEMA),
         https: proxy_endpoint(HTTPS_PROXY_SCHEMA),
         ftp: proxy_endpoint(FTP_PROXY_SCHEMA),
         socks: proxy_endpoint(SOCKS_PROXY_SCHEMA),
-        detail: proxy_detail(gsettings_available, schema_available, mode_available, &mode),
+        detail: proxy_detail(
+            gsettings_available,
+            schema_available,
+            mode_available,
+            editor_available,
+            &mode,
+        ),
         mode,
     }
 }
 
-fn set_proxy_mode_outcome(mode: &str) -> (StatusCode, Json<ProxyModeOutcome>) {
-    let normalized = normalize_proxy_mode(mode);
-    if normalized == "invalid" {
-        return proxy_mode_outcome(
-            StatusCode::BAD_REQUEST,
-            "none",
-            "Proxy mode expects Off, Automatic, or Manual.",
-        );
+fn set_proxy_settings_outcome(
+    request: SetProxySettingsRequest,
+) -> (StatusCode, Json<ProxyModeOutcome>) {
+    if let Some(outcome) = proxy_policy_denial(&request.mode) {
+        return outcome;
     }
+
+    let settings = match validate_proxy_settings(request) {
+        Ok(settings) => settings,
+        Err(detail) => {
+            return proxy_mode_outcome(StatusCode::BAD_REQUEST, "none", &detail);
+        }
+    };
+
+    let _guard = proxy_write_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     if gsettings(&["list-schemas"]).is_err() {
         return proxy_mode_outcome(
             StatusCode::SERVICE_UNAVAILABLE,
-            normalized,
-            "Desktop preferences are not ready, so proxy mode cannot be changed in this session.",
+            settings.mode,
+            "Desktop preferences are not ready, so proxy settings cannot be changed in this session.",
         );
     }
 
-    if !schema_available(PROXY_SCHEMA) || !key_available(PROXY_SCHEMA, "mode") {
+    for key in PROXY_KEYS {
+        if !proxy_key_available(key) {
+            return proxy_mode_outcome(
+                StatusCode::SERVICE_UNAVAILABLE,
+                settings.mode,
+                "This desktop does not provide every standard proxy setting required by the editor, so no proxy settings were changed.",
+            );
+        }
+        if !proxy_key_writable(key) {
+            return proxy_mode_outcome(
+                StatusCode::FORBIDDEN,
+                settings.mode,
+                "One or more proxy settings are managed by the system administrator, so no proxy settings were changed.",
+            );
+        }
+    }
+
+    let previous = match read_proxy_snapshot() {
+        Ok(previous) => previous,
+        Err(_) => {
+            return proxy_mode_outcome(
+                StatusCode::BAD_GATEWAY,
+                settings.mode,
+                "The desktop session could not read the current proxy settings, so no proxy settings were changed.",
+            );
+        }
+    };
+    let desired = proxy_settings_values(&settings);
+
+    if proxy_snapshot_matches(&previous, &desired) {
         return proxy_mode_outcome(
-            StatusCode::SERVICE_UNAVAILABLE,
-            normalized,
-            "The standard proxy mode preference is not supported in this session.",
+            StatusCode::OK,
+            settings.mode,
+            "Proxy settings already match this configuration.",
         );
     }
 
-    match gsettings(&["set", PROXY_SCHEMA, "mode", normalized]) {
-        Ok(_) => proxy_mode_outcome(StatusCode::OK, normalized, proxy_mode_detail(normalized)),
-        Err(GSettingsError::Missing) => proxy_mode_outcome(
-            StatusCode::SERVICE_UNAVAILABLE,
-            normalized,
-            "Desktop preferences are not ready, so proxy mode cannot be changed in this session.",
-        ),
-        Err(GSettingsError::Failed(detail)) => proxy_mode_outcome(
-            StatusCode::BAD_GATEWAY,
-            normalized,
-            &if detail.is_empty() {
-                "The desktop session could not save the proxy mode.".to_string()
-            } else {
-                format!("The desktop session could not save the proxy mode: {detail}")
-            },
-        ),
+    if let Err(failed_key) = apply_proxy_values(&previous, &desired) {
+        let restored = restore_proxy_snapshot(&previous).is_ok();
+        let detail = if restored {
+            format!(
+                "The desktop session could not save the {} setting. The previous proxy configuration was restored.",
+                failed_key.display_name()
+            )
+        } else {
+            "The desktop session could not finish or fully restore the proxy configuration. Open the system network tool to review the current proxy state before trying again."
+                .to_string()
+        };
+        return proxy_mode_outcome(StatusCode::BAD_GATEWAY, settings.mode, &detail);
     }
+
+    if !proxy_settings_match(&settings) {
+        let restored = restore_proxy_snapshot(&previous).is_ok();
+        let detail = if restored {
+            "The desktop did not confirm the complete proxy configuration. The previous proxy configuration was restored."
+        } else {
+            "The desktop did not confirm or fully restore the proxy configuration. Open the system network tool to review the current proxy state before trying again."
+        };
+        return proxy_mode_outcome(StatusCode::BAD_GATEWAY, settings.mode, detail);
+    }
+
+    proxy_mode_outcome(
+        StatusCode::OK,
+        settings.mode,
+        match settings.mode {
+            "auto" => "Automatic proxy configuration saved and activated.",
+            "manual" => "Manual proxy configuration saved and activated.",
+            _ => "Proxy configuration saved. Direct network connections are active.",
+        },
+    )
+}
+
+fn proxy_policy_denial(mode: &str) -> Option<(StatusCode, Json<ProxyModeOutcome>)> {
+    let normalized = normalize_proxy_mode(mode);
+    let reported_mode = if normalized == "invalid" {
+        "none"
+    } else {
+        normalized
+    };
+    match policy_state_for_control("settings-control") {
+        PolicyControlState::Allowed => None,
+        PolicyControlState::Denied => Some(proxy_mode_outcome(
+            StatusCode::FORBIDDEN,
+            reported_mode,
+            "Changing proxy settings is blocked by the active Goblins OS policy profile.",
+        )),
+        PolicyControlState::PermissionGated => Some(proxy_mode_outcome(
+            StatusCode::FORBIDDEN,
+            reported_mode,
+            "Changing proxy settings requires an explicit Goblins OS permission review first.",
+        )),
+    }
+}
+
+fn validate_proxy_settings(
+    request: SetProxySettingsRequest,
+) -> Result<ValidatedProxySettings, String> {
+    let mode = normalize_proxy_mode(&request.mode);
+    if mode == "invalid" {
+        return Err(
+            "Proxy mode expects Off, Automatic, or Manual. No proxy settings were changed."
+                .to_string(),
+        );
+    }
+
+    let autoconfig_url = request
+        .autoconfig_url
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    validate_proxy_url(&autoconfig_url)?;
+
+    let ignore_hosts = validate_proxy_bypass_hosts(request.ignore_hosts)?;
+    let http = validate_proxy_endpoint("HTTP", request.http)?;
+    let https = validate_proxy_endpoint("HTTPS", request.https)?;
+    let ftp = validate_proxy_endpoint("FTP", request.ftp)?;
+    let socks = validate_proxy_endpoint("SOCKS", request.socks)?;
+
+    if mode == "auto" && autoconfig_url.is_empty() {
+        return Err(
+            "Automatic mode requires an HTTP or HTTPS configuration URL. No proxy settings were changed."
+                .to_string(),
+        );
+    }
+    if mode == "manual"
+        && [&http, &https, &ftp, &socks]
+            .iter()
+            .all(|endpoint| endpoint.host.is_empty())
+    {
+        return Err(
+            "Manual mode requires at least one complete proxy host and port. No proxy settings were changed."
+                .to_string(),
+        );
+    }
+
+    Ok(ValidatedProxySettings {
+        mode,
+        autoconfig_url,
+        ignore_hosts,
+        http,
+        https,
+        ftp,
+        socks,
+    })
+}
+
+fn validate_proxy_url(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Ok(());
+    }
+    if value.len() > PROXY_URL_MAX_BYTES || value.chars().any(char::is_control) {
+        return Err(format!(
+            "The automatic configuration URL must be {PROXY_URL_MAX_BYTES} bytes or fewer and cannot contain control characters. No proxy settings were changed."
+        ));
+    }
+    if value.chars().any(char::is_whitespace) {
+        return Err(
+            "The automatic configuration URL cannot contain whitespace. No proxy settings were changed."
+                .to_string(),
+        );
+    }
+
+    let uri = value.parse::<axum::http::Uri>().map_err(|_| {
+        "Enter a complete HTTP or HTTPS automatic configuration URL. No proxy settings were changed."
+            .to_string()
+    })?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.authority().is_none() {
+        return Err(
+            "Automatic configuration URLs must use HTTP or HTTPS and include a host. No proxy settings were changed."
+                .to_string(),
+        );
+    }
+    if uri
+        .authority()
+        .is_some_and(|authority| authority.as_str().contains('@'))
+        || uri.query().is_some()
+    {
+        return Err(
+            "Automatic configuration URLs cannot contain credentials or query secrets. Use the system network tool for authenticated proxies. No proxy settings were changed."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_proxy_bypass_hosts(values: Vec<String>) -> Result<Vec<String>, String> {
+    if values.len() > PROXY_BYPASS_MAX_ENTRIES {
+        return Err(format!(
+            "The bypass list accepts at most {PROXY_BYPASS_MAX_ENTRIES} entries. No proxy settings were changed."
+        ));
+    }
+
+    let mut normalized = Vec::with_capacity(values.len());
+    let mut total_bytes = 0usize;
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(
+                "Bypass entries cannot be empty. No proxy settings were changed.".to_string(),
+            );
+        }
+        if value.len() > PROXY_BYPASS_ENTRY_MAX_BYTES || !proxy_bypass_entry_is_safe(value) {
+            return Err(format!(
+                "Each bypass entry must be a host, domain pattern, IP address, or CIDR no longer than {PROXY_BYPASS_ENTRY_MAX_BYTES} bytes. No proxy settings were changed."
+            ));
+        }
+        total_bytes = total_bytes.saturating_add(value.len());
+        if total_bytes > PROXY_BYPASS_TOTAL_MAX_BYTES {
+            return Err(format!(
+                "The bypass list must be {PROXY_BYPASS_TOTAL_MAX_BYTES} bytes or fewer. No proxy settings were changed."
+            ));
+        }
+        if normalized
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(value))
+        {
+            return Err(format!(
+                "The bypass entry {value} is listed more than once. No proxy settings were changed."
+            ));
+        }
+        normalized.push(value.to_string());
+    }
+    Ok(normalized)
+}
+
+fn proxy_bypass_entry_is_safe(value: &str) -> bool {
+    if value == "<local>" {
+        return true;
+    }
+
+    if let Some((address, prefix)) = value.split_once('/') {
+        if prefix.is_empty() || prefix.bytes().any(|byte| !byte.is_ascii_digit()) {
+            return false;
+        }
+        let Ok(prefix) = prefix.parse::<u8>() else {
+            return false;
+        };
+        return address
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| match address {
+                std::net::IpAddr::V4(_) => prefix <= 32,
+                std::net::IpAddr::V6(_) => prefix <= 128,
+            });
+    }
+
+    let candidate = value
+        .strip_prefix("*.")
+        .or_else(|| value.strip_prefix('.'))
+        .unwrap_or(value);
+    if candidate.starts_with('[') && candidate.ends_with(']') {
+        return candidate[1..candidate.len() - 1]
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok();
+    }
+    proxy_host_is_safe(candidate)
+}
+
+fn validate_proxy_endpoint(
+    label: &str,
+    request: ProxyEndpointRequest,
+) -> Result<ValidatedProxyEndpoint, String> {
+    let mut host = request.host.unwrap_or_default().trim().to_string();
+    match (host.is_empty(), request.port) {
+        (true, None) => return Ok(ValidatedProxyEndpoint::default()),
+        (true, Some(_)) => {
+            return Err(format!(
+                "The {label} proxy needs a host when a port is set. No proxy settings were changed."
+            ));
+        }
+        (false, None) => {
+            return Err(format!(
+                "The {label} proxy needs a port when a host is set. No proxy settings were changed."
+            ));
+        }
+        (false, Some(0)) => {
+            return Err(format!(
+                "The {label} proxy port must be between 1 and 65535. No proxy settings were changed."
+            ));
+        }
+        (false, Some(_)) => {}
+    }
+
+    if host.starts_with('[') && host.ends_with(']') {
+        let candidate = &host[1..host.len() - 1];
+        if candidate.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(format!(
+                "The {label} proxy host is not a valid hostname or IP address. No proxy settings were changed."
+            ));
+        }
+        host = candidate.to_string();
+    }
+    if !proxy_host_is_safe(&host) {
+        return Err(format!(
+            "The {label} proxy host is not a valid hostname or IP address. Enter the host without a scheme, path, or credentials. No proxy settings were changed."
+        ));
+    }
+
+    Ok(ValidatedProxyEndpoint {
+        host,
+        port: request.port.unwrap_or_default(),
+    })
+}
+
+fn proxy_host_is_safe(host: &str) -> bool {
+    if host.is_empty()
+        || host.len() > PROXY_HOST_MAX_BYTES
+        || host.chars().any(char::is_control)
+        || host.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    if host.starts_with('.') || host.ends_with('.') {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    })
+}
+
+fn proxy_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn proxy_settings_values(settings: &ValidatedProxySettings) -> Vec<(ProxyKey, String)> {
+    vec![
+        (ProxyKey::Mode, encode_gvariant_string(settings.mode)),
+        (
+            ProxyKey::AutoconfigUrl,
+            encode_gvariant_string(&settings.autoconfig_url),
+        ),
+        (
+            ProxyKey::IgnoreHosts,
+            encode_gvariant_strv(&settings.ignore_hosts),
+        ),
+        (
+            ProxyKey::HttpHost,
+            encode_gvariant_string(&settings.http.host),
+        ),
+        (ProxyKey::HttpPort, settings.http.port.to_string()),
+        (
+            ProxyKey::HttpsHost,
+            encode_gvariant_string(&settings.https.host),
+        ),
+        (ProxyKey::HttpsPort, settings.https.port.to_string()),
+        (
+            ProxyKey::FtpHost,
+            encode_gvariant_string(&settings.ftp.host),
+        ),
+        (ProxyKey::FtpPort, settings.ftp.port.to_string()),
+        (
+            ProxyKey::SocksHost,
+            encode_gvariant_string(&settings.socks.host),
+        ),
+        (ProxyKey::SocksPort, settings.socks.port.to_string()),
+    ]
+}
+
+fn read_proxy_snapshot() -> Result<Vec<(ProxyKey, String)>, GSettingsError> {
+    PROXY_KEYS
+        .iter()
+        .copied()
+        .map(|key| read_proxy_key(key).map(|value| (key, value)))
+        .collect()
+}
+
+fn proxy_snapshot_matches(previous: &[(ProxyKey, String)], desired: &[(ProxyKey, String)]) -> bool {
+    desired.iter().all(|(key, value)| {
+        previous
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .is_some_and(|(_, previous)| previous == value)
+    })
+}
+
+fn apply_proxy_values(
+    previous: &[(ProxyKey, String)],
+    desired: &[(ProxyKey, String)],
+) -> Result<(), ProxyKey> {
+    let non_mode_changed = desired.iter().any(|(key, value)| {
+        *key != ProxyKey::Mode
+            && previous
+                .iter()
+                .find(|(candidate, _)| candidate == key)
+                .is_none_or(|(_, previous)| previous != value)
+    });
+    let previous_mode = previous
+        .iter()
+        .find(|(key, _)| *key == ProxyKey::Mode)
+        .map(|(_, value)| normalize_proxy_mode(value));
+    let paused = non_mode_changed && previous_mode != Some("none");
+    if paused {
+        write_proxy_key(ProxyKey::Mode, "'none'").map_err(|_| ProxyKey::Mode)?;
+    }
+
+    for (key, value) in desired.iter().filter(|(key, _)| *key != ProxyKey::Mode) {
+        let unchanged = previous
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .is_some_and(|(_, previous)| previous == value);
+        if !unchanged {
+            write_proxy_key(*key, value).map_err(|_| *key)?;
+        }
+    }
+
+    let desired_mode = desired
+        .iter()
+        .find(|(key, _)| *key == ProxyKey::Mode)
+        .expect("proxy settings always include mode");
+    let mode_unchanged = previous
+        .iter()
+        .find(|(key, _)| *key == ProxyKey::Mode)
+        .is_some_and(|(_, previous)| previous == &desired_mode.1);
+    if paused || !mode_unchanged {
+        write_proxy_key(ProxyKey::Mode, &desired_mode.1).map_err(|_| ProxyKey::Mode)?;
+    }
+    Ok(())
+}
+
+fn restore_proxy_snapshot(previous: &[(ProxyKey, String)]) -> Result<(), ()> {
+    let _ = write_proxy_key(ProxyKey::Mode, "'none'");
+    let mut restored = true;
+    for (key, value) in previous.iter().filter(|(key, _)| *key != ProxyKey::Mode) {
+        restored &= write_proxy_key(*key, value).is_ok();
+    }
+    if let Some((_, mode)) = previous.iter().find(|(key, _)| *key == ProxyKey::Mode) {
+        restored &= write_proxy_key(ProxyKey::Mode, mode).is_ok();
+    } else {
+        restored = false;
+    }
+    restored.then_some(()).ok_or(())
+}
+
+fn proxy_settings_match(settings: &ValidatedProxySettings) -> bool {
+    proxy_string(PROXY_SCHEMA, "mode")
+        .is_some_and(|mode| normalize_proxy_mode(&mode) == settings.mode)
+        && proxy_string(PROXY_SCHEMA, "autoconfig-url").unwrap_or_default()
+            == settings.autoconfig_url
+        && proxy_strv(PROXY_SCHEMA, "ignore-hosts").unwrap_or_default() == settings.ignore_hosts
+        && proxy_endpoint_matches(HTTP_PROXY_SCHEMA, &settings.http)
+        && proxy_endpoint_matches(HTTPS_PROXY_SCHEMA, &settings.https)
+        && proxy_endpoint_matches(FTP_PROXY_SCHEMA, &settings.ftp)
+        && proxy_endpoint_matches(SOCKS_PROXY_SCHEMA, &settings.socks)
+}
+
+fn proxy_endpoint_matches(schema: &str, expected: &ValidatedProxyEndpoint) -> bool {
+    proxy_string(schema, "host").unwrap_or_default() == expected.host
+        && proxy_int(schema, "port").unwrap_or_default() == i32::from(expected.port)
 }
 
 fn proxy_mode_outcome(
@@ -477,6 +1001,83 @@ fn proxy_endpoint(schema: &str) -> ProxyEndpoint {
         host: proxy_string(schema, "host"),
         port: proxy_int(schema, "port"),
     }
+}
+
+impl ProxyKey {
+    fn schema(self) -> &'static str {
+        match self {
+            Self::Mode | Self::AutoconfigUrl | Self::IgnoreHosts => PROXY_SCHEMA,
+            Self::HttpHost | Self::HttpPort => HTTP_PROXY_SCHEMA,
+            Self::HttpsHost | Self::HttpsPort => HTTPS_PROXY_SCHEMA,
+            Self::FtpHost | Self::FtpPort => FTP_PROXY_SCHEMA,
+            Self::SocksHost | Self::SocksPort => SOCKS_PROXY_SCHEMA,
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Mode => "mode",
+            Self::AutoconfigUrl => "autoconfig-url",
+            Self::IgnoreHosts => "ignore-hosts",
+            Self::HttpHost | Self::HttpsHost | Self::FtpHost | Self::SocksHost => "host",
+            Self::HttpPort | Self::HttpsPort | Self::FtpPort | Self::SocksPort => "port",
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Mode => "proxy mode",
+            Self::AutoconfigUrl => "automatic configuration URL",
+            Self::IgnoreHosts => "bypass list",
+            Self::HttpHost | Self::HttpPort => "HTTP proxy",
+            Self::HttpsHost | Self::HttpsPort => "HTTPS proxy",
+            Self::FtpHost | Self::FtpPort => "FTP proxy",
+            Self::SocksHost | Self::SocksPort => "SOCKS proxy",
+        }
+    }
+}
+
+fn proxy_key_available(key: ProxyKey) -> bool {
+    schema_available(key.schema()) && key_available(key.schema(), key.key())
+}
+
+fn proxy_key_writable(key: ProxyKey) -> bool {
+    gsettings(&["writable", key.schema(), key.key()])
+        .map(|value| value.trim() == "true")
+        .unwrap_or(false)
+}
+
+fn read_proxy_key(key: ProxyKey) -> Result<String, GSettingsError> {
+    gsettings(&["get", key.schema(), key.key()]).map(|value| value.trim().to_string())
+}
+
+fn write_proxy_key(key: ProxyKey, encoded_value: &str) -> Result<(), GSettingsError> {
+    gsettings(&["set", key.schema(), key.key(), encoded_value]).map(|_| ())
+}
+
+fn encode_gvariant_string(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len().saturating_add(2));
+    encoded.push('\'');
+    for character in value.chars() {
+        match character {
+            '\\' => encoded.push_str("\\\\"),
+            '\'' => encoded.push_str("\\'"),
+            _ => encoded.push(character),
+        }
+    }
+    encoded.push('\'');
+    encoded
+}
+
+fn encode_gvariant_strv(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| encode_gvariant_string(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn proxy_string(schema: &str, key: &str) -> Option<String> {
@@ -525,6 +1126,7 @@ fn proxy_detail(
     gsettings_available: bool,
     schema_available: bool,
     mode_available: bool,
+    editor_available: bool,
     mode: &str,
 ) -> String {
     if !gsettings_available {
@@ -536,6 +1138,10 @@ fn proxy_detail(
     }
     if !mode_available {
         return "The standard proxy mode preference is not supported in this session.".to_string();
+    }
+    if !editor_available {
+        return "Proxy settings can be viewed, but one or more standard fields are missing or managed by the system administrator."
+            .to_string();
     }
     proxy_mode_detail(mode).to_string()
 }
@@ -557,7 +1163,22 @@ fn parse_gsettings_string(value: &str) -> Option<String> {
         .strip_prefix('\'')
         .and_then(|value| value.strip_suffix('\''))
         .unwrap_or(trimmed);
-    Some(unquoted.to_string())
+    let mut decoded = String::with_capacity(unquoted.len());
+    let mut escaping = false;
+    for character in unquoted.chars() {
+        if escaping {
+            decoded.push(character);
+            escaping = false;
+        } else if character == '\\' {
+            escaping = true;
+        } else {
+            decoded.push(character);
+        }
+    }
+    if escaping {
+        decoded.push('\\');
+    }
+    Some(decoded)
 }
 
 fn parse_gsettings_i32(value: &str) -> Option<i32> {
@@ -602,24 +1223,11 @@ fn parse_gsettings_strv(value: &str) -> Vec<String> {
 }
 
 fn gsettings(args: &[&str]) -> Result<String, GSettingsError> {
-    match bounded_session_command_output("gsettings", args, probe_timeout()) {
-        Ok(output) if output.status.success() => {
-            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-        }
-        Ok(output) => Err(GSettingsError::Failed(gsettings_error_detail(
-            &String::from_utf8_lossy(&output.stderr),
-            &String::from_utf8_lossy(&output.stdout),
-        ))),
-        Err(_) => Err(GSettingsError::Missing),
+    match session_bridge::gsettings(args) {
+        SessionBridgeResult::Success(stdout) => Ok(stdout),
+        SessionBridgeResult::Failed(_) => Err(GSettingsError::Failed),
+        SessionBridgeResult::Unavailable => Err(GSettingsError::Missing),
     }
-}
-
-fn gsettings_error_detail(stderr: &str, stdout: &str) -> String {
-    let stderr = stderr.trim();
-    if !stderr.is_empty() {
-        return stderr.to_string();
-    }
-    stdout.trim().to_string()
 }
 
 /// Parse `nmcli -t -f STATE,CONNECTIVITY general` ("connected:full").
@@ -753,10 +1361,13 @@ fn split_terse(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        nmcli_result, normalize_proxy_mode, parse_active_connection, parse_general_status,
-        parse_gsettings_i32, parse_gsettings_string, parse_gsettings_strv, parse_wifi_list,
-        sanitize_connect_error, split_terse, ssid_looks_like_option, ActiveConnection, NmcliError,
-        NETWORK_TIMEOUT_DETAIL,
+        encode_gvariant_string, encode_gvariant_strv, nmcli_result, normalize_proxy_mode,
+        parse_active_connection, parse_general_status, parse_gsettings_i32, parse_gsettings_string,
+        parse_gsettings_strv, parse_wifi_list, proxy_settings_values, sanitize_connect_error,
+        split_terse, ssid_looks_like_option, validate_proxy_settings, ActiveConnection, NmcliError,
+        ProxyEndpointRequest, ProxyKey, SetProxySettingsRequest, FTP_PROXY_SCHEMA,
+        HTTPS_PROXY_SCHEMA, HTTP_PROXY_SCHEMA, NETWORK_TIMEOUT_DETAIL, PROXY_SCHEMA,
+        SOCKS_PROXY_SCHEMA,
     };
     use crate::bounded::BoundedCommandError;
 
@@ -879,5 +1490,138 @@ mod tests {
             vec!["localhost", "127.0.0.0/8", "::1"]
         );
         assert!(parse_gsettings_strv("@as []").is_empty());
+    }
+
+    fn proxy_request(mode: &str) -> SetProxySettingsRequest {
+        SetProxySettingsRequest {
+            mode: mode.to_string(),
+            autoconfig_url: Some("https://proxy.example/proxy.pac".to_string()),
+            ignore_hosts: vec!["localhost".to_string(), "127.0.0.0/8".to_string()],
+            http: ProxyEndpointRequest {
+                host: Some("proxy.example".to_string()),
+                port: Some(8080),
+            },
+            https: ProxyEndpointRequest {
+                host: Some("2001:db8::10".to_string()),
+                port: Some(8443),
+            },
+            ftp: ProxyEndpointRequest {
+                host: None,
+                port: None,
+            },
+            socks: ProxyEndpointRequest {
+                host: None,
+                port: None,
+            },
+        }
+    }
+
+    #[test]
+    fn proxy_editor_validates_the_complete_request_before_writes() {
+        let automatic = validate_proxy_settings(proxy_request("auto")).unwrap();
+        assert_eq!(automatic.mode, "auto");
+        assert_eq!(automatic.http.port, 8080);
+        assert_eq!(automatic.https.host, "2001:db8::10");
+
+        let mut missing_port = proxy_request("manual");
+        missing_port.http.port = None;
+        assert!(validate_proxy_settings(missing_port)
+            .unwrap_err()
+            .contains("HTTP proxy needs a port"));
+
+        let mut secret_url = proxy_request("auto");
+        secret_url.autoconfig_url = Some("https://user:secret@proxy.example/proxy.pac".to_string());
+        assert!(validate_proxy_settings(secret_url)
+            .unwrap_err()
+            .contains("credentials or query secrets"));
+
+        let mut duplicate_bypass = proxy_request("manual");
+        duplicate_bypass.ignore_hosts = vec!["localhost".to_string(), "LOCALHOST".to_string()];
+        assert!(validate_proxy_settings(duplicate_bypass)
+            .unwrap_err()
+            .contains("listed more than once"));
+    }
+
+    #[test]
+    fn automatic_and_manual_modes_require_an_usable_configuration() {
+        let mut automatic = proxy_request("auto");
+        automatic.autoconfig_url = None;
+        assert!(validate_proxy_settings(automatic)
+            .unwrap_err()
+            .contains("Automatic mode requires"));
+
+        let mut manual = proxy_request("manual");
+        manual.http = ProxyEndpointRequest {
+            host: None,
+            port: None,
+        };
+        manual.https = manual.http.clone();
+        assert!(validate_proxy_settings(manual)
+            .unwrap_err()
+            .contains("Manual mode requires"));
+    }
+
+    #[test]
+    fn proxy_gvariant_encoding_escapes_strings_and_arrays() {
+        assert_eq!(
+            encode_gvariant_string("proxy\\branch's host"),
+            "'proxy\\\\branch\\'s host'"
+        );
+        assert_eq!(
+            encode_gvariant_strv(&["localhost".to_string(), "branch's host".to_string()]),
+            "['localhost', 'branch\\'s host']"
+        );
+    }
+
+    #[test]
+    fn proxy_key_allowlist_is_exact_and_excludes_authentication() {
+        let matrix = [
+            (ProxyKey::Mode, PROXY_SCHEMA, "mode"),
+            (ProxyKey::AutoconfigUrl, PROXY_SCHEMA, "autoconfig-url"),
+            (ProxyKey::IgnoreHosts, PROXY_SCHEMA, "ignore-hosts"),
+            (ProxyKey::HttpHost, HTTP_PROXY_SCHEMA, "host"),
+            (ProxyKey::HttpPort, HTTP_PROXY_SCHEMA, "port"),
+            (ProxyKey::HttpsHost, HTTPS_PROXY_SCHEMA, "host"),
+            (ProxyKey::HttpsPort, HTTPS_PROXY_SCHEMA, "port"),
+            (ProxyKey::FtpHost, FTP_PROXY_SCHEMA, "host"),
+            (ProxyKey::FtpPort, FTP_PROXY_SCHEMA, "port"),
+            (ProxyKey::SocksHost, SOCKS_PROXY_SCHEMA, "host"),
+            (ProxyKey::SocksPort, SOCKS_PROXY_SCHEMA, "port"),
+        ];
+        for (key, schema, name) in matrix {
+            assert_eq!(key.schema(), schema);
+            assert_eq!(key.key(), name);
+            assert_ne!(name, "authentication-user");
+            assert_ne!(name, "authentication-password");
+            assert_ne!(name, "use-authentication");
+        }
+    }
+
+    #[test]
+    fn proxy_write_plan_contains_only_the_allowlisted_non_secret_fields() {
+        let settings = validate_proxy_settings(proxy_request("manual")).unwrap();
+        let values = proxy_settings_values(&settings);
+        assert_eq!(values.len(), 11);
+        assert!(values.iter().all(|(key, value)| {
+            !key.key().contains("authentication")
+                && !value.contains("password")
+                && !value.contains("secret")
+        }));
+    }
+
+    #[test]
+    fn proxy_request_rejects_unknown_or_credential_fields() {
+        let unknown = serde_json::from_str::<SetProxySettingsRequest>(
+            r#"{
+                "mode":"none",
+                "autoconfig_url":null,
+                "ignore_hosts":[],
+                "http":{"host":null,"port":null,"password":"secret"},
+                "https":{"host":null,"port":null},
+                "ftp":{"host":null,"port":null},
+                "socks":{"host":null,"port":null}
+            }"#,
+        );
+        assert!(unknown.is_err());
     }
 }

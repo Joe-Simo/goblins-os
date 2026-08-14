@@ -141,6 +141,16 @@ EXPECTED_READY_SHOTS = (
     "30-preview-image-open",
     "31-text-shortcuts-candidate-bubble-render",
     "32-text-shortcuts-live-ibus-runtime-render",
+    "33-accessibility-text-scaling",
+    "34-accessibility-high-contrast",
+    "35-accessibility-reduced-transparency",
+    "36-accessibility-reduced-motion",
+    "37-accessibility-localization-expansion",
+    "38-accessibility-orca-atspi",
+    "39-accessibility-keyboard-focus",
+    "40-accessibility-window-resize",
+    "41-hosted-context-review",
+    "42-hosted-context-review-dark",
 )
 REQUIRED_PROOFS = (
     "firewall-live-toggle",
@@ -160,6 +170,7 @@ REQUIRED_PROOFS = (
     "preview-open-render",
     "audio-output",
     "runtime-build",
+    "accessibility-adaptivity",
 )
 PROOF_FILENAMES = {
     "firewall-live-toggle": "firewall-live-toggle-proof.json",
@@ -179,6 +190,7 @@ PROOF_FILENAMES = {
     "preview-open-render": "preview-open-render-proof.json",
     "audio-output": "audio-output-proof.json",
     "runtime-build": "runtime-build-proof.json",
+    "accessibility-adaptivity": "accessibility-adaptivity-proof.json",
 }
 
 HTTP_MAX_REQUEST_BYTES = 12 * 1024
@@ -558,6 +570,9 @@ def _run_event_receiver():
     helpers = {
         "/firstboot-unlock.sh": os.environ["GOS_CAPTURE_FIRSTBOOT_HELPER"],
         "/core-proof-operation.sh": os.environ["GOS_CAPTURE_CORE_PROOF_HELPER"],
+        "/accessibility-adaptivity-proof.sh": os.environ[
+            "GOS_CAPTURE_ACCESSIBILITY_PROOF_HELPER"
+        ],
         "/orchestrator.sh": os.environ["GOS_ORCHESTRATOR_DEST"],
     }
     store = CaptureEventStore(event_path)

@@ -11,7 +11,7 @@ zerombr
 clearpart --all --initlabel --disklabel=gpt --drives=vda
 bootloader --location=mbr --boot-drive=vda
 reqpart --add-boot
-part / --fstype=xfs --label=root --grow --size=1024 --ondisk=vda
+part / --fstype=btrfs --label=root --grow --size=1024 --ondisk=vda
 lang en_US.UTF-8
 keyboard us
 timezone --utc Etc/UTC

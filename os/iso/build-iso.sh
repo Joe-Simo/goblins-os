@@ -11,26 +11,22 @@
 # Usage:
 #   os/iso/build-iso.sh
 # Env overrides:
-#   GOBLINS_OS_ARCH   target architecture: aarch64 or x86_64 (default host arch)
-#   GOBLINS_OS_IMAGE   container image to install (default localhost/goblins-os:<arch>)
-#   GOBLINS_OS_ROOTFS  installed root filesystem  (default xfs, matching the
+#   GOBLINS_OS_ARCH   target architecture: aarch64 (default host arch)
+#   GOBLINS_OS_IMAGE   container image to install (default localhost/goblins-os:aarch64)
+#   GOBLINS_OS_ROOTFS  installed root filesystem  (default btrfs, matching the
 #                      bootc install config in os/bootc-install/00-goblins-os.toml)
 #   GOBLINS_OS_ISO_CONFIG
 #                      bootc-image-builder config path (default os/iso/config.toml).
 #                      Hardware proof jobs use os/iso/verify-config.toml; release
 #                      media must keep the default interactive config.
-#   OUTDIR             output directory           (default os/iso/output/<arch>)
+#   OUTDIR             output directory           (default os/iso/output/aarch64)
 #   BIB_IMAGE          digest-pinned bootc-image-builder image (default the
-#                      reviewed multi-architecture digest below)
+#                      reviewed image digest below)
 #   GOBLINS_OS_CONTAINER_RUNTIME
 #                      docker (default docker)
-#   GOBLINS_OS_ALLOW_EMULATED_DOCKER
-#                      set 1 to allow a Docker engine whose architecture differs
-#                      from GOBLINS_OS_ARCH; native matching remains the default
-#                      for release media.
 #   GOBLINS_OS_DOCKER_PLATFORM
-#                      Docker platform for non-release Docker artifact testing
-#                      (default linux/arm64 for aarch64, linux/amd64 for x86_64)
+#                      Docker platform selector; must resolve to linux/arm64
+#                      (default linux/arm64)
 #   GOBLINS_OS_DOCKER_REGISTRY_PORT
 #                      local registry port for Docker BIB handoff (default 5002)
 #   GOBLINS_OS_DOCKER_REGISTRY_NAME
@@ -59,7 +55,13 @@
 #                      avoids exporting the full bootc image into the local Docker
 #                      daemon on constrained CI runners.
 #   GOBLINS_OS_SHIPPABLE_RELEASE
-#                      set 1 to fail if the BIB source image is local/test-only
+#                      set 1 to require release-grade source images and the
+#                      protected-publisher ARM64 branding-tool evidence record
+#   GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE
+#                      path to the exact protected-publisher JSON evidence for
+#                      the digest in GOBLINS_OS_INSTALLER_BRANDING_IMAGE;
+#                      required when GOBLINS_OS_SHIPPABLE_RELEASE=1 and bounded
+#                      to 32 KiB so its base64 workflow input stays bounded
 #   GOBLINS_OS_CANDIDATE_COMMIT
 #                      exact 40-hex source commit used for this image and ISO;
 #                      required for every artifact, including non-release tests
@@ -78,10 +80,11 @@ case "$CONFIG_LABEL" in
   "$REPO_ROOT"/*) CONFIG_LABEL="${CONFIG_LABEL#"$REPO_ROOT/"}" ;;
 esac
 BIB="${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b}"
-INSTALLER_BRANDING_IMAGE="${GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:a5b2be1ce90514f1e4d1447bcd6eb6af51ea98644bc310c58ce649a7550e39c0}"
-ROOTFS="${GOBLINS_OS_ROOTFS:-xfs}"
+INSTALLER_BRANDING_IMAGE_OVERRIDE="${GOBLINS_OS_INSTALLER_BRANDING_IMAGE:-}"
+INSTALLER_BRANDING_IMAGE="${INSTALLER_BRANDING_IMAGE_OVERRIDE:-ghcr.io/joe-simo/goblins-os-installer-branding-tool@sha256:4483609aa40e0b8f16e56becda876468309345fadf1b43572ddabfc556382205}"
+INSTALLER_BRANDING_PUBLISHER_EVIDENCE="${GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE:-}"
+ROOTFS="${GOBLINS_OS_ROOTFS:-btrfs}"
 CONTAINER_RUNTIME="${GOBLINS_OS_CONTAINER_RUNTIME:-docker}"
-ALLOW_EMULATED_DOCKER="${GOBLINS_OS_ALLOW_EMULATED_DOCKER:-0}"
 DOCKER_REGISTRY_PORT="${GOBLINS_OS_DOCKER_REGISTRY_PORT:-5002}"
 DOCKER_REGISTRY_NAME="${GOBLINS_OS_DOCKER_REGISTRY_NAME:-goblins-os-registry}"
 DOCKER_REGISTRY_NETWORK="${GOBLINS_OS_DOCKER_REGISTRY_NETWORK:-goblins-os-bib-$DOCKER_REGISTRY_PORT}"
@@ -97,13 +100,22 @@ BIB_SOURCE_IMAGE_USED=""
 BIB_SOURCE_KIND=""
 BIB_SOURCE_LOCAL_ONLY="false"
 INSTALLER_BRANDING_APPLIED="false"
+INSTALLER_BRANDING_PROVENANCE_KIND="schema-1-bootstrap-diagnostic"
+INSTALLER_BRANDING_PUBLISHER_EVIDENCE_SHA256=""
+INSTALLER_BRANDING_SOURCE_COMMIT=""
+INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN=""
+INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN_ATTEMPT="0"
+INSTALLER_BRANDING_PUBLISHER_WORKFLOW_COMMIT=""
+INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN=""
+INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN_ATTEMPT="0"
+INSTALLER_BRANDING_HANDOFF_SHA256=""
+INSTALLER_BRANDING_ENVELOPE_SHA256=""
+INSTALLER_BRANDING_OCI_ARCHIVE_SHA256=""
 DOCKER_PLATFORM=""
-DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS="${GOBLINS_OS_DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS:-20}"
 
 normalize_arch() {
   case "$1" in
     aarch64|arm64) echo "aarch64" ;;
-    x86_64|amd64) echo "x86_64" ;;
     *) echo "unsupported" ;;
   esac
 }
@@ -111,7 +123,6 @@ normalize_arch() {
 docker_platform_for_arch() {
   case "$1" in
     aarch64) echo "linux/arm64" ;;
-    x86_64) echo "linux/amd64" ;;
     *)
       echo "error: unsupported architecture for Docker platform: $1" >&2
       exit 1
@@ -122,7 +133,6 @@ docker_platform_for_arch() {
 arch_for_docker_platform() {
   case "$1" in
     linux/arm64|linux/aarch64) echo "aarch64" ;;
-    linux/amd64|linux/x86_64) echo "x86_64" ;;
     *)
       echo "unsupported"
       ;;
@@ -136,6 +146,266 @@ require_command() {
     exit 1
   fi
 }
+
+sha256_digest() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "error: no sha256sum or shasum command available." >&2
+    exit 1
+  fi
+}
+
+require_shippable_branding_publisher_evidence() {
+  local evidence_path="$INSTALLER_BRANDING_PUBLISHER_EVIDENCE"
+  local evidence_size evidence_sha fields
+
+  if [ "$SHIPPABLE_RELEASE" != "1" ]; then
+    return 0
+  fi
+  if [ -z "$INSTALLER_BRANDING_IMAGE_OVERRIDE" ]; then
+    echo "error: shippable release media requires an explicit GOBLINS_OS_INSTALLER_BRANDING_IMAGE selected from protected-publisher evidence." >&2
+    exit 1
+  fi
+  if [ -z "$evidence_path" ]; then
+    echo "error: shippable release media requires GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE." >&2
+    echo "       The checked-in schema-1 installer-branding-tool.toml is bootstrap/diagnostic history, not promotion evidence." >&2
+    exit 1
+  fi
+  case "$evidence_path" in
+    /*) ;;
+    *) evidence_path="$REPO_ROOT/$evidence_path" ;;
+  esac
+  if [ ! -f "$evidence_path" ] || [ -L "$evidence_path" ]; then
+    echo "error: protected-publisher branding evidence must be a regular non-symlink file: $evidence_path" >&2
+    exit 1
+  fi
+  evidence_size="$(wc -c < "$evidence_path" | tr -d '[:space:]')"
+  if [[ ! "$evidence_size" =~ ^[1-9][0-9]*$ ]] || [ "$evidence_size" -gt 32768 ]; then
+    echo "error: protected-publisher branding evidence must contain 1 through 32768 bytes." >&2
+    exit 1
+  fi
+  require_command python3
+  evidence_sha="$(sha256_digest "$evidence_path")"
+  fields="$(python3 - "$evidence_path" "$INSTALLER_BRANDING_IMAGE" "$REPO_ROOT/os/iso/branding-tool.Containerfile" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+
+evidence_path = Path(sys.argv[1])
+expected_ref = sys.argv[2]
+containerfile_path = Path(sys.argv[3])
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+def exact_keys(value, expected, label):
+    if not isinstance(value, dict) or set(value) != set(expected):
+        raise ValueError(f"{label} key set is not exact")
+
+def positive_int(value, label):
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{label} must be a positive integer")
+
+try:
+    record = json.loads(
+        evidence_path.read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+    )
+except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+    raise SystemExit(f"error: invalid protected-publisher branding evidence: {error}")
+
+try:
+    exact_keys(record, {
+        "schema", "product", "architecture", "oci_architecture",
+        "source_repository", "source_workflow", "source_handoff", "publisher",
+        "published_image", "verification", "source_repository_publish_authority",
+        "non_promotional",
+    }, "publisher evidence")
+    if record["schema"] != "goblins-os-installer-branding-tool-publisher-evidence-v1":
+        raise ValueError("publisher evidence schema is not supported")
+    if record["product"] != "Goblins OS installer branding tool":
+        raise ValueError("publisher evidence product is not exact")
+    if record["architecture"] != "aarch64" or record["oci_architecture"] != "arm64":
+        raise ValueError("publisher evidence is not ARM64-only")
+    if record["source_repository"] != "https://github.com/Joe-Simo/goblins-os":
+        raise ValueError("publisher evidence source repository is not exact")
+    if record["source_repository_publish_authority"] is not False or record["non_promotional"] is not True:
+        raise ValueError("publisher evidence changes the non-promotional source boundary")
+
+    source = record["source_workflow"]
+    exact_keys(source, {
+        "path", "run", "run_id", "run_attempt", "source_commit",
+        "metadata_artifact", "payload_artifacts",
+    }, "source workflow")
+    commit = source["source_commit"]
+    if re.fullmatch(r"[0-9a-f]{40}", commit or "") is None:
+        raise ValueError("branding source commit is not exact lowercase 40-hex")
+    positive_int(source["run_id"], "source workflow run ID")
+    positive_int(source["run_attempt"], "source workflow run attempt")
+    expected_source_run = f"https://github.com/Joe-Simo/goblins-os/actions/runs/{source['run_id']}"
+    if source["path"] != ".github/workflows/branding-tool-image.yml" or source["run"] != expected_source_run:
+        raise ValueError("source workflow identity is not exact")
+
+    artifact_keys = {"name", "id", "digest", "size_in_bytes"}
+    metadata = source["metadata_artifact"]
+    exact_keys(metadata, artifact_keys, "metadata artifact")
+    source_attempt = source["run_attempt"]
+    if metadata["name"] != f"goblins-os-branding-tool-oci-{commit}-aarch64-attempt-{source_attempt}-metadata":
+        raise ValueError("metadata artifact name is not exact")
+    artifacts = source["payload_artifacts"]
+    if not isinstance(artifacts, list) or len(artifacts) != 4:
+        raise ValueError("source workflow must bind exactly four payload artifacts")
+    seen_suffixes = set()
+    for artifact in artifacts:
+        exact_keys(artifact, artifact_keys | {"suffix"}, "payload artifact")
+        suffix = artifact["suffix"]
+        if suffix not in {"00", "01", "02", "03"} or suffix in seen_suffixes:
+            raise ValueError("payload artifact suffix set is not exact")
+        seen_suffixes.add(suffix)
+        if artifact["name"] != f"goblins-os-branding-tool-oci-{commit}-aarch64-attempt-{source_attempt}-part-{suffix}":
+            raise ValueError("payload artifact name is not exact")
+    for artifact in [metadata, *artifacts]:
+        positive_int(artifact["id"], "Actions artifact ID")
+        positive_int(artifact["size_in_bytes"], "Actions artifact size")
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["digest"] or "") is None:
+            raise ValueError("Actions artifact digest is not exact")
+
+    handoff = record["source_handoff"]
+    exact_keys(handoff, {
+        "schema", "envelope_schema", "handoff_sha256", "envelope_sha256",
+        "checksums_sha256", "rpm_inventory_sha256", "rpm_package_count",
+        "oci_archive_sha256", "oci_archive_size_bytes", "oci_image_digest",
+        "intended_immutable_image_ref", "base_image", "containerfile_sha256",
+    }, "source handoff")
+    if handoff["schema"] != "goblins-os-installer-branding-tool-handoff-v1":
+        raise ValueError("source handoff schema is not exact")
+    if handoff["envelope_schema"] != "goblins-os-actions-artifact-envelope-v1":
+        raise ValueError("source envelope schema is not exact")
+    for key in (
+        "handoff_sha256", "envelope_sha256", "checksums_sha256",
+        "rpm_inventory_sha256", "oci_archive_sha256", "containerfile_sha256",
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", handoff[key] or "") is None:
+            raise ValueError(f"{key} is not exact SHA-256")
+    positive_int(handoff["rpm_package_count"], "RPM package count")
+    positive_int(handoff["oci_archive_size_bytes"], "OCI archive size")
+    if handoff["oci_archive_size_bytes"] > 34359738368:
+        raise ValueError("OCI archive exceeds the source handoff bound")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", handoff["oci_image_digest"] or "") is None:
+        raise ValueError("OCI image digest is not exact")
+    if handoff["intended_immutable_image_ref"] != expected_ref:
+        raise ValueError("publisher evidence does not match GOBLINS_OS_INSTALLER_BRANDING_IMAGE")
+    if expected_ref.rsplit("@", 1)[-1] != handoff["oci_image_digest"]:
+        raise ValueError("branding image ref does not preserve the source OCI digest")
+
+    publisher = record["publisher"]
+    exact_keys(publisher, {
+        "repository", "workflow_path", "workflow_commit", "run", "run_id",
+        "run_attempt", "environment", "native_runner",
+    }, "publisher")
+    if re.fullmatch(r"[0-9a-f]{40}", publisher["workflow_commit"] or "") is None:
+        raise ValueError("publisher workflow commit is not exact lowercase 40-hex")
+    positive_int(publisher["run_id"], "publisher workflow run ID")
+    positive_int(publisher["run_attempt"], "publisher workflow run attempt")
+    expected_publisher_run = f"https://github.com/Joe-Simo/goblins-os-publisher/actions/runs/{publisher['run_id']}"
+    if publisher != {
+        "repository": "Joe-Simo/goblins-os-publisher",
+        "workflow_path": ".github/workflows/publish-branding-tool-aarch64.yml",
+        "workflow_commit": publisher["workflow_commit"],
+        "run": expected_publisher_run,
+        "run_id": publisher["run_id"],
+        "run_attempt": publisher["run_attempt"],
+        "environment": "candidate",
+        "native_runner": "aarch64",
+    }:
+        raise ValueError("protected publisher identity is not exact")
+
+    published = record["published_image"]
+    exact_keys(published, {
+        "immutable_ref", "manifest_digest", "digest_preserved",
+        "public_readback_verified", "os", "architecture", "revision", "base_image",
+        "containerfile_sha256", "rpm_inventory_sha256", "rpm_package_count",
+    }, "published image")
+    if published["immutable_ref"] != expected_ref or published["manifest_digest"] != handoff["oci_image_digest"]:
+        raise ValueError("published branding image does not preserve the source digest")
+    if published["digest_preserved"] is not True or published["public_readback_verified"] is not True:
+        raise ValueError("published branding image lacks digest-preserving public read-back")
+    if published["os"] != "linux" or published["architecture"] != "arm64" or published["revision"] != commit:
+        raise ValueError("published branding image identity is not exact native ARM64")
+    for key in ("base_image", "containerfile_sha256", "rpm_inventory_sha256", "rpm_package_count"):
+        if published[key] != handoff[key]:
+            raise ValueError(f"published branding image changes {key}")
+
+    verification = record["verification"]
+    exact_keys(verification, {
+        "source_run_authenticated", "metadata_artifact_digest_verified",
+        "payload_artifact_digests_verified", "ordered_parts_verified",
+        "oci_archive_verified", "required_tools_verified", "public_manifest_verified",
+    }, "publisher verification")
+    if any(value is not True for value in verification.values()):
+        raise ValueError("protected publisher verification is incomplete")
+
+    containerfile = containerfile_path.read_bytes()
+    if hashlib.sha256(containerfile).hexdigest() != handoff["containerfile_sha256"]:
+        raise ValueError("branding Containerfile differs from publisher evidence")
+    base_line = f"ARG FEDORA_IMAGE={handoff['base_image']}\n".encode()
+    if base_line not in containerfile:
+        raise ValueError("branding base image differs from publisher evidence")
+except (KeyError, TypeError, ValueError) as error:
+    raise SystemExit(f"error: protected-publisher branding evidence failed: {error}")
+
+print("\t".join((
+    commit,
+    source["run"],
+    str(source["run_attempt"]),
+    publisher["workflow_commit"],
+    publisher["run"],
+    str(publisher["run_attempt"]),
+    handoff["handoff_sha256"],
+    handoff["envelope_sha256"],
+    handoff["oci_archive_sha256"],
+    published["immutable_ref"],
+)))
+PY
+)" || exit 1
+  IFS=$'\t' read -r \
+    INSTALLER_BRANDING_SOURCE_COMMIT \
+    INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN \
+    INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN_ATTEMPT \
+    INSTALLER_BRANDING_PUBLISHER_WORKFLOW_COMMIT \
+    INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN \
+    INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN_ATTEMPT \
+    INSTALLER_BRANDING_HANDOFF_SHA256 \
+    INSTALLER_BRANDING_ENVELOPE_SHA256 \
+    INSTALLER_BRANDING_OCI_ARCHIVE_SHA256 \
+    evidence_image_ref <<< "$fields"
+  if [ "$evidence_image_ref" != "$INSTALLER_BRANDING_IMAGE" ]; then
+    echo "error: protected-publisher evidence parser returned a different branding image." >&2
+    exit 1
+  fi
+  if [ "$evidence_sha" != "$(sha256_digest "$evidence_path")" ]; then
+    echo "error: protected-publisher branding evidence changed while it was being verified." >&2
+    exit 1
+  fi
+  INSTALLER_BRANDING_PUBLISHER_EVIDENCE="$evidence_path"
+  INSTALLER_BRANDING_PUBLISHER_EVIDENCE_SHA256="$evidence_sha"
+  INSTALLER_BRANDING_PROVENANCE_KIND="protected-publisher-evidence-v1"
+}
+
+# Release mode must prove the branding helper before host, runtime, output, or
+# media setup. The truthful legacy schema-1 record remains only a bootstrap and
+# non-release diagnostic pin; it can never authorize shippable media.
+require_shippable_branding_publisher_evidence
 
 require_docker_dns_label() {
   local label="$1"
@@ -322,6 +592,41 @@ require_shippable_source_ref() {
   fi
 }
 
+verify_shippable_candidate_image() {
+  local ref="$1"
+  local actual_arch actual_os actual_revision
+
+  if [ "$SHIPPABLE_RELEASE" != "1" ]; then
+    return 0
+  fi
+  case "$ref" in
+    ghcr.io/joe-simo/goblins-os@sha256:*) ;;
+    *)
+      echo "error: shippable release media requires the approved ghcr.io/joe-simo/goblins-os image repository." >&2
+      exit 1
+      ;;
+  esac
+  if [ "$IMAGE" != "$ref" ]; then
+    echo "error: GOBLINS_OS_IMAGE and GOBLINS_OS_BIB_SOURCE_IMAGE must name the same immutable candidate image." >&2
+    exit 1
+  fi
+
+  echo "==> Pulling and verifying the exact shippable ARM64 candidate image"
+  docker pull --platform "$DOCKER_PLATFORM" "$ref"
+  actual_os="$(docker image inspect --format '{{.Os}}' "$ref")"
+  actual_arch="$(normalize_arch "$(docker image inspect --format '{{.Architecture}}' "$ref")")"
+  actual_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ref")"
+  actual_revision="$(printf '%s' "$actual_revision" | tr '[:upper:]' '[:lower:]')"
+  if [ "$actual_os" != "linux" ] || [ "$actual_arch" != "$ARCH" ]; then
+    echo "error: shippable candidate image must be linux/$ARCH; got $actual_os/$actual_arch." >&2
+    exit 1
+  fi
+  if [ "$actual_revision" != "$CANDIDATE_COMMIT" ]; then
+    echo "error: shippable candidate image revision $actual_revision does not match selected commit $CANDIDATE_COMMIT." >&2
+    exit 1
+  fi
+}
+
 require_shippable_tool_ref() {
   local label="$1"
   local ref="$2"
@@ -347,45 +652,6 @@ require_shippable_branding_tool_ref() {
   esac
 }
 
-verify_docker_emulation_runtime() {
-  local name output pid i status
-
-  if [ "$ARCH" = "$RUNTIME_ARCH" ]; then
-    return 0
-  fi
-
-  name="goblins-os-rustc-$ARCH-preflight-$$"
-  output="${TMPDIR:-/tmp}/$name.log"
-  rm -f "$output"
-  docker rm -f "$name" >/dev/null 2>&1 || true
-
-  echo "==> Checking Docker $DOCKER_PLATFORM emulation can run the Rust toolchain"
-  (docker run --rm --name "$name" --platform "$DOCKER_PLATFORM" rust:1.88 rustc -Vv >"$output" 2>&1) &
-  pid=$!
-  for i in $(seq 1 "$DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS"); do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      status=0
-      wait "$pid" || status=$?
-      if [ "$status" -ne 0 ]; then
-        cat "$output" >&2 || true
-        echo "error: Docker $DOCKER_PLATFORM emulation cannot run rustc; use a native $ARCH runner for release artifacts or fix the host emulation backend before local artifact testing." >&2
-        exit 1
-      fi
-      rm -f "$output"
-      return 0
-    fi
-    sleep 1
-  done
-
-  docker rm -f "$name" >/dev/null 2>&1 || true
-  kill "$pid" >/dev/null 2>&1 || true
-  wait "$pid" >/dev/null 2>&1 || true
-  cat "$output" >&2 || true
-  rm -f "$output"
-  echo "error: Docker $DOCKER_PLATFORM emulation preflight timed out after ${DOCKER_EMULATION_PREFLIGHT_TIMEOUT_SECS}s; use a native $ARCH runner for release artifacts or fix the host emulation backend before local artifact testing." >&2
-  exit 1
-}
-
 docker_engine_arch() {
   local arch
 
@@ -398,32 +664,40 @@ docker_engine_arch() {
   normalize_arch "$arch"
 }
 
+HOST_OS="$(uname -s)"
 HOST_ARCH="$(normalize_arch "$(uname -m)")"
+ARCH="$(normalize_arch "${GOBLINS_OS_ARCH:-$HOST_ARCH}")"
+if [ "$ARCH" = "unsupported" ]; then
+  echo "error: unsupported GOBLINS_OS_ARCH='${GOBLINS_OS_ARCH:-$(uname -m)}'; expected aarch64." >&2
+  exit 1
+fi
+if [ "$HOST_ARCH" = "unsupported" ]; then
+  echo "error: Goblins OS ARM64 media requires a native aarch64 host; got $(uname -m)." >&2
+  exit 1
+fi
+if [ "${GOBLINS_OS_ALLOW_EMULATED_DOCKER:-0}" != "0" ]; then
+  echo "error: GOBLINS_OS_ALLOW_EMULATED_DOCKER is not supported; use a native aarch64 host and container engine." >&2
+  exit 1
+fi
+unset GOBLINS_OS_ALLOW_EMULATED_DOCKER
 if [ "$CONTAINER_RUNTIME" != "docker" ]; then
   echo "error: unsupported GOBLINS_OS_CONTAINER_RUNTIME='$CONTAINER_RUNTIME'; expected docker." >&2
   exit 1
 fi
 RUNTIME_ARCH="$(docker_engine_arch)"
 
-ARCH="$(normalize_arch "${GOBLINS_OS_ARCH:-$RUNTIME_ARCH}")"
-if [ "$ARCH" = "unsupported" ]; then
-  echo "error: unsupported GOBLINS_OS_ARCH='${GOBLINS_OS_ARCH:-$(uname -m)}'; expected aarch64 or x86_64." >&2
-  exit 1
-fi
 if [ "$RUNTIME_ARCH" = "unsupported" ]; then
-  echo "error: unsupported $CONTAINER_RUNTIME engine architecture; expected native aarch64 or x86_64." >&2
+  echo "error: unsupported $CONTAINER_RUNTIME engine architecture; expected native aarch64." >&2
   exit 1
 fi
-if [ "$ARCH" != "$RUNTIME_ARCH" ] && [ "$ALLOW_EMULATED_DOCKER" != "1" ]; then
+if [ "$ARCH" != "$RUNTIME_ARCH" ]; then
   echo "error: requested $ARCH ISO on $RUNTIME_ARCH Docker engine." >&2
-  echo "       Goblins OS release media must be built on a native $ARCH container engine." >&2
-  echo "       For non-release Docker experiments only, set GOBLINS_OS_ALLOW_EMULATED_DOCKER=1." >&2
+  echo "       Goblins OS ARM64 media requires a native $ARCH container engine." >&2
   exit 1
 fi
-if [ "$SHIPPABLE_RELEASE" = "1" ] \
-  && { [ "$ARCH" != "$HOST_ARCH" ] || [ "$ARCH" != "$RUNTIME_ARCH" ]; }; then
-  echo "error: shippable $ARCH media requires a native $ARCH host and container engine (host=$HOST_ARCH engine=$RUNTIME_ARCH)" >&2
-  echo "       Emulated Docker builds are restricted to GOBLINS_OS_SHIPPABLE_RELEASE=0 experiments." >&2
+if [ "$SHIPPABLE_RELEASE" = "1" ] && [ "$HOST_OS" != "Linux" ]; then
+  echo "error: shippable $ARCH media requires a native aarch64 Linux host; got $HOST_OS/$HOST_ARCH." >&2
+  echo "       macOS ARM64 builds are diagnostic artifacts, not release packaging authority." >&2
   exit 1
 fi
 DOCKER_PLATFORM="${GOBLINS_OS_DOCKER_PLATFORM:-$(docker_platform_for_arch "$ARCH")}"
@@ -476,7 +750,8 @@ brand_installer() {
   echo "==> Branding the Anaconda installer (Goblins sidebar/logo/accent)"
   docker run --rm --pull=missing \
     --platform "$DOCKER_PLATFORM" \
-    -v "$REPO_ROOT/os/brand/anaconda":/brand:ro \
+    -v "$REPO_ROOT/os/brand":/brand:ro \
+    -v "$REPO_ROOT/os/icons/GoblinsOS/scalable/apps":/installer-icons:ro \
     -v "$REPO_ROOT/os/iso":/scripts:ro \
     -v "$dir":/iso:ro \
     -v "$dir":/work \
@@ -499,6 +774,8 @@ finalize_outputs() {
   local source_iso="$1"
   local source_manifest="$2"
   local iso_count
+  local branding_evidence_name=""
+  local branding_evidence_output="$OUTDIR/installer-branding-publisher-evidence.json"
 
   [ -s "$source_iso" ] || {
     echo "error: bootc-image-builder did not produce the exact expected bootiso/install.iso" >&2
@@ -519,11 +796,22 @@ finalize_outputs() {
   # Replace Fedora's Anaconda chrome with the Goblins identity before sealing the
   # checksum, so the shipped ISO's installer carries zero Fedora branding.
   brand_installer "$ISO_PATH"
+  if [ "$SHIPPABLE_RELEASE" = "1" ]; then
+    if [ "$INSTALLER_BRANDING_PUBLISHER_EVIDENCE" != "$branding_evidence_output" ]; then
+      cp "$INSTALLER_BRANDING_PUBLISHER_EVIDENCE" "$branding_evidence_output"
+    fi
+    if [ "$INSTALLER_BRANDING_PUBLISHER_EVIDENCE_SHA256" != "$(sha256_digest "$branding_evidence_output")" ]; then
+      echo "error: copied protected-publisher branding evidence does not match its verified SHA-256." >&2
+      exit 1
+    fi
+    branding_evidence_name="installer-branding-publisher-evidence.json"
+  fi
   # Emit a portable, basename-relative checksum so no machine-specific absolute
   # path is baked into a shipping artifact; verify with `cd <dir> && sha256sum -c`.
   (cd "$(dirname "$ISO_PATH")" && sha256_file "$(basename "$ISO_PATH")") > "$SHA_PATH"
   cat > "$MANIFEST_PATH" <<EOF
 {
+  "schema": "goblins-os-iso-build-manifest-v2",
   "product": "Goblins OS",
   "architecture": "$ARCH",
   "candidate_commit": "$CANDIDATE_COMMIT",
@@ -533,6 +821,7 @@ finalize_outputs() {
   "iso": "bootiso/$ISO_NAME",
   "sha256_file": "bootiso/$ISO_NAME.sha256",
   "built_on": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "native_host_os": "$HOST_OS",
   "native_host_arch": "$HOST_ARCH",
   "container_engine_arch": "$RUNTIME_ARCH",
   "docker_platform": "$DOCKER_PLATFORM",
@@ -540,6 +829,18 @@ finalize_outputs() {
   "installer_branding_applied": $INSTALLER_BRANDING_APPLIED,
   "installer_branding_image": "$INSTALLER_BRANDING_IMAGE",
   "installer_branding_ownership_helper_image": "$INSTALLER_BRANDING_IMAGE",
+  "installer_branding_provenance_kind": "$INSTALLER_BRANDING_PROVENANCE_KIND",
+  "installer_branding_publisher_evidence": "$branding_evidence_name",
+  "installer_branding_publisher_evidence_sha256": "$INSTALLER_BRANDING_PUBLISHER_EVIDENCE_SHA256",
+  "installer_branding_source_commit": "$INSTALLER_BRANDING_SOURCE_COMMIT",
+  "installer_branding_source_workflow_run": "$INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN",
+  "installer_branding_source_workflow_run_attempt": $INSTALLER_BRANDING_SOURCE_WORKFLOW_RUN_ATTEMPT,
+  "installer_branding_publisher_workflow_commit": "$INSTALLER_BRANDING_PUBLISHER_WORKFLOW_COMMIT",
+  "installer_branding_publisher_workflow_run": "$INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN",
+  "installer_branding_publisher_workflow_run_attempt": $INSTALLER_BRANDING_PUBLISHER_WORKFLOW_RUN_ATTEMPT,
+  "installer_branding_handoff_sha256": "$INSTALLER_BRANDING_HANDOFF_SHA256",
+  "installer_branding_envelope_sha256": "$INSTALLER_BRANDING_ENVELOPE_SHA256",
+  "installer_branding_oci_archive_sha256": "$INSTALLER_BRANDING_OCI_ARCHIVE_SHA256",
   "builder_image": "$BIB",
   "builder_output_ownership_helper_image": "$BIB",
   "builder_source_image": "$BIB_SOURCE_IMAGE_USED",
@@ -1009,6 +1310,7 @@ run_docker_builder() {
     exit 1
   fi
   require_shippable_source_ref "$builder_image"
+  verify_shippable_candidate_image "$builder_image"
   case "$source_route" in
     managed-registry)
       # Validate Docker's exact dual-network contract before an expensive bootc
@@ -1028,7 +1330,6 @@ run_docker_builder() {
       # they create and attach neither managed local network.
       ;;
   esac
-  verify_docker_emulation_runtime
   if [ "$SKIP_LOCAL_IMAGE_BUILD" = "1" ]; then
     echo "==> Skipping local Docker image build; bootc-image-builder will pull $BIB_SOURCE_IMAGE_OVERRIDE"
   else

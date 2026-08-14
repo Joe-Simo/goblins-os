@@ -468,6 +468,12 @@ fixture_start_finished() {
 case "$OPERATION" in
   health) request health GET /health ;;
   audio-status) request audio-status GET /v1/audio/status ;;
+  accessibility-status) request accessibility-status GET /v1/accessibility/status ;;
+  accessibility-text-scale) request accessibility-text-scale POST /v1/accessibility/preference '{"target":"text-scale","value":1.25}' ;;
+  accessibility-high-contrast) request accessibility-high-contrast POST /v1/accessibility/preference '{"target":"high-contrast","value":true}' ;;
+  accessibility-reduce-transparency) request accessibility-reduce-transparency POST /v1/accessibility/preference '{"target":"reduce-transparency","value":true}' ;;
+  accessibility-reduce-motion) request accessibility-reduce-motion POST /v1/accessibility/preference '{"target":"reduce-motion","value":true}' ;;
+  accessibility-screen-reader) request accessibility-screen-reader POST /v1/accessibility/preference '{"target":"screen-reader","value":true}' ;;
   preview-status) request preview-status GET /v1/preview/status ;;
   firewall-status) request firewall-status GET /v1/firewall/status ;;
   firewall-disable) request firewall-disable POST /v1/firewall/enabled '{"enabled":false}' ;;

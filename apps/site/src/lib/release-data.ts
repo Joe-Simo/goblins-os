@@ -1,4 +1,6 @@
 export type ArchitectureId = "aarch64" | "x86_64";
+export type CurrentReleaseArchitectureId = "aarch64";
+export type HistoricalReleaseArchitectureId = "x86_64";
 
 export type ReleaseDownloadPart = {
   filename: string;
@@ -7,8 +9,8 @@ export type ReleaseDownloadPart = {
   sha256: string;
 };
 
-export type ReleaseArtifact = {
-  arch: ArchitectureId;
+export type ReleaseArtifact<TArchitecture extends ArchitectureId = ArchitectureId> = {
+  arch: TArchitecture;
   label: string;
   cpu: string;
   isoName: string;
@@ -24,12 +26,22 @@ export type ReleaseArtifact = {
   evidenceUrl: string;
   downloadParts: ReleaseDownloadPart[];
   builtOn: string;
-  status: "available" | "blocked";
+  status: "historical" | "blocked";
   notes: string[];
 };
 
+export type HistoricalReleaseArtifact = Omit<
+  ReleaseArtifact<HistoricalReleaseArchitectureId>,
+  "status"
+> & {
+  status: "historical";
+  releaseTag: string;
+  releaseUrl: string;
+  recordNote: string;
+};
+
 export type ContainerImage = {
-  arch: ArchitectureId;
+  arch: CurrentReleaseArchitectureId;
   label: string;
   image: string;
   platform: string;
@@ -45,14 +57,21 @@ export type ContainerImage = {
 const releaseTag = "v0.1.0-alpha.20260703";
 const releaseBaseUrl =
   "https://github.com/Joe-Simo/goblins-os/releases/download/v0.1.0-alpha.20260703";
+const historicalX86ReleaseTag = "v0.1.0-alpha.20260703";
+const historicalX86ReleaseUrl =
+  "https://github.com/Joe-Simo/goblins-os/releases/tag/v0.1.0-alpha.20260703";
+const historicalX86ReleaseBaseUrl =
+  "https://github.com/Joe-Simo/goblins-os/releases/download/v0.1.0-alpha.20260703";
 
 const releaseAssetUrl = (filename: string) => `${releaseBaseUrl}/${filename}`;
+const historicalX86ReleaseAssetUrl = (filename: string) =>
+  `${historicalX86ReleaseBaseUrl}/${filename}`;
 
 export const releaseArtifacts = [
   {
     arch: "aarch64",
     label: "Arm / aarch64",
-    cpu: "Native Arm systems and Arm virtual machines.",
+    cpu: "UEFI aarch64 virtual machines. Bare-metal devices require model-specific proof.",
     isoName: "goblins-os-aarch64.iso",
     compressedName: "goblins-os-aarch64.iso.zst",
     rawSizeBytes: 2861367296,
@@ -82,16 +101,19 @@ export const releaseArtifacts = [
       },
     ],
     builtOn: "2026-07-03T18:19:13Z",
-    status: "available",
+    status: "historical",
     notes: [
-      "Alpha release. Use a spare device or VM and back up first.",
-      "Release gate passed with published checksums, manifests, SBOMs, and signoff evidence.",
+      "Historical July 2026 alpha. It predates the current Goblins OS identity and experience updates.",
+      "Retained with checksums, manifests, and SBOMs for provenance; do not use it for a new installation.",
     ],
   },
+] satisfies ReleaseArtifact<CurrentReleaseArchitectureId>[];
+
+export const historicalReleaseArtifacts = [
   {
     arch: "x86_64",
-    label: "Intel / AMD x86_64",
-    cpu: "64-bit Intel and AMD systems.",
+    label: "Historical Intel / AMD x86_64 alpha",
+    cpu: "Immutable provenance for the retired Intel and AMD alpha target.",
     isoName: "goblins-os-x86_64.iso",
     compressedName: "goblins-os-x86_64.iso.zst",
     rawSizeBytes: 3164340224,
@@ -99,40 +121,50 @@ export const releaseArtifacts = [
     sha256: "45abf064735fa2a2ba9ef034883d19453c4bfc02a3b0c311d29e3679c52db434",
     compressedSha256:
       "c433bb73fc4da1629f86eed9b908f8f2dc9c200e56dbc54b8f2185d90f809d68",
-    isoSha256Url: releaseAssetUrl("goblins-os-x86_64.iso.sha256"),
-    compressedSha256Url: releaseAssetUrl("goblins-os-x86_64.iso.zst.sha256"),
-    partsSha256Url: releaseAssetUrl("goblins-os-x86_64.iso.zst.parts.sha256"),
-    manifestUrl: releaseAssetUrl("manifest-goblins-os-x86_64.json"),
-    evidenceUrl: releaseAssetUrl("release-evidence-manifest-x86_64.json"),
+    isoSha256Url: historicalX86ReleaseAssetUrl("goblins-os-x86_64.iso.sha256"),
+    compressedSha256Url: historicalX86ReleaseAssetUrl(
+      "goblins-os-x86_64.iso.zst.sha256",
+    ),
+    partsSha256Url: historicalX86ReleaseAssetUrl(
+      "goblins-os-x86_64.iso.zst.parts.sha256",
+    ),
+    manifestUrl: historicalX86ReleaseAssetUrl("manifest-goblins-os-x86_64.json"),
+    evidenceUrl: historicalX86ReleaseAssetUrl(
+      "release-evidence-manifest-x86_64.json",
+    ),
     downloadParts: [
       {
         filename: "goblins-os-x86_64.iso.zst.part-00",
-        url: releaseAssetUrl("goblins-os-x86_64.iso.zst.part-00"),
+        url: historicalX86ReleaseAssetUrl("goblins-os-x86_64.iso.zst.part-00"),
         sizeBytes: 1887436800,
         sha256:
           "40b7fcf8216b3a3b08e3f4d0cc791b413c3c85e1cd8d81c152a0455e25f536dc",
       },
       {
         filename: "goblins-os-x86_64.iso.zst.part-01",
-        url: releaseAssetUrl("goblins-os-x86_64.iso.zst.part-01"),
+        url: historicalX86ReleaseAssetUrl("goblins-os-x86_64.iso.zst.part-01"),
         sizeBytes: 879961992,
         sha256:
           "7dd74eb52891389579d83f7a23ab30e06d00a2f7643a621b56c247f0911abc81",
       },
     ],
     builtOn: "2026-07-03T18:21:10Z",
-    status: "available",
+    status: "historical",
+    releaseTag: historicalX86ReleaseTag,
+    releaseUrl: historicalX86ReleaseUrl,
+    recordNote:
+      "Retained only as an immutable historical record. It is not supported, current, or eligible for promotion.",
     notes: [
-      "Alpha release. Use a spare device or VM and back up first.",
-      "Release gate passed with published checksums, manifests, SBOMs, and signoff evidence.",
+      "Originally published as part of the July 2026 alpha.",
+      "Checksums, manifests, and evidence remain available for provenance.",
     ],
   },
-] satisfies ReleaseArtifact[];
+] satisfies HistoricalReleaseArtifact[];
 
 export const containerImages = [
   {
     arch: "aarch64",
-    label: "Arm / aarch64 bootc image",
+    label: "Goblins OS image · Arm / aarch64",
     image: "ghcr.io/joe-simo/goblins-os:aarch64",
     platform: "linux/arm64",
     sourceManifestUrl: releaseAssetUrl("manifest-goblins-os-aarch64.json"),
@@ -143,22 +175,7 @@ export const containerImages = [
     podmanVerifyCommand:
       "podman run --rm ghcr.io/joe-simo/goblins-os:aarch64 /usr/libexec/goblins-os/goblins-os-verify",
     status: "public",
-    note: "Public GHCR image. Pull with Docker or Podman, then run the verifier command before using it as an install base.",
-  },
-  {
-    arch: "x86_64",
-    label: "Intel / AMD x86_64 bootc image",
-    image: "ghcr.io/joe-simo/goblins-os:x86_64",
-    platform: "linux/amd64",
-    sourceManifestUrl: releaseAssetUrl("manifest-goblins-os-x86_64.json"),
-    pullCommand: "docker pull ghcr.io/joe-simo/goblins-os:x86_64",
-    verifyCommand:
-      "docker run --rm ghcr.io/joe-simo/goblins-os:x86_64 /usr/libexec/goblins-os/goblins-os-verify",
-    podmanPullCommand: "podman pull ghcr.io/joe-simo/goblins-os:x86_64",
-    podmanVerifyCommand:
-      "podman run --rm ghcr.io/joe-simo/goblins-os:x86_64 /usr/libexec/goblins-os/goblins-os-verify",
-    status: "public",
-    note: "Public GHCR image. Pull with Docker or Podman, then run the verifier command before using it as an install base.",
+    note: "Public GHCR channel. Its current production digest predates the pending Goblins OS identity update; verify the pulled image before using it.",
   },
 ] satisfies ContainerImage[];
 

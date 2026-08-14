@@ -406,6 +406,64 @@ capture_window_region_with_popovers() {
   echo "RENDERED $out ($title, composited_transients=$transient_count) wid=$wid"
 }
 
+largest_overlapping_transient() {
+  local parent_wid="$1" geometry x y width height parent_pid candidate
+  local candidate_geometry candidate_x candidate_y candidate_width candidate_height
+  local best="" best_area=0 area
+
+  geometry="$(xdotool getwindowgeometry --shell "$parent_wid" 2>/dev/null)" || return 1
+  x="$(printf '%s\n' "$geometry" | awk -F= '$1 == "X" { print $2; exit }')"
+  y="$(printf '%s\n' "$geometry" | awk -F= '$1 == "Y" { print $2; exit }')"
+  width="$(printf '%s\n' "$geometry" | awk -F= '$1 == "WIDTH" { print $2; exit }')"
+  height="$(printf '%s\n' "$geometry" | awk -F= '$1 == "HEIGHT" { print $2; exit }')"
+  parent_pid="$(xdotool getwindowpid "$parent_wid" 2>/dev/null || true)"
+  if [[ ! "$x" =~ ^-?[0-9]+$ || ! "$y" =~ ^-?[0-9]+$ \
+      || ! "$width" =~ ^[1-9][0-9]*$ || ! "$height" =~ ^[1-9][0-9]*$ \
+      || ! "$parent_pid" =~ ^[1-9][0-9]*$ ]]; then
+    return 1
+  fi
+
+  while read -r candidate; do
+    [ "$candidate" = "$parent_wid" ] && continue
+    candidate_geometry="$(xdotool getwindowgeometry --shell "$candidate" 2>/dev/null || true)"
+    candidate_x="$(printf '%s\n' "$candidate_geometry" | awk -F= '$1 == "X" { print $2; exit }')"
+    candidate_y="$(printf '%s\n' "$candidate_geometry" | awk -F= '$1 == "Y" { print $2; exit }')"
+    candidate_width="$(printf '%s\n' "$candidate_geometry" | awk -F= '$1 == "WIDTH" { print $2; exit }')"
+    candidate_height="$(printf '%s\n' "$candidate_geometry" | awk -F= '$1 == "HEIGHT" { print $2; exit }')"
+    if [[ ! "$candidate_x" =~ ^-?[0-9]+$ || ! "$candidate_y" =~ ^-?[0-9]+$ \
+        || ! "$candidate_width" =~ ^[1-9][0-9]*$ || ! "$candidate_height" =~ ^[1-9][0-9]*$ ]]; then
+      continue
+    fi
+    if (( candidate_x + candidate_width <= x || candidate_x >= x + width \
+          || candidate_y + candidate_height <= y || candidate_y >= y + height )); then
+      continue
+    fi
+    area=$((candidate_width * candidate_height))
+    if [ "$area" -gt "$best_area" ]; then
+      best="$candidate"
+      best_area="$area"
+    fi
+  done < <(xdotool search --onlyvisible --pid "$parent_pid" 2>/dev/null || true)
+
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
+}
+
+click_window_fraction() {
+  local wid="$1" x_percent="$2" y_percent="$3" geometry width height click_x click_y
+
+  geometry="$(xdotool getwindowgeometry --shell "$wid" 2>/dev/null)" || return 1
+  width="$(printf '%s\n' "$geometry" | awk -F= '$1 == "WIDTH" { print $2; exit }')"
+  height="$(printf '%s\n' "$geometry" | awk -F= '$1 == "HEIGHT" { print $2; exit }')"
+  if [[ ! "$width" =~ ^[1-9][0-9]*$ || ! "$height" =~ ^[1-9][0-9]*$ ]]; then
+    return 1
+  fi
+  click_x=$((width * x_percent / 100))
+  click_y=$((height * y_percent / 100))
+  xdotool mousemove --window "$wid" "$click_x" "$click_y"
+  xdotool click 1
+}
+
 start_interaction_window() {
   local bin="$1" title="$2"
   shift 2
@@ -839,7 +897,7 @@ capture_settings_polish_interactions() {
 }
 
 capture_studio_polish_interactions() {
-  local width height picker_x picker_y option_x option_y menu_open_difference menu_difference closed_error_difference dark_menu_difference
+  local width height picker_x picker_y popover_wid menu_open_difference menu_difference closed_error_difference dark_menu_difference
 
   export GOBLINS_OS_THEME=light
   seed_first_boot_profile cloud-openai
@@ -869,13 +927,14 @@ capture_studio_polish_interactions() {
     return 1
   fi
 
-  # The popover opens above the picker. The first enabled on-device option sits
-  # under the readiness line; keyboard traversal from a MenuButton closes the
-  # popover before entering this plain vertical button list on GTK 4.
-  option_x="$picker_x"
-  option_y=$((picker_y - height * 28 / 100))
-  xdotool mousemove --window "$INTERACTION_WID" "$option_x" "$option_y"
-  xdotool click 1
+  # Click the first enabled on-device option on the real popover surface.
+  # Parent-relative guesses land outside that transient and GTK dismisses it.
+  popover_wid="$(largest_overlapping_transient "$INTERACTION_WID" || true)"
+  if [ -z "$popover_wid" ]; then
+    echo "RENDER-FAILED Studio engine popover was not a visible transient window" >&2
+    return 1
+  fi
+  click_window_fraction "$popover_wid" 50 40
   sleep 1.0
   xdotool mousemove 2 2
   capture_window_region_with_popovers "$INTERACTION_WID" 128-studio-engine-offline-error.png "Studio engine switch while core is offline"

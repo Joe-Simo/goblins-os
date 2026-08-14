@@ -722,7 +722,7 @@ image_absolute_error_pixels() {
 }
 
 capture_settings_polish_interactions() {
-  local width height content_x content_y content_left content_width click_x click_y expanded_difference dark_expanded_difference offline_difference
+  local width height content_x content_y click_x click_y expanded_difference dark_expanded_difference offline_difference
 
   export GOBLINS_OS_THEME=light
   seed_first_boot_profile cloud-openai
@@ -807,21 +807,24 @@ capture_settings_polish_interactions() {
   xdotool mousemove 2 2
   capture_existing_window "$INTERACTION_WID" .settings-models-engine-online.png "Settings Models online comparison"
   stop_core
-  # Sidebar min-width is 244px and the main pane pads 32px. The GPT-OSS segment
-  # is the left half of the two-button row under "Goblins AI engine", not the
-  # intro copy above it.
-  content_left=$((244 + 32))
-  content_width=$((width - 244 - 64))
-  click_x=$((content_left + content_width / 4))
-  click_y=$((height * 32 / 100))
-  xdotool mousemove --window "$INTERACTION_WID" "$click_x" "$click_y"
-  xdotool click 1
-  sleep 1.0
-  xdotool mousemove 2 2
-  capture_existing_window "$INTERACTION_WID" 126-settings-models-engine-offline-error.png "Settings Models engine selection while core is offline"
-  offline_difference="$(image_absolute_error_pixels \
-    "$OUT/.settings-models-engine-online.png" \
-    "$OUT/126-settings-models-engine-offline-error.png")"
+  # On the 1055x840 Models surface the GPT-OSS segment is the left half of the
+  # engine row at y=306-344, x=368-662. Percentages below hit the center of
+  # that segment; nearby rows are only tried if the first click is a miss.
+  click_x=$((width * 49 / 100))
+  offline_difference=0
+  for click_y in $((height * 39 / 100)) $((height * 37 / 100)) $((height * 41 / 100)); do
+    xdotool mousemove --window "$INTERACTION_WID" "$click_x" "$click_y"
+    xdotool click 1
+    sleep 1.0
+    xdotool mousemove 2 2
+    capture_existing_window "$INTERACTION_WID" 126-settings-models-engine-offline-error.png "Settings Models engine selection while core is offline"
+    offline_difference="$(image_absolute_error_pixels \
+      "$OUT/.settings-models-engine-online.png" \
+      "$OUT/126-settings-models-engine-offline-error.png")"
+    if [ "$offline_difference" -ge 100 ]; then
+      break
+    fi
+  done
   rm -f "$OUT/.settings-models-engine-online.png"
   if [ "$offline_difference" -lt 100 ]; then
     echo "RENDER-FAILED Settings offline engine selection did not produce a visible error state (changed_pixels=$offline_difference)" >&2

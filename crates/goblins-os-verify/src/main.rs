@@ -5267,9 +5267,8 @@ fn official_openai_desktop_wrapper_check(root: &Path) -> Check {
     for marker in [
         "COPY os/application-overrides/ /usr/lib/goblins-os/application-overrides/",
         "COPY os/tmpfiles/goblins-os-application-overrides.conf /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf",
-        "test -z \"$(find /usr/local -mindepth 1 ! -type d -print -quit)\"",
-        "test -z \"$(find /usr/local -mindepth 0 \\( ! -user root -o ! -group root \\) -print -quit)\"",
-        "find /usr/local -depth -mindepth 1 -type d -exec rmdir -- '{}' \\;",
+        "install -d -m 0755 /var/usrlocal",
+        "cp -a /usr/local/. /var/usrlocal/",
         "ln -s ../var/usrlocal /usr/local",
         "test -L /usr/local && test \"$(readlink /usr/local)\" = \"../var/usrlocal\"",
         "desktop-file-validate /usr/lib/goblins-os/application-overrides/chatgpt.desktop",

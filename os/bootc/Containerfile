@@ -483,17 +483,21 @@ RUN install -d /var/home \
 COPY --from=rust-build /out/ /
 COPY --from=os-assets / /
 
-# Fedora bootc keeps /usr/local as a regular directory so downstream images can
-# add content while they are being derived. Goblins OS is the final appliance:
-# keep site-local content in persistent machine state instead. Refuse to discard
-# anything a package placed there, remove only the empty root-owned directory
-# skeleton, and install the canonical OSTree-compatible link.
-RUN test -d /usr/local \
-    && test -z "$(find /usr/local -mindepth 1 ! -type d -print -quit)" \
-    && test -z "$(find /usr/local -mindepth 0 \( ! -user root -o ! -group root \) -print -quit)" \
-    && find /usr/local -depth -mindepth 1 -type d -exec rmdir -- '{}' \; \
-    && rmdir /usr/local \
-    && ln -s ../var/usrlocal /usr/local \
+# Fedora bootc ships /usr/local as a writable directory during derivation and
+# may already have files there. Goblins OS is the final appliance: move that
+# tree into persistent /var/usrlocal and expose it through the OSTree link.
+RUN install -d -m 0755 /var/usrlocal \
+    && if [ -L /usr/local ]; then \
+         test "$(readlink /usr/local)" = "../var/usrlocal"; \
+       else \
+         if [ -d /usr/local ]; then \
+           cp -a /usr/local/. /var/usrlocal/; \
+           rm -rf /usr/local; \
+         else \
+           rm -f /usr/local; \
+         fi; \
+         ln -s ../var/usrlocal /usr/local; \
+       fi \
     && test -L /usr/local \
     && test "$(readlink /usr/local)" = "../var/usrlocal"
 

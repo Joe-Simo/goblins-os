@@ -3,7 +3,7 @@
 # exercises the installed OS to prove the contract holds, the daemon serves, and
 # the persistent resident answers IPC. A non-zero self-test fails the build.
 FROM goblins-os AS selftest
-COPY --chmod=0755 os/bootc/run-selftest.sh /usr/local/bin/run-selftest.sh
+COPY --chmod=0755 os/bootc/run-selftest.sh /usr/libexec/goblins-os-ci/run-selftest
 RUN dnf -y install curl jq socat \
     && dnf clean all \
-    && /usr/local/bin/run-selftest.sh
+    && /usr/libexec/goblins-os-ci/run-selftest

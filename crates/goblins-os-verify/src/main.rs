@@ -2069,7 +2069,7 @@ fn source_checks(root: &Path, profile: SourceProfile) -> Vec<Check> {
     checks.push(absent_check(
         root.join("os/bootc/selftest.suffix.Dockerfile"),
         "selftest-suffix-no-extra-chmod-run-layer",
-        "RUN chmod +x /usr/local/bin/run-selftest.sh",
+        "RUN chmod +x /usr/libexec/goblins-os-ci/run-selftest",
     ));
     checks.push(contains_check(
         root.join("os/bootc/render.suffix.Dockerfile"),
@@ -2079,7 +2079,7 @@ fn source_checks(root: &Path, profile: SourceProfile) -> Vec<Check> {
     checks.push(absent_check(
         root.join("os/bootc/render.suffix.Dockerfile"),
         "render-suffix-no-extra-chmod-run-layer",
-        "RUN chmod +x /usr/local/bin/render-screens.sh",
+        "RUN chmod +x /usr/libexec/goblins-os-ci/render-screens",
     ));
     checks.push(contains_check(
         root.join("os/bootc/render-desktop.suffix.Dockerfile"),
@@ -2089,7 +2089,7 @@ fn source_checks(root: &Path, profile: SourceProfile) -> Vec<Check> {
     checks.push(absent_check(
         root.join("os/bootc/render-desktop.suffix.Dockerfile"),
         "desktop-render-suffix-no-extra-chmod-run-layer",
-        "RUN chmod +x /usr/local/bin/render-desktop.sh",
+        "RUN chmod +x /usr/libexec/goblins-os-ci/render-desktop",
     ));
     checks.push(file_check(root, "os/bootc/verify.suffix.Dockerfile"));
     checks.push(reviewed_github_action_pins_check(root));
@@ -5267,7 +5267,11 @@ fn official_openai_desktop_wrapper_check(root: &Path) -> Check {
     for marker in [
         "COPY os/application-overrides/ /usr/lib/goblins-os/application-overrides/",
         "COPY os/tmpfiles/goblins-os-application-overrides.conf /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf",
-        "test -L /usr/local && test \"$(readlink -f /usr/local)\" = \"/var/usrlocal\"",
+        "test -z \"$(find /usr/local -mindepth 1 ! -type d -print -quit)\"",
+        "test -z \"$(find /usr/local -mindepth 0 \\( ! -user root -o ! -group root \\) -print -quit)\"",
+        "find /usr/local -depth -mindepth 1 -type d -exec rmdir -- '{}' \\;",
+        "ln -s ../var/usrlocal /usr/local",
+        "test -L /usr/local && test \"$(readlink /usr/local)\" = \"../var/usrlocal\"",
         "desktop-file-validate /usr/lib/goblins-os/application-overrides/chatgpt.desktop",
         "grep -Fxq 'L+ /var/usrlocal/share/applications/chatgpt.desktop - - - - /usr/lib/goblins-os/application-overrides/chatgpt.desktop' /usr/lib/tmpfiles.d/goblins-os-application-overrides.conf",
         "grep -Fxq 'x-scheme-handler/codex=chatgpt.desktop' /usr/share/applications/mimeapps.list",

@@ -1,45 +1,32 @@
 import Image from "next/image";
 import {
-  ArrowDownToLineIcon,
+  ArrowDownIcon,
   ArrowRightIcon,
   ArrowUpRightIcon,
   BoxIcon,
-  CheckCircle2Icon,
-  CodeIcon,
+  CheckIcon,
+  Code2Icon,
   CpuIcon,
-  ExternalLinkIcon,
-  FileCheck2Icon,
-  Gamepad2Icon,
+  DownloadIcon,
+  FingerprintIcon,
+  GitForkIcon,
   HardDriveIcon,
   LockKeyholeIcon,
   MonitorIcon,
+  PackageCheckIcon,
+  RotateCcwIcon,
   ShieldCheckIcon,
+  SparklesIcon,
   TerminalSquareIcon,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { CopyButton } from "@/components/copy-button";
-import { DevicePreview } from "@/components/device-preview";
+import { HeroReel } from "@/components/hero-reel";
 import { MotionReveal } from "@/components/motion-reveal";
-import { assetBudget, screenshots } from "@/lib/site-assets";
 import {
   containerImages,
   formatBytes,
@@ -47,67 +34,79 @@ import {
   releaseArtifacts,
   releaseEvidence,
 } from "@/lib/release-data";
-import type { ContainerImage } from "@/lib/release-data";
+import { screenshots } from "@/lib/site-assets";
 
 const sourceUrl = "https://github.com/Joe-Simo/goblins-os";
+const issuesUrl = `${sourceUrl}/issues`;
 
-const features = [
+const experienceSteps = [
   {
-    title: "Image-based Goblins OS foundation",
-    description: "Image-based updates, rollback, and native Linux packaging.",
+    marker: "01",
+    title: "Describe the thing.",
+    body: "Start with a sentence. Build Studio turns intent into a local project while keeping the work visible and reviewable.",
+    icon: SparklesIcon,
+  },
+  {
+    marker: "02",
+    title: "See every change.",
+    body: "Review files, diffs, logs, and checkpoints before anything leaves your machine. Undo stays part of the workflow.",
+    icon: Code2Icon,
+  },
+  {
+    marker: "03",
+    title: "Run it your way.",
+    body: "Preview static apps locally, export deterministic source, or package supported projects into an OCI image layout.",
     icon: BoxIcon,
   },
+];
+
+const systemCapabilities = [
   {
-    title: "AI-native local builder",
-    description:
-      "Describe an app, review the project, preview it locally, inspect files and logs, then export or containerize it.",
-    icon: TerminalSquareIcon,
+    label: "System image",
+    title: "Updates without losing the plot",
+    body: "The public aarch64 channel supports image-based check, download, apply, reboot, and rollback flows.",
+    icon: RotateCcwIcon,
   },
   {
-    title: "AI choices without a bundled secret",
-    description:
-      "Choose on-device GPT-OSS, an OpenAI account through the bundled Codex CLI, or your own API key through a protected per-user window.",
-    icon: LockKeyholeIcon,
+    label: "Recovery",
+    title: "A way back when work gets weird",
+    body: "Eligible fresh Btrfs installs expose bounded Snapper file recovery without silently overwriting the destination.",
+    icon: HardDriveIcon,
   },
   {
-    title: "Native desktop surfaces",
-    description: "Rust, GNOME technologies, systemd services, and real installed pixels.",
+    label: "Desktop",
+    title: "Real native surfaces",
+    body: "Rust, GNOME technologies, systemd services, display controls, Bluetooth, input, gestures, and proxy settings.",
     icon: MonitorIcon,
   },
   {
-    title: "Native Arm release",
-    description: "The installer and container image target the aarch64 architecture.",
-    icon: CpuIcon,
-  },
-  {
-    title: "Gaming substrate without Steam",
-    description: "Mesa, Vulkan tooling, GameMode, gamescope, MangoHud, and PipeWire diagnostics.",
-    icon: Gamepad2Icon,
+    label: "Credentials",
+    title: "Your account stays yours",
+    body: "The image ships without a maintainer API key. Personal credentials are configured per user and kept outside the public OS image.",
+    icon: LockKeyholeIcon,
   },
 ];
 
-const installSteps = [
-  {
-    title: "Download every part",
-    body: "Get each numbered aarch64 preview part from the current GitHub prerelease.",
-  },
-  {
-    title: "Verify the download",
-    body: "Check the published SHA256 before using the ISO. Stop if the checksum does not match.",
-  },
-  {
-    title: "Create and boot the VM",
-    body: "Create a UEFI aarch64 virtual machine, attach the ISO, and review the virtual target disk before installation.",
-  },
-];
+function screenshot(title: string) {
+  const match = screenshots.find((candidate) => candidate.title === title);
+  if (!match) {
+    throw new Error(`Missing website screenshot: ${title}`);
+  }
+  return match;
+}
 
 export default function Home() {
-  const totalMedia = formatBytes(assetBudget.screenshotBytes);
-  const demoMedia = formatBytes(assetBudget.demoVideoBytes);
-  const currentArmRelease = releaseArtifacts.find(({ arch }) => arch === "aarch64");
-  if (!currentArmRelease) {
-    throw new Error("The current Arm release manifest is missing.");
+  const release = releaseArtifacts[0];
+  const image = containerImages[0];
+  const home = screenshot("Home");
+  const buildStudio = screenshot("Build Studio");
+  const workspace = screenshot("Workspace Overview");
+  const installer = screenshot("Installer");
+
+  if (!release || !image) {
+    throw new Error("The current aarch64 release data is incomplete.");
   }
+
   const macLinuxVerificationCommand = [
     "(",
     "set -eu",
@@ -118,859 +117,518 @@ export default function Home() {
     "else",
     "  echo 'Install sha256sum or shasum before continuing.' >&2; exit 1",
     "fi",
-    ...currentArmRelease.downloadParts.map(
+    ...release.downloadParts.map(
       (part) =>
         `printf '%s  %s\\n' '${part.sha256}' '${part.filename}' | verify_sha256`,
     ),
-    `cat ${currentArmRelease.downloadParts.map(({ filename }) => `'${filename}'`).join(" ")} > '${currentArmRelease.compressedName}'`,
-    `printf '%s  %s\\n' '${currentArmRelease.compressedSha256}' '${currentArmRelease.compressedName}' | verify_sha256`,
-    `zstd -d --long=31 --force '${currentArmRelease.compressedName}'`,
-    `printf '%s  %s\\n' '${currentArmRelease.sha256}' '${currentArmRelease.isoName}' | verify_sha256`,
+    `cat ${release.downloadParts.map(({ filename }) => `'${filename}'`).join(" ")} > '${release.compressedName}'`,
+    `printf '%s  %s\\n' '${release.compressedSha256}' '${release.compressedName}' | verify_sha256`,
+    `zstd -d --long=31 --force '${release.compressedName}'`,
+    `printf '%s  %s\\n' '${release.sha256}' '${release.isoName}' | verify_sha256`,
     ")",
   ].join("\n");
+
   const windowsVerificationCommand = [
     "& {",
     "  $ErrorActionPreference = 'Stop'",
     "  Set-StrictMode -Version Latest",
-    ...currentArmRelease.downloadParts.map(
+    ...release.downloadParts.map(
       (part) =>
         `  if ((Get-FileHash '.\\${part.filename}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${part.sha256}') { throw 'Checksum mismatch: ${part.filename}' }`,
     ),
-    `  cmd /c copy /b /y ${currentArmRelease.downloadParts.map(({ filename }) => filename).join("+")} ${currentArmRelease.compressedName}`,
+    `  cmd /c copy /b /y ${release.downloadParts.map(({ filename }) => filename).join("+")} ${release.compressedName}`,
     "  if ($LASTEXITCODE -ne 0) { throw 'Could not reassemble the compressed ISO.' }",
-    `  if ((Get-FileHash '.\\${currentArmRelease.compressedName}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${currentArmRelease.compressedSha256}') { throw 'Checksum mismatch: ${currentArmRelease.compressedName}' }`,
-    `  zstd -d --long=31 --force '.\\${currentArmRelease.compressedName}'`,
+    `  if ((Get-FileHash '.\\${release.compressedName}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${release.compressedSha256}') { throw 'Checksum mismatch: ${release.compressedName}' }`,
+    `  zstd -d --long=31 --force '.\\${release.compressedName}'`,
     "  if ($LASTEXITCODE -ne 0) { throw 'Could not decompress the ISO.' }",
-    `  if ((Get-FileHash '.\\${currentArmRelease.isoName}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${currentArmRelease.sha256}') { throw 'Checksum mismatch: ${currentArmRelease.isoName}' }`,
+    `  if ((Get-FileHash '.\\${release.isoName}' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${release.sha256}') { throw 'Checksum mismatch: ${release.isoName}' }`,
     "}",
   ].join("\n");
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <main className="site-shell" id="main-content">
+      <a className="skip-link" href="#experience">Skip to the experience</a>
       <MotionReveal />
       <SiteHeader />
 
-      <section className="relative overflow-hidden border-b bg-background">
-        <div className="mx-auto grid w-full max-w-7xl grid-cols-1 items-center gap-8 px-4 py-8 sm:px-6 sm:py-10 lg:min-h-[580px] lg:grid-cols-[0.88fr_1.12fr] lg:gap-10 lg:px-8 lg:py-10">
-          <div className="flex max-w-2xl flex-col gap-6" data-gsap="reveal">
-            <div className="flex flex-col gap-4">
-              <Badge variant="secondary" className="w-fit">
-                Public aarch64 preview · native Linux desktop · local builds
-              </Badge>
-              <h1 className="text-5xl font-semibold leading-[0.95] tracking-normal text-balance sm:text-6xl lg:text-7xl">
-                Goblins OS
-              </h1>
-              <p className="max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
-                An open AI-native Linux desktop for building local software.
-                Download the public Arm preview, explore it in a VM, and keep
-                your system under your control.
-              </p>
+      <section className="hero" aria-labelledby="hero-title">
+        <div className="hero__grid" aria-hidden="true" />
+        <div className="hero__inner">
+          <div className="hero__copy">
+            <div className="hero__eyebrow" data-hero-reveal>
+              <Image src="/favicon.svg" alt="" width={24} height={24} aria-hidden="true" />
+              <span>Public aarch64 preview</span>
+              <span className="status-pulse" aria-hidden="true" />
+              <span>Live now</span>
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <Button asChild size="lg">
-                <a href="#downloads">
-                  Download the preview
-                  <ArrowDownToLineIcon data-icon="inline-end" />
-                </a>
-              </Button>
-              <Button asChild variant="outline" size="lg">
-                <a href={sourceUrl} rel="noreferrer" target="_blank">
-                  View source
-                  <CodeIcon data-icon="inline-end" />
-                </a>
-              </Button>
-            </div>
-            <div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-              <ProofPoint>Goblins OS system image</ProofPoint>
-              <ProofPoint>Local app builds</ProofPoint>
-              <ProofPoint>No bundled API key</ProofPoint>
-            </div>
-          </div>
-
-          <div className="relative" data-gsap="reveal">
-            <DevicePreview />
-            <div className="relative rounded-lg border bg-card p-2 shadow-2xl shadow-foreground/10">
-              <div className="overflow-hidden rounded-md border bg-muted">
-                <Image
-                  src={screenshots[0].src}
-                  alt={screenshots[0].alt}
-                  width={screenshots[0].width}
-                  height={screenshots[0].height}
-                  priority
-                  sizes="(min-width: 1024px) 58vw, 100vw"
-                  className="h-auto w-full"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="features" className="scroll-mt-20 border-b bg-muted/35">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
-          <SectionHeading
-            title="Built for creativity and control"
-            description="A native Linux desktop for local software creation, with published Arm release artifacts and source-enforced credential boundaries."
-          />
-          <div className="grid gap-x-8 gap-y-0 md:grid-cols-2 lg:grid-cols-3">
-            {features.map((feature) => (
-              <div
-                key={feature.title}
-                className="flex gap-4 border-t py-6"
-                data-gsap="reveal"
-              >
-                <feature.icon className="mt-0.5 text-primary" aria-hidden="true" />
-                <div className="flex flex-col gap-2">
-                  <h3 className="text-base font-semibold">{feature.title}</h3>
-                  <p className="text-sm leading-6 text-muted-foreground">
-                    {feature.description}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <Alert role="note" data-gsap="reveal">
-            <ShieldCheckIcon aria-hidden="true" />
-            <AlertTitle>OpenAI is a provider, not the OS identity</AlertTitle>
-            <AlertDescription>
-              The public image ships no maintainer API key and no proprietary OpenAI desktop app.
-              In the current source, Goblins AI uses the bundled verified Codex CLI for an OpenAI
-              account. The separate Codex shortcut opens a user-installed compatible app or the
-              official web, while ChatGPT remains on the official web. Personal credentials stay
-              outside the published OS image.
-            </AlertDescription>
-          </Alert>
-        </div>
-      </section>
-
-      <section id="screenshots" className="scroll-mt-20 border-b bg-background">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
-          <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
-            <SectionHeading
-              title="See Goblins OS in action"
-              description={`Screenshot media totals ${totalMedia}; media below the hero is lazy-loaded.`}
-            />
-            <Button asChild variant="ghost">
-              <a href="#install">
-                Install notes
-                <ArrowRightIcon data-icon="inline-end" />
-              </a>
-            </Button>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            {screenshots.map((screenshot, index) => (
-              <Card key={screenshot.src} className="overflow-hidden py-0" data-gsap="reveal">
-                <div className="aspect-[16/9] overflow-hidden bg-muted">
-                  <Image
-                    src={screenshot.src}
-                    alt={screenshot.alt}
-                    width={screenshot.width}
-                    height={screenshot.height}
-                    loading={index === 0 ? "eager" : "lazy"}
-                    sizes="(min-width: 1024px) 25vw, (min-width: 768px) 50vw, 100vw"
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-                <CardHeader className="px-4 py-4">
-                  <CardTitle>{screenshot.title}</CardTitle>
-                  <CardDescription>{screenshot.description}</CardDescription>
-                </CardHeader>
-              </Card>
-            ))}
-          </div>
-          <Card data-gsap="reveal">
-            <CardHeader>
-              <CardTitle>Demo reel</CardTitle>
-              <CardDescription>
-                Built from the screenshots above. The MP4 is {demoMedia}, uses controls, and does not autoplay.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <video
-                className="aspect-video w-full rounded-lg border bg-muted"
-                controls
-                preload="metadata"
-                poster="/screenshots/home.png"
-              >
-                <source src="/media/goblins-os-demo.mp4" type="video/mp4" />
-              </video>
-            </CardContent>
-          </Card>
-        </div>
-      </section>
-
-      <section id="downloads" className="scroll-mt-20 border-b bg-muted/35">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
-          <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-            <SectionHeading
-              title="Goblins OS public preview"
-              description="A real, branded installer for UEFI aarch64 virtual machines. It is made for demos, exploration, and feedback—not production or unverified bare-metal devices."
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <Button asChild variant="ghost">
-                <a href={releaseEvidence.releaseUrl} rel="noreferrer" target="_blank">
-                  Open release
-                  <ExternalLinkIcon data-icon="inline-end" />
-                </a>
-              </Button>
-              <Button asChild variant="ghost">
-                <a href="#verify">
-                  Verify checksums
-                  <ArrowRightIcon data-icon="inline-end" />
-                </a>
-              </Button>
-            </div>
-          </div>
-
-          <div className="grid gap-4 xl:hidden">
-            {releaseArtifacts.map((artifact) => (
-              <DownloadArtifactCard key={artifact.arch} artifact={artifact} />
-            ))}
-            <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
-              <p>Large OS media is served from GitHub release assets.</p>
+            <h1 id="hero-title" className="hero__title" data-hero-reveal>
+              <span>Goblins</span>
+              <span className="hero__title-line">
+                <em>OS</em>
+                <small>Build locally. Keep control.</small>
+              </span>
+            </h1>
+            <div className="hero__intro" data-hero-reveal>
               <p>
-                Release:{" "}
-                <a
-                  className="font-medium text-foreground underline-offset-4 hover:underline"
-                  href={releaseEvidence.releaseUrl}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  {releaseEvidence.releaseTag}
-                </a>
+                An open, AI-native Linux desktop that turns a sentence into
+                software you can inspect, run, export, and own.
               </p>
+              <div className="hero__actions">
+                <Button asChild size="lg" className="button--ink">
+                  <a href="#download">
+                    Get the preview
+                    <ArrowDownIcon aria-hidden="true" />
+                  </a>
+                </Button>
+                <Button asChild size="lg" variant="outline" className="button--ghost">
+                  <a href={sourceUrl} rel="noreferrer" target="_blank">
+                    Explore the source
+                    <ArrowUpRightIcon aria-hidden="true" />
+                  </a>
+                </Button>
+              </div>
             </div>
           </div>
 
-          <Card className="hidden xl:block" data-gsap="reveal">
-            <CardContent className="px-0">
-              <Table className="min-w-[1120px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Architecture</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Media</TableHead>
-                    <TableHead>SHA256</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Built</TableHead>
-                    <TableHead className="text-right">Download</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {releaseArtifacts.map((artifact) => (
-                    <TableRow key={artifact.arch}>
-                      <TableCell className="min-w-[220px] whitespace-normal">
-                        <div className="flex flex-col gap-1">
-                          <span className="font-medium">{artifact.label}</span>
-                          <span className="text-xs leading-5 text-muted-foreground">
-                            {artifact.cpu}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="min-w-[260px] whitespace-normal">
-                        <div className="flex flex-col gap-2">
-                          <Badge variant="secondary" className="w-fit">
-                            Community preview
-                          </Badge>
-                          <ul className="flex flex-col gap-1 text-xs leading-5 text-muted-foreground">
-                            {artifact.notes.map((note) => (
-                              <li key={note}>{note}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      </TableCell>
-                      <TableCell className="whitespace-normal">
-                        <div className="flex flex-col gap-1">
-                          <code className="text-xs">{artifact.isoName}</code>
-                          <code className="text-xs text-muted-foreground">
-                            {artifact.compressedName}
-                          </code>
-                        </div>
-                      </TableCell>
-                      <TableCell className="max-w-[240px] whitespace-normal">
-                        <code className="break-all text-xs">{artifact.sha256}</code>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1 text-sm">
-                          <span>{formatBytes(artifact.rawSizeBytes)} ISO</span>
-                          <span className="text-xs text-muted-foreground">
-                            {formatBytes(artifact.compressedSizeBytes)} download
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>{new Date(artifact.builtOn).toISOString().slice(0, 10)}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex flex-col items-end gap-2">
-                          {artifact.downloadParts.map((part, index) => (
-                            <Button key={part.filename} asChild variant="outline" size="sm">
-                              <a href={part.url} rel="noreferrer" target="_blank">
-                                Part {String(index).padStart(2, "0")}
-                                <ArrowDownToLineIcon data-icon="inline-end" />
-                              </a>
-                            </Button>
-                          ))}
-                          <Button asChild variant="ghost" size="sm">
-                            <a href={artifact.partsSha256Url} rel="noreferrer" target="_blank">
-                              Checksums
-                              <ExternalLinkIcon data-icon="inline-end" />
-                            </a>
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-            <CardFooter className="flex flex-col items-start gap-3 border-t text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <span>Preview media and its exact checksums are served from GitHub.</span>
-              <a
-                className="font-medium text-foreground underline-offset-4 hover:underline"
-                href={releaseEvidence.releaseRunUrl}
-                rel="noreferrer"
-                target="_blank"
-              >
-                Build details
-              </a>
-            </CardFooter>
-          </Card>
-
-          <div className="mt-2 flex flex-col gap-4 border-t pt-8">
-            <div className="max-w-2xl space-y-2">
-              <h3 className="text-lg font-semibold tracking-tight">Earlier release record</h3>
-              <p className="text-sm leading-6 text-muted-foreground">
-                Retired media remains visible for audit and provenance only. It is not an
-                installation option.
-              </p>
+          <div className="hero__media" data-hero-reveal>
+            <HeroReel />
+            <div className="hero__media-note">
+              <span>01 / Product tour</span>
+              <span>Native desktop · local checkout</span>
             </div>
-            {historicalReleaseArtifacts.map((artifact) => (
-              <Card
-                key={`${artifact.releaseTag}-${artifact.arch}`}
-                className="bg-card/60"
-                data-gsap="reveal"
-              >
-                <CardHeader>
-                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
-                    <div className="flex flex-col gap-2">
-                      <CardTitle>{artifact.label}</CardTitle>
-                      <CardDescription>{artifact.recordNote}</CardDescription>
-                    </div>
-                    <Badge variant="outline">Historical · unsupported</Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="grid gap-4 text-sm md:grid-cols-3">
-                  <MetadataRow label="Release">
-                    <code className="text-xs">{artifact.releaseTag}</code>
-                  </MetadataRow>
-                  <MetadataRow label="ISO">
-                    <code className="break-all text-xs">{artifact.isoName}</code>
-                  </MetadataRow>
-                  <MetadataRow label="SHA256">
-                    <code className="break-all text-xs">{artifact.sha256}</code>
-                  </MetadataRow>
-                </CardContent>
-                <CardFooter className="flex flex-col items-start justify-between gap-3 border-t text-sm text-muted-foreground sm:flex-row sm:items-center">
-                  <span>Preserved for provenance; do not use for a new installation.</span>
-                  <Button asChild variant="ghost" size="sm">
-                    <a href={artifact.releaseUrl} rel="noreferrer" target="_blank">
-                      View record
-                      <ExternalLinkIcon data-icon="inline-end" />
-                    </a>
-                  </Button>
-                </CardFooter>
-              </Card>
-            ))}
+          </div>
+        </div>
+        <a className="hero__scroll" href="#story" aria-label="Continue to the Goblins OS story">
+          <span>Scroll to enter</span>
+          <ArrowDownIcon aria-hidden="true" />
+        </a>
+      </section>
+
+      <div className="signal-strip" aria-label="Goblins OS release facts">
+        <div className="signal-strip__track">
+          <SignalItem icon={CpuIcon}>ARM64 native</SignalItem>
+          <SignalItem icon={TerminalSquareIcon}>Rust desktop</SignalItem>
+          <SignalItem icon={ShieldCheckIcon}>No bundled API key</SignalItem>
+          <SignalItem icon={PackageCheckIcon}>Checksum-bound preview</SignalItem>
+          <SignalItem icon={CpuIcon} ariaHidden>ARM64 native</SignalItem>
+          <SignalItem icon={TerminalSquareIcon} ariaHidden>Rust desktop</SignalItem>
+          <SignalItem icon={ShieldCheckIcon} ariaHidden>No bundled API key</SignalItem>
+          <SignalItem icon={PackageCheckIcon} ariaHidden>Checksum-bound preview</SignalItem>
+        </div>
+      </div>
+
+      <section id="story" className="manifesto section-pad">
+        <div className="section-index" data-gsap="reveal">
+          <span>00</span>
+          <span>The premise</span>
+        </div>
+        <div className="manifesto__content" data-gsap="reveal">
+          <p className="manifesto__lead">Computers should feel like possibility.</p>
+          <p className="manifesto__statement">
+            Goblins OS is a workshop disguised as a desktop—quiet enough to
+            focus, capable enough to build, and transparent enough to trust.
+          </p>
+          <div className="manifesto__aside">
+            <span className="eyebrow">Made for curious builders</span>
+            <p>
+              Describe the idea. Review the project. Run it locally. Keep the
+              source and the system under your control.
+            </p>
           </div>
         </div>
       </section>
 
-      <section id="containers" className="scroll-mt-20 border-b bg-background">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
-          <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-            <SectionHeading
-              title="Arm container image"
-              description="Use the public aarch64 Goblins OS channel to inspect the same update-enabled system image carried by the preview installer."
-            />
-            <Button asChild variant="ghost">
-              <a href={releaseEvidence.releaseRunUrl} rel="noreferrer" target="_blank">
-                Build details
-                <ExternalLinkIcon data-icon="inline-end" />
-              </a>
-            </Button>
-          </div>
-
-          <div className="grid max-w-3xl gap-4">
-            {containerImages.map((image) => (
-              <ContainerImageCard key={image.arch} image={image} />
-            ))}
-          </div>
-
-          <Alert role="note" data-gsap="reveal">
-            <BoxIcon aria-hidden="true" />
-            <AlertTitle>Containers are not a desktop VM</AlertTitle>
-            <AlertDescription>
-              Container images are for inspection, automation, and derived
-              builds. Use the public preview ISO for the graphical VM experience.
-            </AlertDescription>
-          </Alert>
+      <section id="experience" className="experience section-pad" aria-labelledby="experience-title">
+        <div className="section-index section-index--light" data-gsap="reveal">
+          <span>01</span>
+          <span>From thought to software</span>
         </div>
-      </section>
-
-      <section id="install" className="scroll-mt-20 border-b bg-background">
-        <div className="mx-auto grid w-full max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[1fr_0.42fr] lg:px-8">
-          <div className="flex flex-col gap-8">
-            <SectionHeading
-              title="Install Goblins OS"
-              description="Try the community preview in a UEFI aarch64 virtual machine. Verify the download, use a disposable virtual disk, and keep anything important backed up."
-            />
-            <div className="grid gap-4 md:grid-cols-3">
-              {installSteps.map((step, index) => (
-                <div key={step.title} className="flex gap-4 border-t pt-5" data-gsap="reveal">
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
-                    {index + 1}
-                  </span>
-                  <div className="flex flex-col gap-2">
-                    <h3 className="font-semibold">{step.title}</h3>
-                    <p className="text-sm leading-6 text-muted-foreground">{step.body}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <Alert role="note" className="h-fit" data-gsap="reveal">
-            <ShieldCheckIcon aria-hidden="true" />
-            <AlertTitle>Install guardrails</AlertTitle>
-            <AlertDescription>
-              <ul className="flex flex-col gap-2">
-                <li>This is a community preview, not the formally signed stable release.</li>
-                <li>The supported preview target is a UEFI aarch64 virtual machine.</li>
-                <li>Apple Silicon is a good Arm VM host; do not install it directly on a Mac.</li>
-                <li>Bare-metal Arm devices are still experimental and model-specific.</li>
-                <li>Intel and AMD systems are not supported.</li>
-                <li>Dual boot uses advanced storage and preserved partitions.</li>
-                <li>Whole-disk erase requires an explicit blank-disk decision.</li>
-              </ul>
-            </AlertDescription>
-          </Alert>
+        <div className="experience__heading" data-gsap="reveal">
+          <h2 id="experience-title">The shortest distance from idea to artifact.</h2>
+          <p>
+            The AI layer is not a floating chatbot. It lives inside a real build
+            flow with files, logs, checkpoints, previews, and exports.
+          </p>
         </div>
-      </section>
 
-      <section id="verify" className="scroll-mt-20 border-b bg-muted/35">
-        <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.72fr_0.28fr] lg:px-8">
-          <div className="flex min-w-0 flex-col gap-6">
-            <SectionHeading
-              title="Verify the preview before booting"
-              description="Verify every part, reassemble the compressed ISO, decompress it, and verify the final ISO before attaching it to a virtual machine."
-            />
-            <Tabs defaultValue="macos-linux" className="w-full min-w-0">
-              <TabsList className="w-full justify-start overflow-x-auto sm:w-fit">
-                <TabsTrigger value="macos-linux">macOS / Linux</TabsTrigger>
-                <TabsTrigger value="windows">Windows</TabsTrigger>
-              </TabsList>
-              <TabsContent value="macos-linux" className="min-w-0">
-                <Card className="min-w-0">
-                  <CardHeader>
-                    <CardTitle>Reassemble and verify</CardTitle>
-                    <CardDescription>
-                      Commands for the current <code>aarch64</code> preview. Requires{" "}
-                      <code>zstd</code>.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="min-w-0">
-                    <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-4 text-sm leading-6">
-                      <code>{macLinuxVerificationCommand}</code>
-                    </pre>
-                  </CardContent>
-                  <CardFooter>
-                    <CopyButton
-                      value={macLinuxVerificationCommand}
-                      label="Copy macOS and Linux verification commands"
-                    />
-                  </CardFooter>
-                </Card>
-              </TabsContent>
-              <TabsContent value="windows" className="min-w-0">
-                <Card className="min-w-0">
-                  <CardHeader>
-                    <CardTitle>PowerShell checks</CardTitle>
-                    <CardDescription>
-                      Each command stops with an error if a downloaded or reassembled file differs
-                      from the exact published Arm release hash.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="min-w-0">
-                    <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-4 text-sm leading-6">
-                      <code>{windowsVerificationCommand}</code>
-                    </pre>
-                  </CardContent>
-                  <CardFooter>
-                    <CopyButton
-                      value={windowsVerificationCommand}
-                      label="Copy Windows verification commands"
-                    />
-                  </CardFooter>
-                </Card>
-              </TabsContent>
-            </Tabs>
-          </div>
-
-          <Card className="h-fit min-w-0" data-gsap="reveal">
-            <CardHeader>
-              <CardTitle>Release checksums</CardTitle>
-              <CardDescription>
-                Final Arm ISO SHA256 from the published release assets.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              {releaseArtifacts.map((artifact) => (
-                <div key={artifact.arch} className="flex flex-col gap-2 rounded-md bg-muted p-3">
-                  <span className="text-sm font-medium">{artifact.label}</span>
-                  <code className="break-all text-xs">{artifact.sha256}</code>
-                  <CopyButton value={artifact.sha256} label={`Copy ${artifact.arch} checksum`} />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        </div>
-      </section>
-
-      <section id="source" className="scroll-mt-20 border-b bg-background">
-        <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.8fr_1.2fr] lg:px-8">
-          <div className="flex min-w-0 flex-col gap-5" data-gsap="reveal">
-            <SectionHeading
-              title="Source and provenance"
-              description="Goblins OS source is AGPL-3.0-or-later. Forks must keep required notices and use their own branding unless they have permission to use the Goblins OS marks."
-            />
-            <div className="flex flex-wrap gap-3">
-              <Button asChild>
-                <a href={sourceUrl} rel="noreferrer" target="_blank">
-                  GitHub repository
-                  <ExternalLinkIcon data-icon="inline-end" />
-                </a>
-              </Button>
-              <Button asChild variant="outline">
-                <a href={`${sourceUrl}/blob/main/LICENSE`} rel="noreferrer" target="_blank">
-                  License
-                  <ArrowUpRightIcon data-icon="inline-end" />
-                </a>
-              </Button>
-              <Button asChild variant="outline">
-                <a href={`${sourceUrl}/blob/main/NOTICE`} rel="noreferrer" target="_blank">
-                  Notice
-                  <ArrowUpRightIcon data-icon="inline-end" />
-                </a>
-              </Button>
-            </div>
-          </div>
-
-          <div className="grid min-w-0 gap-4 md:grid-cols-3" data-gsap="reveal">
-            <EvidenceCard
-              icon={FileCheck2Icon}
-              title="Release process"
-              href={`${sourceUrl}/blob/main/SHIP.md`}
-              body="Build, verification, artifact, and signoff rules."
-            />
-            <EvidenceCard
-              icon={HardDriveIcon}
-              title="Arm release contract"
-              href={`${sourceUrl}/blob/main/os/release/architectures.toml`}
-              body="Expected aarch64 ISO, checksum, and manifest paths."
-            />
-            <EvidenceCard
-              icon={ShieldCheckIcon}
-              title="Marks policy"
-              href={`${sourceUrl}/blob/main/TRADEMARKS.md`}
-              body="Forks can use the source, but not the Goblins OS identity."
-            />
-          </div>
-        </div>
-      </section>
-
-      <section id="notice" className="scroll-mt-20 bg-muted/35">
-        <div className="mx-auto grid w-full max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.78fr_1.22fr] lg:px-8">
-          <SectionHeading
-            title="Notice and marks policy"
-            description="The source is open under AGPL-3.0-or-later. The Goblins OS identity is reserved so forks can exist without impersonating official releases."
-          />
-          <div className="grid gap-4 md:grid-cols-2" data-gsap="reveal">
-            <div className="flex flex-col gap-3 border-t pt-5">
-              <ShieldCheckIcon className="text-primary" aria-hidden="true" />
-              <h3 className="text-base font-semibold">Notice</h3>
-              <p className="text-sm leading-6 text-muted-foreground">
-                Modified distributions must preserve license, attribution,
-                provenance, and source obligations. Automated or AI-generated
-                patches do not remove those duties.
-              </p>
-              <Button asChild variant="ghost" size="sm" className="w-fit px-0">
-                <a href={`${sourceUrl}/blob/main/NOTICE`} rel="noreferrer" target="_blank">
-                  Open NOTICE
-                  <ArrowUpRightIcon data-icon="inline-end" />
-                </a>
-              </Button>
-            </div>
-            <div id="marks" className="scroll-mt-20 flex flex-col gap-3 border-t pt-5">
-              <FileCheck2Icon className="text-primary" aria-hidden="true" />
-              <h3 className="text-base font-semibold">Marks policy</h3>
-              <p className="text-sm leading-6 text-muted-foreground">
-                Forks may use the source under the license, but modified builds
-                need their own product name, release identity, icons,
-                wallpapers, domains, and installer branding unless permission is
-                granted.
-              </p>
-              <Button asChild variant="ghost" size="sm" className="w-fit px-0">
-                <a href={`${sourceUrl}/blob/main/TRADEMARKS.md`} rel="noreferrer" target="_blank">
-                  Open marks policy
-                  <ArrowUpRightIcon data-icon="inline-end" />
-                </a>
-              </Button>
-            </div>
-          </div>
-        </div>
-        <footer className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-6 text-sm text-muted-foreground sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
-          <span>Goblins OS</span>
-          <span>AGPL-3.0-or-later source. Goblins OS marks reserved.</span>
-        </footer>
-      </section>
-    </main>
-  );
-}
-
-function DownloadArtifactCard({ artifact }: { artifact: (typeof releaseArtifacts)[number] }) {
-  return (
-    <Card data-gsap="reveal">
-      <CardHeader>
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <CardTitle>{artifact.label}</CardTitle>
-            <CardDescription>{artifact.cpu}</CardDescription>
-          </div>
-          <Badge variant="secondary" className="shrink-0">
-            Community preview
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="flex min-w-0 flex-col gap-5">
-        <div className="grid gap-3 text-sm">
-          <MetadataRow label="ISO">
-            <code className="break-all text-xs">{artifact.isoName}</code>
-          </MetadataRow>
-          <MetadataRow label="Download">
-            <code className="break-all text-xs">{artifact.compressedName}</code>
-          </MetadataRow>
-          <MetadataRow label="SHA256">
-            <code className="break-all text-xs">{artifact.sha256}</code>
-          </MetadataRow>
-          <MetadataRow label="Size">
-            {formatBytes(artifact.rawSizeBytes)} ISO ·{" "}
-            {formatBytes(artifact.compressedSizeBytes)} download
-          </MetadataRow>
-          <MetadataRow label="Built">
-            {new Date(artifact.builtOn).toISOString().slice(0, 10)}
-          </MetadataRow>
-        </div>
-        <div className="rounded-lg border bg-muted/55 p-3">
-          <p className="mb-2 text-sm font-medium">Release notes</p>
-          <ul className="flex flex-col gap-1 text-xs leading-5 text-muted-foreground">
-            {artifact.notes.map((note) => (
-              <li key={note}>{note}</li>
-            ))}
-          </ul>
-        </div>
-        <div className="grid gap-2">
-          {artifact.downloadParts.map((part, index) => (
-            <Button key={part.filename} asChild variant="outline" className="w-full">
-              <a href={part.url} rel="noreferrer" target="_blank">
-                Download part {String(index).padStart(2, "0")}
-                <ArrowDownToLineIcon data-icon="inline-end" />
-              </a>
-            </Button>
+        <div className="experience__steps">
+          {experienceSteps.map((step) => (
+            <article className="experience-step" key={step.marker} data-gsap="reveal">
+              <span className="experience-step__marker">{step.marker}</span>
+              <step.icon aria-hidden="true" />
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+            </article>
           ))}
         </div>
-      </CardContent>
-      <CardFooter className="grid gap-2 sm:grid-cols-2">
-        <Button asChild variant="ghost" className="w-full">
-          <a href={artifact.partsSha256Url} rel="noreferrer" target="_blank">
-            Part hashes
-            <ExternalLinkIcon data-icon="inline-end" />
-          </a>
-        </Button>
-        <Button asChild variant="ghost" className="w-full">
-          <a href={artifact.manifestUrl} rel="noreferrer" target="_blank">
-            Manifest
-            <ExternalLinkIcon data-icon="inline-end" />
-          </a>
-        </Button>
-      </CardFooter>
-    </Card>
-  );
-}
 
-function ContainerImageCard({ image }: { image: ContainerImage }) {
-  return (
-    <Card data-gsap="reveal">
-      <CardHeader>
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-2">
-            <CardTitle>{image.label}</CardTitle>
-            <CardDescription>{image.platform}</CardDescription>
+        <figure className="product-window product-window--wide" data-gsap="reveal">
+          <WindowBar title="Build Studio · New build" meta="local / main" />
+          <Image
+            src={buildStudio.src}
+            alt={buildStudio.alt}
+            width={buildStudio.width}
+            height={buildStudio.height}
+            sizes="(min-width: 1280px) 1200px, 94vw"
+            className="product-window__image"
+          />
+          <figcaption>
+            <span>Build Studio</span>
+            <span>{buildStudio.description}</span>
+          </figcaption>
+        </figure>
+      </section>
+
+      <section className="workspace section-pad" aria-labelledby="workspace-title">
+        <div className="workspace__copy" data-gsap="reveal">
+          <div className="section-index section-index--dark">
+            <span>02</span>
+            <span>A desktop, not a demo</span>
           </div>
-          <Badge variant="secondary" className="shrink-0">
-            Public pull
-          </Badge>
+          <h2 id="workspace-title">Your whole workspace, still within reach.</h2>
+          <p>
+            Mission Control, native Settings, window switching, display tools,
+            recovery, and the build experience live in one coherent desktop.
+          </p>
+          <Button asChild variant="secondary" size="lg">
+            <a href="#system">
+              Explore the system
+              <ArrowRightIcon aria-hidden="true" />
+            </a>
+          </Button>
         </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-5">
-        <MetadataRow label="Image">
-          <code className="break-all text-xs">{image.image}</code>
-        </MetadataRow>
-        <div className="grid gap-3">
-          <CommandBlock label="Docker pull" command={image.pullCommand} />
-          <CommandBlock label="Docker verify" command={image.verifyCommand} />
-          <CommandBlock label="Podman pull" command={image.podmanPullCommand} />
-          <CommandBlock label="Podman verify" command={image.podmanVerifyCommand} />
+        <figure className="workspace__frame" data-gsap="reveal">
+          <Image
+            src={workspace.src}
+            alt={workspace.alt}
+            width={workspace.width}
+            height={workspace.height}
+            sizes="(min-width: 1024px) 68vw, 100vw"
+            className="workspace__image"
+          />
+          <figcaption>
+            <span>Mission Control</span>
+            <span>Windows, workspaces, and the native system surface.</span>
+          </figcaption>
+        </figure>
+      </section>
+
+      <section id="system" className="system section-pad" aria-labelledby="system-title">
+        <div className="section-index" data-gsap="reveal">
+          <span>03</span>
+          <span>Own the machine</span>
         </div>
-        <p className="text-sm leading-6 text-muted-foreground">{image.note}</p>
-      </CardContent>
-      <CardFooter className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <Button asChild variant="ghost">
-          <a href={image.sourceManifestUrl} rel="noreferrer" target="_blank">
-            Source manifest
-            <ExternalLinkIcon data-icon="inline-end" />
-          </a>
-        </Button>
-        <CopyButton value={image.pullCommand} label="Copy Docker pull command" />
-        <CopyButton value={image.podmanPullCommand} label="Copy Podman pull command" />
-      </CardFooter>
-    </Card>
-  );
-}
+        <div className="system__heading" data-gsap="reveal">
+          <h2 id="system-title">A playful front. A serious operating system underneath.</h2>
+          <p>
+            Built on Fedora bootc 44, with product identity, policy, release
+            verification, and native control surfaces owned by Goblins OS.
+          </p>
+        </div>
 
-function CommandBlock({ label, command }: { label: string; command: string }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <span className="text-sm font-medium">{label}</span>
-      <pre className="max-w-full whitespace-pre-wrap break-words rounded-md bg-muted p-3 text-xs leading-5">
-        <code>{command}</code>
-      </pre>
-    </div>
-  );
-}
+        <div className="system__grid">
+          {systemCapabilities.map((capability, index) => (
+            <article className="system-capability" key={capability.label} data-gsap="reveal">
+              <div className="system-capability__top">
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <capability.icon aria-hidden="true" />
+              </div>
+              <span className="eyebrow">{capability.label}</span>
+              <h3>{capability.title}</h3>
+              <p>{capability.body}</p>
+            </article>
+          ))}
+        </div>
 
-function MetadataRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="grid grid-cols-[92px_1fr] gap-3">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="min-w-0">{children}</span>
-    </div>
+        <div className="system__screens">
+          <figure className="product-window product-window--home" data-gsap="reveal">
+            <WindowBar title="Goblins OS · Home" meta="local first" />
+            <Image
+              src={home.src}
+              alt={home.alt}
+              width={home.width}
+              height={home.height}
+              sizes="(min-width: 1024px) 62vw, 100vw"
+              className="product-window__image"
+            />
+          </figure>
+          <figure className="product-window product-window--installer" data-gsap="reveal">
+            <WindowBar title="Installer" meta="guarded storage" />
+            <Image
+              src={installer.src}
+              alt={installer.alt}
+              width={installer.width}
+              height={installer.height}
+              sizes="(min-width: 1024px) 42vw, 100vw"
+              className="product-window__image"
+            />
+          </figure>
+        </div>
+      </section>
+
+      <section id="download" className="download section-pad" aria-labelledby="download-title">
+        <div className="download__halo" aria-hidden="true" />
+        <div className="section-index" data-gsap="reveal">
+          <span>04</span>
+          <span>Community preview</span>
+        </div>
+        <div className="download__heading" data-gsap="reveal">
+          <Badge variant="secondary">{releaseEvidence.releaseTag}</Badge>
+          <h2 id="download-title">Take the workshop for a spin.</h2>
+          <p>
+            Install the current preview in a UEFI aarch64 virtual machine. Use
+            a disposable virtual disk, keep backups, and expect a few goblins.
+          </p>
+        </div>
+
+        <div className="download__layout">
+          <Card className="download-card" data-gsap="reveal">
+            <CardHeader>
+              <div className="download-card__icon"><DownloadIcon aria-hidden="true" /></div>
+              <div>
+                <span className="eyebrow">Split installer media</span>
+                <CardTitle>{release.label}</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="download-card__facts">
+                <ReleaseFact label="Compressed" value={formatBytes(release.compressedSizeBytes)} />
+                <ReleaseFact label="Raw ISO" value={formatBytes(release.rawSizeBytes)} />
+                <ReleaseFact label="Built" value={new Date(release.builtOn).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} />
+              </div>
+              <div className="download-card__parts">
+                {release.downloadParts.map((part, index) => (
+                  <Button asChild size="lg" key={part.filename} className="download-part">
+                    <a href={part.url}>
+                      <span>
+                        <small>Part {String(index + 1).padStart(2, "0")}</small>
+                        {part.filename}
+                      </span>
+                      <strong>{formatBytes(part.sizeBytes)}</strong>
+                      <DownloadIcon aria-hidden="true" />
+                    </a>
+                  </Button>
+                ))}
+              </div>
+              <div className="download-card__links">
+                <a href={release.partsSha256Url}>Part checksums <ArrowUpRightIcon aria-hidden="true" /></a>
+                <a href={release.manifestUrl}>Build manifest <ArrowUpRightIcon aria-hidden="true" /></a>
+                <a href={release.evidenceUrl}>Release evidence <ArrowUpRightIcon aria-hidden="true" /></a>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="release-ledger" data-gsap="reveal">
+            <div className="release-ledger__top">
+              <FingerprintIcon aria-hidden="true" />
+              <span>Exact release ledger</span>
+            </div>
+            <ReleaseFact label="Architecture" value="aarch64 / ARM64" />
+            <ReleaseFact label="Target" value="UEFI virtual machine" />
+            <ReleaseFact label="Channel" value={image.image} />
+            <ReleaseFact label="Status" value="Installable community preview" />
+            <div className="release-ledger__digest">
+              <span>ISO SHA256</span>
+              <code>{release.sha256}</code>
+            </div>
+            <Button asChild variant="outline" className="w-full">
+              <a href={releaseEvidence.releaseUrl} target="_blank" rel="noreferrer">
+                Open the GitHub release
+                <ArrowUpRightIcon aria-hidden="true" />
+              </a>
+            </Button>
+          </div>
+        </div>
+
+        <Alert className="download__guardrail" data-gsap="reveal">
+          <ShieldCheckIcon aria-hidden="true" />
+          <AlertTitle>Preview boundaries</AlertTitle>
+          <AlertDescription>
+            This is not the formally signed stable release. Apple Silicon is a
+            convenient Arm VM host, not a bare-metal install target. Intel and
+            AMD x86_64 systems are not supported by this preview.
+          </AlertDescription>
+        </Alert>
+      </section>
+
+      <section id="verify" className="verify section-pad" aria-labelledby="verify-title">
+        <div className="section-index section-index--dark" data-gsap="reveal">
+          <span>05</span>
+          <span>Trust, but verify</span>
+        </div>
+        <div className="verify__layout">
+          <div className="verify__copy" data-gsap="reveal">
+            <h2 id="verify-title">You should not have to take the website&apos;s word for it.</h2>
+            <p>
+              Verify every split part, reassemble the compressed image, then
+              verify the final ISO before attaching it to a virtual machine.
+            </p>
+            <div className="verify__checks">
+              <span><CheckIcon aria-hidden="true" /> Split parts</span>
+              <span><CheckIcon aria-hidden="true" /> Compressed image</span>
+              <span><CheckIcon aria-hidden="true" /> Final installer ISO</span>
+            </div>
+          </div>
+
+          <Tabs defaultValue="unix" className="verify-console" data-gsap="reveal">
+            <div className="verify-console__bar">
+              <TabsList>
+                <TabsTrigger value="unix">macOS / Linux</TabsTrigger>
+                <TabsTrigger value="windows">Windows</TabsTrigger>
+              </TabsList>
+            </div>
+            <TabsContent value="unix">
+              <CommandBlock label="Terminal" command={macLinuxVerificationCommand} />
+            </TabsContent>
+            <TabsContent value="windows">
+              <CommandBlock label="PowerShell" command={windowsVerificationCommand} />
+            </TabsContent>
+          </Tabs>
+        </div>
+      </section>
+
+      <section className="open-source section-pad" aria-labelledby="source-title">
+        <div className="open-source__mark" data-gsap="reveal">
+          <Image src="/favicon.svg" alt="" width={120} height={120} aria-hidden="true" />
+        </div>
+        <div className="open-source__copy" data-gsap="reveal">
+          <span className="eyebrow">Open source, with a point of view</span>
+          <h2 id="source-title">Read the code. Break the build. Tell us what got weird.</h2>
+          <p>
+            Goblins OS is licensed under AGPL-3.0-or-later. The project keeps
+            source, release evidence, issue tracking, and the public build story
+            in the open.
+          </p>
+          <div className="open-source__actions">
+            <Button asChild size="lg">
+              <a href={sourceUrl} target="_blank" rel="noreferrer">
+                <GitForkIcon aria-hidden="true" />
+                Browse the repository
+              </a>
+            </Button>
+            <Button asChild size="lg" variant="outline">
+              <a href={issuesUrl} target="_blank" rel="noreferrer">
+                Share feedback
+                <ArrowUpRightIcon aria-hidden="true" />
+              </a>
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <section className="archive section-pad" aria-labelledby="archive-title">
+        <div data-gsap="reveal">
+          <span className="eyebrow">Immutable archive</span>
+          <h2 id="archive-title">Earlier experiments stay on the record.</h2>
+        </div>
+        <div className="archive__list">
+          {historicalReleaseArtifacts.map((artifact) => (
+            <a
+              className="archive-row"
+              href={artifact.releaseUrl}
+              key={artifact.arch}
+              target="_blank"
+              rel="noreferrer"
+              data-gsap="reveal"
+            >
+              <span>{artifact.arch}</span>
+              <strong>{artifact.label}</strong>
+              <small>{artifact.releaseTag}</small>
+              <ArrowUpRightIcon aria-hidden="true" />
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <footer className="site-footer">
+        <div className="site-footer__brand">
+          <Image src="/favicon.svg" alt="" width={28} height={28} aria-hidden="true" />
+          <strong>Goblins OS</strong>
+          <span>Build locally. Keep control.</span>
+        </div>
+        <div className="site-footer__links">
+          <a href="#top">Back to top</a>
+          <a href={`${sourceUrl}/blob/main/NOTICE`}>Notice</a>
+          <a href={`${sourceUrl}/blob/main/TRADEMARKS.md`}>Trademarks</a>
+          <a href={releaseEvidence.releaseRunUrl}>Build run</a>
+        </div>
+        <p>
+          Built on Fedora bootc 44. Goblins OS product identity and marks are
+          reserved. Source code is AGPL-3.0-or-later.
+        </p>
+      </footer>
+    </main>
   );
 }
 
 function SiteHeader() {
   return (
-    <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur">
-      <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        <a href="#" className="flex items-center gap-3 font-semibold" aria-label="Goblins OS home">
-          <Image src="/favicon.svg" alt="" aria-hidden width={32} height={32} priority />
-          <span>Goblins OS</span>
+    <header className="site-header" id="top">
+      <a className="site-header__brand" href="#top" aria-label="Goblins OS home">
+        <Image src="/favicon.svg" alt="" width={24} height={24} aria-hidden="true" />
+        <span>Goblins OS</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#experience">Experience</a>
+        <a href="#system">System</a>
+        <a href="#verify">Verify</a>
+      </nav>
+      <Button asChild size="sm">
+        <a href="#download">
+          Get preview
+          <ArrowRightIcon aria-hidden="true" />
         </a>
-        <nav className="hidden items-center gap-5 text-sm text-muted-foreground xl:flex">
-          <a className="transition-colors hover:text-foreground" href="#features">
-            Features
-          </a>
-          <a className="transition-colors hover:text-foreground" href="#screenshots">
-            Screenshots
-          </a>
-          <a className="transition-colors hover:text-foreground" href="#downloads">
-            Downloads
-          </a>
-          <a className="transition-colors hover:text-foreground" href="#containers">
-            Containers
-          </a>
-          <a className="transition-colors hover:text-foreground" href="#install">
-            Install
-          </a>
-          <a className="transition-colors hover:text-foreground" href="#verify">
-            Verify
-          </a>
-          <a className="transition-colors hover:text-foreground" href="#source">
-            Source
-          </a>
-          <a className="transition-colors hover:text-foreground" href="#notice">
-            Notice
-          </a>
-          <a className="transition-colors hover:text-foreground" href="#marks">
-            Marks
-          </a>
-        </nav>
-        <Button asChild variant="outline" size="sm">
-          <a href="#downloads">Get the preview</a>
-        </Button>
-      </div>
+      </Button>
     </header>
   );
 }
 
-function SectionHeading({
-  title,
-  description,
+function SignalItem({
+  children,
+  icon: Icon,
+  ariaHidden = false,
 }: {
-  title: string;
-  description: string;
+  children: React.ReactNode;
+  icon: typeof CpuIcon;
+  ariaHidden?: boolean;
 }) {
   return (
-    <div className="flex max-w-2xl flex-col gap-2" data-gsap="reveal">
-      <h2 className="text-3xl font-semibold tracking-normal text-balance sm:text-4xl">
-        {title}
-      </h2>
-      <p className="text-sm leading-6 text-muted-foreground sm:text-base">
-        {description}
-      </p>
-    </div>
-  );
-}
-
-function ProofPoint({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="flex items-center gap-2">
-      <CheckCircle2Icon className="text-primary" aria-hidden="true" />
+    <span className="signal-item" aria-hidden={ariaHidden || undefined}>
+      <Icon aria-hidden="true" />
       {children}
     </span>
   );
 }
 
-function EvidenceCard({
-  icon: Icon,
-  title,
-  body,
-  href,
-}: {
-  icon: typeof FileCheck2Icon;
-  title: string;
-  body: string;
-  href: string;
-}) {
+function WindowBar({ title, meta }: { title: string; meta: string }) {
   return (
-    <Card>
-      <CardHeader>
-        <Icon className="text-primary" aria-hidden="true" />
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{body}</CardDescription>
-      </CardHeader>
-      <CardFooter>
-        <Button asChild variant="ghost" size="sm">
-          <a href={href} rel="noreferrer" target="_blank">
-            Open
-            <ArrowUpRightIcon data-icon="inline-end" />
-          </a>
-        </Button>
-      </CardFooter>
-    </Card>
+    <div className="window-bar" aria-hidden="true">
+      <span className="window-dot window-dot--red" />
+      <span className="window-dot window-dot--yellow" />
+      <span className="window-dot window-dot--green" />
+      <span className="window-title">{title}</span>
+      <span className="window-live">{meta}</span>
+    </div>
+  );
+}
+
+function ReleaseFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="release-fact">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function CommandBlock({ label, command }: { label: string; command: string }) {
+  return (
+    <div className="command-block">
+      <div className="command-block__header">
+        <span><TerminalSquareIcon aria-hidden="true" />{label}</span>
+        <CopyButton value={command} label={`Copy ${label} verification command`} />
+      </div>
+      <pre tabIndex={0}><code>{command}</code></pre>
+    </div>
   );
 }

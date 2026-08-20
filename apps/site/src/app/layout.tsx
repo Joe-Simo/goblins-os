@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   metadataBase: new URL("https://goblinsos.com"),
   title: {
-    default: "Goblins OS",
+    default: "Goblins OS — Build locally. Keep control.",
     template: "%s | Goblins OS",
   },
   description:
@@ -46,11 +46,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  colorScheme: "light dark",
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#18181b" },
-  ],
+  colorScheme: "light",
+  themeColor: "#f3f0e6",
 };
 
 export default function RootLayout({

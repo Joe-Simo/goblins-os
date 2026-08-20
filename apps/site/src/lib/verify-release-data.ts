@@ -43,15 +43,15 @@ equalStringSets(
 );
 equalStringSets(
   historicalReleaseArtifacts.map(({ arch }) => arch),
-  ["x86_64"],
+  ["aarch64", "x86_64"],
   "Historical release architecture drifted",
 );
 
 for (const artifact of releaseArtifacts) {
   const releaseBaseUrl = `https://github.com/Joe-Simo/goblins-os/releases/download/${releaseEvidence.releaseTag}`;
   assert(
-    artifact.status === "historical",
-    `Preserved ${artifact.arch} media must remain explicitly historical`,
+    artifact.status === "preview",
+    `Current ${artifact.arch} media must remain explicitly preview`,
   );
   assert(
     Number.isSafeInteger(artifact.rawSizeBytes) && artifact.rawSizeBytes > 0,

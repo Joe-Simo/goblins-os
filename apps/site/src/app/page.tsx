@@ -64,9 +64,9 @@ const features = [
     icon: TerminalSquareIcon,
   },
   {
-    title: "AI choices in the current source",
+    title: "AI choices without a bundled secret",
     description:
-      "Choose on-device GPT-OSS, an OpenAI account through the bundled Codex CLI, or your own API key through a protected per-user window. The linked July alpha predates this flow.",
+      "Choose on-device GPT-OSS, an OpenAI account through the bundled Codex CLI, or your own API key through a protected per-user window.",
     icon: LockKeyholeIcon,
   },
   {
@@ -88,8 +88,8 @@ const features = [
 
 const installSteps = [
   {
-    title: "Choose the right ISO",
-    body: "A current Goblins OS installer is not published yet. The July alpha is retained only as a historical record.",
+    title: "Download every part",
+    body: "Get each numbered aarch64 preview part from the current GitHub prerelease.",
   },
   {
     title: "Verify the download",
@@ -155,21 +155,21 @@ export default function Home() {
           <div className="flex max-w-2xl flex-col gap-6" data-gsap="reveal">
             <div className="flex flex-col gap-4">
               <Badge variant="secondary" className="w-fit">
-                Goblins OS · native Linux desktop · local builds
+                Public aarch64 preview · native Linux desktop · local builds
               </Badge>
               <h1 className="text-5xl font-semibold leading-[0.95] tracking-normal text-balance sm:text-6xl lg:text-7xl">
                 Goblins OS
               </h1>
               <p className="max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
                 An open AI-native Linux desktop for building local software.
-                Verify the native Arm release media and keep your system under
-                your control.
+                Download the public Arm preview, explore it in a VM, and keep
+                your system under your control.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
               <Button asChild size="lg">
                 <a href="#downloads">
-                  Check downloads
+                  Download the preview
                   <ArrowDownToLineIcon data-icon="inline-end" />
                 </a>
               </Button>
@@ -236,9 +236,8 @@ export default function Home() {
               The public image ships no maintainer API key and no proprietary OpenAI desktop app.
               In the current source, Goblins AI uses the bundled verified Codex CLI for an OpenAI
               account. The separate Codex shortcut opens a user-installed compatible app or the
-              official web, while ChatGPT remains on the official web. The linked July alpha
-              predates the protected per-user key flow and compatible-app routing; do not treat it
-              as proof of these candidate capabilities.
+              official web, while ChatGPT remains on the official web. Personal credentials stay
+              outside the published OS image.
             </AlertDescription>
           </Alert>
         </div>
@@ -304,8 +303,8 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-12 sm:px-6 lg:px-8">
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
             <SectionHeading
-              title="Historical Arm installer"
-              description="The July aarch64 alpha predates the current Goblins OS identity and experience updates. It remains available only as a verifiable historical record; a current installer will be published after its release gates pass."
+              title="Goblins OS public preview"
+              description="A real, branded installer for UEFI aarch64 virtual machines. It is made for demos, exploration, and feedback—not production or unverified bare-metal devices."
             />
             <div className="flex flex-wrap items-center gap-2">
               <Button asChild variant="ghost">
@@ -371,7 +370,7 @@ export default function Home() {
                       <TableCell className="min-w-[260px] whitespace-normal">
                         <div className="flex flex-col gap-2">
                           <Badge variant="secondary" className="w-fit">
-                            Historical · not current
+                            Community preview
                           </Badge>
                           <ul className="flex flex-col gap-1 text-xs leading-5 text-muted-foreground">
                             {artifact.notes.map((note) => (
@@ -424,7 +423,7 @@ export default function Home() {
               </Table>
             </CardContent>
             <CardFooter className="flex flex-col items-start gap-3 border-t text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <span>Historical OS media is preserved on GitHub for provenance.</span>
+              <span>Preview media and its exact checksums are served from GitHub.</span>
               <a
                 className="font-medium text-foreground underline-offset-4 hover:underline"
                 href={releaseEvidence.releaseRunUrl}
@@ -490,7 +489,7 @@ export default function Home() {
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
             <SectionHeading
               title="Arm container image"
-              description="Use the public aarch64 Goblins OS channel to inspect or verify the currently published system image. The pending identity update is not live until its channel promotion completes."
+              description="Use the public aarch64 Goblins OS channel to inspect the same update-enabled system image carried by the preview installer."
             />
             <Button asChild variant="ghost">
               <a href={releaseEvidence.releaseRunUrl} rel="noreferrer" target="_blank">
@@ -511,7 +510,7 @@ export default function Home() {
             <AlertTitle>Containers are not a desktop VM</AlertTitle>
             <AlertDescription>
               Container images are for inspection, automation, and derived
-              builds. There is no current graphical installer release yet.
+              builds. Use the public preview ISO for the graphical VM experience.
             </AlertDescription>
           </Alert>
         </div>
@@ -522,7 +521,7 @@ export default function Home() {
           <div className="flex flex-col gap-8">
             <SectionHeading
               title="Install Goblins OS"
-              description="Wait for the next current installer release. The preserved July alpha is not the current branded product and should not be used for a new installation."
+              description="Try the community preview in a UEFI aarch64 virtual machine. Verify the download, use a disposable virtual disk, and keep anything important backed up."
             />
             <div className="grid gap-4 md:grid-cols-3">
               {installSteps.map((step, index) => (
@@ -544,10 +543,10 @@ export default function Home() {
             <AlertTitle>Install guardrails</AlertTitle>
             <AlertDescription>
               <ul className="flex flex-col gap-2">
-                <li>No current Goblins OS installer is published.</li>
-                <li>The next install target is a UEFI aarch64 virtual machine.</li>
-                <li>Apple Silicon is an HVF proof host, not a bare-metal install target.</li>
-                <li>Bare-metal Arm devices need explicit model-specific proof before support is claimed.</li>
+                <li>This is a community preview, not the formally signed stable release.</li>
+                <li>The supported preview target is a UEFI aarch64 virtual machine.</li>
+                <li>Apple Silicon is a good Arm VM host; do not install it directly on a Mac.</li>
+                <li>Bare-metal Arm devices are still experimental and model-specific.</li>
                 <li>Intel and AMD systems are not supported.</li>
                 <li>Dual boot uses advanced storage and preserved partitions.</li>
                 <li>Whole-disk erase requires an explicit blank-disk decision.</li>
@@ -561,8 +560,8 @@ export default function Home() {
         <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[0.72fr_0.28fr] lg:px-8">
           <div className="flex min-w-0 flex-col gap-6">
             <SectionHeading
-              title="Verify the historical media"
-              description="If you need to audit the preserved July alpha, verify both parts, reassemble the compressed ISO, decompress it, and verify the final ISO. Do not use it for a new installation."
+              title="Verify the preview before booting"
+              description="Verify every part, reassemble the compressed ISO, decompress it, and verify the final ISO before attaching it to a virtual machine."
             />
             <Tabs defaultValue="macos-linux" className="w-full min-w-0">
               <TabsList className="w-full justify-start overflow-x-auto sm:w-fit">
@@ -574,7 +573,7 @@ export default function Home() {
                   <CardHeader>
                     <CardTitle>Reassemble and verify</CardTitle>
                     <CardDescription>
-                      Commands for the historical <code>aarch64</code> alpha. Requires{" "}
+                      Commands for the current <code>aarch64</code> preview. Requires{" "}
                       <code>zstd</code>.
                     </CardDescription>
                   </CardHeader>
@@ -747,7 +746,7 @@ function DownloadArtifactCard({ artifact }: { artifact: (typeof releaseArtifacts
             <CardDescription>{artifact.cpu}</CardDescription>
           </div>
           <Badge variant="secondary" className="shrink-0">
-            Historical · not current
+            Community preview
           </Badge>
         </div>
       </CardHeader>
@@ -911,7 +910,7 @@ function SiteHeader() {
           </a>
         </nav>
         <Button asChild variant="outline" size="sm">
-          <a href="#downloads">Check downloads</a>
+          <a href="#downloads">Get the preview</a>
         </Button>
       </div>
     </header>

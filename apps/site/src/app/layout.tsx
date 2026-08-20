@@ -9,7 +9,7 @@ export const metadata: Metadata = {
     template: "%s | Goblins OS",
   },
   description:
-    "Goblins OS is an open AI-native Linux desktop for building local software.",
+    "Download the Goblins OS public aarch64 preview—an open AI-native Linux desktop for building local software.",
   alternates: {
     canonical: "/",
   },
@@ -20,15 +20,15 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Goblins OS",
     description:
-      "An open AI-native Linux desktop for building local software.",
+      "The public aarch64 preview of an open AI-native Linux desktop for building local software.",
     url: "https://goblinsos.com",
     siteName: "Goblins OS",
     images: [
       {
-        url: "/screenshots/home.png",
+        url: "/screenshots/build-studio.png",
         width: 1400,
-        height: 591,
-        alt: "Goblins OS home screen",
+        height: 590,
+        alt: "Goblins OS Build Studio on the native desktop",
       },
     ],
     locale: "en_US",
@@ -38,8 +38,8 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Goblins OS",
     description:
-      "An open AI-native Linux desktop for building local software.",
-    images: ["/screenshots/home.png"],
+      "The public aarch64 preview of an open AI-native Linux desktop for building local software.",
+    images: ["/screenshots/build-studio.png"],
   },
 };
 

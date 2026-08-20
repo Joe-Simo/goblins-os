@@ -10,18 +10,20 @@ icons, wallpapers, and associated trade dress are reserved.
 
 ## Published artifacts
 
-The public image channel and historical release records are available here:
+The public image channel, community preview, and historical release records are
+available here:
 
 - [Goblins OS releases](https://github.com/Joe-Simo/goblins-os/releases)
 - [Website](https://goblinsos.com)
 
-No current branded installer is published yet. The preserved July 2026
-`aarch64` alpha predates the current Goblins OS identity and experience updates
-and should not be used for a new installation. The next installer remains
-scoped to a UEFI aarch64 virtual machine; bare-metal Arm support is not claimed
-until an exact device model completes the hardware matrix. Apple Silicon is an
-HVF proof host, not a bare-metal Goblins OS install target. Intel and AMD
-`x86_64` systems are not supported.
+The current installer is the
+[`v0.2.0-preview.20260820`](https://github.com/Joe-Simo/goblins-os/releases/tag/v0.2.0-preview.20260820)
+community preview for UEFI aarch64 virtual machines. It is installable and
+update-enabled, but it is not the formally signed stable release. Use a
+disposable virtual disk, keep backups, and expect rough edges. Bare-metal Arm
+support is not claimed until an exact device model completes the hardware
+matrix. Apple Silicon is an Arm VM host, not a bare-metal Goblins OS install
+target. Intel and AMD `x86_64` systems are not supported.
 
 The `x86_64` files already attached to
 [`v0.1.0-alpha.20260703`](https://github.com/Joe-Simo/goblins-os/releases/tag/v0.1.0-alpha.20260703)
@@ -29,8 +31,8 @@ are retained as immutable historical release records. They are not a supported
 or current Goblins OS target and must not be promoted into a current channel.
 
 The historical release keeps SHA256 checksums, manifests, and SBOMs for audit
-and provenance. A new installer will be listed as current only after its release
-gates pass.
+and provenance. The preview has its own checksums, manifests, package evidence,
+and exact image/source binding; formal stable signoff remains a separate path.
 
 ## What it is
 
@@ -62,9 +64,8 @@ and notices.
 
 The current `ghcr.io/joe-simo/goblins-os:aarch64` bootc container image is
 intended for Docker/Podman inspection, verification, automation, and
-derived-image workflows. A full graphical desktop installation requires a
-current branded ISO; none is published yet, so the historical July installer
-must not be presented as the current installation path.
+derived-image workflows. Use the current aarch64 community-preview ISO for the
+full graphical VM installation path; the July installer remains historical.
 
 Container package visibility is tracked separately from the public source repo.
 If a `docker pull` or `podman pull` command asks for authentication, the GHCR

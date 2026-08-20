@@ -1,0 +1,345 @@
+# Goblins OS — public aarch64 preview installer packaging.
+#
+# This is the practical public-preview path for the side project. It builds the
+# normal interactive installer from an already-published, digest-pinned image,
+# verifies the image and installer inputs, and emits release-ready split assets.
+# It does not claim formal stable signoff and it has no repository write
+# authority; publishing the prerelease remains an explicit owner action.
+name: aarch64-preview-iso
+run-name: aarch64 preview installer · ${{ inputs.preview_tag }} · ${{ inputs.candidate_commit }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview_tag:
+        description: "Public prerelease tag (vX.Y.Z-preview.YYYYMMDD)"
+        required: true
+        type: string
+      candidate_commit:
+        description: "Exact lowercase 40-hex source commit represented by the public image"
+        required: true
+        type: string
+      candidate_image_ref:
+        description: "Digest-pinned public aarch64 image (ghcr.io/...@sha256:<64 lowercase hex>)"
+        required: true
+        type: string
+      branding_image_ref:
+        description: "Digest-pinned installer branding image from the protected publisher"
+        required: true
+        type: string
+      branding_publisher_evidence_base64:
+        description: "Base64 of the exact protected-publisher branding evidence JSON (32 KiB decoded maximum)"
+        required: true
+        type: string
+      branding_publisher_evidence_sha256:
+        description: "SHA-256 of the decoded protected-publisher branding evidence JSON"
+        required: true
+        type: string
+
+concurrency:
+  group: aarch64-preview-iso-${{ inputs.preview_tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GOBLINS_OS_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+  GOBLINS_OS_CANDIDATE_IMAGE_REF: ${{ inputs.candidate_image_ref }}
+  GOBLINS_OS_INSTALLER_BRANDING_IMAGE: ${{ inputs.branding_image_ref }}
+  GOBLINS_OS_PREVIEW_TAG: ${{ inputs.preview_tag }}
+
+jobs:
+  build-preview-installer:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate preview inputs and exact checkout
+        run: |
+          set -euo pipefail
+          [[ "$GOBLINS_OS_PREVIEW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]{8}$ ]] || {
+            echo "preview_tag must use vX.Y.Z-preview.YYYYMMDD" >&2
+            exit 1
+          }
+          [[ "$GOBLINS_OS_CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "candidate_commit must be exactly 40 lowercase hexadecimal characters" >&2
+            exit 1
+          }
+          [[ "$GOBLINS_OS_CANDIDATE_IMAGE_REF" =~ ^ghcr\.io/[a-z0-9][a-z0-9._/-]*[a-z0-9]@sha256:[0-9a-f]{64}$ ]] || {
+            echo "candidate_image_ref must be a lowercase digest-pinned ghcr.io reference" >&2
+            exit 1
+          }
+          [[ "$GOBLINS_OS_CANDIDATE_IMAGE_REF" != *".."* && "$GOBLINS_OS_CANDIDATE_IMAGE_REF" != *"//"* ]] || {
+            echo "candidate_image_ref contains an invalid repository path" >&2
+            exit 1
+          }
+          expected_prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/goblins-os@sha256:"
+          [[ "$GOBLINS_OS_CANDIDATE_IMAGE_REF" == "$expected_prefix"* ]] || {
+            echo "candidate_image_ref must identify this repository's Goblins OS package" >&2
+            exit 1
+          }
+          [[ "$GOBLINS_OS_INSTALLER_BRANDING_IMAGE" =~ ^ghcr\.io/joe-simo/goblins-os-installer-branding-tool@sha256:[0-9a-f]{64}$ ]] || {
+            echo "branding_image_ref must be the protected publisher's digest-pinned ARM64 branding tool" >&2
+            exit 1
+          }
+          test "$(git rev-parse HEAD)" = "$GOBLINS_OS_CANDIDATE_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+
+      - name: Materialize protected-publisher branding evidence
+        shell: bash
+        env:
+          BRANDING_EVIDENCE_BASE64: ${{ inputs.branding_publisher_evidence_base64 }}
+          BRANDING_EVIDENCE_SHA256: ${{ inputs.branding_publisher_evidence_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$BRANDING_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          evidence="$RUNNER_TEMP/installer-branding-publisher-evidence.json"
+          printf '%s' "$BRANDING_EVIDENCE_BASE64" | base64 --decode > "$evidence"
+          test -s "$evidence"
+          test ! -L "$evidence"
+          test "$(wc -c < "$evidence")" -le 32768
+          test "$(sha256sum "$evidence" | awk '{print $1}')" = "$BRANDING_EVIDENCE_SHA256"
+          printf 'GOBLINS_OS_INSTALLER_BRANDING_PUBLISHER_EVIDENCE=%s\n' "$evidence" \
+            >> "$GITHUB_ENV"
+
+      - name: Assert native aarch64 runner
+        run: test "$(uname -m)" = "aarch64"
+
+      - name: Free disk and add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache /usr/share/swift /usr/local/lib/node_modules \
+            /usr/share/miniconda /usr/lib/jvm /usr/local/share/powershell \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+          sudo apt-get clean || true
+          sudo docker image prune -af || true
+          sudo swapoff -a || true
+          sudo rm -f /swapfile /mnt/swapfile || true
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          df -h /
+          free -h
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq ripgrep zstd
+
+      - name: Pull and verify the public digest-pinned image anonymously
+        run: |
+          set -euo pipefail
+          anonymous_config="$(mktemp -d "$RUNNER_TEMP/goblins-os-anonymous-docker.XXXXXX")"
+          trap 'rm -rf -- "$anonymous_config"' EXIT
+          DOCKER_CONFIG="$anonymous_config" docker pull "$GOBLINS_OS_CANDIDATE_IMAGE_REF"
+          test "$(docker image inspect --format '{{.Os}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "linux"
+          test "$(docker image inspect --format '{{.Architecture}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "arm64"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$GOBLINS_OS_CANDIDATE_IMAGE_REF")" = "$GOBLINS_OS_CANDIDATE_COMMIT"
+
+      - name: Verify source and installed image contracts
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -w /workspace \
+            "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            /usr/libexec/goblins-os/goblins-os-verify \
+            --source-root /workspace \
+            --source-profile update \
+            | tee /tmp/goblins-os-preview-source-verify.log
+          grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
+            /tmp/goblins-os-preview-source-verify.log
+          docker run --rm "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            /usr/libexec/goblins-os/goblins-os-verify --installed-root / \
+            | tee /tmp/goblins-os-preview-installed-verify.log
+          grep -Eq '^goblins_os_verify_result total=[0-9]+ blocked=0$' \
+            /tmp/goblins-os-preview-installed-verify.log
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+
+      - name: Run install and services self-test
+        run: |
+          set -euo pipefail
+          printf 'FROM %s AS goblins-os\n' "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            > /tmp/goblins-os-preview-selftest.Dockerfile
+          cat os/bootc/selftest.suffix.Dockerfile \
+            >> /tmp/goblins-os-preview-selftest.Dockerfile
+          docker buildx build \
+            --file /tmp/goblins-os-preview-selftest.Dockerfile \
+            --target selftest \
+            --output type=cacheonly \
+            .
+
+      - name: Build the interactive preview installer
+        run: |
+          GOBLINS_OS_CONTAINER_RUNTIME=docker \
+          GOBLINS_OS_ARCH=aarch64 \
+          GOBLINS_OS_ISO_CONFIG=os/iso/config.toml \
+          GOBLINS_OS_IMAGE="$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+          GOBLINS_OS_SKIP_LOCAL_IMAGE_BUILD=1 \
+          GOBLINS_OS_SHIPPABLE_RELEASE=1 \
+          GOBLINS_OS_BIB_SOURCE_IMAGE="$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+          os/iso/build-iso.sh
+
+      - name: Verify interactive preview media contract
+        run: |
+          set -euo pipefail
+          output="os/iso/output/aarch64"
+          iso="$output/bootiso/goblins-os-aarch64.iso"
+          manifest="$output/manifest-goblins-os-aarch64.json"
+          (cd "$output/bootiso" && sha256sum -c goblins-os-aarch64.iso.sha256)
+          jq -e \
+            --arg commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
+            --arg image "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            '.schema == "goblins-os-iso-build-manifest-v2"
+             and .product == "Goblins OS"
+             and .architecture == "aarch64"
+             and .candidate_commit == $commit
+             and .image == $image
+             and .installer_config == "os/iso/config.toml"
+             and .installer_branding_applied == true
+             and .builder_source_image == $image
+             and .installer_payload_source_kind == "release-registry"
+             and .installer_payload_source_local_only == false
+             and .shippable_release == true' \
+            "$manifest" >/dev/null
+          test -s "$iso"
+          if LC_ALL=C grep -aFq "GOBLINS_VERIFY_INSTALL_DONE" "$iso"; then
+            echo "preview media unexpectedly contains the verification-only installer marker" >&2
+            exit 1
+          fi
+
+      - name: Generate release evidence for the preview image
+        run: |
+          set -euo pipefail
+          mkdir -p os/signoff-proofs/sbom/aarch64
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -v "$PWD/os/signoff-proofs/sbom/aarch64:/out" \
+            -w /workspace \
+            "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            /usr/libexec/goblins-os/goblins-os-verify \
+            --source-root /workspace \
+            --release-evidence /out \
+            --arch aarch64 \
+            --candidate-commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
+            --image-ref "$GOBLINS_OS_CANDIDATE_IMAGE_REF"
+          . ./os/hardware-gate/rpm-sbom-arch.sh
+          rpm_sbom_arch_matches os/signoff-proofs/sbom/aarch64/rpm-packages.tsv aarch64
+          . ./os/hardware-gate/release-evidence.sh
+          goblins_os_release_evidence_hashes_match os/signoff-proofs/sbom/aarch64
+
+      - name: Package split preview downloads and manifest
+        run: |
+          set -euo pipefail
+          output="os/iso/output/aarch64"
+          bootiso="$output/bootiso"
+          iso="$bootiso/goblins-os-aarch64.iso"
+          compressed="$bootiso/goblins-os-aarch64.iso.zst"
+          zstd -T0 -10 --long=31 --force "$iso" -o "$compressed"
+          (cd "$bootiso" && sha256sum goblins-os-aarch64.iso.zst > goblins-os-aarch64.iso.zst.sha256)
+          split -b 1800M -d -a 2 "$compressed" "$compressed.part-"
+          (cd "$bootiso" && sha256sum goblins-os-aarch64.iso.zst.part-* > goblins-os-aarch64.iso.zst.parts.sha256)
+          part_count="$(find "$bootiso" -maxdepth 1 -type f -name 'goblins-os-aarch64.iso.zst.part-*' | wc -l | tr -d ' ')"
+          test "$part_count" -ge 1
+          test "$part_count" -le 4
+          while IFS= read -r part; do
+            test "$(wc -c < "$part")" -le 1887436800
+          done < <(find "$bootiso" -maxdepth 1 -type f -name 'goblins-os-aarch64.iso.zst.part-*' | sort)
+          raw_sha="$(sha256sum "$iso" | awk '{print $1}')"
+          compressed_sha="$(sha256sum "$compressed" | awk '{print $1}')"
+          raw_size="$(wc -c < "$iso")"
+          compressed_size="$(wc -c < "$compressed")"
+          parts_json="$(
+            find "$bootiso" -maxdepth 1 -type f -name 'goblins-os-aarch64.iso.zst.part-*' -print0 \
+              | sort -z \
+              | while IFS= read -r -d '' part; do
+                  jq -n \
+                    --arg filename "$(basename "$part")" \
+                    --arg sha256 "$(sha256sum "$part" | awk '{print $1}')" \
+                    --argjson size_bytes "$(wc -c < "$part")" \
+                    '{filename: $filename, size_bytes: $size_bytes, sha256: $sha256}'
+                done \
+              | jq -s .
+          )"
+          jq -n \
+            --arg preview_tag "$GOBLINS_OS_PREVIEW_TAG" \
+            --arg commit "$GOBLINS_OS_CANDIDATE_COMMIT" \
+            --arg image "$GOBLINS_OS_CANDIDATE_IMAGE_REF" \
+            --arg raw_sha "$raw_sha" \
+            --arg compressed_sha "$compressed_sha" \
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg built_on "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson raw_size "$raw_size" \
+            --argjson compressed_size "$compressed_size" \
+            --argjson parts "$parts_json" \
+            '{
+              schema: "goblins-os-public-preview-v1",
+              product: "Goblins OS",
+              channel: "preview",
+              preview_tag: $preview_tag,
+              support: "community preview",
+              architecture: "aarch64",
+              target: "UEFI aarch64 virtual machines",
+              candidate_commit: $commit,
+              image_ref: $image,
+              workflow_run: $run,
+              built_on: $built_on,
+              iso: {
+                filename: "goblins-os-aarch64.iso",
+                size_bytes: $raw_size,
+                sha256: $raw_sha
+              },
+              compressed_iso: {
+                filename: "goblins-os-aarch64.iso.zst",
+                size_bytes: $compressed_size,
+                sha256: $compressed_sha,
+                parts: $parts
+              },
+              stable_release_signoff: false,
+              note: "Public side-project preview. It is installable and update-enabled, but it is not the formally signed stable release."
+            }' > "$output/goblins-os-aarch64-preview-manifest.json"
+          cat > "$output/PREVIEW-INSTALL.txt" <<'EOF'
+          Goblins OS aarch64 public preview
+
+          1. Download every goblins-os-aarch64.iso.zst.part-* file.
+          2. Verify the hashes in goblins-os-aarch64.iso.zst.parts.sha256.
+          3. Reassemble the parts in numeric order.
+          4. Verify goblins-os-aarch64.iso.zst.sha256.
+          5. Decompress with zstd --long=31.
+          6. Verify goblins-os-aarch64.iso.sha256.
+          7. Boot the ISO in a UEFI aarch64 virtual machine and review the target disk before installing.
+
+          This is a community preview for exploration and demos, not the formally signed stable release.
+          EOF
+          rm -f "$iso" "$compressed"
+
+      - name: Scan preview artifacts for secrets
+        run: |
+          . ./os/hardware-gate/secret-scan.sh
+          goblins_os_artifact_secret_scan "$PWD"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: goblins-os-aarch64-preview-${{ inputs.preview_tag }}-${{ inputs.candidate_commit }}-attempt-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso.sha256
+            os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso.zst.sha256
+            os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso.zst.parts.sha256
+            os/iso/output/aarch64/bootiso/goblins-os-aarch64.iso.zst.part-*
+            os/iso/output/aarch64/goblins-os-aarch64-preview-manifest.json
+            os/iso/output/aarch64/PREVIEW-INSTALL.txt
+            os/iso/output/aarch64/manifest-goblins-os-aarch64.json
+            os/iso/output/aarch64/manifest-anaconda-iso.json
+            os/iso/output/aarch64/installer-branding-publisher-evidence.json
+            os/signoff-proofs/sbom/aarch64/

@@ -5,11 +5,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   metadataBase: new URL("https://goblinsos.com"),
   title: {
-    default: "Goblins OS — Build locally. Keep control.",
+    default: "Goblins OS — Imagine it. Build it. Keep it.",
     template: "%s | Goblins OS",
   },
   description:
-    "Download the Goblins OS public aarch64 preview—an open AI-native Linux desktop for building local software.",
+    "Meet Goblins OS, the open Linux desktop that helps turn your ideas into working software—right on your machine.",
   alternates: {
     canonical: "/",
   },
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Goblins OS",
     description:
-      "The public aarch64 preview of an open AI-native Linux desktop for building local software.",
+      "The open Linux desktop that helps turn your ideas into working software—right on your machine.",
     url: "https://goblinsos.com",
     siteName: "Goblins OS",
     images: [
@@ -38,7 +38,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Goblins OS",
     description:
-      "The public aarch64 preview of an open AI-native Linux desktop for building local software.",
+      "The open Linux desktop that helps turn your ideas into working software—right on your machine.",
     images: ["/screenshots/build-studio.png"],
   },
 };

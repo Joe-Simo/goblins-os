@@ -89,8 +89,8 @@ export function HeroReel() {
         <span className="window-dot window-dot--red" />
         <span className="window-dot window-dot--yellow" />
         <span className="window-dot window-dot--green" />
-        <span className="window-title">Goblins OS · Product tour</span>
-        <span className="window-live">Live preview</span>
+        <span className="window-title">Goblins OS</span>
+        <span className="window-live">Build Studio</span>
       </div>
       <div className="hero-reel__screen">
         <video
@@ -106,8 +106,7 @@ export function HeroReel() {
           onPlay={() => setIsPlaying(true)}
         >
           <source src="/media/goblins-os-demo.mp4" type="video/mp4" />
-          The demo video is unavailable. The same experience is shown in the
-          still-image chapters below.
+          The video is unavailable. A still image of Goblins OS appears instead.
         </video>
         <Button
           className="hero-reel__control"
@@ -121,8 +120,7 @@ export function HeroReel() {
         </Button>
       </div>
       <p id="hero-reel-caption" className="hero-reel__caption">
-        A six-second silent tour from the desktop into Build Studio. The same
-        experience is shown in the still-image chapters below.
+        From a fresh idea to Build Studio in six seconds. No audio.
       </p>
     </div>
   );

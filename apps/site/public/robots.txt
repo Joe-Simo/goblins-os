@@ -1,5 +1,6 @@
 User-agent: *
 Allow: /
+Sitemap: https://goblinsos.com/sitemap.xml
 
 # Goblins OS source is AGPL-3.0-or-later. The Goblins OS name, marks, branding,
 # release identity, and attribution are reserved and governed by NOTICE and

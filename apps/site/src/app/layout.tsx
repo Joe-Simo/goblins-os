@@ -10,6 +10,16 @@ export const metadata: Metadata = {
   },
   description:
     "Meet Goblins OS, the open Linux desktop that helps turn your ideas into working software—right on your machine.",
+  applicationName: "Goblins OS",
+  category: "technology",
+  keywords: [
+    "Goblins OS",
+    "Linux desktop",
+    "AI-native operating system",
+    "Build Studio",
+    "open source",
+    "ARM64 virtual machine",
+  ],
   alternates: {
     canonical: "/",
   },
@@ -40,6 +50,10 @@ export const metadata: Metadata = {
     description:
       "The open Linux desktop that helps turn your ideas into working software—right on your machine.",
     images: ["/screenshots/build-studio.png"],
+  },
+  robots: {
+    index: true,
+    follow: true,
   },
 };
 

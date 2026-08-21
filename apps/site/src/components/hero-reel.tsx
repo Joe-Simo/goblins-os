@@ -101,8 +101,8 @@ export function HeroReel() {
           loop
           muted
           playsInline
-          poster="/screenshots/home.png"
-          preload="metadata"
+          poster="/screenshots/build-studio-hero.jpg"
+          preload="none"
           onPause={() => setIsPlaying(false)}
           onPlay={() => setIsPlaying(true)}
         >

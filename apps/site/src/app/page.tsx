@@ -26,6 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyButton } from "@/components/copy-button";
 import { HeroReel } from "@/components/hero-reel";
 import { MotionReveal } from "@/components/motion-reveal";
+import { MobileNavigation } from "@/components/mobile-navigation";
 import {
   containerImages,
   formatBytes,
@@ -468,7 +469,7 @@ export default function Home() {
           </div>
         </div>
 
-        <Alert className="download__guardrail" data-gsap="reveal">
+        <Alert className="download__guardrail" data-gsap="reveal" role="note">
           <ShieldCheckIcon aria-hidden="true" />
           <AlertTitle>Preview boundaries</AlertTitle>
           <AlertDescription>
@@ -602,6 +603,7 @@ function SiteHeader() {
         <a href="#system">Control</a>
         <a href="#verify">Verify</a>
       </nav>
+      <MobileNavigation />
       <Button asChild size="sm">
         <a href="#download">
           Get preview

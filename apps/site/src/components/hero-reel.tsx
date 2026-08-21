@@ -22,7 +22,8 @@ export function HeroReel() {
     const saveData = (
       navigator as Navigator & { connection?: { saveData?: boolean } }
     ).connection?.saveData;
-    if (reducedMotion || saveData) {
+    const compactViewport = window.matchMedia("(max-width: 48rem)").matches;
+    if (reducedMotion || saveData || compactViewport) {
       playbackRequestedRef.current = false;
       video.pause();
       setIsPlaying(false);
@@ -89,8 +90,8 @@ export function HeroReel() {
         <span className="window-dot window-dot--red" />
         <span className="window-dot window-dot--yellow" />
         <span className="window-dot window-dot--green" />
-        <span className="window-title">Goblins OS</span>
-        <span className="window-live">Build Studio</span>
+        <span className="window-title">Goblins OS · Product tour</span>
+        <span className="window-live">Live preview</span>
       </div>
       <div className="hero-reel__screen">
         <video
@@ -106,7 +107,8 @@ export function HeroReel() {
           onPlay={() => setIsPlaying(true)}
         >
           <source src="/media/goblins-os-demo.mp4" type="video/mp4" />
-          The video is unavailable. A still image of Goblins OS appears instead.
+          The demo video is unavailable. The same experience is shown in the
+          still-image chapters below.
         </video>
         <Button
           className="hero-reel__control"
@@ -115,12 +117,17 @@ export function HeroReel() {
           size="sm"
           onClick={togglePlayback}
         >
-          {isPlaying ? <PauseIcon aria-hidden="true" /> : <PlayIcon aria-hidden="true" />}
+          {isPlaying ? (
+            <PauseIcon data-icon="inline-start" aria-hidden="true" />
+          ) : (
+            <PlayIcon data-icon="inline-start" aria-hidden="true" />
+          )}
           {isPlaying ? "Pause demo" : "Play demo"}
         </Button>
       </div>
       <p id="hero-reel-caption" className="hero-reel__caption">
-        From a fresh idea to Build Studio in six seconds. No audio.
+        A short, silent tour from the desktop into Build Studio. On smaller or
+        reduced-motion screens, the tour waits for you to press play.
       </p>
     </div>
   );

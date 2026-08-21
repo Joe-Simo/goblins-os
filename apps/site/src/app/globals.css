@@ -84,7 +84,6 @@
 }
 
 * {
-  box-sizing: border-box;
   border-color: var(--border);
 }
 
@@ -161,16 +160,16 @@ button:focus-visible,
 
 .site-header {
   position: fixed;
-  top: 1rem;
+  top: 0.75rem;
   left: 50%;
   z-index: 50;
   display: grid;
-  width: min(calc(100% - 2rem), 86rem);
-  min-height: 3.75rem;
+  width: min(calc(100% - 2rem), 90rem);
+  min-height: 3.35rem;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 1.5rem;
-  padding: 0.55rem 0.65rem 0.55rem 1rem;
+  padding: 0.4rem 0.45rem 0.4rem 0.9rem;
   border: 1px solid rgb(255 255 255 / 35%);
   border-radius: 999px;
   background: rgb(250 249 243 / 82%);
@@ -198,7 +197,7 @@ button:focus-visible,
 .site-header nav {
   display: flex;
   align-items: center;
-  gap: 1.7rem;
+  gap: 1.35rem;
   font-size: 0.76rem;
   font-weight: 650;
 }
@@ -251,7 +250,7 @@ button:focus-visible,
   flex-direction: column;
   justify-content: center;
   overflow: hidden;
-  padding: clamp(7rem, 12vw, 9rem) max(1.25rem, calc((100vw - 90rem) / 2)) 4rem;
+  padding: clamp(6.5rem, 9vw, 8rem) max(1.25rem, calc((100vw - 90rem) / 2)) 3.75rem;
   background:
     radial-gradient(circle at 78% 32%, rgb(201 202 255 / 72%), transparent 31rem),
     linear-gradient(145deg, #f7f5eb 0%, #eeecdf 55%, #e2e9ce 100%);
@@ -274,18 +273,17 @@ button:focus-visible,
   z-index: 1;
   display: grid;
   width: 100%;
-  min-width: 0;
   max-width: 90rem;
   margin: auto;
-  align-items: end;
-  gap: clamp(2rem, 4vw, 4rem);
+  grid-template-columns: minmax(23rem, 0.78fr) minmax(32rem, 1.22fr);
+  align-items: center;
+  gap: clamp(2.5rem, 5vw, 5.5rem);
 }
 
 .hero__copy {
   display: flex;
   flex-direction: column;
-  gap: clamp(1.25rem, 3vw, 2.5rem);
-  min-width: 0;
+  gap: clamp(1.15rem, 2.5vw, 2rem);
 }
 
 .hero__eyebrow {
@@ -321,10 +319,10 @@ button:focus-visible,
 .hero__title {
   display: flex;
   flex-direction: column;
-  font-size: clamp(4.7rem, 14.2vw, 13rem);
+  font-size: clamp(3.9rem, 6.2vw, 6.7rem);
   font-weight: 770;
-  letter-spacing: -0.095em;
-  line-height: 0.72;
+  letter-spacing: -0.085em;
+  line-height: 0.82;
   text-transform: uppercase;
 }
 
@@ -341,7 +339,7 @@ button:focus-visible,
 .hero__title em {
   color: transparent;
   font-style: normal;
-  -webkit-text-stroke: 2px var(--ink);
+  -webkit-text-stroke: 1.5px var(--ink);
 }
 
 .hero__title small {
@@ -356,18 +354,15 @@ button:focus-visible,
 
 .hero__intro {
   display: grid;
-  width: 100%;
-  min-width: 0;
-  max-width: 72rem;
-  grid-template-columns: minmax(0, 1.15fr) auto;
-  align-items: end;
-  gap: 2rem;
+  max-width: 36rem;
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: 1.35rem;
 }
 
 .hero__intro > p {
   max-width: 43rem;
-  overflow-wrap: break-word;
-  font-size: clamp(1.1rem, 2vw, 1.65rem);
+  font-size: clamp(1.05rem, 1.35vw, 1.3rem);
   font-weight: 540;
   letter-spacing: -0.035em;
   line-height: 1.25;
@@ -396,8 +391,8 @@ button:focus-visible,
 }
 
 .hero__media {
-  width: min(100%, 74rem);
-  margin-top: clamp(2rem, 5vw, 5rem);
+  width: 100%;
+  margin-top: 0;
   margin-left: auto;
 }
 
@@ -413,7 +408,7 @@ button:focus-visible,
 }
 
 .hero-reel {
-  transform: rotate(-1.4deg);
+  transform: rotate(0.75deg);
   transform-origin: 50% 100%;
 }
 
@@ -498,7 +493,7 @@ button:focus-visible,
 
 .hero-reel__caption::before {
   color: var(--ink);
-  content: "Goblins OS";
+  content: "Silent motion study";
   font-weight: 720;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -652,6 +647,14 @@ button:focus-visible,
   background: var(--acid);
 }
 
+.experience__stage {
+  display: grid;
+  grid-template-columns: minmax(19rem, 0.72fr) minmax(0, 1.28fr);
+  align-items: center;
+  gap: clamp(3rem, 7vw, 7rem);
+  margin-bottom: clamp(4rem, 8vw, 7rem);
+}
+
 .experience__heading,
 .system__heading {
   display: grid;
@@ -659,6 +662,18 @@ button:focus-visible,
   align-items: end;
   gap: 3rem;
   margin-bottom: clamp(4rem, 8vw, 7rem);
+}
+
+.experience__stage .experience__heading {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 1.4rem;
+  margin-bottom: 0;
+}
+
+.experience__stage .experience__heading h2 {
+  font-size: clamp(3rem, 5vw, 5.8rem);
 }
 
 .experience__heading h2,
@@ -688,7 +703,7 @@ button:focus-visible,
 .experience__steps {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-bottom: clamp(4rem, 8vw, 8rem);
+  margin-bottom: 0;
   border-top: 1px solid rgb(17 20 15 / 35%);
 }
 
@@ -731,7 +746,7 @@ button:focus-visible,
 }
 
 .product-window--wide {
-  width: min(100%, 77rem);
+  width: 100%;
   margin: 0 auto;
   transform: rotate(0.5deg);
 }
@@ -763,7 +778,7 @@ button:focus-visible,
   position: relative;
   display: grid;
   min-height: 100svh;
-  grid-template-columns: minmax(18rem, 0.62fr) minmax(0, 1.38fr);
+  grid-template-columns: minmax(19rem, 0.48fr) minmax(0, 1.52fr);
   align-items: center;
   gap: clamp(3rem, 8vw, 8rem);
   overflow: hidden;
@@ -786,7 +801,7 @@ button:focus-visible,
 }
 
 .workspace__copy h2 {
-  font-size: clamp(3rem, 5.9vw, 6.3rem);
+  font-size: clamp(2.8rem, 4.45vw, 4.9rem);
 }
 
 .workspace__copy > p {
@@ -807,6 +822,7 @@ button:focus-visible,
   display: block;
   width: 100%;
   height: auto;
+  filter: brightness(1.18) saturate(1.06);
 }
 
 .workspace__frame figcaption {
@@ -918,7 +934,7 @@ button:focus-visible,
 .download__heading {
   position: relative;
   display: grid;
-  max-width: 72rem;
+  max-width: 64rem;
   gap: 1.2rem;
   margin-bottom: clamp(3rem, 7vw, 6rem);
 }
@@ -931,6 +947,52 @@ button:focus-visible,
 
 .download__heading p {
   max-width: 44rem;
+}
+
+.download__primary-action {
+  width: max-content;
+  min-height: 3.35rem;
+  border-radius: 999px;
+  box-shadow: 0 1rem 2.4rem rgb(40 42 88 / 16%);
+}
+
+.download-path {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 clamp(2.5rem, 5vw, 4rem);
+  border-top: 1px solid rgb(17 20 15 / 24%);
+  border-left: 1px solid rgb(17 20 15 / 24%);
+  list-style: none;
+}
+
+.download-path li {
+  display: grid;
+  min-height: 12rem;
+  align-content: start;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  border-right: 1px solid rgb(17 20 15 / 24%);
+  border-bottom: 1px solid rgb(17 20 15 / 24%);
+}
+
+.download-path span {
+  font-size: 0.65rem;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+}
+
+.download-path strong {
+  margin-top: auto;
+  font-size: clamp(1.15rem, 2vw, 1.65rem);
+  letter-spacing: -0.04em;
+}
+
+.download-path p {
+  max-width: 24rem;
+  color: #50564b;
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .download__layout {
@@ -982,13 +1044,6 @@ button:focus-visible,
   flex-direction: column;
   gap: 1.5rem;
   padding: 1.5rem;
-}
-
-.download-card__intro {
-  max-width: 48rem;
-  color: #596055;
-  font-size: 0.9rem;
-  line-height: 1.6;
 }
 
 .download-card__facts {
@@ -1426,6 +1481,8 @@ button:focus-visible,
 }
 
 @media (max-width: 70rem) {
+  .hero__inner,
+  .experience__stage,
   .hero__intro,
   .experience__heading,
   .system__heading,
@@ -1434,6 +1491,15 @@ button:focus-visible,
   .verify__layout,
   .archive {
     grid-template-columns: 1fr;
+  }
+
+  .hero__inner {
+    align-items: start;
+  }
+
+  .hero__media {
+    width: min(100%, 62rem);
+    margin-top: 1rem;
   }
 
   .hero__intro {
@@ -1509,8 +1575,8 @@ button:focus-visible,
   }
 
   .hero__title {
-    font-size: clamp(3.45rem, 15.3vw, 7.4rem);
-    line-height: 0.76;
+    font-size: clamp(3.5rem, 16vw, 6rem);
+    line-height: 0.82;
   }
 
   .hero__title-line {
@@ -1598,8 +1664,13 @@ button:focus-visible,
   }
 
   .experience__steps,
-  .system__grid {
+  .system__grid,
+  .download-path {
     grid-template-columns: 1fr;
+  }
+
+  .download-path li {
+    min-height: 10rem;
   }
 
   .experience-step {
@@ -1701,7 +1772,31 @@ button:focus-visible,
 }
 
 @media (max-width: 26rem) {
+  .site-header {
+    width: calc(100% - 0.75rem);
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.25rem;
+    padding-left: 0.65rem;
+  }
+
+  .site-header__brand {
+    min-width: 0;
+    gap: 0.45rem;
+    font-size: 0.72rem;
+  }
+
+  .site-header__brand img {
+    width: 1.15rem;
+    height: 1.15rem;
+  }
+
   .site-header > [data-slot="button"] {
+    padding-inline: 0.7rem;
+    font-size: 0.68rem;
+    white-space: nowrap;
+  }
+
+  .site-header > [data-slot="button"] svg {
     display: none;
   }
 
@@ -1711,7 +1806,7 @@ button:focus-visible,
   }
 
   .hero__title {
-    font-size: 15.3vw;
+    font-size: clamp(3.1rem, 15vw, 3.5rem);
   }
 }
 

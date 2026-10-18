@@ -35,9 +35,9 @@ export const metadata: Metadata = {
     siteName: "Goblins OS",
     images: [
       {
-        url: "/screenshots/build-studio.png",
-        width: 1400,
-        height: 590,
+        url: "/og-image.png",
+        width: 1200,
+        height: 630,
         alt: "Goblins OS Build Studio on the native desktop",
       },
     ],
@@ -49,7 +49,7 @@ export const metadata: Metadata = {
     title: "Goblins OS",
     description:
       "The open Linux desktop that helps turn your ideas into working software—right on your machine.",
-    images: ["/screenshots/build-studio.png"],
+    images: ["/og-image.png"],
   },
   robots: {
     index: true,

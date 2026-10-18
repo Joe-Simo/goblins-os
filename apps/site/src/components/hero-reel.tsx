@@ -107,8 +107,9 @@ export function HeroReel() {
           onPlay={() => setIsPlaying(true)}
         >
           <source src="/media/goblins-os-demo.mp4" type="video/mp4" />
-          The demo video is unavailable. The same experience is shown in the
-          still-image chapters below.
+          <a href="/media/goblins-os-demo.mp4">
+            Download the Goblins OS product tour (MP4)
+          </a>
         </video>
         <Button
           className="hero-reel__control"

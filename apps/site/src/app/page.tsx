@@ -230,7 +230,7 @@ export default function Home() {
             <span className="eyebrow">Meet your new workshop</span>
             <p>
               Goblins OS brings the conversation, the project, and the desktop
-              together—so you can move from “what if?” to “it works.”
+              together, so you can move from “what if?” to “it works.”
             </p>
           </div>
         </div>
@@ -325,7 +325,7 @@ export default function Home() {
           <h2 id="system-title">Powerful when you need it. Forgiving when you do not.</h2>
           <p>
             Updates, rollback, recovery, native controls, and per-user
-            credentials live behind the playful surface—without taking the
+            credentials live behind the playful surface, without taking the
             machine away from you.
           </p>
         </div>
